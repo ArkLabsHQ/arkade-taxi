@@ -24,6 +24,12 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)
 
+  packages/core:
+    dependencies:
+      '@arkade-taxi/covenant':
+        specifier: workspace:*
+        version: link:../covenant
+
   packages/covenant:
     dependencies:
       '@arkade-os/sdk':
@@ -39,6 +45,8 @@ importers:
       '@noble/curves':
         specifier: ^2.4.0
         version: 2.4.0
+
+  packages/protocol: {}
 
 packages:
 
