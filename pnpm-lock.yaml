@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@scure/base':
+        specifier: ^2.4.0
+        version: 2.4.0
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
@@ -783,7 +786,7 @@ snapshots:
       - ecpair
       - utf-8-validate
 
-  '@bitcoinerlab/descriptors-core@3.1.7(@noble/curves@2.0.1)(@noble/hashes@2.4.0)(@scure/base@2.0.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)':
+  '@bitcoinerlab/descriptors-core@3.1.7(@noble/curves@2.0.1)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)':
     dependencies:
       '@bitcoinerlab/miniscript': 2.0.0
       lodash.memoize: 4.1.2
@@ -792,16 +795,16 @@ snapshots:
     optionalDependencies:
       '@noble/curves': 2.0.1
       '@noble/hashes': 2.4.0
-      '@scure/base': 2.0.0
+      '@scure/base': 2.4.0
       '@scure/bip32': 2.4.0
       '@scure/btc-signer': 2.4.1
 
   '@bitcoinerlab/descriptors-scure@3.1.7':
     dependencies:
-      '@bitcoinerlab/descriptors-core': 3.1.7(@noble/curves@2.0.1)(@noble/hashes@2.4.0)(@scure/base@2.0.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)
+      '@bitcoinerlab/descriptors-core': 3.1.7(@noble/curves@2.0.1)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)
       '@noble/curves': 2.0.1
       '@noble/hashes': 2.4.0
-      '@scure/base': 2.0.0
+      '@scure/base': 2.4.0
       '@scure/bip32': 2.4.0
       '@scure/btc-signer': 2.4.1
     transitivePeerDependencies:

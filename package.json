@@ -17,6 +17,7 @@
         "vectors": "node scripts/gen-vectors.mjs"
     },
     "devDependencies": {
+        "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
         "prettier": "^3.9.6",
         "typescript": "^5.9.3",
