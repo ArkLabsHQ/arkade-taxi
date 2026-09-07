@@ -30,10 +30,13 @@ export function admit(
 ): AdmissionDecision {
     if (policy.paused) return { ok: false, reason: "paused" };
 
-    if (policy.assetAllowlist !== null) {
-        // Fail closed: an assetless bitcoin request is not on an enumerated list.
-        const key = req.assetId ? assetIdKey(req.assetId) : null;
-        if (key === null || !policy.assetAllowlist.includes(key)) {
+    // Two gates, not one: the asset allowlist governs assets, allowBitcoin
+    // governs bitcoin. Folding them together made enabling an allowlist
+    // silently stop quoting sub-dust bitcoin.
+    if (req.assetId === undefined) {
+        if (!policy.allowBitcoin) return { ok: false, reason: "bitcoin_not_allowed" };
+    } else if (policy.assetAllowlist !== null) {
+        if (!policy.assetAllowlist.includes(assetIdKey(req.assetId))) {
             return { ok: false, reason: "asset_not_allowed" };
         }
     }

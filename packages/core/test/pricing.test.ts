@@ -11,6 +11,7 @@ const policy = (overrides: Partial<Policy> = {}): Policy => ({
     maxConcurrentAdvances: 10,
     locktimeMarginBlocks: 144,
     assetAllowlist: null,
+    allowBitcoin: true,
     quoteTtlSeconds: 60,
     ...overrides,
 });

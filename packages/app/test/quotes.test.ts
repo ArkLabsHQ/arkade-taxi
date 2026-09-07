@@ -177,9 +177,24 @@ describe("createQuote admission", () => {
 
     it("rejects an asset that is not on the allowlist", async () => {
         const e = await caught(() =>
-            createQuote(deps({ policy: { assetAllowlist: [] } }), quoteBody()),
+            createQuote(
+                deps({ policy: { assetAllowlist: [] } }),
+                quoteBody({ assetId: { txid: "11".repeat(32), groupIndex: 0 } }),
+            ),
         );
         expect(e.code).toBe("asset_not_allowed");
+    });
+
+    // The asset allowlist governs assets only; bitcoin has its own gate.
+    it("quotes bitcoin against an empty asset allowlist, and refuses it only when allowBitcoin is off", async () => {
+        await expect(
+            createQuote(deps({ policy: { assetAllowlist: [] } }), quoteBody()),
+        ).resolves.toBeDefined();
+
+        const e = await caught(() =>
+            createQuote(deps({ policy: { allowBitcoin: false } }), quoteBody()),
+        );
+        expect(e.code).toBe("bitcoin_not_allowed");
     });
 
     it("never calls the builder for a refused quote", async () => {

@@ -11,9 +11,11 @@ import { policy as basePolicy, receiverKey, senderKey } from "./fixtures.js";
 
 const EXPOSURE = { outstandingSats: 0n, lockedCount: 0, oldestUnsweptLocktime: null };
 
-const reasonFrom = (over: Partial<Policy>, senderSats = 0n): string => {
+const someAsset = { txid: new Uint8Array(32).fill(7), groupIndex: 0 };
+
+const reasonFrom = (over: Partial<Policy>, senderSats = 0n, withAsset = false): string => {
     const d = admit(
-        { receiverKey, senderKey, senderSats },
+        { receiverKey, senderKey, senderSats, ...(withAsset ? { assetId: someAsset } : {}) },
         basePolicy(over),
         EXPOSURE,
         330n,
@@ -76,7 +78,8 @@ describe("admissionError", () => {
     it("covers every reason admit actually produces", () => {
         const produced = [
             reasonFrom({ paused: true }),
-            reasonFrom({ assetAllowlist: [] }),
+            reasonFrom({ assetAllowlist: [] }, 0n, true),
+            reasonFrom({ allowBitcoin: false }),
             reasonFrom({ maxPerPaymentTopupSats: 1n }),
             reasonFrom({ maxOutstandingSats: 1n }),
             reasonFrom({ maxConcurrentAdvances: 0 }),
@@ -84,6 +87,7 @@ describe("admissionError", () => {
         expect(produced).toEqual([
             "paused",
             "asset_not_allowed",
+            "bitcoin_not_allowed",
             "topup_exceeds_max_per_payment",
             "exceeds_max_outstanding",
             "max_concurrent_advances",

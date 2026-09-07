@@ -82,7 +82,19 @@ CREATE TABLE policy_audit (
 CREATE INDEX policy_audit_changed_at ON policy_audit (changed_at);
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ id: 1, up: INITIAL_SCHEMA }];
+/**
+ * Defaults to 1 (allowed) so an existing row keeps quoting bitcoin: this split
+ * the asset allowlist in two, and a migration that silently stopped a service
+ * from quoting what it quoted yesterday would be the wrong way to land it.
+ */
+const ADD_ALLOW_BITCOIN = `
+ALTER TABLE policy ADD COLUMN allow_bitcoin INTEGER NOT NULL DEFAULT 1 CHECK (allow_bitcoin IN (0, 1));
+`;
+
+export const MIGRATIONS: readonly Migration[] = [
+    { id: 1, up: INITIAL_SCHEMA },
+    { id: 2, up: ADD_ALLOW_BITCOIN },
+];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
     const ordered = [...migrations].sort((a, b) => a.id - b.id);

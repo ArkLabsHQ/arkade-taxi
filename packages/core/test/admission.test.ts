@@ -20,6 +20,7 @@ const policy = (overrides: Partial<Policy> = {}): Policy => ({
     maxConcurrentAdvances: 10,
     locktimeMarginBlocks: 144,
     assetAllowlist: null,
+    allowBitcoin: true,
     quoteTtlSeconds: 60,
     ...overrides,
 });
@@ -93,11 +94,21 @@ describe("admit", () => {
         expect(admit(request(), policy(), exposure(), DUST, MIN).ok).toBe(true);
     });
 
-    // Fail closed: a non-null allowlist is a deliberate enumeration, and a
-    // bitcoin transfer is not on it.
-    it("rejects an assetless bitcoin request against a non-null allowlist", () => {
-        const p = policy({ assetAllowlist: [assetIdKey(asset(7))] });
-        expect(reasonOf(admit(request(), p, exposure(), DUST, MIN))).toBe("asset_not_allowed");
+    // The asset allowlist governs assets only. Gating bitcoin on it would mean
+    // enabling an allowlist silently stopped sub-dust bitcoin quotes.
+    it("admits a bitcoin request even against a non-null asset allowlist", () => {
+        const p = policy({ assetAllowlist: [assetIdKey(asset(7))], allowBitcoin: true });
+        expect(admit(request(), p, exposure(), DUST, MIN).ok).toBe(true);
+    });
+
+    it("rejects a bitcoin request when allowBitcoin is off", () => {
+        const p = policy({ allowBitcoin: false });
+        expect(reasonOf(admit(request(), p, exposure(), DUST, MIN))).toBe("bitcoin_not_allowed");
+    });
+
+    it("still admits an allowlisted asset when allowBitcoin is off", () => {
+        const p = policy({ allowBitcoin: false, assetAllowlist: [assetIdKey(asset(7))] });
+        expect(admit(request({ assetId: asset(7) }), p, exposure(), DUST, MIN).ok).toBe(true);
     });
 
     it("rejects everything when the allowlist is empty", () => {

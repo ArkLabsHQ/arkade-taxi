@@ -67,8 +67,15 @@ export interface Policy {
      * means spending it, which means satisfying a leaf — so recovery must fire
      * first. UNVERIFIED against arkd; kept configurable for that reason. */
     locktimeMarginBlocks: number;
-    /** null means every asset is accepted. */
+    /** null means every asset is accepted. Governs assets only — see allowBitcoin. */
     assetAllowlist: string[] | null;
+    /**
+     * Whether plain sub-dust bitcoin transfers are quoted, independent of the
+     * asset allowlist. Separate because a field named `assetAllowlist` silently
+     * disabling bitcoin is a coupling nobody would predict, and sub-dust bitcoin
+     * is a first-class case rather than an asset with no id.
+     */
+    allowBitcoin: boolean;
     quoteTtlSeconds: number;
 }
 

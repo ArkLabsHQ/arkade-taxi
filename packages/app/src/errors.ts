@@ -49,6 +49,7 @@ export const toErrorResponse = (e: ServiceError): ErrorResponse => ({
 export const ADMISSION_REASONS = [
     "paused",
     "asset_not_allowed",
+    "bitcoin_not_allowed",
     "topup_exceeds_max_per_payment",
     "exceeds_max_outstanding",
     "max_concurrent_advances",
@@ -60,6 +61,7 @@ export type AdmissionReason = (typeof ADMISSION_REASONS)[number];
 const ADMISSION_MESSAGE: Record<AdmissionReason, string> = {
     paused: "the operator is not quoting right now",
     asset_not_allowed: "this asset is not on the operator's allowlist",
+    bitcoin_not_allowed: "the operator is not quoting sub-dust bitcoin transfers",
     topup_exceeds_max_per_payment: "the required topup exceeds the per-payment limit",
     exceeds_max_outstanding: "the required topup would exceed the operator's outstanding limit",
     max_concurrent_advances: "the operator is at its concurrent advance limit",

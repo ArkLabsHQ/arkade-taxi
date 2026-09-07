@@ -26,6 +26,7 @@ export const DEFAULT_POLICY: Policy = {
     maxConcurrentAdvances: 0,
     locktimeMarginBlocks: 144,
     assetAllowlist: [],
+    allowBitcoin: true,
     quoteTtlSeconds: 60,
 };
 
@@ -38,6 +39,7 @@ const COLUMN_OF = {
     maxConcurrentAdvances: "max_concurrent_advances",
     locktimeMarginBlocks: "locktime_margin_blocks",
     assetAllowlist: "asset_allowlist",
+    allowBitcoin: "allow_bitcoin",
     quoteTtlSeconds: "quote_ttl_seconds",
 } as const satisfies Record<keyof Policy, string>;
 
@@ -55,6 +57,7 @@ interface PolicyRow {
     max_concurrent_advances: bigint;
     locktime_margin_blocks: bigint;
     asset_allowlist: string | null;
+    allow_bitcoin: bigint;
     quote_ttl_seconds: bigint;
 }
 
@@ -96,6 +99,7 @@ const fromRow = (r: PolicyRow): Policy => ({
     maxConcurrentAdvances: Number(r.max_concurrent_advances),
     locktimeMarginBlocks: Number(r.locktime_margin_blocks),
     assetAllowlist: r.asset_allowlist === null ? null : (JSON.parse(r.asset_allowlist) as string[]),
+    allowBitcoin: r.allow_bitcoin !== 0n,
     quoteTtlSeconds: Number(r.quote_ttl_seconds),
 });
 
