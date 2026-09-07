@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 const REF = "49ae96d0241e7672e40b25543875538d4373fb80";
 const BRANCH = "test/dust-free-transfer-covenant";
 const DIR = ".reference/emulator";
-const OUT = resolve("packages/dust-covenant/test/vectors.json");
+const OUT = resolve("packages/covenant/test/vectors.json");
 
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: "inherit" });
 

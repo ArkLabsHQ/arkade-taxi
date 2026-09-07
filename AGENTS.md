@@ -16,7 +16,7 @@ happen.
 
 ## The covenant is ported, not authored
 
-`packages/dust-covenant` is a TypeScript port of `test/covenant/covenant.go` in
+`packages/covenant` is a TypeScript port of `test/covenant/covenant.go` in
 arkade-os/emulator#150, which was executed against a live emulator and arkd. The
 Go implementation is the reference. `test/vectors.json` is generated from it and
 asserted byte-for-byte.

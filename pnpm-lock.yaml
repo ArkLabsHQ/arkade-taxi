@@ -24,7 +24,7 @@ importers:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@24.13.3)
 
-  packages/dust-covenant:
+  packages/covenant:
     dependencies:
       '@arkade-os/sdk':
         specifier: 0.4.67
