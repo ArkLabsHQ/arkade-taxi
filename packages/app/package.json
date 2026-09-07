@@ -1,0 +1,27 @@
+{
+    "name": "@arkade-taxi/app",
+    "version": "0.0.0",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json"
+    },
+    "dependencies": {
+        "@arkade-taxi/core": "workspace:*",
+        "@arkade-taxi/covenant": "workspace:*",
+        "@arkade-taxi/db": "workspace:*",
+        "@arkade-taxi/protocol": "workspace:*",
+        "@arkade-os/sdk": "0.4.67",
+        "@hono/node-server": "^2.1.0",
+        "hono": "^4.13.0",
+        "pino": "^9.6.0",
+        "zod": "^3.24.1"
+    }
+}

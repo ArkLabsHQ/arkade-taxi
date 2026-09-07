@@ -23,9 +23,6 @@ FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# The sweeper is the only component whose failure costs the operator money
-# rather than merely blocking a payment, so the container must not be silently
-# restarted into a broken state — the healthcheck reports sweeper liveness.
 COPY --from=build /out /app
 
 RUN useradd --system --uid 10001 taxi && chown -R taxi:taxi /app /data 2>/dev/null || true
@@ -35,6 +32,12 @@ EXPOSE 8080
 VOLUME ["/data"]
 ENV TAXI_DB_PATH=/data/taxi.db TAXI_HTTP_PORT=8080
 
+# Gates on /health (liveness), NOT /ready. A stale sweeper means arkd is
+# unreachable, and restarting cannot make it reachable — probing /ready here
+# would churn the container forever while hiding the cause. Point an
+# orchestrator's readiness probe at /ready and alert on it; that is the signal
+# that recovery is not running, which costs the operator money rather than
+# merely blocking a payment.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD node -e "fetch('http://127.0.0.1:'+(process.env.TAXI_HTTP_PORT||8080)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="robots" content="noindex, nofollow" />
+        <title>arkade-taxi operator console</title>
+        <link
+            rel="icon"
+            href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%23101215'/><rect x='3' y='3' width='10' height='3' fill='%23dfe3e8'/><rect x='3' y='8' width='10' height='3' fill='%23f0a92c'/></svg>"
+        />
+        <link rel="stylesheet" href="/admin/styles.css" />
+        <script src="/admin/app.js" defer></script>
+    </head>
+    <body>
+        <div class="alarm" id="alarm" role="alert" hidden>
+            <span id="alarm-title">Sweeper stale</span>
+            <span class="alarm__detail" id="alarm-detail"></span>
+        </div>
+
+        <header class="bar">
+            <h1>arkade-taxi <span>operator console</span></h1>
+            <div class="bar__right">
+                <span class="pill" id="service-state">loading</span>
+                <span class="field-label" id="actor-label">Actor</span>
+                <input
+                    type="text"
+                    id="actor"
+                    aria-labelledby="actor-label"
+                    placeholder="who is editing"
+                    autocomplete="username"
+                    spellcheck="false"
+                />
+                <button type="button" id="refresh">Refresh</button>
+                <span class="meta" id="updated">never updated</span>
+            </div>
+        </header>
+
+        <main>
+            <section class="headline" aria-labelledby="exposure-heading">
+                <div>
+                    <h2 class="label" id="exposure-heading">Outstanding exposure</h2>
+                    <p class="figure" id="outstanding">—<span class="unit">sats</span></p>
+                    <div class="gauge" title="share of the outstanding cap in use">
+                        <div class="gauge__fill" id="gauge"></div>
+                    </div>
+                    <dl class="satellites">
+                        <div>
+                            <dt>Locked advances</dt>
+                            <dd id="locked-count">—</dd>
+                        </div>
+                        <div>
+                            <dt>Oldest unswept locktime</dt>
+                            <dd id="oldest-locktime">—</dd>
+                        </div>
+                        <div>
+                            <dt>Cap</dt>
+                            <dd id="cap">—</dd>
+                        </div>
+                        <div>
+                            <dt>Cap in use</dt>
+                            <dd id="cap-used">—</dd>
+                        </div>
+                    </dl>
+                </div>
+
+                <div class="headline__sweeper" id="sweeper">
+                    <h2 class="label">Sweeper — last tick</h2>
+                    <p class="tick" id="sweeper-tick">—</p>
+                    <p class="sweeper__state" id="sweeper-state">unknown</p>
+                    <p class="sweeper__meta" id="sweeper-meta"></p>
+                    <p class="sweeper__error" id="sweeper-error" hidden></p>
+                </div>
+            </section>
+
+            <dl class="states" id="states"></dl>
+
+            <div class="cols">
+                <section class="panel" aria-labelledby="policy-heading">
+                    <div class="panel__head">
+                        <h2 id="policy-heading">Policy</h2>
+                        <span class="meta" id="policy-loaded"></span>
+                    </div>
+                    <div class="panel__body">
+                        <div class="actions">
+                            <button type="button" id="pause" class="attention">Pause</button>
+                            <button type="button" id="resume">Resume</button>
+                        </div>
+                        <p class="note" id="switch-note" aria-live="polite"></p>
+
+                        <form id="policy-form" class="form-grid" novalidate>
+                            <p class="field">
+                                <label for="feeFlatSats">Flat fee (sats)</label>
+                                <input type="text" id="feeFlatSats" inputmode="numeric" />
+                            </p>
+                            <p class="field">
+                                <label for="feeBps">Fee (bps)</label>
+                                <input type="number" id="feeBps" min="0" max="10000" step="1" />
+                            </p>
+                            <p class="field">
+                                <label for="maxOutstandingSats">Max outstanding (sats)</label>
+                                <input type="text" id="maxOutstandingSats" inputmode="numeric" />
+                            </p>
+                            <p class="field">
+                                <label for="maxPerPaymentTopupSats"
+                                    >Max topup per payment (sats)</label
+                                >
+                                <input
+                                    type="text"
+                                    id="maxPerPaymentTopupSats"
+                                    inputmode="numeric"
+                                />
+                            </p>
+                            <p class="field">
+                                <label for="maxConcurrentAdvances">Max concurrent advances</label>
+                                <input type="number" id="maxConcurrentAdvances" min="0" step="1" />
+                            </p>
+                            <p class="field">
+                                <label for="locktimeMarginBlocks">Locktime margin (blocks)</label>
+                                <input type="number" id="locktimeMarginBlocks" min="0" step="1" />
+                            </p>
+                            <p class="field">
+                                <label for="quoteTtlSeconds">Quote TTL (seconds)</label>
+                                <input type="number" id="quoteTtlSeconds" min="1" step="1" />
+                            </p>
+                            <p class="field field--wide">
+                                <label for="assetAllowlist">Asset allowlist</label>
+                                <input
+                                    type="text"
+                                    id="assetAllowlist"
+                                    spellcheck="false"
+                                    placeholder="comma separated"
+                                />
+                                <label class="check">
+                                    <input type="checkbox" id="allowAnyAsset" />
+                                    Accept every asset
+                                </label>
+                            </p>
+                            <div class="actions">
+                                <button type="submit" class="primary" id="apply">Apply</button>
+                                <button type="button" id="revert">Revert</button>
+                            </div>
+                        </form>
+                        <p class="note" id="policy-note" aria-live="polite"></p>
+                    </div>
+                </section>
+
+                <section class="panel" aria-labelledby="advances-heading">
+                    <div class="panel__head">
+                        <h2 id="advances-heading">Advances</h2>
+                        <span class="actions">
+                            <label class="field-label" for="state-filter">State</label>
+                            <select id="state-filter">
+                                <option value="">all</option>
+                            </select>
+                            <span class="meta" id="advances-count"></span>
+                        </span>
+                    </div>
+                    <div class="scroll">
+                        <table>
+                            <caption class="sr-only">
+                                Advances, newest first
+                            </caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col">Id</th>
+                                    <th scope="col">State</th>
+                                    <th scope="col" class="n">Topup</th>
+                                    <th scope="col" class="n">Fee</th>
+                                    <th scope="col" class="n">Locktime</th>
+                                    <th scope="col" class="n">Age</th>
+                                    <th scope="col">Covenant</th>
+                                </tr>
+                            </thead>
+                            <tbody id="advances-body"></tbody>
+                        </table>
+                        <p class="empty" id="advances-empty" hidden>No advances.</p>
+                    </div>
+                </section>
+            </div>
+
+            <section class="panel" aria-labelledby="history-heading">
+                <div class="panel__head">
+                    <h2 id="history-heading">Policy audit</h2>
+                    <span class="meta">every field change, attributed</span>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Policy changes, newest first
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">When</th>
+                                <th scope="col">Field</th>
+                                <th scope="col">From</th>
+                                <th scope="col">To</th>
+                                <th scope="col">Actor</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-body"></tbody>
+                    </table>
+                    <p class="empty" id="history-empty" hidden>No policy changes recorded.</p>
+                </div>
+            </section>
+        </main>
+    </body>
+</html>

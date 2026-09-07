@@ -15,3 +15,5 @@ arkade-regtest/
 docs/superpowers/
 
 .reference/
+e2e-results.json
+**/.build/
