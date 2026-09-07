@@ -9,6 +9,19 @@
 
 export const PROTOCOL_VERSION = 1;
 
+export {
+    assetIdFromWire,
+    assetIdToWire,
+    bytesToHex,
+    hexToBytes,
+    quoteParamsFromWire,
+    quoteParamsToWire,
+    satsFromWire,
+    satsToWire,
+    type AssetIdValue,
+    type CovenantParamsValue,
+} from "./codec.js";
+
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */
     txid: string;
@@ -62,6 +75,14 @@ export interface QuoteResponse {
     params: QuoteParams;
     covenantAddress: string;
     feeSats: string;
+    /**
+     * Quote expiry, **unix SECONDS** — not milliseconds.
+     *
+     * The unit is part of the contract because getting it wrong fails OPEN: a
+     * millisecond timestamp compared as seconds is always far-future, so every
+     * expired quote would read as valid. A client must reject at or after this
+     * instant, never merely past it.
+     */
     expiresAt: number;
     /** Base64 PSBT with the operator's topup input already contributed. */
     unsignedLockupTx: string;

@@ -1,0 +1,86 @@
+name: release
+
+on:
+    push:
+        tags: ["v*"]
+    workflow_dispatch:
+        inputs:
+            dry_run:
+                description: "Build and pack without publishing"
+                type: boolean
+                default: true
+
+env:
+    REGISTRY: ghcr.io
+    IMAGE: ${{ github.repository }}
+
+jobs:
+    # The tag is vX.Y.Z; docker/metadata-action's {{version}} STRIPS the v, so the
+    # image is ghcr.io/<owner>/arkade-taxi:X.Y.Z. Anything pinning :vX.Y.Z gets
+    # `manifest unknown`.
+    image:
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            packages: write
+        steps:
+            - uses: actions/checkout@v5
+
+            - id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+                  tags: |
+                      type=semver,pattern={{version}}
+                      type=semver,pattern={{major}}.{{minor}}
+                      type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+            - uses: docker/setup-buildx-action@v3
+
+            - if: ${{ inputs.dry_run != true }}
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') }}
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+                  cache-from: type=gha
+                  cache-to: type=gha,mode=max
+
+    # Runs after the image so a failure here cannot block it. npm names are not
+    # claimed and a first publish is not undoable, so this is opt-in even on a tag.
+    packages:
+        if: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_PACKAGES == 'true' }}
+        needs: image
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+            id-token: write
+        steps:
+            - uses: actions/checkout@v5
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 22
+                  cache: pnpm
+                  registry-url: https://registry.npmjs.org
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm -r build
+
+            - name: Verify tag matches manifest versions
+              run: |
+                  TAG="${GITHUB_REF_NAME#v}"
+                  for p in packages/*/package.json; do
+                    V=$(node -p "require('./$p').version")
+                    [ "$V" = "$TAG" ] || { echo "::error::$p is $V, tag is $TAG"; exit 1; }
+                  done
+
+            - run: pnpm publish -r --access public --no-git-checks
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
