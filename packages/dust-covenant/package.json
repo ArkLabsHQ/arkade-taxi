@@ -17,5 +17,8 @@
         "@arkade-os/sdk": "0.4.67",
         "@noble/hashes": "^2.0.0",
         "@scure/btc-signer": "^2.0.1"
+    },
+    "devDependencies": {
+        "@noble/curves": "^2.4.0"
     }
 }
