@@ -92,11 +92,24 @@ reference at `49ae96d` across 10 parameter sets covering both the asset and
 bitcoin variants and both output-pinning branches. The mutation guards were each
 observed to fail before being reverted.
 
-**Not verified.** Nothing has run against a live emulator or arkd — the vectors
-prove the scripts match, not that a spend succeeds. The relationship between the
-covenant's recovery `locktime` and the covenant VTXO's own batch expiry is
-inferred from the covenant's structure and not yet confirmed; it is kept as a
-config value for that reason.
+That byte-identity carries VM assurance transitively: the Go reference's own
+tests execute those exact bytes through `arkade.NewEngine`, so "these scripts
+run correctly under the Arkade VM" is established without this repo re-proving
+it. What it does not establish is that a spend of a real covenant succeeds.
+
+`scripts/probe-live.mjs` derives a covenant against a running arkd and emulator
+and prints the address. Against arkd `v0.9.16` and emulator `v0.0.7` on regtest
+— `dust=330`, `vtxoMinAmount=1`, so the sub-dust window is open — both variants
+derive four-leaf `tark1…` addresses from the live signer keys. It is read-only:
+it signs nothing and submits nothing.
+
+**Not verified.** No spend has been constructed or broadcast. `LockupBuilder`
+and `RecoveryRunner` are injectable interfaces awaiting a live transaction
+layer, so the joint-funded lockup, the emulator co-signing a claim, and arkd
+accepting it are all untested. The relationship between the covenant's recovery
+`locktime` and the covenant VTXO's own batch expiry is inferred from the
+covenant's structure and not yet confirmed; it is kept as a config value for
+that reason.
 
 The upstream covenant PR is still open, so the scripts may change in review.
 `packages/covenant` is deliberately small and isolated so that stays a
