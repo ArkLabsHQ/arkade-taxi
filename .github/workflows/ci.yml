@@ -1,0 +1,42 @@
+name: ci
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    gates:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 22
+                  cache: pnpm
+            - run: pnpm install --frozen-lockfile
+            # Run all four. build passing while typecheck fails, and the reverse, have
+            # both happened here.
+            - run: pnpm -r build
+            - run: pnpm typecheck
+            - run: pnpm test
+            - run: pnpm format:check
+
+    vectors:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v5
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 22
+                  cache: pnpm
+            - uses: actions/setup-go@v6
+              with:
+                  go-version: "1.26"
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm vectors
+            # A committed vectors.json that no longer matches the Go reference is
+            # worse than none: every test would still pass, against stale bytes.
+            - run: git diff --exit-code packages/dust-covenant/test/vectors.json
