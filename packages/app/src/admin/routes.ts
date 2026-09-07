@@ -68,9 +68,17 @@ const policyPatch = z
         maxConcurrentAdvances: z.number().int().min(0).optional(),
         locktimeMarginBlocks: z.number().int().min(0).optional(),
         assetAllowlist: z.array(z.string()).nullable().optional(),
+        allowBitcoin: z.boolean().optional(),
         quoteTtlSeconds: z.number().int().min(1).optional(),
     })
     .strict();
+
+// This schema is hand-maintained, so nothing makes it fail when Policy gains a
+// field — it just becomes unsettable, and .strict() turns an attempt into a 400.
+// The check is in policy.test.ts rather than here so it runs, not just compiles.
+export const PATCHABLE_POLICY_KEYS = Object.keys(policyPatch.shape).filter(
+    (k) => k !== "actor",
+) as (keyof Policy)[];
 
 const actorOnly = z.object({ actor }).strict();
 
@@ -136,6 +144,7 @@ const toPolicyWire = (p: Policy) => ({
     maxConcurrentAdvances: p.maxConcurrentAdvances,
     locktimeMarginBlocks: p.locktimeMarginBlocks,
     assetAllowlist: p.assetAllowlist,
+    allowBitcoin: p.allowBitcoin,
     quoteTtlSeconds: p.quoteTtlSeconds,
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { advance, harness, healthySweeper, key } from "./fixtures.js";
+import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
 
 const INT64_MAX = "9223372036854775807";
 
@@ -176,6 +177,7 @@ describe("GET /admin/api/policy", () => {
             maxConcurrentAdvances: 0,
             locktimeMarginBlocks: DEFAULT_POLICY.locktimeMarginBlocks,
             assetAllowlist: [],
+            allowBitcoin: true,
             quoteTtlSeconds: 60,
         });
     });
@@ -483,5 +485,34 @@ describe("sweeper status contract", () => {
         const { body } = await h.json("/admin/api/status");
 
         expect(body.sweeper.lastHeight).toBe("9007199254740993");
+    });
+});
+
+/**
+ * The db layer catches a new Policy field at compile time via
+ * `satisfies Record<keyof Policy, string>`. The admin schema is hand-written
+ * zod with no such link, so a new field silently becomes unsettable and
+ * `.strict()` turns an attempt to set it into a 400. This is the check that
+ * fails instead.
+ */
+describe("policy surface completeness", () => {
+    it("exposes every Policy field as patchable", () => {
+        expect([...PATCHABLE_POLICY_KEYS].sort()).toEqual(Object.keys(DEFAULT_POLICY).sort());
+    });
+
+    it("returns every Policy field on GET", async () => {
+        const h = harness();
+        const { body } = await h.json("/admin/api/policy");
+        expect(Object.keys(body).sort()).toEqual(Object.keys(DEFAULT_POLICY).sort());
+    });
+
+    it("accepts a patch for the field that was missed", async () => {
+        const h = harness();
+        const res = await h.json("/admin/api/policy", {
+            method: "PATCH",
+            body: JSON.stringify({ actor: "ops", allowBitcoin: false }),
+        });
+        expect(res.status).toBe(200);
+        expect(res.body.allowBitcoin).toBe(false);
     });
 });
