@@ -1,0 +1,9 @@
+node_modules
+dist
+pnpm-lock.yaml
+.reference
+docs/superpowers
+
+# Generated from the Go reference. CI regenerates it and fails on any diff, so
+# reformatting it here would make that check fail against correct bytes.
+packages/dust-covenant/test/vectors.json

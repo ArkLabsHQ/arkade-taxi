@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.*.example
+*.db
+*.db-journal
+*.sqlite
+coverage/
+.DS_Store
+arkade-regtest/
+
+# Specs and plans stay in the working tree, never in history.
+docs/superpowers/
