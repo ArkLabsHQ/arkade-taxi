@@ -43,7 +43,10 @@ CREATE TABLE advances (
     asset_group_index INTEGER,
     locktime          INTEGER NOT NULL,
     covenant_address  TEXT NOT NULL,
-    fee_sats          INTEGER NOT NULL,
+    fare_currency     TEXT NOT NULL CHECK (fare_currency IN ('sats', 'asset')),
+    fare_units        INTEGER NOT NULL,
+    fare_asset_txid   BLOB,
+    fare_asset_group_index INTEGER,
     outpoint_txid     TEXT,
     outpoint_vout     INTEGER,
     spent_txid        TEXT,
@@ -51,6 +54,8 @@ CREATE TABLE advances (
     updated_at        INTEGER NOT NULL,
     expires_at        INTEGER NOT NULL,
     CHECK ((asset_txid IS NULL) = (asset_group_index IS NULL)),
+    CHECK ((fare_asset_txid IS NULL) = (fare_asset_group_index IS NULL)),
+    CHECK ((fare_currency = 'asset') = (fare_asset_txid IS NOT NULL)),
     CHECK ((outpoint_txid IS NULL) = (outpoint_vout IS NULL))
 );
 
@@ -60,13 +65,11 @@ CREATE UNIQUE INDEX advances_outpoint ON advances (outpoint_txid, outpoint_vout)
 CREATE TABLE policy (
     id                         INTEGER PRIMARY KEY CHECK (id = 1),
     paused                     INTEGER NOT NULL CHECK (paused IN (0, 1)),
-    fee_flat_sats              INTEGER NOT NULL,
-    fee_bps                    INTEGER NOT NULL,
     max_outstanding_sats       INTEGER NOT NULL,
     max_per_payment_topup_sats INTEGER NOT NULL,
     max_concurrent_advances    INTEGER NOT NULL,
     locktime_margin_blocks     INTEGER NOT NULL,
-    asset_allowlist            TEXT,
+    asset_rules                TEXT NOT NULL,
     quote_ttl_seconds          INTEGER NOT NULL
 );
 
@@ -82,19 +85,7 @@ CREATE TABLE policy_audit (
 CREATE INDEX policy_audit_changed_at ON policy_audit (changed_at);
 `;
 
-/**
- * Defaults to 1 (allowed) so an existing row keeps quoting bitcoin: this split
- * the asset allowlist in two, and a migration that silently stopped a service
- * from quoting what it quoted yesterday would be the wrong way to land it.
- */
-const ADD_ALLOW_BITCOIN = `
-ALTER TABLE policy ADD COLUMN allow_bitcoin INTEGER NOT NULL DEFAULT 1 CHECK (allow_bitcoin IN (0, 1));
-`;
-
-export const MIGRATIONS: readonly Migration[] = [
-    { id: 1, up: INITIAL_SCHEMA },
-    { id: 2, up: ADD_ALLOW_BITCOIN },
-];
+export const MIGRATIONS: readonly Migration[] = [{ id: 1, up: INITIAL_SCHEMA }];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
     const ordered = [...migrations].sort((a, b) => a.id - b.id);

@@ -109,7 +109,7 @@ describe("requestQuote", () => {
     });
 
     it("throws INVALID_RESPONSE when the quote fails the codecs", async () => {
-        const { taxi } = client(ok({ ...quote(), feeSats: "1e3" }));
+        const { taxi } = client(ok({ ...quote(), fare: { currency: "sats", units: "1e3" } }));
         await expect(
             taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n }),
         ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });

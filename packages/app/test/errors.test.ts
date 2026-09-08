@@ -20,7 +20,6 @@ const reasonFrom = (over: Partial<Policy>, senderSats = 0n, withAsset = false): 
         EXPOSURE,
         330n,
         10n,
-        () => 0n,
     );
     if (d.ok) throw new Error("expected admit to reject");
     return d.reason;
@@ -78,16 +77,26 @@ describe("admissionError", () => {
     it("covers every reason admit actually produces", () => {
         const produced = [
             reasonFrom({ paused: true }),
-            reasonFrom({ assetAllowlist: [] }, 0n, true),
-            reasonFrom({ allowBitcoin: false }),
+            reasonFrom({ assetRules: [] }, 0n, true),
+            reasonFrom({
+                assetRules: [
+                    {
+                        assetId: null,
+                        enabled: false,
+                        fares: [],
+                        claim: "either",
+                        maxTopupSats: null,
+                    },
+                ],
+            }),
             reasonFrom({ maxPerPaymentTopupSats: 1n }),
             reasonFrom({ maxOutstandingSats: 1n }),
             reasonFrom({ maxConcurrentAdvances: 0 }),
         ];
         expect(produced).toEqual([
             "paused",
-            "asset_not_allowed",
-            "bitcoin_not_allowed",
+            "asset_not_served",
+            "asset_disabled",
             "topup_exceeds_max_per_payment",
             "exceeds_max_outstanding",
             "max_concurrent_advances",

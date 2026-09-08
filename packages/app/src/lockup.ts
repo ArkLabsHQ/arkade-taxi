@@ -1,4 +1,5 @@
-import { payoutPkScript, type DustCovenantParams } from "@arkade-taxi/covenant";
+import { payoutPkScript, type AssetIdRef, type DustCovenantParams } from "@arkade-taxi/covenant";
+import type { FareSpec } from "@arkade-taxi/core";
 import { hex } from "@scure/base";
 
 /**
@@ -9,19 +10,23 @@ import { hex } from "@scure/base";
  * output nobody can spend.
  */
 export interface LockupOutput {
-    /** What the output is for, for logs and tests. Not committed to anywhere. */
-    role: "covenant" | "operator-fee" | "sender-change";
+    role: "covenant" | "operator-fare" | "sender-change";
     script: Uint8Array;
+    /** Sats on this output. For an asset output this is the HOST value, not the
+     * payment — an asset cannot occupy an output on its own. */
     amount: bigint;
+    asset?: { id: AssetIdRef; units: bigint };
 }
 
 export interface LockupOutputRequest {
     params: DustCovenantParams;
     covenantPkScript: Uint8Array;
-    feeSats: bigint;
-    /** Sats the sender contributes beyond the covenant and the fee. */
+    fare: FareSpec;
+    /** Sats needed to host an asset output. Unused by a sats fare. */
+    vtxoMinAmount: bigint;
     senderChangeSats: bigint;
     senderChangeScript?: Uint8Array;
+    senderChangeAsset?: { id: AssetIdRef; units: bigint };
 }
 
 export class LockupShapeError extends Error {
@@ -54,14 +59,15 @@ export function assertDistinctScripts(outputs: readonly LockupOutput[]): void {
 }
 
 /**
- * The operator's fee output uses the same sub-dust-or-P2TR rule the covenant
- * pins its own payouts with, so a fee below dust is still spendable rather than
- * an unspendable OP_RETURN the operator cannot recover.
+ * An asset fare costs the operator hosting sats it pays to ITSELF, so those are
+ * not capital at risk — only `topup` is. A sats fare costs no hosting but
+ * demands the sender hold spendable bitcoin, which is the thing this service
+ * exists so they need not.
  */
 export function buildLockupOutputs(req: LockupOutputRequest): LockupOutput[] {
-    const { params, feeSats, senderChangeSats } = req;
+    const { params, fare, vtxoMinAmount, senderChangeSats } = req;
 
-    if (feeSats < 0n) throw new LockupShapeError(`fee must not be negative, got ${feeSats}`);
+    if (fare.units < 0n) throw new LockupShapeError(`fare must not be negative, got ${fare.units}`);
     if (senderChangeSats < 0n) {
         throw new LockupShapeError(`change must not be negative, got ${senderChangeSats}`);
     }
@@ -70,22 +76,35 @@ export function buildLockupOutputs(req: LockupOutputRequest): LockupOutput[] {
         { role: "covenant", script: req.covenantPkScript, amount: params.dust },
     ];
 
-    if (feeSats > 0n) {
+    if (fare.units > 0n) {
+        const hosting = fare.currency === "asset" ? vtxoMinAmount : fare.units;
+        if (fare.currency === "asset" && hosting <= 0n) {
+            throw new LockupShapeError(
+                "an asset fare needs a positive vtxoMinAmount to host it — an asset cannot occupy an output alone",
+            );
+        }
         outputs.push({
-            role: "operator-fee",
-            script: payoutPkScript(params.operatorKey, feeSats, params.dust),
-            amount: feeSats,
+            role: "operator-fare",
+            script: payoutPkScript(params.operatorKey, hosting, params.dust),
+            amount: hosting,
+            ...(fare.currency === "asset"
+                ? { asset: { id: fare.assetId, units: fare.units } }
+                : {}),
         });
     }
 
-    if (senderChangeSats > 0n) {
+    if (senderChangeSats > 0n || req.senderChangeAsset) {
         if (!req.senderChangeScript) {
-            throw new LockupShapeError("senderChangeScript is required when change is non-zero");
+            throw new LockupShapeError("senderChangeScript is required when there is change");
+        }
+        if (req.senderChangeAsset && senderChangeSats < vtxoMinAmount) {
+            throw new LockupShapeError("asset change needs vtxoMinAmount of sats to host it");
         }
         outputs.push({
             role: "sender-change",
             script: req.senderChangeScript,
             amount: senderChangeSats,
+            ...(req.senderChangeAsset ? { asset: req.senderChangeAsset } : {}),
         });
     }
 

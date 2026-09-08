@@ -38,14 +38,21 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
 
 export const policy = (over: Partial<Policy> = {}): Policy => ({
     paused: false,
-    feeFlatSats: 5n,
-    feeBps: 100,
     maxOutstandingSats: 100_000n,
     maxPerPaymentTopupSats: 1_000n,
     maxConcurrentAdvances: 10,
     locktimeMarginBlocks: 144,
-    assetAllowlist: null,
-    allowBitcoin: true,
+    assetRules: [
+        {
+            assetId: null,
+            enabled: true,
+            fares: [
+                { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units: 8n } },
+            ],
+            claim: "either",
+            maxTopupSats: null,
+        },
+    ],
     quoteTtlSeconds: 60,
     ...over,
 });
@@ -60,7 +67,7 @@ export const advance = (over: Partial<Advance> = {}): Advance => ({
     topup: 330n,
     locktime: 850_000n,
     covenantAddress: "tark1qcovenantexample",
-    feeSats: 8n,
+    fare: { currency: "sats", units: 8n },
     createdAt: NOW,
     updatedAt: NOW,
     expiresAt: NOW + 60,

@@ -1,5 +1,6 @@
 import type { Database, Statement } from "better-sqlite3";
-import type { Policy } from "@arkade-taxi/core";
+import type { AssetRule, Policy } from "@arkade-taxi/core";
+import { assetRulesFromJson, assetRulesToJson } from "./assetRules.js";
 
 export interface AuditRow {
     id: number;
@@ -13,33 +14,28 @@ export interface AuditRow {
 }
 
 /**
- * Refuses to guess the operator's pricing: caps at zero and `paused` admit
- * nothing until the UI sets them. `assetAllowlist` seeds as `[]` rather than
- * `null`, which would mean every asset is accepted.
+ * Refuses to guess the operator's terms: caps at zero, `paused` set, and NO
+ * asset rules, so nothing is served until someone states what and at what fare.
+ * An empty rule list serves nothing, which is the safe direction for a service
+ * that lends capital.
  */
 export const DEFAULT_POLICY: Policy = {
     paused: true,
-    feeFlatSats: 0n,
-    feeBps: 0,
     maxOutstandingSats: 0n,
     maxPerPaymentTopupSats: 0n,
     maxConcurrentAdvances: 0,
     locktimeMarginBlocks: 144,
-    assetAllowlist: [],
-    allowBitcoin: true,
+    assetRules: [],
     quoteTtlSeconds: 60,
 };
 
 const COLUMN_OF = {
     paused: "paused",
-    feeFlatSats: "fee_flat_sats",
-    feeBps: "fee_bps",
     maxOutstandingSats: "max_outstanding_sats",
     maxPerPaymentTopupSats: "max_per_payment_topup_sats",
     maxConcurrentAdvances: "max_concurrent_advances",
     locktimeMarginBlocks: "locktime_margin_blocks",
-    assetAllowlist: "asset_allowlist",
-    allowBitcoin: "allow_bitcoin",
+    assetRules: "asset_rules",
     quoteTtlSeconds: "quote_ttl_seconds",
 } as const satisfies Record<keyof Policy, string>;
 
@@ -50,14 +46,11 @@ type Bound = string | number | bigint | null;
 
 interface PolicyRow {
     paused: bigint;
-    fee_flat_sats: bigint;
-    fee_bps: bigint;
     max_outstanding_sats: bigint;
     max_per_payment_topup_sats: bigint;
     max_concurrent_advances: bigint;
     locktime_margin_blocks: bigint;
-    asset_allowlist: string | null;
-    allow_bitcoin: bigint;
+    asset_rules: string;
     quote_ttl_seconds: bigint;
 }
 
@@ -80,26 +73,29 @@ interface AuditInsert {
 
 const encode = (v: PolicyValue): Bound => {
     if (typeof v === "boolean") return v ? 1 : 0;
-    if (Array.isArray(v)) return JSON.stringify(v);
+    // The only array field is assetRules, whose members carry bigints and
+    // Uint8Arrays that JSON.stringify cannot represent.
+    if (Array.isArray(v)) return assetRulesToJson(v as AssetRule[]);
     return v;
 };
 
 const serialize = (v: PolicyValue): string =>
-    typeof v === "bigint" ? v.toString() : JSON.stringify(v);
+    typeof v === "bigint"
+        ? v.toString()
+        : Array.isArray(v)
+          ? assetRulesToJson(v as AssetRule[])
+          : JSON.stringify(v);
 
 const unchanged = (a: PolicyValue, b: PolicyValue): boolean =>
     Array.isArray(a) || Array.isArray(b) ? serialize(a) === serialize(b) : a === b;
 
 const fromRow = (r: PolicyRow): Policy => ({
     paused: r.paused !== 0n,
-    feeFlatSats: r.fee_flat_sats,
-    feeBps: Number(r.fee_bps),
     maxOutstandingSats: r.max_outstanding_sats,
     maxPerPaymentTopupSats: r.max_per_payment_topup_sats,
     maxConcurrentAdvances: Number(r.max_concurrent_advances),
     locktimeMarginBlocks: Number(r.locktime_margin_blocks),
-    assetAllowlist: r.asset_allowlist === null ? null : (JSON.parse(r.asset_allowlist) as string[]),
-    allowBitcoin: r.allow_bitcoin !== 0n,
+    assetRules: assetRulesFromJson(r.asset_rules),
     quoteTtlSeconds: Number(r.quote_ttl_seconds),
 });
 

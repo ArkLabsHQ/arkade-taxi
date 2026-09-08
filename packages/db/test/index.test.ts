@@ -28,7 +28,7 @@ function seedAdvance(repo: AdvanceRepository, id: string): void {
         topup: 300n,
         locktime: 850_000n,
         covenantAddress: "tark1qcovenantexample",
-        feeSats: 25n,
+        fare: { currency: "sats", units: 25n },
         createdAt: 1,
         updatedAt: 1,
         expiresAt: 2,
@@ -62,13 +62,13 @@ describe("openDatabase", () => {
 
         const first = openDatabase(path);
         seedAdvance(new AdvanceRepository(first), "a1");
-        new PolicyRepository(first).update({ feeBps: 42 }, "alice");
+        new PolicyRepository(first).update({ locktimeMarginBlocks: 42 }, "alice");
         first.close();
 
         const second = openDatabase(path);
 
         expect(new AdvanceRepository(second).get("a1")?.dust).toBe(ABOVE_MAX_SAFE);
-        expect(new PolicyRepository(second).get().feeBps).toBe(42);
+        expect(new PolicyRepository(second).get().locktimeMarginBlocks).toBe(42);
         expect(new PolicyRepository(second).history(10)).toHaveLength(1);
         second.close();
     });

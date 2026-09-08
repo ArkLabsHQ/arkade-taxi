@@ -168,7 +168,10 @@ describe("verifyQuote — caller authorisation bounds", () => {
     });
 
     it("rejects a feeSats above maxFeeSats", () => {
-        rejects({ quote: { ...quote(), feeSats: "11" } }, "FEE_ABOVE_MAX");
+        rejects(
+            { quote: { ...quote(), fare: { currency: "sats", units: "11" } } },
+            "FEE_ABOVE_MAX",
+        );
     });
 
     it("rejects a locktime below minLocktime", () => {

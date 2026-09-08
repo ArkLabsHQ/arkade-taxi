@@ -1,5 +1,22 @@
 export * from "./types.js";
 export { canTransition, isExpired, isTerminal, transition } from "./ledger.js";
 export { computeExposure, sweepable } from "./exposure.js";
-export { defaultPricing, priceQuote, type PricingFn, type PricingInputs } from "./pricing.js";
-export { admit, assetIdKey } from "./admission.js";
+export { admit } from "./admission.js";
+export {
+    assetIdKey,
+    fareBase,
+    fareNeedsSenderSats,
+    FareError,
+    resolveFare,
+    ruleFor,
+    sameAsset,
+    selectFare,
+    validateFareOption,
+    type AssetRule,
+    type ClaimMode,
+    type FareCurrency,
+    type FareContext,
+    type FareOption,
+    type FarePricing,
+    type FareSpec,
+} from "./fares.js";

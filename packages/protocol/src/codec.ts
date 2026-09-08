@@ -6,7 +6,7 @@
  * which of six keys was wrong.
  */
 
-import type { AssetIdWire, QuoteParams } from "./index.js";
+import type { FareWire, AssetIdWire, QuoteParams } from "./index.js";
 
 /** Structurally identical to `@arkade-taxi/covenant`'s `AssetIdRef`, restated
  * so the wire package depends on nothing. */
@@ -105,4 +105,25 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     return out;
+}
+
+/** Wire<->domain for a resolved fare. Units are decimal strings for the reason
+ * every other amount is: JSON has no bigint. */
+export function fareToWire(fare: {
+    currency: "sats" | "asset";
+    units: bigint;
+    assetId?: { txid: Uint8Array; groupIndex: number };
+}): FareWire {
+    return fare.currency === "asset" && fare.assetId
+        ? { currency: "asset", units: satsToWire(fare.units), assetId: assetIdToWire(fare.assetId) }
+        : { currency: "sats", units: satsToWire(fare.units) };
+}
+
+export function fareFromWire(w: FareWire, label = "fare") {
+    const units = satsFromWire(w.units, `${label}.units`);
+    if (w.currency === "asset") {
+        if (!w.assetId) throw new Error(`${label}: an asset fare must carry an assetId`);
+        return { currency: "asset" as const, assetId: assetIdFromWire(w.assetId), units };
+    }
+    return { currency: "sats" as const, units };
 }

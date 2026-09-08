@@ -28,10 +28,20 @@ liveScenario("exposure-cap-rejects-quote", () => {
     expect(refused).toEqual({ ok: false, reason: "exceeds_max_outstanding" });
 
     const admitted = admit(req, policy({ maxOutstandingSats: 2_000n }), exposure, DUST, VTXO_MIN);
-    expect(admitted).toEqual({ ok: true, topup: DUST, feeSats: 1n });
+    expect(admitted).toEqual({
+        ok: true,
+        topup: DUST,
+        fare: { currency: "sats", units: 1n },
+        claim: "either",
+    });
 
     const boundary = admit(req, policy({ maxOutstandingSats: 1_030n }), exposure, DUST, VTXO_MIN);
-    expect(boundary).toEqual({ ok: true, topup: DUST, feeSats: 1n });
+    expect(boundary).toEqual({
+        ok: true,
+        topup: DUST,
+        fare: { currency: "sats", units: 1n },
+        claim: "either",
+    });
     const overBoundary = admit(
         req,
         policy({ maxOutstandingSats: 1_029n }),

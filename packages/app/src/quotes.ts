@@ -7,10 +7,12 @@ import {
     type AdvanceState,
     type Outpoint,
     type Policy,
+    type FareSpec,
 } from "@arkade-taxi/core";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import {
     assetIdFromWire,
+    fareToWire,
     hexToBytes,
     quoteParamsToWire,
     satsFromWire,
@@ -29,7 +31,7 @@ export interface LockupBuildRequest {
     covenantAddress: string;
     /** A separate output at lockup: the covenant pins the operator's repayment
      * to exactly `topup`, so no fee is expressible inside it. */
-    feeSats: bigint;
+    fare: FareSpec;
     senderSats: bigint;
 }
 
@@ -183,7 +185,7 @@ export async function createQuote(deps: QuoteDeps, body: unknown): Promise<Quote
         advanceId: id,
         params,
         covenantAddress: covenant.address,
-        feeSats: decision.feeSats,
+        fare: decision.fare,
         senderSats: req.senderSats,
     });
 
@@ -198,7 +200,7 @@ export async function createQuote(deps: QuoteDeps, body: unknown): Promise<Quote
         topup: params.topup,
         locktime: params.locktime,
         covenantAddress: covenant.address,
-        feeSats: decision.feeSats,
+        fare: decision.fare,
         createdAt: now,
         updatedAt: now,
         expiresAt: now + policy.quoteTtlSeconds,
@@ -210,7 +212,7 @@ export async function createQuote(deps: QuoteDeps, body: unknown): Promise<Quote
         transferId: id,
         params: quoteParamsToWire(params),
         covenantAddress: covenant.address,
-        feeSats: satsToWire(decision.feeSats),
+        fare: fareToWire(decision.fare),
         expiresAt: advance.expiresAt,
         unsignedLockupTx,
     };

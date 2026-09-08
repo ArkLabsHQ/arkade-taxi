@@ -18,6 +18,8 @@ export {
     quoteParamsToWire,
     satsFromWire,
     satsToWire,
+    fareToWire,
+    fareFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
 } from "./codec.js";
@@ -43,12 +45,37 @@ export interface InfoResponse {
     emulatorUrl: string;
     dust: string;
     vtxoMinAmount: string;
-    /** null means every asset is accepted. */
-    assetAllowlist: AssetIdWire[] | null;
-    feeFlatSats: string;
-    feeBps: number;
+    /** What this operator serves and on what terms, per asset. */
+    assetRules: AssetRuleWire[];
     maxPerPaymentTopupSats: string;
     paused: boolean;
+}
+
+/** A fare on the wire. `assetId` is present exactly when currency is "asset". */
+export interface FareWire {
+    currency: "sats" | "asset";
+    units: string;
+    assetId?: AssetIdWire;
+}
+
+/** One fare an operator offers for an asset. `id` is what a client names to accept it. */
+export interface FareOfferWire {
+    id: string;
+    currency: "sats" | "sameAsset" | "token";
+    /** Present only for a token fare. */
+    assetId?: AssetIdWire;
+    pricing:
+        | { kind: "flat"; units: string }
+        | { kind: "proportional"; bps: number; minUnits: string; maxUnits: string | null };
+}
+
+/** What the operator serves for one asset. `assetId` null is sub-dust bitcoin. */
+export interface AssetRuleWire {
+    assetId: AssetIdWire | null;
+    enabled: boolean;
+    fares: FareOfferWire[];
+    claim: "recycle" | "purchase" | "either";
+    maxTopupSats: string | null;
 }
 
 export interface QuoteRequestBody {
@@ -56,6 +83,10 @@ export interface QuoteRequestBody {
     senderKey: string;
     assetId?: AssetIdWire;
     senderSats: string;
+    /** Units of the asset being moved; a proportional fare prices against it. */
+    assetUnits?: string;
+    /** Which offered fare the client accepts. Omitted takes the operator's first. */
+    fareId?: string;
 }
 
 /** Everything needed to re-derive the covenant address independently. The
@@ -74,7 +105,7 @@ export interface QuoteResponse {
     transferId: string;
     params: QuoteParams;
     covenantAddress: string;
-    feeSats: string;
+    fare: FareWire;
     /**
      * Quote expiry, **unix SECONDS** — not milliseconds.
      *

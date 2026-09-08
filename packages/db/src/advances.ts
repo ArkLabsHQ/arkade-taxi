@@ -13,7 +13,10 @@ const COLUMNS = [
     "asset_group_index",
     "locktime",
     "covenant_address",
-    "fee_sats",
+    "fare_currency",
+    "fare_units",
+    "fare_asset_txid",
+    "fare_asset_group_index",
     "outpoint_txid",
     "outpoint_vout",
     "spent_txid",
@@ -36,7 +39,10 @@ interface AdvanceRow {
     asset_group_index: bigint | null;
     locktime: bigint;
     covenant_address: string;
-    fee_sats: bigint;
+    fare_currency: string;
+    fare_units: bigint;
+    fare_asset_txid: Uint8Array | null;
+    fare_asset_group_index: bigint | null;
     outpoint_txid: string | null;
     outpoint_vout: bigint | null;
     spent_txid: string | null;
@@ -68,7 +74,10 @@ function toParams(a: Advance): AdvanceParams {
         asset_group_index: a.assetId?.groupIndex ?? null,
         locktime: a.locktime,
         covenant_address: a.covenantAddress,
-        fee_sats: a.feeSats,
+        fare_currency: a.fare.currency,
+        fare_units: a.fare.units,
+        fare_asset_txid: a.fare.currency === "asset" ? a.fare.assetId.txid : null,
+        fare_asset_group_index: a.fare.currency === "asset" ? a.fare.assetId.groupIndex : null,
         outpoint_txid: a.outpoint?.txid ?? null,
         outpoint_vout: a.outpoint?.vout ?? null,
         spent_txid: a.spentTxid ?? null,
@@ -92,7 +101,17 @@ function fromRow(r: AdvanceRow): Advance {
         topup: r.topup,
         locktime: r.locktime,
         covenantAddress: r.covenant_address,
-        feeSats: r.fee_sats,
+        fare:
+            r.fare_currency === "asset"
+                ? {
+                      currency: "asset",
+                      assetId: {
+                          txid: bytes(r.fare_asset_txid as Parameters<typeof bytes>[0]),
+                          groupIndex: Number(r.fare_asset_group_index),
+                      },
+                      units: r.fare_units,
+                  }
+                : { currency: "sats", units: r.fare_units },
         createdAt: Number(r.created_at),
         updatedAt: Number(r.updated_at),
         expiresAt: Number(r.expires_at),

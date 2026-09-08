@@ -38,7 +38,10 @@ const RAW_ADVANCE = {
     asset_group_index: null,
     locktime: 100n,
     covenant_address: "tark1qexample",
-    fee_sats: 10n,
+    fare_currency: "sats",
+    fare_units: 10n,
+    fare_asset_txid: null,
+    fare_asset_group_index: null,
     outpoint_txid: null,
     outpoint_vout: null,
     spent_txid: null,
@@ -178,10 +181,10 @@ describe("policy constraints", () => {
         const insert = (id: number) =>
             db
                 .prepare(
-                    `INSERT INTO policy (id, paused, fee_flat_sats, fee_bps, max_outstanding_sats,
+                    `INSERT INTO policy (id, paused, max_outstanding_sats,
                      max_per_payment_topup_sats, max_concurrent_advances, locktime_margin_blocks,
-                     asset_allowlist, quote_ttl_seconds)
-                     VALUES (?, 0, 0, 0, 0, 0, 0, 0, NULL, 60)`,
+                     asset_rules, quote_ttl_seconds)
+                     VALUES (?, 0, 0, 0, 0, 0, '[]', 60)`,
                 )
                 .run(id);
 

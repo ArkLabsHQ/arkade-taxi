@@ -3,11 +3,11 @@ import {
     bytesToHex,
     PROTOCOL_VERSION,
     satsToWire,
-    type AssetIdWire,
     type InfoResponse,
     type LockupRequestBody,
 } from "@arkade-taxi/protocol";
 import { ErrorCode, ServiceError, toErrorResponse } from "./errors.js";
+import { assetRuleToWire } from "./rulesWire.js";
 import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
 import type { Sweeper } from "./sweeper.js";
 
@@ -29,22 +29,6 @@ export interface HealthResponse {
         lastError: string | null;
     };
     reason?: string;
-}
-
-/** `assetIdKey`'s format is `<hex txid>:<groupIndex>`. A row that does not
- * parse is dropped rather than failing the whole response: `admit` is the
- * authority on the allowlist, this is advisory. */
-function allowlistToWire(keys: string[] | null): AssetIdWire[] | null {
-    if (keys === null) return null;
-    const out: AssetIdWire[] = [];
-    for (const key of keys) {
-        const at = key.lastIndexOf(":");
-        if (at <= 0) continue;
-        const groupIndex = Number(key.slice(at + 1));
-        if (!Number.isSafeInteger(groupIndex) || groupIndex < 0) continue;
-        out.push({ txid: key.slice(0, at), groupIndex });
-    }
-    return out;
 }
 
 async function readJson(c: Context): Promise<unknown> {
@@ -94,9 +78,7 @@ export function createRoutes(deps: RouteDeps): Hono {
                 emulatorUrl: cfg.emulatorUrl,
                 dust: satsToWire(cfg.dust),
                 vtxoMinAmount: satsToWire(cfg.vtxoMinAmount),
-                assetAllowlist: allowlistToWire(p.assetAllowlist),
-                feeFlatSats: satsToWire(p.feeFlatSats),
-                feeBps: p.feeBps,
+                assetRules: p.assetRules.map(assetRuleToWire),
                 maxPerPaymentTopupSats: satsToWire(p.maxPerPaymentTopupSats),
                 paused: p.paused,
             };

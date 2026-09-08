@@ -19,7 +19,7 @@ export function advance(over: Partial<Advance> = {}): Advance {
         topup: 300n,
         locktime: 800_000n,
         covenantAddress: `tark1qcovenant${seq}`,
-        feeSats: 12n,
+        fare: { currency: "sats" as const, units: 0n },
         createdAt: 1_700_000_000_000 + seq,
         updatedAt: 1_700_000_000_000 + seq,
         expiresAt: 1_700_000_060_000 + seq,

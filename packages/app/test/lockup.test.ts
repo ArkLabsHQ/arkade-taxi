@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { payoutPkScript } from "@arkade-taxi/covenant";
+import type { FareSpec } from "@arkade-taxi/core";
 import {
     assertDistinctScripts,
     buildLockupOutputs,
@@ -7,9 +8,12 @@ import {
     LockupShapeError,
     type LockupOutput,
 } from "../src/lockup.js";
-import { DUST, operatorKey, receiverKey, senderKey } from "./fixtures.js";
+import { DUST, operatorKey, receiverKey, senderKey, VTXO_MIN } from "./fixtures.js";
 
-const baseParams = () => ({
+const ASSET = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
+const TOKEN = { txid: new Uint8Array(32).fill(0x99), groupIndex: 0 };
+
+const params = () => ({
     receiverKey,
     senderKey,
     operatorKey,
@@ -19,11 +23,14 @@ const baseParams = () => ({
 });
 
 const covenantPkScript = new Uint8Array([0x51, 0x20, ...new Uint8Array(32).fill(0xcc)]);
+const satsFare: FareSpec = { currency: "sats", units: 50n };
+const tokenFare: FareSpec = { currency: "asset", assetId: TOKEN, units: 1n };
 
 const req = (over: Partial<Parameters<typeof buildLockupOutputs>[0]> = {}) => ({
-    params: baseParams(),
+    params: params(),
     covenantPkScript,
-    feeSats: 50n,
+    fare: satsFare,
+    vtxoMinAmount: VTXO_MIN,
     senderChangeSats: 0n,
     ...over,
 });
@@ -31,50 +38,60 @@ const req = (over: Partial<Parameters<typeof buildLockupOutputs>[0]> = {}) => ({
 describe("buildLockupOutputs", () => {
     it("puts the covenant at index 0 for the full dust unit", () => {
         const [covenant] = buildLockupOutputs(req());
-        expect(covenant).toMatchObject({ role: "covenant", amount: baseParams().dust });
+        expect(covenant).toMatchObject({ role: "covenant", amount: DUST });
         expect(covenant?.script).toEqual(covenantPkScript);
     });
 
-    it("omits a zero fee rather than emitting a zero-value output", () => {
-        expect(buildLockupOutputs(req({ feeSats: 0n })).map((o) => o.role)).toEqual(["covenant"]);
+    it("omits a zero fare rather than emitting an empty output", () => {
+        const fare: FareSpec = { currency: "sats", units: 0n };
+        expect(buildLockupOutputs(req({ fare })).map((o) => o.role)).toEqual(["covenant"]);
     });
 
-    // Same rule the covenant pins its own payouts with, so a fee below dust
-    // stays spendable instead of becoming an OP_RETURN the operator cannot claim.
-    it("pays a below-dust fee to the operator's sub-dust script", () => {
-        const fee = buildLockupOutputs(req({ feeSats: 50n }))[1];
-        expect(fee?.script).toEqual(payoutPkScript(operatorKey, 50n, baseParams().dust));
+    // The whole point: a sender with an asset and no spare bitcoin can still pay.
+    it("pays a token fare as asset units riding on hosting sats", () => {
+        const fare = buildLockupOutputs(req({ fare: tokenFare }))[1];
+        expect(fare).toMatchObject({ role: "operator-fare", amount: VTXO_MIN });
+        expect(fare?.asset).toEqual({ id: TOKEN, units: 1n });
     });
 
-    it("pays an at-or-above-dust fee to P2TR", () => {
-        const fee = buildLockupOutputs(req({ feeSats: 400n }))[1];
-        expect(fee?.script).toEqual(payoutPkScript(operatorKey, 400n, baseParams().dust));
+    // Those hosting sats are the operator paying itself, so exposure is topup only.
+    it("charges the sender no sats for an asset fare", () => {
+        const outputs = buildLockupOutputs(req({ fare: tokenFare }));
+        expect(lockupFundingTotal(outputs)).toBe(DUST + VTXO_MIN);
     });
 
-    it("requires a script when there is change to return", () => {
-        expect(() => buildLockupOutputs(req({ senderChangeSats: 100n }))).toThrow(LockupShapeError);
+    it("pays a sats fare with no asset rider", () => {
+        const fare = buildLockupOutputs(req())[1];
+        expect(fare?.amount).toBe(50n);
+        expect(fare?.asset).toBeUndefined();
+        expect(fare?.script).toEqual(payoutPkScript(operatorKey, 50n, DUST));
     });
 
-    it("rejects negative amounts", () => {
-        expect(() => buildLockupOutputs(req({ feeSats: -1n }))).toThrow(/negative/);
-    });
-
-    it("totals every output, which is what the lockup must be funded with", () => {
-        const outputs = buildLockupOutputs(
-            req({
-                senderChangeSats: 100n,
-                senderChangeScript: new Uint8Array([0x51, 0x20, ...receiverKey]),
-            }),
+    // An asset cannot occupy an output on its own.
+    it("refuses an asset fare with no sats to host it", () => {
+        expect(() => buildLockupOutputs(req({ fare: tokenFare, vtxoMinAmount: 0n }))).toThrow(
+            /cannot occupy an output alone/,
         );
-        expect(lockupFundingTotal(outputs)).toBe(baseParams().dust + 50n + 100n);
+    });
+
+    it("refuses asset change with too little sats to host it", () => {
+        expect(() =>
+            buildLockupOutputs(
+                req({
+                    senderChangeSats: 0n,
+                    senderChangeScript: new Uint8Array([0x51, 0x20, ...senderKey]),
+                    senderChangeAsset: { id: ASSET, units: 5n },
+                }),
+            ),
+        ).toThrow(/host it/);
+    });
+
+    it("rejects a negative fare", () => {
+        const fare: FareSpec = { currency: "sats", units: -1n };
+        expect(() => buildLockupOutputs(req({ fare }))).toThrow(/negative/);
     });
 });
 
-/**
- * Sighash commits to the prevout amount and the wallet resolves inputs by
- * script, taking the first match, so a duplicate script signs for the wrong
- * amount and surfaces as an invalid checkpoint signature.
- */
 describe("assertDistinctScripts", () => {
     const out = (role: LockupOutput["role"], fill: number): LockupOutput => ({
         role,
@@ -84,11 +101,11 @@ describe("assertDistinctScripts", () => {
 
     it("accepts distinct scripts", () => {
         expect(() =>
-            assertDistinctScripts([out("covenant", 1), out("operator-fee", 2)]),
+            assertDistinctScripts([out("covenant", 1), out("operator-fare", 2)]),
         ).not.toThrow();
     });
 
-    it("rejects two outputs sharing a scriptPubKey, naming both roles", () => {
+    it("rejects a shared scriptPubKey, naming both roles", () => {
         expect(() => assertDistinctScripts([out("covenant", 1), out("sender-change", 1)])).toThrow(
             /covenant.*sender-change/,
         );
@@ -98,20 +115,20 @@ describe("assertDistinctScripts", () => {
         expect(() =>
             assertDistinctScripts([
                 out("covenant", 1),
-                out("operator-fee", 2),
+                out("operator-fare", 2),
                 out("sender-change", 1),
             ]),
         ).toThrow(LockupShapeError);
     });
 
-    // The operator's fee and the sender's change both being sub-dust to the
-    // same key is the realistic way this happens, not a contrived collision.
+    // The realistic collision: the fare and the change both landing on the same
+    // key's script.
     it("is enforced by buildLockupOutputs, not left to the caller", () => {
         expect(() =>
             buildLockupOutputs(
                 req({
                     senderChangeSats: 100n,
-                    senderChangeScript: payoutPkScript(operatorKey, 50n, baseParams().dust),
+                    senderChangeScript: payoutPkScript(operatorKey, 50n, DUST),
                 }),
             ),
         ).toThrow(LockupShapeError);

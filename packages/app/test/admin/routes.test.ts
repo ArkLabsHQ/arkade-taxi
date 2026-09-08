@@ -170,14 +170,11 @@ describe("GET /admin/api/policy", () => {
         expect(status).toBe(200);
         expect(body).toEqual({
             paused: true,
-            feeFlatSats: "0",
-            feeBps: 0,
             maxOutstandingSats: "0",
             maxPerPaymentTopupSats: "0",
             maxConcurrentAdvances: 0,
             locktimeMarginBlocks: DEFAULT_POLICY.locktimeMarginBlocks,
-            assetAllowlist: [],
-            allowBitcoin: true,
+            assetRules: [],
             quoteTtlSeconds: 60,
         });
     });
@@ -190,13 +187,13 @@ describe("PATCH /admin/api/policy", () => {
         const { status, body } = await h.send("/admin/api/policy", "PATCH", {
             actor: "alice@ui",
             paused: false,
-            feeBps: 45,
+            locktimeMarginBlocks: 45,
             maxOutstandingSats: INT64_MAX,
         });
 
         expect(status).toBe(200);
         expect(body.paused).toBe(false);
-        expect(body.feeBps).toBe(45);
+        expect(body.locktimeMarginBlocks).toBe(45);
         expect(body.maxOutstandingSats).toBe(INT64_MAX);
         expect(h.policy.get().maxOutstandingSats).toBe(9_223_372_036_854_775_807n);
 
@@ -210,11 +207,11 @@ describe("PATCH /admin/api/policy", () => {
 
         const { body } = await h.send("/admin/api/policy", "PATCH", {
             actor: "alice",
-            feeFlatSats: "9007199254740993",
+            maxOutstandingSats: "9007199254740993",
         });
 
-        expect(body.feeFlatSats).toBe("9007199254740993");
-        expect(h.policy.get().feeFlatSats).toBe(9_007_199_254_740_993n);
+        expect(body.maxOutstandingSats).toBe("9007199254740993");
+        expect(h.policy.get().maxOutstandingSats).toBe(9_007_199_254_740_993n);
     });
 
     it("rejects a blank actor with 400 and changes nothing", async () => {
@@ -222,19 +219,19 @@ describe("PATCH /admin/api/policy", () => {
 
         const { status, body } = await h.send("/admin/api/policy", "PATCH", {
             actor: "   ",
-            feeBps: 45,
+            locktimeMarginBlocks: 7,
         });
 
         expect(status).toBe(400);
         expect(body.error).toMatch(/actor/i);
-        expect(h.policy.get().feeBps).toBe(0);
+        expect(h.policy.get().locktimeMarginBlocks).toBe(DEFAULT_POLICY.locktimeMarginBlocks);
         expect(h.policy.history(10)).toHaveLength(0);
     });
 
     it("rejects a missing actor with 400", async () => {
         const h = harness();
 
-        const { status } = await h.send("/admin/api/policy", "PATCH", { feeBps: 45 });
+        const { status } = await h.send("/admin/api/policy", "PATCH", { locktimeMarginBlocks: 45 });
 
         expect(status).toBe(400);
         expect(h.policy.history(10)).toHaveLength(0);
@@ -256,12 +253,12 @@ describe("PATCH /admin/api/policy", () => {
     it("rejects a malformed or negative sats value with 400", async () => {
         const h = harness();
 
-        for (const feeFlatSats of ["-1", "1.5", "1e3", "", "abc"]) {
+        for (const maxOutstandingSats of ["-1", "1.5", "1e3", "", "abc"]) {
             const { status } = await h.send("/admin/api/policy", "PATCH", {
                 actor: "alice",
-                feeFlatSats,
+                maxOutstandingSats,
             });
-            expect(status, `feeFlatSats=${feeFlatSats}`).toBe(400);
+            expect(status, `maxOutstandingSats=${maxOutstandingSats}`).toBe(400);
         }
         expect(h.policy.history(10)).toHaveLength(0);
     });
@@ -277,42 +274,30 @@ describe("PATCH /admin/api/policy", () => {
 
         expect(res.status).toBe(400);
     });
-
-    it("distinguishes an empty allowlist from an absent one", async () => {
-        const h = harness();
-
-        const listed = await h.send("/admin/api/policy", "PATCH", {
-            actor: "alice",
-            assetAllowlist: ["usd", "eur"],
-        });
-        expect(listed.body.assetAllowlist).toEqual(["usd", "eur"]);
-
-        const open = await h.send("/admin/api/policy", "PATCH", {
-            actor: "alice",
-            assetAllowlist: null,
-        });
-        expect(open.body.assetAllowlist).toBeNull();
-    });
 });
 
 describe("GET /admin/api/policy/history", () => {
     it("returns audit rows newest first, capped by limit", async () => {
         const h = harness();
-        h.policy.update({ feeBps: 1 }, "alice");
-        h.policy.update({ feeBps: 2 }, "bob");
-        h.policy.update({ feeBps: 3 }, "carol");
+        h.policy.update({ locktimeMarginBlocks: 1 }, "alice");
+        h.policy.update({ locktimeMarginBlocks: 2 }, "bob");
+        h.policy.update({ locktimeMarginBlocks: 3 }, "carol");
 
         const { status, body } = await h.json("/admin/api/policy/history?limit=2");
 
         expect(status).toBe(200);
         expect(body.history).toHaveLength(2);
-        expect(body.history[0]).toMatchObject({ field: "feeBps", newValue: "3", actor: "carol" });
+        expect(body.history[0]).toMatchObject({
+            field: "locktimeMarginBlocks",
+            newValue: "3",
+            actor: "carol",
+        });
         expect(body.history[1].newValue).toBe("2");
     });
 
     it("defaults the limit when none is given", async () => {
         const h = harness();
-        h.policy.update({ feeBps: 1 }, "alice");
+        h.policy.update({ locktimeMarginBlocks: 1 }, "alice");
 
         const { body } = await h.json("/admin/api/policy/history");
 
@@ -348,7 +333,7 @@ describe("GET /admin/api/advances", () => {
             dust: "330",
             topup: "2",
             locktime: "800000",
-            feeSats: "12",
+            fare: { currency: "sats", units: "0" },
             createdAt: 3_000,
         });
     });
@@ -506,13 +491,13 @@ describe("policy surface completeness", () => {
         expect(Object.keys(body).sort()).toEqual(Object.keys(DEFAULT_POLICY).sort());
     });
 
-    it("accepts a patch for the field that was missed", async () => {
+    it("accepts a patch for the nested rule table", async () => {
         const h = harness();
         const res = await h.json("/admin/api/policy", {
             method: "PATCH",
-            body: JSON.stringify({ actor: "ops", allowBitcoin: false }),
+            body: JSON.stringify({ actor: "ops", assetRules: [] }),
         });
         expect(res.status).toBe(200);
-        expect(res.body.allowBitcoin).toBe(false);
+        expect(res.body.assetRules).toEqual([]);
     });
 });

@@ -85,18 +85,25 @@ describe("GET /v1/info", () => {
             emulatorUrl: "https://emulator.example",
             dust: "330",
             vtxoMinAmount: "10",
-            assetAllowlist: null,
-            feeFlatSats: "5",
-            feeBps: 100,
+            assetRules: [
+                {
+                    assetId: null,
+                    enabled: true,
+                    fares: [
+                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "8" } },
+                    ],
+                    claim: "either",
+                    maxTopupSats: null,
+                },
+            ],
             maxPerPaymentTopupSats: "1000",
             paused: false,
         });
     });
 
-    it("renders the allowlist as wire asset ids", async () => {
-        const res = await app({ assetAllowlist: [assetIdKey(ASSET)] }).request("/v1/info");
-        const body = (await res.json()) as InfoResponse;
-        expect(body.assetAllowlist).toEqual([assetIdToWire(ASSET)]);
+    it("advertises no rules when the operator has stated none", async () => {
+        const res = await app({ assetRules: [] }).request("/v1/info");
+        expect(((await res.json()) as InfoResponse).assetRules).toEqual([]);
     });
 
     it("reflects a paused operator without refusing the request", async () => {
@@ -114,7 +121,7 @@ describe("POST /v1/transfers", () => {
         const body = (await res.json()) as QuoteResponse;
         expect(body.transferId).toBe("adv-1");
         expect(body.params.topup).toBe("330");
-        expect(body.feeSats).toBe("8");
+        expect(body.fare.units).toBe("8");
         expect(body.expiresAt).toBe(NOW + 60);
     });
 

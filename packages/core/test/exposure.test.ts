@@ -15,7 +15,7 @@ const advance = (state: AdvanceState, topup: bigint, locktime: bigint): Advance 
     topup,
     locktime,
     covenantAddress: "tark1qexample",
-    feeSats: 10n,
+    fare: { currency: "sats", units: 10n },
     createdAt: 1_000,
     updatedAt: 1_000,
     expiresAt: 2_000,

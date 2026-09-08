@@ -34,7 +34,13 @@ export interface QuoteExpectation {
     senderKey: Uint8Array;
     assetId?: AssetIdValue;
     maxTopupSats: bigint;
-    maxFeeSats: bigint;
+    /**
+     * The most the caller will pay, AND in what. Currency is part of the
+     * authorisation: "at most 1000" means nothing until it says 1000 of what,
+     * and a bare number would let a quote in an unexpected currency pass a
+     * ceiling meant for another.
+     */
+    maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     minLocktime: bigint;
 }
 
@@ -71,6 +77,8 @@ const sameAsset = (a: AssetIdValue | undefined, b: AssetIdValue | undefined): bo
         : a.groupIndex === b.groupIndex && sameBytes(a.txid, b.txid);
 
 const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" : "bitcoin");
+
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
 export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     const { expect, trustedServerKey, trustedEmulatorKey, vtxoMinAmount, hrp } = args;
@@ -130,10 +138,25 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
             `topup ${params.topup} exceeds your max ${expect.maxTopupSats}`,
         );
     }
-    if (quote.feeSats > expect.maxFeeSats) {
+    if (quote.fare.currency !== expect.maxFare.currency) {
         reject(
             VerificationErrorCode.Fee,
-            `fee ${quote.feeSats} exceeds your max ${expect.maxFeeSats}`,
+            `fare is in ${quote.fare.currency}, you authorised ${expect.maxFare.currency}`,
+        );
+    }
+    if (
+        quote.fare.currency === "asset" &&
+        (!expect.maxFare.assetId ||
+            !quote.fare.assetId ||
+            hex(quote.fare.assetId.txid) !== hex(expect.maxFare.assetId.txid) ||
+            quote.fare.assetId.groupIndex !== expect.maxFare.assetId.groupIndex)
+    ) {
+        reject(VerificationErrorCode.Fee, "fare is charged in an asset you did not authorise");
+    }
+    if (quote.fare.units > expect.maxFare.units) {
+        reject(
+            VerificationErrorCode.Fee,
+            `fare ${quote.fare.units} exceeds your max ${expect.maxFare.units}`,
         );
     }
     if (params.locktime < expect.minLocktime) {

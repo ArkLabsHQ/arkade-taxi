@@ -5,6 +5,7 @@ import { applyMigrations } from "./schema.js";
 export { AdvanceRepository } from "./advances.js";
 export { DEFAULT_POLICY, PolicyRepository, type AuditRow } from "./policy.js";
 export { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "./schema.js";
+export { assetRulesFromJson, assetRulesToJson } from "./assetRules.js";
 export type { Database } from "better-sqlite3";
 
 /** `path` may be `":memory:"`. Every INTEGER read on the returned handle is a

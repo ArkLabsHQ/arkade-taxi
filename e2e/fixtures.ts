@@ -59,9 +59,7 @@ export const info = (): InfoResponse => ({
     emulatorUrl: "http://localhost:7073",
     dust: "330",
     vtxoMinAmount: "10",
-    assetAllowlist: null,
-    feeFlatSats: "1",
-    feeBps: 0,
+    assetRules: [],
     maxPerPaymentTopupSats: "1000",
     paused: false,
 });
@@ -70,7 +68,7 @@ export const quote = (): QuoteResponse => ({
     transferId: "tr_e2e_01",
     params: quoteParamsToWire(params()),
     covenantAddress: addressFor(params()),
-    feeSats: "1",
+    fare: { currency: "sats", units: "1" },
     expiresAt: NOW + 60,
     unsignedLockupTx: "cHNidP8BAA==",
 });
@@ -82,7 +80,7 @@ export const verifyArgs = (): VerifyQuoteArgs => ({
         receiverKey,
         senderKey,
         maxTopupSats: DUST,
-        maxFeeSats: 10n,
+        maxFare: { currency: "sats" as const, units: 10n },
         minLocktime: 700_000n,
     },
     trustedServerKey: serverKey,
@@ -94,13 +92,25 @@ export const verifyArgs = (): VerifyQuoteArgs => ({
 
 export const policy = (over: Partial<Policy> = {}): Policy => ({
     paused: false,
-    feeFlatSats: 1n,
-    feeBps: 0,
     maxOutstandingSats: 1_000n,
     maxPerPaymentTopupSats: 1_000n,
     maxConcurrentAdvances: 8,
     locktimeMarginBlocks: 144,
-    assetAllowlist: null,
+    assetRules: [
+        {
+            assetId: null,
+            enabled: true,
+            fares: [
+                {
+                    id: "sats",
+                    currency: { kind: "sats" as const },
+                    pricing: { kind: "flat" as const, units: 1n },
+                },
+            ],
+            claim: "either" as const,
+            maxTopupSats: null,
+        },
+    ],
     quoteTtlSeconds: 60,
     ...over,
 });
@@ -114,7 +124,7 @@ export const advance = (over: Partial<Advance> & Pick<Advance, "id">): Advance =
     topup: DUST,
     locktime: LOCKTIME,
     covenantAddress: addressFor(params()),
-    feeSats: 1n,
+    fare: { currency: "sats" as const, units: 1n },
     createdAt: NOW,
     updatedAt: NOW,
     expiresAt: NOW + 60,

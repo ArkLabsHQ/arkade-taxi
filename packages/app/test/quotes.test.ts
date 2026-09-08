@@ -73,7 +73,7 @@ describe("createQuote", () => {
             topup: "330",
             locktime: LOCKTIME.toString(),
         });
-        expect(res.feeSats).toBe("8");
+        expect(res.fare.units).toBe("8");
         expect(res.unsignedLockupTx).toBe(lockupBuilder.unsignedTx);
     });
 
@@ -109,7 +109,7 @@ describe("createQuote", () => {
 
         expect(stored.state).toBe("quoted");
         expect(stored.topup).toBe(330n);
-        expect(stored.feeSats).toBe(8n);
+        expect(stored.fare).toEqual({ currency: "sats", units: 8n });
         expect(stored.locktime).toBe(LOCKTIME);
         expect(stored.createdAt).toBe(NOW);
         expect(stored.covenantAddress).toBe(res.covenantAddress);
@@ -121,7 +121,26 @@ describe("createQuote", () => {
     });
 
     it("round-trips an asset id", async () => {
-        const res = await createQuote(deps(), quoteBody({ assetId: assetIdToWire(ASSET) }));
+        const withAsset = deps({
+            policy: {
+                assetRules: [
+                    {
+                        assetId: ASSET,
+                        enabled: true,
+                        fares: [
+                            {
+                                id: "sats",
+                                currency: { kind: "sats" },
+                                pricing: { kind: "flat", units: 8n },
+                            },
+                        ],
+                        claim: "either",
+                        maxTopupSats: null,
+                    },
+                ],
+            },
+        });
+        const res = await createQuote(withAsset, quoteBody({ assetId: assetIdToWire(ASSET) }));
         expect(res.params.assetId).toEqual(assetIdToWire(ASSET));
         expect(advances.get(res.transferId)!.assetId).toEqual(ASSET);
     });
@@ -130,7 +149,7 @@ describe("createQuote", () => {
         const res = await createQuote(deps(), quoteBody());
         expect(lockupBuilder.built).toHaveLength(1);
         expect(lockupBuilder.built[0]!.covenantAddress).toBe(res.covenantAddress);
-        expect(lockupBuilder.built[0]!.feeSats).toBe(8n);
+        expect(lockupBuilder.built[0]!.fare).toEqual({ currency: "sats", units: 8n });
     });
 
     it("subtracts the policy margin from the covenant VTXO expiry", async () => {
@@ -175,26 +194,42 @@ describe("createQuote admission", () => {
         ).resolves.toBeDefined();
     });
 
-    it("rejects an asset that is not on the allowlist", async () => {
+    it("rejects an asset the operator lists no rule for", async () => {
         const e = await caught(() =>
             createQuote(
-                deps({ policy: { assetAllowlist: [] } }),
+                deps({ policy: { assetRules: [] } }),
                 quoteBody({ assetId: { txid: "11".repeat(32), groupIndex: 0 } }),
             ),
         );
-        expect(e.code).toBe("asset_not_allowed");
+        expect(e.code).toBe("asset_not_served");
     });
 
-    // The asset allowlist governs assets only; bitcoin has its own gate.
-    it("quotes bitcoin against an empty asset allowlist, and refuses it only when allowBitcoin is off", async () => {
-        await expect(
-            createQuote(deps({ policy: { assetAllowlist: [] } }), quoteBody()),
-        ).resolves.toBeDefined();
-
-        const e = await caught(() =>
-            createQuote(deps({ policy: { allowBitcoin: false } }), quoteBody()),
+    // Bitcoin has its own rule, so listing assets cannot silently stop it.
+    it("distinguishes a disabled bitcoin rule from an absent one", async () => {
+        const disabled = await caught(() =>
+            createQuote(
+                deps({
+                    policy: {
+                        assetRules: [
+                            {
+                                assetId: null,
+                                enabled: false,
+                                fares: [],
+                                claim: "either",
+                                maxTopupSats: null,
+                            },
+                        ],
+                    },
+                }),
+                quoteBody(),
+            ),
         );
-        expect(e.code).toBe("bitcoin_not_allowed");
+        expect(disabled.code).toBe("asset_disabled");
+
+        const absent = await caught(() =>
+            createQuote(deps({ policy: { assetRules: [] } }), quoteBody()),
+        );
+        expect(absent.code).toBe("asset_not_served");
     });
 
     it("never calls the builder for a refused quote", async () => {

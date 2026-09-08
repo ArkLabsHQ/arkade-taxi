@@ -4,7 +4,9 @@
  * response — so each field is checked rather than asserted.
  */
 
+import type { AssetRuleWire } from "@arkade-taxi/protocol";
 import {
+    fareFromWire,
     assetIdFromWire,
     hexToBytes,
     quoteParamsFromWire,
@@ -27,9 +29,9 @@ export interface DecodedInfo {
     emulatorUrl: string;
     dust: bigint;
     vtxoMinAmount: bigint;
-    assetAllowlist: AssetIdValue[] | null;
-    feeFlatSats: bigint;
-    feeBps: number;
+    /** Left in wire form: a client accepts a fare by id and re-derives nothing
+     * from the terms, so decoding them would be validation with no consumer. */
+    assetRules: AssetRuleWire[];
     maxPerPaymentTopupSats: bigint;
     paused: boolean;
 }
@@ -38,7 +40,7 @@ export interface DecodedQuote {
     transferId: string;
     params: CovenantParamsValue;
     covenantAddress: string;
-    feeSats: bigint;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     expiresAt: number;
     unsignedLockupTx: string;
 }
@@ -90,10 +92,7 @@ const outpoint = (v: unknown, label: string): { txid: string; vout: number } => 
 export function decodeInfo(info: InfoResponse): DecodedInfo {
     return wrap("info", () => {
         if (info === null || typeof info !== "object") invalid("info must be an object");
-        const allowlist = info.assetAllowlist;
-        if (allowlist !== null && !Array.isArray(allowlist)) {
-            invalid("info.assetAllowlist must be an array or null");
-        }
+        if (!Array.isArray(info.assetRules)) invalid("info.assetRules must be an array");
         return {
             protocolVersion: uint(info.protocolVersion, "info.protocolVersion"),
             operatorKey: bytes32(info.operatorKey, "info.operatorKey"),
@@ -103,12 +102,10 @@ export function decodeInfo(info: InfoResponse): DecodedInfo {
             emulatorUrl: str(info.emulatorUrl, "info.emulatorUrl"),
             dust: satsFromWire(info.dust, "info.dust"),
             vtxoMinAmount: satsFromWire(info.vtxoMinAmount, "info.vtxoMinAmount"),
-            assetAllowlist:
-                allowlist === null
-                    ? null
-                    : allowlist.map((a, i) => assetIdFromWire(a, `info.assetAllowlist[${i}]`)),
-            feeFlatSats: satsFromWire(info.feeFlatSats, "info.feeFlatSats"),
-            feeBps: uint(info.feeBps, "info.feeBps"),
+            // Kept in wire form: a client picks a fare by id and re-derives
+            // nothing from the terms, so decoding them would be validation
+            // without a consumer.
+            assetRules: info.assetRules,
             maxPerPaymentTopupSats: satsFromWire(
                 info.maxPerPaymentTopupSats,
                 "info.maxPerPaymentTopupSats",
@@ -125,7 +122,7 @@ export function decodeQuote(quote: QuoteResponse): DecodedQuote {
             transferId: str(quote.transferId, "quote.transferId"),
             params: quoteParamsFromWire(quote.params, "quote.params"),
             covenantAddress: str(quote.covenantAddress, "quote.covenantAddress"),
-            feeSats: satsFromWire(quote.feeSats, "quote.feeSats"),
+            fare: fareFromWire(quote.fare, "quote.fare"),
             expiresAt: uint(quote.expiresAt, "quote.expiresAt"),
             unsignedLockupTx: str(quote.unsignedLockupTx, "quote.unsignedLockupTx"),
         };

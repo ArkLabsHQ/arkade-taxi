@@ -7,9 +7,16 @@
 
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { computeExposure, type Advance, type AdvanceState, type Policy } from "@arkade-taxi/core";
+import {
+    computeExposure,
+    type Advance,
+    type AdvanceState,
+    type AssetRule,
+    type Policy,
+} from "@arkade-taxi/core";
 import { ADVANCE_STATES, type AdvanceRepository, type PolicyRepository } from "@arkade-taxi/db";
-import { bytesToHex, satsToWire } from "@arkade-taxi/protocol";
+import { bytesToHex, fareToWire, satsToWire } from "@arkade-taxi/protocol";
+import { assetRuleToWire } from "../rulesWire.js";
 
 /** What the admin surface needs to know about the sweeper. Only the first three
  * fields are required, so a sweeper that tracks less can still report. */
@@ -61,14 +68,14 @@ const policyPatch = z
     .object({
         actor,
         paused: z.boolean().optional(),
-        feeFlatSats: sats.optional(),
-        feeBps: z.number().int().min(0).max(10_000).optional(),
         maxOutstandingSats: sats.optional(),
         maxPerPaymentTopupSats: sats.optional(),
         maxConcurrentAdvances: z.number().int().min(0).optional(),
         locktimeMarginBlocks: z.number().int().min(0).optional(),
-        assetAllowlist: z.array(z.string()).nullable().optional(),
-        allowBitcoin: z.boolean().optional(),
+        // Rules are replaced wholesale rather than patched member-by-member: a
+        // partial edit of a nested list has no unambiguous meaning, and the
+        // console reads the whole table before it writes.
+        assetRules: z.array(z.custom<AssetRule>()).optional(),
         quoteTtlSeconds: z.number().int().min(1).optional(),
     })
     .strict();
@@ -102,7 +109,7 @@ interface AdvanceWire {
     topup: string;
     locktime: string;
     covenantAddress: string;
-    feeSats: string;
+    fare: unknown;
     createdAt: number;
     updatedAt: number;
     expiresAt: number;
@@ -122,7 +129,7 @@ function toAdvanceWire(a: Advance): AdvanceWire {
         topup: satsToWire(a.topup),
         locktime: satsToWire(a.locktime),
         covenantAddress: a.covenantAddress,
-        feeSats: satsToWire(a.feeSats),
+        fare: fareToWire(a.fare),
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
         expiresAt: a.expiresAt,
@@ -137,14 +144,11 @@ function toAdvanceWire(a: Advance): AdvanceWire {
 
 const toPolicyWire = (p: Policy) => ({
     paused: p.paused,
-    feeFlatSats: satsToWire(p.feeFlatSats),
-    feeBps: p.feeBps,
     maxOutstandingSats: satsToWire(p.maxOutstandingSats),
     maxPerPaymentTopupSats: satsToWire(p.maxPerPaymentTopupSats),
     maxConcurrentAdvances: p.maxConcurrentAdvances,
     locktimeMarginBlocks: p.locktimeMarginBlocks,
-    assetAllowlist: p.assetAllowlist,
-    allowBitcoin: p.allowBitcoin,
+    assetRules: p.assetRules.map(assetRuleToWire),
     quoteTtlSeconds: p.quoteTtlSeconds,
 });
 

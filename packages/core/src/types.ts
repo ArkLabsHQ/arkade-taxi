@@ -1,4 +1,5 @@
 import type { AssetIdRef } from "@arkade-taxi/covenant";
+import type { AssetRule, ClaimMode, FareSpec } from "./fares.js";
 
 /**
  * Transitions are driven by observed chain state, never by optimism: `locked`
@@ -41,9 +42,15 @@ export interface Advance {
     /** Derived from the params; the client verifies against its own derivation. */
     covenantAddress: string;
 
-    /** Charged at lockup as a separate output: the covenant pins the operator's
-     * repayment to exactly `topup`, so no fee is expressible inside it. */
-    feeSats: bigint;
+    /**
+     * Charged at lockup as a separate output: the covenant pins the operator's
+     * repayment to exactly `topup`, so no fare is expressible inside it.
+     *
+     * Not necessarily sats. The sender this service exists for holds an asset
+     * and no spare bitcoin, so a sats-only fare would demand the very thing the
+     * covenant removes the need for.
+     */
+    fare: FareSpec;
 
     outpoint?: Outpoint;
     spentTxid?: string;
@@ -57,8 +64,6 @@ export interface Advance {
 /** Live-reconfigurable operator policy. Persisted; UI edits are audited. */
 export interface Policy {
     paused: boolean;
-    feeFlatSats: bigint;
-    feeBps: number;
     maxOutstandingSats: bigint;
     maxPerPaymentTopupSats: bigint;
     maxConcurrentAdvances: number;
@@ -67,15 +72,15 @@ export interface Policy {
      * means spending it, which means satisfying a leaf — so recovery must fire
      * first. UNVERIFIED against arkd; kept configurable for that reason. */
     locktimeMarginBlocks: number;
-    /** null means every asset is accepted. Governs assets only — see allowBitcoin. */
-    assetAllowlist: string[] | null;
     /**
-     * Whether plain sub-dust bitcoin transfers are quoted, independent of the
-     * asset allowlist. Separate because a field named `assetAllowlist` silently
-     * disabling bitcoin is a coupling nobody would predict, and sub-dust bitcoin
-     * is a first-class case rather than an asset with no id.
+     * What this operator serves, and on what terms, per asset. An entry with
+     * `assetId: null` is the plain sub-dust bitcoin case.
+     *
+     * One table rather than an allowlist plus a bitcoin flag: those were two
+     * mechanisms answering the same question, and folding bitcoin into an
+     * ASSET allowlist made enabling the allowlist silently stop quoting it.
      */
-    allowBitcoin: boolean;
+    assetRules: AssetRule[];
     quoteTtlSeconds: number;
 }
 
@@ -94,7 +99,11 @@ export interface QuoteRequest {
     /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
      * payment, where the operator funds the whole thing. */
     senderSats: bigint;
+    /** Units of the asset being moved; priced against by a proportional fare. */
+    assetUnits?: bigint;
+    /** Which of the rule's offered fares the client accepts. Omitted takes the first. */
+    fareId?: string;
 }
 
 export type AdmissionDecision =
-    { ok: true; topup: bigint; feeSats: bigint } | { ok: false; reason: string };
+    { ok: true; topup: bigint; fare: FareSpec; claim: ClaimMode } | { ok: false; reason: string };

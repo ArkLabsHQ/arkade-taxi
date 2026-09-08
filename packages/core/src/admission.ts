@@ -1,18 +1,5 @@
-import type { AssetIdRef } from "@arkade-taxi/covenant";
 import type { AdmissionDecision, Exposure, Policy, QuoteRequest } from "./types.js";
-import { priceQuote, type PricingFn } from "./pricing.js";
-
-const toHex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-
-/**
- * Canonical key for `Policy.assetAllowlist`, which is `string[]` while an asset
- * is really the pair (txid, groupIndex). Both halves are in the key: a txid-only
- * one would admit a group the operator never listed. Hex is the raw internal
- * byte order, never reversed display hex.
- */
-export function assetIdKey(id: AssetIdRef): string {
-    return `${toHex(id.txid)}:${id.groupIndex}`;
-}
+import { FareError, resolveFare, ruleFor, selectFare, type FareSpec } from "./fares.js";
 
 function requiredTopup(senderSats: bigint, dust: bigint, vtxoMinAmount: bigint): bigint {
     const shortfall = dust - senderSats;
@@ -26,24 +13,20 @@ export function admit(
     exposure: Exposure,
     dust: bigint,
     vtxoMinAmount: bigint,
-    pricing?: PricingFn,
 ): AdmissionDecision {
     if (policy.paused) return { ok: false, reason: "paused" };
 
-    // Two gates, not one: the asset allowlist governs assets, allowBitcoin
-    // governs bitcoin. Folding them together made enabling an allowlist
-    // silently stop quoting sub-dust bitcoin.
-    if (req.assetId === undefined) {
-        if (!policy.allowBitcoin) return { ok: false, reason: "bitcoin_not_allowed" };
-    } else if (policy.assetAllowlist !== null) {
-        if (!policy.assetAllowlist.includes(assetIdKey(req.assetId))) {
-            return { ok: false, reason: "asset_not_allowed" };
-        }
-    }
+    // One table, not a pair of flags. `assetId: null` is the bitcoin rule, so
+    // "does this operator serve sub-dust bitcoin" and "does it serve USDT" are
+    // the same question asked of the same structure.
+    const rule = ruleFor(policy.assetRules, req.assetId);
+    if (!rule) return { ok: false, reason: "asset_not_served" };
+    if (!rule.enabled) return { ok: false, reason: "asset_disabled" };
 
     const topup = requiredTopup(req.senderSats, dust, vtxoMinAmount);
 
-    if (topup > policy.maxPerPaymentTopupSats) {
+    const perPaymentCap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
+    if (topup > perPaymentCap) {
         return { ok: false, reason: "topup_exceeds_max_per_payment" };
     }
     if (exposure.outstandingSats + topup > policy.maxOutstandingSats) {
@@ -58,9 +41,17 @@ export function admit(
         return { ok: false, reason: "topup_outside_covenant_range" };
     }
 
-    const feeSats = priceQuote(
-        { topup, senderSats: req.senderSats, policy, assetId: req.assetId },
-        pricing,
-    );
-    return { ok: true, topup, feeSats };
+    let fare: FareSpec;
+    try {
+        fare = resolveFare(selectFare(rule, req.fareId), {
+            topupSats: topup,
+            assetUnits: req.assetUnits,
+            assetId: req.assetId,
+        });
+    } catch (error) {
+        if (error instanceof FareError) return { ok: false, reason: "fare_unavailable" };
+        throw error;
+    }
+
+    return { ok: true, topup, fare, claim: rule.claim };
 }

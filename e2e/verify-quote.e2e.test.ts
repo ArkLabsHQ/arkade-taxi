@@ -58,7 +58,22 @@ liveScenario("verify-quote-rejects-tampered-params", () => {
     expect(codeOf((a) => (a.quote.params.dust = "329"))).toBe(VerificationErrorCode.Dust);
     expect(codeOf((a) => (a.quote.params.topup = "331"))).toBe(VerificationErrorCode.Topup);
     expect(codeOf((a) => (a.quote.params.topup = "5"))).toBe(VerificationErrorCode.InvalidParams);
-    expect(codeOf((a) => (a.quote.feeSats = "11"))).toBe(VerificationErrorCode.Fee);
+    expect(codeOf((a) => (a.quote.fare = { currency: "sats", units: "11" }))).toBe(
+        VerificationErrorCode.Fee,
+    );
+
+    // Currency is part of the authorisation: a client that agreed to sats must
+    // not be charged the same number of some asset's units.
+    expect(
+        codeOf(
+            (a) =>
+                (a.quote.fare = {
+                    currency: "asset",
+                    units: "1",
+                    assetId: { txid: "99".repeat(32), groupIndex: 0 },
+                }),
+        ),
+    ).toBe(VerificationErrorCode.Fee);
     expect(codeOf((a) => (a.quote.params.locktime = "600000"))).toBe(
         VerificationErrorCode.Locktime,
     );

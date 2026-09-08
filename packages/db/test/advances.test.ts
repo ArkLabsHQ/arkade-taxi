@@ -19,7 +19,7 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         topup: 300n,
         locktime: 850_000n,
         covenantAddress: "tark1qcovenantexample",
-        feeSats: 25n,
+        fare: { currency: "sats", units: 25n },
         createdAt: 1_757_000_000,
         updatedAt: 1_757_000_001,
         expiresAt: 1_757_000_600,
@@ -52,7 +52,7 @@ describe("round-trip fidelity", () => {
         const a = advance({
             dust: ABOVE_MAX_SAFE,
             topup: ABOVE_MAX_SAFE - 1n,
-            feeSats: INT64_MAX,
+            fare: { currency: "sats" as const, units: INT64_MAX },
             locktime: ABOVE_MAX_SAFE + 2n,
         });
 
@@ -61,7 +61,7 @@ describe("round-trip fidelity", () => {
 
         expect(got.dust).toBe(ABOVE_MAX_SAFE);
         expect(got.topup).toBe(ABOVE_MAX_SAFE - 1n);
-        expect(got.feeSats).toBe(INT64_MAX);
+        expect(got.fare.units).toBe(INT64_MAX);
         expect(got.locktime).toBe(ABOVE_MAX_SAFE + 2n);
         expect(got.dust).not.toBe(got.topup);
         expect(Number(got.dust)).toBe(Number(got.topup));

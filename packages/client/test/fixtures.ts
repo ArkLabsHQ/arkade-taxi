@@ -46,9 +46,7 @@ export const info = (): InfoResponse => ({
     emulatorUrl: "https://emulator.example",
     dust: "330",
     vtxoMinAmount: "10",
-    assetAllowlist: null,
-    feeFlatSats: "1",
-    feeBps: 0,
+    assetRules: [],
     maxPerPaymentTopupSats: "1000",
     paused: false,
 });
@@ -57,7 +55,7 @@ export const quote = (): QuoteResponse => ({
     transferId: "tr_01",
     params: quoteParamsToWire(params()),
     covenantAddress: addressFor(params()),
-    feeSats: "1",
+    fare: { currency: "sats", units: "1" },
     expiresAt: NOW + 60,
     unsignedLockupTx: "cHNidP8BAA==",
 });
@@ -69,7 +67,7 @@ export const args = (): VerifyQuoteArgs => ({
         receiverKey,
         senderKey,
         maxTopupSats: 330n,
-        maxFeeSats: 10n,
+        maxFare: { currency: "sats" as const, units: 10n },
         minLocktime: 700_000n,
     },
     trustedServerKey: serverKey,
