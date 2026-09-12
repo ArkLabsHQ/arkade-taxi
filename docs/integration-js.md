@@ -1,387 +1,309 @@
 # Integrating `@arkade-taxi/client`
 
-A wallet-side guide. The flow is **quote → verify → sign → submit**, and the
-middle step is the whole security argument.
+Taxi supplies the sats needed to carry an Arkade asset in a covenant VTXO.
+Alice funds the asset payment; Bob claims it into his existing Arkade account.
+Taxi either receives its sats back when Bob recycles, or earns an agreed fare
+at lockup when Bob purchases. Both wallets need access to their trusted Arkade
+Service and emulator as well as Taxi.
 
-```bash
-pnpm add @arkade-taxi/client
-```
+## Recycle: send 200 USDT
 
-You also need connectivity to **arkd and the emulator**, not only to the
-operator. A client that can only reach the operator cannot check anything it is
-told.
+1. Bob gives Alice his full Arkade address and Taxi URL.
+2. Alice selects spendable VTXOs containing 200 USDT.
+3. Alice requests and verifies the quote, then signs and submits the lockup.
+   Taxi adds the required sats and Bob's feed reports the transfer as
+   `locking`, then `locked` and claimable.
+4. Bob verifies the incoming claim and recycles it with his own sats VTXO.
+   Taxi gets its advanced sats back; Bob gets a normal VTXO holding 200 USDT
+   and the remaining merged sats.
 
-## Do not skip verification
+This example assumes a zero-fare recycle offer. Bob needs a compatible sats
+input large enough to repay the top-up and keep his merged output above dust.
 
-`verifyQuote` rebuilds the covenant from the quoted parameters, using the same
-package the operator used, and refuses unless the derived address equals the
-`covenantAddress` you were handed.
+## Purchase: authorize 201 USDT, receive 200 USDT
 
-**That check is worthless on its own.** It is only meaningful once you have
-pinned `serverKey` and `emulatorKey` against keys you already trust. Otherwise
-an operator names an emulator it controls, derives an address from it, and the
-rebuild agrees with the forgery — a self-consistent lie.
+1. Bob asks Alice for 200 USDT and supplies his Arkade address and Taxi URL.
+2. Alice selects 201 USDT and authorizes a 1 USDT Taxi fare.
+3. Alice requests and verifies the quote, then signs and submits the lockup.
+   It pays Taxi 1 USDT immediately and puts 200 USDT in the Taxi-funded
+   covenant. Bob's feed reports the claim.
+4. Bob verifies and purchases the claim without adding a Bob-owned input.
+   He receives 200 USDT and the Taxi-funded sats; Taxi keeps its 1 USDT fare.
 
-So `verifyQuote` takes `trustedServerKey` and `trustedEmulatorKey` as separate
-arguments from the `info` response, checks them **first**, and then builds the
-script from the trusted values rather than from what `info` claimed. Weakening
-the pin cannot quietly re-enable the attack, because the address it compares
-against was never derived from the operator's keys in the first place.
+The examples assume this USDT asset has six decimals. Use your verified asset
+ID and metadata: the name “USDT” alone does not identify an asset.
 
-`e2e/verify-quote.e2e.test.ts` asserts exactly this: an unpinned client accepts
-a rogue-emulator quote, a pinned one rejects it at `UNTRUSTED_EMULATOR_KEY`
-before the address is ever derived.
+## Alice: select, verify, submit
 
-The API is shaped so this is awkward to skip. `TaxiClient.submitLockup` takes a
-`VerifiedQuote`, and the only way to obtain one is `verifyQuote` — the brand is
-unconstructible outside that module. There is no `submitLockup(transferId, …)`.
-
-## Where the trusted keys come from
-
-From the underlying Arkade operator and emulator **your wallet is already
-talking to**, not from the taxi operator:
-
-```ts
-import { hex } from "@scure/base";
-
-// arkd and the emulator both serve `signerPubkey` on GET /v1/info, compressed
-// (33 bytes). The covenant leaves take the 32-byte x-only form.
-const xOnly = (compressed: string): Uint8Array => hex.decode(compressed).slice(-32);
-
-const trustedServerKey = xOnly(arkdInfo.signerPubkey);
-const trustedEmulatorKey = xOnly(emulatorInfo.signerPubkey);
-```
-
-If your wallet ships a pinned key set, use that instead — the requirement is
-that the value has an origin independent of the operator.
+Install `@arkade-taxi/client` and `@arkade-os/sdk@0.4.72`. Call this function
+with Alice's initialized wallet, Bob's full address, the selected offer's
+`fareId`, and policy/trust facts from the wallet's own configuration.
+`assetUnits` is Bob's payment quantity; the fare is additional.
 
 ```ts
-// ✗ Wrong. This is the attack, written out.
-const trustedServerKey = hexToBytes(info.serverKey);
-const trustedEmulatorKey = hexToBytes(info.emulatorKey);
+import { TaxiClient, type RequestVerifiedQuoteArgs } from "@arkade-taxi/client";
+import { asset, selectCoinsWithAsset, type IWallet } from "@arkade-os/sdk";
+
+type AlicePolicy = Pick<
+    RequestVerifiedQuoteArgs,
+    | "receiverAddress"
+    | "fareId"
+    | "trustedServerKey"
+    | "trustedEmulatorKey"
+    | "trustedServerUnrollScript"
+    | "vtxoMinAmount"
+    | "hrp"
+> & {
+    taxiUrl: string;
+    usdtId: string;
+    mode: "recycle" | "purchase";
+    maxTopupSats: bigint;
+    minLocktime: bigint;
+};
+
+export async function sendUsdt(wallet: IWallet, policy: AlicePolicy) {
+    const taxi = new TaxiClient({ baseUrl: policy.taxiUrl });
+    const id = asset.AssetId.fromString(policy.usdtId);
+    const assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: id.groupIndex };
+    const fareUnits = policy.mode === "purchase" ? 1_000_000n : 0n;
+    const { selected } = selectCoinsWithAsset(
+        await wallet.getSpendableVtxos(),
+        policy.usdtId,
+        200_000_000n + fareUnits,
+    );
+    const { verified } = await taxi.requestVerifiedQuote({
+        ...policy,
+        senderKey: await wallet.identity.xOnlyPublicKey(),
+        selectedVtxos: selected,
+        senderSats: 0n,
+        assetId,
+        assetUnits: 200_000_000n,
+        expect: {
+            maxTopupSats: policy.maxTopupSats,
+            maxFare:
+                policy.mode === "purchase"
+                    ? { currency: "asset", assetId, units: fareUnits }
+                    : { currency: "sats", units: 0n },
+            minLocktime: policy.minLocktime,
+        },
+    });
+    const lockup = await taxi.prepareAndSubmitLockup(verified, wallet.identity);
+    return { verified, lockup };
+}
 ```
 
-Pinning against `info` compares the operator's claim to the operator's claim.
+Alice's wallet chooses and reserves the inputs under its normal expiry and
+concurrency policy. This sample leaves the selected inputs' sats as Alice's
+change; the selection must support valid change. `requestVerifiedQuote`
+converts the selected VTXOs, fetches info and a quote, and verifies the complete
+graph against the explicit payment and policy before returning `VerifiedQuote`.
+Signing and submission are one call.
 
-The same rule applies to `trustedServerUnrollScript`. Obtain it from the Arkade
-operator your wallet already trusts and validate `arkdInfo.checkpointTapscript`
-with the public SDK's `assertValidServerUnrollScript` and a policy derived from
-your locally configured network. Pass the returned `.script`; never copy the
-unroll script out of the taxi envelope and call that trusted.
+## Bob: subscribe, verify, claim
 
-## The flow
+Call this function with Bob's initialized wallet and the full addresses it owns.
+It uses one batched SSE subscription for up to 64 distinct addresses. Both
+snapshot and change events enter the same handler; only locked claims are
+eligible. The expected 200 USDT and trusted keys come from Bob's payment request
+and wallet configuration, independently of the inbox.
 
-The same code runs in a browser and in Node.js 22.12 or newer. Browsers use
-their native `fetch`, `TextEncoder`, and `TextDecoder`; Node uses the matching
-globals. The client signing path does not require `Buffer`, `node:crypto`, or
-the service's Node-only envelope parser. `TaxiClient({ fetch })` configures only
-requests to the Taxi HTTP API; it does not replace the ambient fetch used by
-the public SDK covenant providers.
+Supply `claimOnce` from the wallet's durable operation store: it must reserve a
+transfer before invoking the operation and keep success, failure and ambiguous
+outcomes across restarts. Repeated events must not execute the same claim again.
+The returned function closes the subscription when the wallet screen is disposed.
+
+**Privacy: this inbox is unauthenticated. Anyone who knows an Arkade address
+can inspect its incoming Taxi transfers. URLs and batched addresses can also
+expose account relationships to Taxi and infrastructure logs.**
 
 ```ts
 import {
     TaxiClient,
-    QuoteVerificationError,
-    TaxiError,
-    VerificationErrorCode,
-    signLockup,
-    verifyQuote,
-    type QuoteExpectation,
-    type VerifiedQuote,
+    fundingInputsFromVtxos,
+    type CovenantSpendConfig,
+    type IncomingClaimTrust,
 } from "@arkade-taxi/client";
-import { asset, scriptFromTapLeafScript } from "@arkade-os/sdk";
+import { ArkAddress, asset, type IWallet } from "@arkade-os/sdk";
 
-const taxi = new TaxiClient({ baseUrl: "https://taxi.example" });
+type ClaimBatch = Awaited<ReturnType<TaxiClient["listClaims"]>>;
 
-// 1. What the operator advertises. Every field is decoded and checked; a
-//    malformed body raises TaxiError rather than reaching your logic.
-const info = await taxi.info();
-
-// 2. Select spendable VTXOs using your wallet's coin-selection policy, then
-//    preserve their exact funding evidence. Never synthesize these values.
-const selectedVtxos = await selectTaxiFunding(wallet);
-const expiryOf = (vtxo) => {
-    if (vtxo.expiresAtHeight !== undefined)
-        return { kind: "height", value: BigInt(vtxo.expiresAtHeight) };
-    if (vtxo.expiresAt !== undefined)
-        return { kind: "time", value: BigInt(Math.floor(vtxo.expiresAt.getTime() / 1000)) };
-    throw new Error("selected VTXO has no tagged expiry");
-};
-const holdingsOf = (vtxo) => {
-    const groups = [...(vtxo.assets ?? [])]
-        .sort((a, b) => a.assetId.localeCompare(b.assetId))
-        .map(({ assetId, amount }) =>
-            asset.AssetGroup.create(
-                asset.AssetId.fromString(assetId),
-                null,
-                [],
-                [asset.AssetOutput.create(vtxo.vout, amount)],
-                [],
-            ),
-        );
-    return groups.length ? asset.Packet.create(groups).serialize() : undefined;
-};
-const senderInputs = selectedVtxos.map((vtxo) => {
-    const assetPacket = holdingsOf(vtxo);
-    return {
-        txid: vtxo.txid,
-        vout: vtxo.vout,
-        value: BigInt(vtxo.value),
-        tapTree: vtxo.tapTree,
-        spendLeaf: scriptFromTapLeafScript(vtxo.forfeitTapLeafScript),
-        expiry: expiryOf(vtxo),
-        ...(assetPacket ? { assetPacket } : {}),
-    };
-});
-const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
-
-// 3. Ask for a quote. assetUnits remains bigint and crosses the wire as an
-//    exact decimal string, including values above Number.MAX_SAFE_INTEGER.
-const quote = await taxi.requestQuote({
-    senderInputs,
-    receiverKey, // 32-byte x-only
-    senderKey, // 32-byte x-only
-    assetId, // optional; omit for a sub-dust bitcoin transfer
-    assetUnits, // optional exact asset quantity
-    fareId, // optional id selected from info.assetRules
-    senderSats,
-});
-
-// 4. Verify. Everything you are willing to accept goes in `expect`; funding,
-//    tagged expiries and the unroll script come from independent wallet state.
-const expectation: QuoteExpectation = {
-    receiverKey,
-    senderKey,
-    assetId,
-    maxTopupSats: 330n,
-    maxFare: { currency: "sats", units: 50n },
-    minLocktime: 800_000n,
-};
-
-const verified: VerifiedQuote = verifyQuote({
-    quote,
-    info,
-    expect: expectation,
-    trustedServerKey,
-    trustedEmulatorKey,
-    vtxoMinAmount: BigInt(info.vtxoMinAmount),
-    hrp: "tark", // "ark" on mainnet
-    senderInputs,
-    senderSats,
-    assetUnits,
-    trustedServerUnrollScript,
-});
-
-// 5. Sign. `identity` is the same public SDK Identity your Arkade wallet uses.
-const signedLockupTx = await signLockup({ verified, identity: wallet.identity });
-
-// 6. Submit. Takes the VerifiedQuote, never a caller-supplied transfer id.
-const { txid, outpoint } = await taxi.submitLockup(verified, signedLockupTx);
-
-// 7. Poll until your application reaches a terminal state.
-let state = await taxi.status(verified.quote.transferId);
-while (!terminalStates.has(state.state)) {
-    await waitBeforePolling();
-    state = await taxi.status(verified.quote.transferId);
-}
-```
-
-`prepareAndSubmitLockup(verified, identity)` safely composes steps 5 and 6 when
-you do not need to retain the signed envelope. `signLockup` first reconstructs
-and validates the complete graph from the original authorization, then calls
-`identity.sign` with only the independently derived sender input indexes. It
-also pre-signs checkpoint input 0 for checkpoints belonging to sender inputs.
-Batch-capable identities receive the Arkade transaction and sender checkpoints in
-one `signMultiple` interaction. It accepts only canonical `SigHash.DEFAULT`,
-verifies every returned sender signature, refuses signatures on operator-owned
-inputs or checkpoints, and preserves all unsigned graph bytes.
-
-Submission is queued and idempotent. A successful POST normally returns HTTP
-202 after atomically storing the exact signed envelope; a leased background
-worker performs and resumes provider submission/finalization. Poll status until
-it becomes `locked`. Repeating the identical signed envelope reports the
-current state and does not start a second inline network effect. A different
-envelope for the same transfer is a conflict. A timeout or ambiguous provider
-result remains `locking`; keep polling instead of constructing a replacement
-transaction.
-
-Status may carry `submissionPhase`, `failureCode`, and `failureDetail`. A phase
-of `failed` or `legacy` requires operator action and blocks new admission; the
-client should keep the transfer identifier and must not construct a replacement
-graph.
-
-`verified` also carries `params` (decoded to `bigint`/`Uint8Array`), `script`,
-the independently decoded `envelope`, and the validated `senderInputIndexes`.
-It is a runtime capability as well as a TypeScript brand: copying or mutating it
-does not produce another usable signing/submission capability.
-
-## What `verifyQuote` checks, in order
-
-Order matters when you are reading an error: the first failure wins, so a quote
-with two problems reports the earlier one.
-
-| Step | Check                                      | Code on failure             |
-| ---- | ------------------------------------------ | --------------------------- |
-| 1    | `info` decodes                             | `MALFORMED_INFO`            |
-| 2    | protocol version matches this client       | `PROTOCOL_VERSION_MISMATCH` |
-| 3    | `info.serverKey` == `trustedServerKey`     | `UNTRUSTED_SERVER_KEY`      |
-| 4    | `info.emulatorKey` == `trustedEmulatorKey` | `UNTRUSTED_EMULATOR_KEY`    |
-| 5    | `quote` decodes                            | `MALFORMED_QUOTE`           |
-| 6    | quoted receiver is the one you named       | `RECEIVER_KEY_MISMATCH`     |
-| 7    | quoted sender is the one you named         | `SENDER_KEY_MISMATCH`       |
-| 8    | quoted asset is the one you are paying     | `ASSET_ID_MISMATCH`         |
-| 9    | quoted operator matches `/v1/info`         | `OPERATOR_KEY_MISMATCH`     |
-| 10   | quoted `dust` matches `/v1/info`           | `DUST_MISMATCH`             |
-| 11   | `topup` ≤ `maxTopupSats`                   | `TOPUP_ABOVE_MAX`           |
-| 12   | fare currency/asset/units are authorized   | `FEE_ABOVE_MAX`             |
-| 13   | `locktime` ≥ `minLocktime`                 | `LOCKTIME_BELOW_MIN`        |
-| 14   | not expired                                | `QUOTE_EXPIRED`             |
-| 15   | parameters build a valid covenant          | `INVALID_COVENANT_PARAMS`   |
-| 16   | re-derived address == `covenantAddress`    | `COVENANT_ADDRESS_MISMATCH` |
-| 17   | full lockup graph matches original funding | `MALFORMED_QUOTE`           |
-
-Steps 3 and 4 are what make step 16 mean anything.
-
-## Errors
-
-Two classes, deliberately distinguishable, so "the operator is lying" never
-looks like "the network is down":
-
-- `QuoteVerificationError` — a quote you must not fund. `code` is one of
-  `VerificationErrorCode`. Do not retry; the answer will not change.
-- `TaxiError` — transport and shape. `code` is one of `ClientErrorCode`
-  (`NETWORK_ERROR`, `HTTP_ERROR`, `INVALID_RESPONSE`), or the operator's own
-  code when the body parsed as an `ErrorResponse` — `paused` is retryable, the
-  rest of the admission reasons are not.
-
-```ts
-try {
-    const verified = verifyQuote({ ...args });
-} catch (e) {
-    if (e instanceof QuoteVerificationError) {
-        if (e.code === VerificationErrorCode.EmulatorKey) {
-            // The operator named an emulator you do not trust. Stop.
+export function receiveUsdt(options: {
+    wallet: IWallet;
+    taxiUrl: string;
+    receiverAddresses: string[];
+    usdtId: string;
+    mode: "recycle" | "purchase";
+    trusted: IncomingClaimTrust;
+    config: CovenantSpendConfig;
+    claimOnce: (transferId: string, operation: () => Promise<string>) => Promise<void>;
+    onError: (error: unknown) => void;
+}) {
+    const taxi = new TaxiClient({ baseUrl: options.taxiUrl });
+    const id = asset.AssetId.fromString(options.usdtId);
+    const assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: id.groupIndex };
+    const handle = (batch: ClaimBatch) => {
+        for (const claim of batch.claims) {
+            if (
+                !claim.claimable ||
+                claim.state !== "locked" ||
+                !options.receiverAddresses.includes(claim.receiverAddress)
+            )
+                continue;
+            void options
+                .claimOnce(claim.transferId, async () => {
+                    const transfer = await taxi.verifyIncomingClaim(
+                        claim,
+                        {
+                            receiverAddress: claim.receiverAddress,
+                            assetId,
+                            assetUnits: 200_000_000n,
+                        },
+                        options.trusted,
+                        options.config,
+                    );
+                    const destination = ArkAddress.decode(claim.receiverAddress).pkScript;
+                    if (options.mode === "purchase") return taxi.purchase(transfer, destination);
+                    const script = Array.from(destination, (byte) =>
+                        byte.toString(16).padStart(2, "0"),
+                    ).join("");
+                    const coin = (await options.wallet.getSpendableVtxos()).find(
+                        (coin) =>
+                            coin.script === script &&
+                            !coin.assets?.length &&
+                            BigInt(coin.value) >= transfer.value,
+                    );
+                    if (!coin) throw new Error("Recycle requires a spendable sats VTXO");
+                    const [{ expiry, spendLeaf, ...input }] = fundingInputsFromVtxos([coin]);
+                    return taxi.recycle(
+                        transfer,
+                        {
+                            input: { ...input, tapLeafScript: coin.forfeitTapLeafScript },
+                            expiry,
+                            identity: options.wallet.identity,
+                        },
+                        destination,
+                    );
+                })
+                .catch(options.onError);
         }
-        throw e;
-    }
-    throw e;
+    };
+    return taxi.subscribeClaims({
+        receiverAddresses: options.receiverAddresses,
+        onSnapshot: handle,
+        onChanged: handle,
+        onError: options.onError,
+    });
 }
 ```
 
-`QuoteVerificationError` extends `TaxiError`, so order your `instanceof` checks
-narrowest first.
+Bob's recycle input must also be reserved by his wallet during the operation.
+If it belongs to a descriptor with a different signer, use that input's identity.
+The claim descriptor is untrusted discovery data: `verifyIncomingClaim` checks
+fresh Taxi status and independent provider/indexer evidence before creating the
+opaque capability accepted by `purchase` and `recycle`. Bob needs no quote,
+lockup PSBT or `VerifiedQuote` from Alice.
 
-## Two details that cost time to rediscover
+## Who signs what?
 
-**`expiresAt` is unix seconds, not milliseconds.** The unit is part of the wire
-contract because getting it wrong fails _open_: a millisecond timestamp compared
-as seconds is always far-future, so every expired quote reads as valid. Reject
-at or after the instant, never merely past it. `verifyQuote` takes an optional
-`now` (seconds) so this is testable.
+- Taxi builds the complete Arkade transaction and every input checkpoint PSBT.
+- Alice reconstructs the graph and signs only her inputs/checkpoints.
+- Taxi verifies Alice, then signs only Taxi inputs/checkpoints.
+- Batch signers may use one `signMultiple` prompt.
+- Every signature is `SIGHASH_DEFAULT`, not `SINGLE | ANYONECANPAY`.
+- Full-graph signing commits to the claim, fare, change, and asset allocation.
+- Bob signs his sats input for recycle; purchase has no Bob-owned input.
+- Covenant introspection pins Bob's output and, for recycle, Taxi repayment.
 
-**Amounts cross the wire as decimal strings and byte fields as lowercase hex.**
-JSON has no bigint, and a sats value silently losing precision above 2^53 is a
-bug that only appears on a large payment. The client decodes both for you;
-`quote.params` on the raw response is wire-shaped, while `verified.params` is
-decoded. Read the decoded one.
+## Errors and recovery
 
-## After the lockup
+`QuoteVerificationError` extends `TaxiError`; handle it first and never sign
+a rejected quote. `TaxiError.code` identifies HTTP, transport, malformed-response
+and service failures. Invalid addresses and incomplete funding evidence fail
+locally before a quote request. Input-conversion errors are ordinary errors.
 
-There are no Taxi claim or refund endpoints. These are wallet-side covenant
-spends submitted through the configured public SDK `EmulatorProvider`; the Taxi
-service only watches the resulting outpoint spend to reconcile its ledger. The
-Taxi payout key is a destination, not a leaf signer. The actual leaves require
-the Arkade Service and the covenant's tweaked emulator key, while `refundSender`
-also requires the verified sender key.
+SSE decoding rejects a malformed batch as a whole and calls `onError`.
+Transport errors also reach that callback; the browser's EventSource reconnects
+and receives a fresh complete snapshot. There is no durable event replay log.
+Node needs a compatible `eventSourceFactory` when EventSource is unavailable.
+A UI replaces its active inbox on snapshots and applies changed records,
+including terminal ones, to remove completed claims.
 
-Which means the wallet, not the operator, owns what happens next:
+`CovenantSpendAmbiguousError.expectedTxid` identifies a spend that may already
+have reached the emulator. Persist it and observe that exact transaction and
+outpoint before recovery; do not blindly rebuild and resubmit. Apply the same
+discipline to an uncertain lockup submission. Capability replay guards are
+in-memory and do not replace the wallet's durable operation store.
 
-- `recycle` — the receiver merges the covenant into an account it owns, repaying
-  the operator in sats.
-- `purchase` — the receiver keeps the whole covenant; the operator was paid at
-  lockup.
-- `refund` (`refundSender` leaf) — the sender cancels with its own identity.
+If Bob stays offline, Taxi's persisted worker uses the permissionless recovery
+leaf after the tagged locktime and before batch expiry. `recovering` means an
+intent or submission exists; `recovered` requires canonical observation.
+Alice can also verify her retained quote and lockup with `verifyTransfer`
+and use `refund(transfer, aliceIdentity)`. There are no Taxi claim/refund
+HTTP endpoints; covenant spends go directly through the public SDK providers.
 
-Never pass a transfer id or a status object to these operations. First exchange
-the verified quote, the exact lockup response and fresh Taxi/indexer/provider
-facts for an opaque `CovenantTransfer` capability:
+## Advanced reference
 
-```ts
-const transfer = await taxi.verifyTransfer(verified, lockup, {
-    arkdUrl,
-    emulatorUrl,
-    network,
-    serverUnrollScript: serverUnrollScriptHex,
-    chainHeight: currentHeight,
-});
+### Trust facts
 
-const txid = await taxi.purchase(transfer, verifiedReceiverAccountScript);
-// or: await taxi.recycle(transfer, receiverWalletInput, verifiedReceiverAccountScript)
-// or: await taxi.refund(transfer, senderIdentity)
-```
+Obtain Arkade/emulator signer keys independently from the services your wallet
+already trusts, or a pinned deployment configuration. Decode their compressed
+`signerPubkey` to the 32-byte x-only form. Never copy Taxi's `/v1/info`
+keys into the trusted fields. Bob also pins Taxi's operator repayment key.
+The address HRP and embedded server key must agree with these trusted facts.
 
-The capability binds the provider URLs and keys, network, asset/fare/top-up,
-parties, locktime, covenant output index/value/script and the currently
-spendable indexed outpoint. Its displayed properties are a detached snapshot,
-not authorization. `recycle` additionally requires a `ReceiverWalletInput`
-whose exact outpoint, value, canonical tree/leaf proof, expiry, assets and
-identity are independently checked; it is always input 1 after the covenant at
-input 0.
+Validate the trusted Arkade Service's `checkpointTapscript` with SDK
+`assertValidServerUnrollScript` and `defaultCheckpointExitDelayPolicy`
+for your locally configured network. Pass the validated `.script` to
+Alice's `trustedServerUnrollScript`; Bob's `config.serverUnrollScript`
+is the same validated script encoded as lowercase hex. His config also names
+the trusted `arkdUrl`, `emulatorUrl`, `network` and current `chainHeight`
+for height-based expiry checks.
 
-Provider destinations and implementations are isolated when the capability is
-created. The public config contains only primitive URLs and trust facts; custom
-provider objects and functions are rejected. The client constructs private SDK
-REST providers for the Arkade Service, indexer and emulator from the verified
-URLs. Their URLs and private prototype snapshots cannot be replaced through
-caller-held objects.
-The SDK REST providers use the realm's `globalThis.fetch`, independently of the
-Taxi client's ordinary HTTP option: `TaxiClient({ fetch })` does not configure
-covenant provider calls. Consequently, same-realm code that can replace or
-intercept the global fetch remains inside the transport trust boundary and can
-observe, redirect or forge those calls. Applications must initialize and
-protect a trusted global fetch before using covenant spends, prevent untrusted
-code from running in that realm, use TLS, and enforce the expected reverse
-proxy trust policy. Current Arkade Service and emulator information is checked
-again before graph construction, before any owner signature, and immediately
-before submission. Network, keys, checkpoint script, dust, minimum amount or
-required OP_RETURN-capacity drift aborts that operation.
+The SDK REST providers use the realm's `globalThis.fetch`.
+`TaxiClient({ fetch })` does not configure covenant provider calls.
+Consequently, same-realm code that can replace or intercept the global fetch
+is inside the transport trust boundary. Protect that realm, use TLS and enforce
+your expected reverse proxy policy. Provider network, keys, checkpoint script,
+dust, minimum amount and OP_RETURN capacity are checked again before graph
+construction, owner signing and submission.
 
-The owner identity signs only Arkade transaction and checkpoint inputs it owns.
-The emulator call then supplies the server/emulator covenant signatures and
-returns the final graph. The client rejects changed unsigned fields or metadata, reordered
-checkpoints, a changed txid, unexpected keys or leaf hashes, non-default
-sighashes, malformed signatures and loss of an owner's signature. It returns
-only that independently verified Arkade transaction id. It does not call a generic
-forfeit builder or make a second Arkade Service submission.
+### Exact funding and wire amounts
 
-`EmulatorProvider.submitTx` is a network effect. A transport failure can be
-ambiguous. Each capability and exact outpoint/provider tuple is one-shot within
-the process while any matching capability remains live: concurrent use, replay
-after success, and replay after an ambiguous response are rejected. The shared
-registry holds only weak lifecycle references and cleans dead outpoint entries;
-each live opaque capability holds its lifecycle strongly. A
-`CovenantSpendAmbiguousError` includes the independently known `expectedTxid`;
-persist the operation/outpoint in the calling application and observe that txid
-and the exact covenant outpoint before deciding recovery. Do not blindly rebuild
-and resubmit. Pre-submission validation failures also consume the capability
-conservatively. Browser restarts erase in-memory guards, so durable caller
-idempotency and exact-transaction retry behavior must be verified against the
-live emulator. Live Arkade Service/emulator acceptance, including the
-three-`OP_RETURN` refund shape supported by this client, remains part of the
-provider E2E suite described in `e2e/README.md`.
+`fundingInputsFromVtxos` accepts selected SDK `ExtendedVirtualCoin` values;
+it never selects coins. Use the wallet's spendability, current chain height,
+expiry headroom and reservation checks before conversion. The converter rejects
+spent, swept, unrolled or incomplete coins, invalid amounts, duplicate outpoints,
+wrong script/leaf proofs and ambiguous expiry. It preserves explicit
+`expiresAtHeight` or converts `expiresAt: Date` to Unix seconds; the
+deprecated `virtualStatus.batchExpiry` is not a substitute. Conversion alone
+cannot decide whether a height deadline has passed without a current chain tip.
 
-If the receiver remains offline, Taxi's persisted recovery worker returns funds
-through the permissionless recovery leaf after its tagged locktime and before
-batch expiry. Applications should retain transfer identifiers and observe
-terminal status after reconnecting. `recovering` means an exact recovery intent
-or submission exists; `recovered` requires canonical observation. Height and
-time deadlines use independent chain clocks, and quote `expiresAt` is a separate
-Unix-seconds deadline.
+The converter builds canonical holdings packets from SDK `assets`, preserving
+bigint quantities and the selected output index. Protocol asset IDs use
+display-order txid bytes; SDK `AssetId.txid` uses the opposite byte order.
+For lower-level integrations, `requestQuote`, `verifyQuote`, `signLockup`
+and `submitLockup` remain public. The combined helper returns
+`{ verified, senderInputs }` if the application also needs the converted inputs.
 
-Taxi owns this pre-expiry recovery guarantee. The deployed Arkade Service's
-special covenant settlement is an external assumption, not a client capability
-flag or a Taxi implementation. A dedicated upstream forfeit mechanism is out
-of scope. Run all 17 live scenarios and both integrity checks against current
-regtest master before adopting a changed provider deployment; retain that run's
-`stack.json` master SHA and image identities with its results. The stable SDK
-registry checkpoint on 2026-09-12 is `@arkade-os/sdk` 0.4.72.
+Wire amounts are decimal strings and byte fields are lowercase hex.
+`verified.params` contains decoded values; `verified.quote` remains wire-shaped.
+Quote `expiresAt` and verification `now` use Unix seconds. Quote validity,
+covenant recovery locktime and funding batch expiry are separate deadlines;
+height and time locks use different chain clocks.
+
+### Complete graph validation and submission
+
+Verification reconstructs the full Arkade transaction, checkpoints, claim output,
+fare, change and asset allocation. Each signer signs only owned inputs. The
+client rejects changed unsigned fields or metadata, reordered checkpoints,
+unexpected signing keys or leaf hashes, non-default sighashes, missing owner
+signatures and changed transaction IDs in the returned graph. A displayed
+capability property is a snapshot, not authorization.
+
+Each spend capability and matching outpoint/provider tuple is one-shot within
+the process, including concurrent use and ambiguous results. Pre-submission
+validation failures also consume the capability conservatively. Recovery after
+a restart requires the application's durable record and canonical observation.
+Live Arkade/emulator acceptance, recovery and settlement assumptions must be
+checked with the production-artifact E2E suite in [e2e/README.md](../e2e/README.md)
+for the deployed provider versions.

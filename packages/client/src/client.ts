@@ -26,7 +26,8 @@ import {
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
-import { activeQuoteStateFor } from "./lockup.js";
+import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
+import { fundingInputsFromVtxos } from "./funding.js";
 import {
     purchase,
     recycle,
@@ -39,8 +40,13 @@ import {
     type IncomingClaimTrust,
     type ReceiverWalletInput,
 } from "./spend.js";
-import type { Identity } from "@arkade-os/sdk";
-import type { VerifiedQuote } from "./verify.js";
+import { ArkAddress, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
+import {
+    verifyQuote,
+    type QuoteExpectation,
+    type VerifiedQuote,
+    type VerifyQuoteArgs,
+} from "./verify.js";
 
 export interface TaxiClientOptions {
     baseUrl: string;
@@ -78,6 +84,18 @@ export interface QuoteRequest {
     /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
      * payment, where the operator funds the whole thing. */
     senderSats: bigint;
+}
+
+export interface RequestVerifiedQuoteArgs extends Omit<
+    VerifyQuoteArgs,
+    "quote" | "info" | "senderInputs" | "expect"
+> {
+    receiverAddress: string;
+    senderKey: Uint8Array;
+    selectedVtxos: readonly ExtendedVirtualCoin[];
+    assetId?: AssetIdValue;
+    fareId?: string;
+    expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId">;
 }
 
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
@@ -126,6 +144,39 @@ export class TaxiClient {
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
         decodeQuote(body);
         return body;
+    }
+
+    async requestVerifiedQuote(
+        args: RequestVerifiedQuoteArgs,
+    ): Promise<{ verified: VerifiedQuote; senderInputs: FundingInputValue[] }> {
+        const { selectedVtxos, ...options } = args;
+        const request = immutablePlainCopy(options, "verified quote request");
+        const receiver = ArkAddress.decode(request.receiverAddress);
+        if (
+            receiver.encode() !== request.receiverAddress ||
+            receiver.hrp !== request.hrp ||
+            bytesToHex(receiver.serverPubKey) !== bytesToHex(request.trustedServerKey)
+        )
+            throw new Error(
+                "taxi: receiver address must be canonical and match the trusted network and server",
+            );
+        const senderInputs = fundingInputsFromVtxos(selectedVtxos);
+        const receiverKey = receiver.vtxoTaprootKey;
+        const info = await this.info();
+        const quote = await this.requestQuote({ ...request, receiverKey, senderInputs });
+        const verified = verifyQuote({
+            ...request,
+            quote,
+            info,
+            senderInputs,
+            expect: {
+                ...request.expect,
+                receiverKey,
+                senderKey: request.senderKey,
+                assetId: request.assetId,
+            },
+        });
+        return { verified, senderInputs };
     }
 
     /** Takes a `VerifiedQuote` rather than a transfer id: the only way to obtain

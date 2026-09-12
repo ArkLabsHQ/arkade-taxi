@@ -3,9 +3,11 @@ export {
     type ClaimSubscription,
     type EventSourceLike,
     type QuoteRequest,
+    type RequestVerifiedQuoteArgs,
     type SubscribeClaimsArgs,
     type TaxiClientOptions,
 } from "./client.js";
+export { fundingInputsFromVtxos } from "./funding.js";
 export {
     ClientErrorCode,
     QuoteVerificationError,
