@@ -32,6 +32,7 @@ const ordered = (claims: ReceiverClaimWire[]) =>
 export class ReceiverClaimFeed {
     private readonly subscriptions = new Set<Subscription>();
     private timer?: ReturnType<typeof setInterval>;
+    private closed = false;
 
     constructor(private readonly deps: Parameters<typeof listReceiverClaims>[0]) {}
 
@@ -40,6 +41,7 @@ export class ReceiverClaimFeed {
         listener: ClaimFeedListener,
         snapshot: readonly ReceiverClaimWire[] = [],
     ): () => void {
+        if (this.closed) throw new Error("claim feed is closed");
         const subscription: Subscription = {
             keys: new Map(receiverKeys.map((key) => [bytesToHex(key), key.slice()])),
             listener,
@@ -50,6 +52,11 @@ export class ReceiverClaimFeed {
         this.subscriptions.add(subscription);
         this.timer ??= setInterval(() => this.sample(), 250);
         return () => this.remove(subscription);
+    }
+
+    close(): void {
+        this.closed = true;
+        for (const subscription of this.subscriptions) this.fail(subscription);
     }
 
     private remove(subscription: Subscription): void {

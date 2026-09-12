@@ -12,6 +12,7 @@ export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "cla
     sweeperRunning: () => boolean;
     rescan(): Promise<void>;
     accepting?: () => boolean;
+    shutdownSignal?: AbortSignal;
 }
 
 export const ADMIN_PREFIX = "/admin";
@@ -52,11 +53,13 @@ function adminDeps(deps: ServerDeps) {
 export function createApp(deps: ServerDeps): Hono {
     const app = new Hono();
     app.use("*", async (c, next) => {
-        if (deps.accepting?.() === false)
+        if (deps.shutdownSignal?.aborted || deps.accepting?.() === false)
             return c.json({ code: "shutting_down", error: "service is shutting down" }, 503);
         await next();
     });
     const claimFeed = new ReceiverClaimFeed(deps);
+    deps.shutdownSignal?.addEventListener("abort", () => claimFeed.close(), { once: true });
+    if (deps.shutdownSignal?.aborted) claimFeed.close();
     app.route("/", createRoutes({ ...deps, claimFeed }));
     app.route(ADMIN_PREFIX, createAdminRouter(adminDeps(deps)));
     return app;

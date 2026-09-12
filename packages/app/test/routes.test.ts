@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
+import { serve } from "@hono/node-server";
+import { AdvanceRepository, openDatabase, PolicyRepository } from "@arkade-taxi/db";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
 import type {
@@ -14,6 +16,7 @@ import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
+import { createApp } from "../src/server.js";
 import type { SweeperStatus } from "../src/sweeper.js";
 import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
@@ -100,6 +103,105 @@ describe("receiver claim routes", () => {
         vi.restoreAllMocks();
         vi.useRealTimers();
         expect(timers).toBe(0);
+    });
+
+    it("drains a real HTTP receiver stream during service shutdown without client abort", async () => {
+        vi.useRealTimers();
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+        const db = openDatabase(":memory:");
+        const store = new AdvanceRepository(db);
+        const shutdown = new AbortController();
+        const client = new AbortController();
+        const forced = vi.fn();
+        const reads = vi.spyOn(store, "byReceiverKeys");
+        const router = createApp({
+            ...deps(),
+            advances: store,
+            policy: new PolicyRepository(db),
+            sweeperIntervalMs: 1_000,
+            sweeperRunning: () => true,
+            rescan: async () => {},
+            shutdownSignal: shutdown.signal,
+        });
+        let server: ReturnType<typeof serve> | undefined;
+        let closeServer: Promise<void> | undefined;
+        let origin = "";
+        let finished = false;
+        let databaseClosed = false;
+        const lifecycle = createServiceLifecycle({
+            listen: () =>
+                new Promise((resolve) => {
+                    server = serve(
+                        { fetch: router.fetch, hostname: "127.0.0.1", port: 0 },
+                        (info) => {
+                            origin = `http://127.0.0.1:${info.port}`;
+                            resolve({
+                                stopAccepting() {
+                                    closeServer = new Promise<void>((done, reject) =>
+                                        server!.close((error) => (error ? reject(error) : done())),
+                                    );
+                                },
+                                async finished() {
+                                    await closeServer;
+                                    finished = true;
+                                },
+                            });
+                        },
+                    );
+                }),
+            verifyRuntime: async () => {},
+            reconcile: async () => {},
+            firstRecoveryTick: async () => {},
+            startStreams: async () => {},
+            startBackground() {},
+            stopBackground: () => shutdown.abort(),
+            stopRuntime() {},
+            abort() {},
+            drain: async () => {},
+            disposeProviders: async () => {},
+            closeDatabase() {
+                db.close();
+                databaseClosed = true;
+            },
+            shutdownTimeoutMs: 1_000,
+            forceTerminate: forced,
+        });
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        try {
+            await lifecycle.start();
+            await lifecycle.refresh();
+            const response = await fetch(`${origin}${claimsUrl("/v1/claims/events")}`, {
+                signal: client.signal,
+            });
+            expect(response.status).toBe(200);
+            reader = response.body!.getReader();
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                "event: claims-snapshot",
+            );
+            reads.mockClear();
+            await vi.advanceTimersByTimeAsync(250);
+            expect(reads).toHaveBeenCalledTimes(1);
+            const ended = reader.read();
+            void ended.catch(() => {});
+            expect(await lifecycle.stop()).toEqual({ ok: true, code: "stopped" });
+            expect(await ended).toEqual({ done: true, value: undefined });
+            expect(client.signal.aborted).toBe(false);
+            expect(finished).toBe(true);
+            expect(databaseClosed).toBe(true);
+            expect(forced).not.toHaveBeenCalled();
+            reads.mockClear();
+            expect((await router.request(claimsUrl("/v1/claims/events"))).status).toBe(503);
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(reads).not.toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            shutdown.abort();
+            client.abort();
+            await reader?.cancel().catch(() => {});
+            if (!closeServer) server?.close();
+            await closeServer;
+            if (!databaseClosed) db.close();
+        }
     });
 
     it("returns one active snapshot for repeated and deduplicated receivers", async () => {

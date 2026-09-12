@@ -117,6 +117,7 @@ async function runServe(): Promise<void> {
     let closeServer: Promise<void> | undefined;
     let server: ReturnType<typeof serve> | undefined;
     let accepting = true;
+    const shutdown = new AbortController();
 
     const app = createApp({
         advances,
@@ -147,6 +148,7 @@ async function runServe(): Promise<void> {
         rescan: () => lifecycle.refresh(),
         startup: () => lifecycle.status(),
         accepting: () => accepting,
+        shutdownSignal: shutdown.signal,
     });
 
     lifecycle = createServiceLifecycle({
@@ -201,6 +203,7 @@ async function runServe(): Promise<void> {
             );
         },
         stopBackground() {
+            shutdown.abort();
             running = false;
             if (timer) clearInterval(timer);
             timer = undefined;

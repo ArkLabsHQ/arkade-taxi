@@ -376,7 +376,7 @@ export function createRoutes(deps: RouteDeps): Hono {
             const snapshot = baseline.filter((claim) =>
                 ACTIVE_CLAIM_STATES.some((state) => state === claim.state),
             );
-            return streamSSE(c, async (stream) => {
+            const response = streamSSE(c, async (stream) => {
                 let unsubscribe: (() => void) | undefined;
                 let heartbeat: ReturnType<typeof setInterval> | undefined;
                 let resolveEnded!: () => void;
@@ -445,6 +445,8 @@ export function createRoutes(deps: RouteDeps): Hono {
                     cleanup();
                 }
             });
+            response.headers.set("Connection", "close");
+            return response;
         } catch (error) {
             const err = ServiceError.from(error);
             return c.json(toErrorResponse(err), err.status);

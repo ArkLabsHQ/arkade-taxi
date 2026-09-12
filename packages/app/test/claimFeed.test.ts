@@ -40,6 +40,24 @@ afterEach(() => {
 });
 
 describe("ReceiverClaimFeed", () => {
+    it("closes every subscription and cannot restart after service shutdown", async () => {
+        const { advances, reads, feed } = setup();
+        advances.insert(advance({ state: "locking" }));
+        const a = listener();
+        const b = listener();
+        feed.subscribe([receiverKey], a);
+        feed.subscribe([senderKey], b);
+        await vi.advanceTimersByTimeAsync(250);
+        feed.close();
+        feed.close();
+        expect(a.onError).toHaveBeenCalledTimes(1);
+        expect(b.onError).toHaveBeenCalledTimes(1);
+        expect(() => feed.subscribe([receiverKey], listener())).toThrow("claim feed is closed");
+        reads.mockClear();
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(reads).not.toHaveBeenCalled();
+    });
+
     it("samples overlapping subscriptions once per tick and emits terminal changes", async () => {
         const { advances, reads, feed } = setup();
         const row = locked();
