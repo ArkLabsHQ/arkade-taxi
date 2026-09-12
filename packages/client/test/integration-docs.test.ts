@@ -27,9 +27,15 @@ const integrationGuide = readFileSync(
     new URL("../../../docs/integration-js.md", import.meta.url),
     "utf8",
 );
-const examples = [
-    ...integrationGuide.matchAll(/^```(?:ts|typescript)\s*\r?\n([\s\S]*?)^```\s*$/gm),
-].map((match) => match[1]);
+const coordinationGuide = readFileSync(
+    new URL("../../../docs/receiver-coordination-js.md", import.meta.url),
+    "utf8",
+);
+const examples = [integrationGuide, coordinationGuide].flatMap((guide) =>
+    [...guide.matchAll(/^```(?:ts|typescript)\s*\r?\n([\s\S]*?)^```\s*$/gm)].map(
+        (match) => match[1],
+    ),
+);
 
 describe("JavaScript integration guide", () => {
     it("typechecks every TypeScript example against packed public exports", () => {
@@ -114,14 +120,25 @@ describe("JavaScript integration guide", () => {
         );
     });
 
+    it("keeps the primary flows compact and links the complete durable adapter", () => {
+        expect(integrationGuide.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(320);
+        const bob = examples.find((code) => code.startsWith("// receiver.ts"))!;
+        expect(bob.trimEnd().split(/\r?\n/).length).toBeLessThanOrEqual(80);
+        expect(integrationGuide).toContain(
+            "[complete receiver coordinator](receiver-coordination-js.md)",
+        );
+        expect(integrationGuide).not.toContain("localStorage.setItem");
+    });
+
     it("derives sender funding and coordinates receiver reservations across ambiguous submissions", () => {
         expect(integrationGuide).not.toMatch(/senderSats\s*:/);
         expect(integrationGuide).toContain("reserveFunding");
-        expect(integrationGuide).toContain("retainAmbiguous");
-        expect(integrationGuide).toContain("observedSpend");
-        expect(integrationGuide).toContain("failedBeforeSubmission");
-        expect(integrationGuide).toContain("navigator.locks.request");
-        expect(integrationGuide).toContain("localStorage.setItem");
+        expect(integrationGuide).toContain("receiver-coordination-js.md");
+        expect(coordinationGuide).toContain("retainAmbiguous");
+        expect(coordinationGuide).toContain("observedSpend");
+        expect(coordinationGuide).toContain("failedBeforeSubmission");
+        expect(coordinationGuide).toContain("navigator.locks.request");
+        expect(coordinationGuide).toContain("localStorage.setItem");
         expect(integrationGuide).not.toMatch(/Promise\.all|claims\.map\(\s*async/);
     });
 
@@ -159,14 +176,27 @@ const loadReceiverStore = () => {
         compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
     }).outputText;
     const exports: Record<string, unknown> = {};
-    new Function("exports", output)(exports);
+    new Function("exports", "require", output)(exports, (name: string) =>
+        name === "@arkade-taxi/client" ? client : sdk,
+    );
     return exports as {
         createReceiverStore(key: string): ReceiverStore;
         resumeReceiver(
             store: ReceiverStore,
             observe: (txid: string, funding?: Pending["fundingOutpoint"]) => Promise<void>,
+            onError: (error: unknown) => void,
         ): Promise<void>;
     };
+};
+
+const deferred = <T>() => {
+    let resolve!: (value: T | PromiseLike<T>) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((accept, decline) => {
+        resolve = accept;
+        reject = decline;
+    });
+    return { promise, resolve, reject };
 };
 
 describe("durable receiver documentation implementation", () => {
@@ -246,18 +276,33 @@ describe("durable receiver documentation implementation", () => {
         await reloaded.claimOnce("b", async () => {
             await expect(reloaded.reserveFunding("b", [funding])).rejects.toThrow(/No unreserved/);
         });
-        await expect(
-            resumeReceiver(reloaded, async () => {
+        const failure = deferred<unknown>();
+        await resumeReceiver(
+            reloaded,
+            async () => {
                 throw new Error("not observed");
-            }),
-        ).rejects.toThrow("not observed");
+            },
+            failure.resolve,
+        );
+        expect(await failure.promise).toEqual(new Error("not observed"));
         expect(
             (await reloaded.pending()).find((row) => row.transferId === "a")?.fundingOutpoint,
         ).toEqual({ txid: funding.input.txid, vout: funding.input.vout });
         const observations: string[] = [];
-        await resumeReceiver(reloaded, async (txid) => {
-            observations.push(txid);
-        });
+        const done = deferred<void>();
+        const observedSpend = reloaded.observedSpend;
+        reloaded.observedSpend = async (id, txid) => {
+            await observedSpend(id, txid);
+            done.resolve();
+        };
+        await resumeReceiver(
+            reloaded,
+            async (txid) => {
+                observations.push(txid);
+            },
+            done.reject,
+        );
+        await done.promise;
         expect(observations).toEqual(["expected-tx"]);
         expect((await reloaded.pending()).some((row) => row.transferId === "a")).toBe(false);
         await expect(reloaded.reserveFunding("b", [funding])).rejects.toThrow(/No unreserved/);
@@ -277,7 +322,7 @@ describe("durable receiver documentation implementation", () => {
         });
         const observe = vi.fn();
         const reloaded = createReceiverStore("wallet");
-        await resumeReceiver(reloaded, observe);
+        await resumeReceiver(reloaded, observe, () => {});
         expect(observe).not.toHaveBeenCalled();
         expect(await reloaded.pending()).toEqual([
             {
@@ -287,6 +332,154 @@ describe("durable receiver documentation implementation", () => {
             },
         ]);
     });
+
+    it("reconciles other pending spends without waiting on an unobserved restart record", async () => {
+        const { createReceiverStore, resumeReceiver } = loadReceiverStore();
+        const store = createReceiverStore("wallet");
+        for (const id of ["a", "b"])
+            await store.claimOnce(id, async () => {
+                const funding = candidate();
+                if (id === "b") funding.input.vout = 3;
+                await store.reserveFunding(id, [funding]);
+                await store.submitting(id);
+                await store.retainAmbiguous(id, id + "-tx");
+            });
+        const completed = deferred<void>();
+        const observedSpend = store.observedSpend;
+        store.observedSpend = async (id, txid) => {
+            await observedSpend(id, txid);
+            if (id === "b") completed.resolve();
+        };
+        await resumeReceiver(
+            store,
+            (txid) => (txid === "a-tx" ? new Promise<void>(() => {}) : Promise.resolve()),
+            completed.reject,
+        );
+        await completed.promise;
+        expect(await store.pending()).toEqual([
+            {
+                transferId: "a",
+                expectedTxid: "a-tx",
+                fundingOutpoint: { txid: "aa".repeat(32), vout: 2 },
+            },
+        ]);
+    });
+
+    it.each([
+        { ambiguous: true, burst: false },
+        { ambiguous: true, burst: true },
+        { ambiguous: false, burst: true },
+    ])(
+        "keeps unrelated claims moving during an unobserved claim (ambiguous=$ambiguous, burst=$burst)",
+        async ({ ambiguous, burst }) => {
+            const source = examples.find((code) => code.startsWith("// receiver.ts"))!;
+            const output = ts.transpileModule(source, {
+                compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+            }).outputText;
+            let onSnapshot: (batch: { claims: unknown[] }) => void = () => {};
+            const submissions: number[] = [];
+            class Taxi {
+                async verifyIncomingClaim() {
+                    return { value: 330n };
+                }
+                async recycle(_transfer: unknown, funding: ReceiverWalletInput) {
+                    submissions.push(funding.input.vout);
+                    if (funding.input.vout === 2 && ambiguous)
+                        throw new client.CovenantSpendAmbiguousError(
+                            "unobserved-tx",
+                            new Error("dropped reply"),
+                        );
+                    return funding.input.vout === 2 ? "unobserved-tx" : "observed-tx";
+                }
+                subscribeClaims(options: { onSnapshot: typeof onSnapshot }) {
+                    onSnapshot = options.onSnapshot;
+                    return () => {};
+                }
+            }
+            const exports: Record<string, unknown> = {};
+            new Function("exports", "require", output)(exports, (name: string) =>
+                name === "@arkade-taxi/client"
+                    ? { ...client, TaxiClient: Taxi }
+                    : name === "./receiver-store.js"
+                      ? loadReceiverStore()
+                      : sdk,
+            );
+            const receiver = exports.receiveUsdt as (
+                options: Record<string, unknown>,
+            ) => () => void;
+            const store = loadReceiverStore().createReceiverStore("wallet");
+            let observedOther: () => void = () => {};
+            const completed = new Promise<void>((resolve) => {
+                observedOther = resolve;
+            });
+            const observedSpend = store.observedSpend;
+            store.observedSpend = async (id, txid) => {
+                await observedSpend(id, txid);
+                if (txid === "observed-tx") observedOther();
+            };
+            const address = new sdk.ArkAddress(
+                serverKey,
+                senderTree.tweakedPublicKey,
+                "ark",
+            ).encode();
+            const errors: unknown[] = [];
+            receiver({
+                wallet: {
+                    identity: senderIdentity,
+                    getSpendableVtxos: async () =>
+                        [2, 3].map((vout) => ({
+                            txid: "aa".repeat(32),
+                            vout,
+                            value: 600,
+                            status: { confirmed: true },
+                            createdAt: new Date(0),
+                            script: bytesToHex(senderTree.pkScript),
+                            isUnrolled: false,
+                            isSpent: false,
+                            isSwept: false,
+                            virtualStatus: { state: "settled" },
+                            expiresAtHeight: 900_000,
+                            tapTree: senderTree.encode(),
+                            forfeitTapLeafScript: senderTree.leaves[0],
+                            intentTapLeafScript: senderTree.leaves[0],
+                        })),
+                },
+                taxiUrl: "https://taxi.example",
+                receiverAddresses: [address],
+                usdtId: sdk.asset.AssetId.create("12".repeat(32), 0).toString(),
+                mode: "recycle",
+                trusted: {},
+                config: {},
+                store,
+                observeSpend: (txid: string) =>
+                    txid === "unobserved-tx" ? new Promise<void>(() => {}) : Promise.resolve(),
+                onError: (error: unknown) => errors.push(error),
+            });
+            const batch = {
+                claims: (burst ? ["a", "a", "b", "b"] : ["a", "b"]).map((transferId) => ({
+                    transferId,
+                    receiverAddress: address,
+                    claimable: true,
+                    state: "locked",
+                })),
+            };
+            onSnapshot(batch);
+            if (burst) {
+                onSnapshot(batch);
+                onSnapshot(batch);
+            }
+            await completed;
+            expect(submissions.sort()).toEqual([2, 3]);
+            expect(errors).toEqual([]);
+            expect(await store.pending()).toEqual([
+                {
+                    transferId: "https://taxi.example:a",
+                    expectedTxid: "unobserved-tx",
+                    fundingOutpoint: { txid: "aa".repeat(32), vout: 2 },
+                },
+            ]);
+        },
+    );
 
     it("runs Bob's exact example without reusing ambiguously submitted funding", async () => {
         const source = examples.find((code) => code.startsWith("// receiver.ts"))!;
@@ -313,7 +506,11 @@ describe("durable receiver documentation implementation", () => {
         }
         const exports: Record<string, unknown> = {};
         new Function("exports", "require", output)(exports, (name: string) =>
-            name === "@arkade-taxi/client" ? { ...client, TaxiClient: Taxi } : sdk,
+            name === "@arkade-taxi/client"
+                ? { ...client, TaxiClient: Taxi }
+                : name === "./receiver-store.js"
+                  ? loadReceiverStore()
+                  : sdk,
         );
         const receiver = exports.receiveUsdt as (options: Record<string, unknown>) => () => void;
         const { createReceiverStore } = loadReceiverStore();
@@ -371,10 +568,9 @@ describe("durable receiver documentation implementation", () => {
         });
         await completed;
         expect(submissions).toBe(1);
-        expect(errors.map((error) => (error as Error).message)).toEqual([
-            "not canonically observed",
-            "No unreserved sats input",
-        ]);
+        expect(errors.map((error) => (error as Error).message).sort()).toEqual(
+            ["not canonically observed", "No unreserved sats input"].sort(),
+        );
         expect(await store.pending()).toEqual([
             {
                 transferId: "https://taxi.example:a",
