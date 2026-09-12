@@ -170,6 +170,50 @@ export interface LockupResponse {
     outpoint: { txid: string; vout: number };
 }
 
+export type ReceiverClaimState =
+    | "locking"
+    | "locked"
+    | "recovering"
+    | "recycled"
+    | "purchased"
+    | "refunded"
+    | "recovered"
+    | "expired";
+
+export interface TaggedLocktimeWire {
+    kind: "height" | "time";
+    value: string;
+}
+
+export interface ReceiverClaimDescriptorWire {
+    params: QuoteParams;
+    covenantAddress: string;
+    outpoint: { txid: string; vout: number };
+    assetUnits?: string;
+    fare: FareWire;
+    batchExpiry: TaggedLocktimeWire;
+    recoveryLocktime: TaggedLocktimeWire;
+}
+
+export interface ReceiverClaimWire {
+    transferId: string;
+    receiverAddress: string;
+    state: ReceiverClaimState;
+    claimable: boolean;
+    updatedAt: number;
+    claim?: ReceiverClaimDescriptorWire;
+    spentTxid?: string;
+    failureCode?: string;
+}
+
+export interface ClaimsSnapshotResponse {
+    claims: ReceiverClaimWire[];
+}
+
+export interface ClaimsChangedEvent {
+    claims: ReceiverClaimWire[];
+}
+
 export interface TransferStatusResponse {
     transferId: string;
     state: string;

@@ -27,6 +27,8 @@ export {
 } from "./spend.js";
 export {
     decodeInfo,
+    decodeClaimsChanged,
+    decodeClaimsSnapshot,
     decodeLockup,
     decodeQuote,
     decodeStatus,

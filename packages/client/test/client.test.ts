@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { ArkAddress } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { QuoteRequestBody } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
-import { TaxiError } from "../src/errors.js";
+import { decodeClaimsChanged, decodeClaimsSnapshot } from "../src/index.js";
+import { ClientErrorCode, TaxiError } from "../src/errors.js";
 import { signLockup } from "../src/lockup.js";
 import { verifyQuote } from "../src/verify.js";
 import {
@@ -14,6 +16,7 @@ import {
     recordingFetch,
     senderIdentity,
     senderKey,
+    serverKey,
 } from "./fixtures.js";
 
 const BASE = "https://taxi.example";
@@ -235,5 +238,88 @@ describe("status", () => {
     it("throws INVALID_RESPONSE when state is missing", async () => {
         const { taxi } = client(ok({ transferId: "tr_01", updatedAt: 1 }));
         await expect(taxi.status("tr_01")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    });
+});
+
+describe("receiver claims", () => {
+    const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark");
+    const USDT_WIRE = { txid: "12".repeat(32), groupIndex: 7 };
+    const lockedClaim = () => {
+        const lockedQuote = quote();
+        return {
+            transferId: "adv-1",
+            receiverAddress: receiverAddress.encode(),
+            state: "locked",
+            claimable: true,
+            updatedAt: 1_000_000_000,
+            claim: {
+                params: lockedQuote.params,
+                covenantAddress: lockedQuote.covenantAddress,
+                outpoint: { txid: "ab".repeat(32), vout: 0 },
+                assetUnits: "200000000",
+                fare: { currency: "asset", units: "1000000", assetId: USDT_WIRE },
+                batchExpiry: { kind: "height", value: "900000" },
+                recoveryLocktime: { kind: "height", value: "899928" },
+            },
+        };
+    };
+
+    it("decodes complete locked claim batches and changed events", () => {
+        const claim = lockedClaim();
+        expect(decodeClaimsSnapshot({ claims: [claim] })).toEqual({ claims: [claim] });
+        expect(decodeClaimsChanged({ claims: [claim] })).toEqual({ claims: [claim] });
+    });
+
+    it.each([
+        [
+            "assetUnits",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                claim: { ...claim.claim, assetUnits: "1e3" },
+            }),
+        ],
+        [
+            "receiverAddress",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                receiverAddress: "",
+            }),
+        ],
+        [
+            "claimable",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                claimable: "yes",
+            }),
+        ],
+        ["claim", (claim: ReturnType<typeof lockedClaim>) => ({ ...claim, claim: undefined })],
+        [
+            "batchExpiry",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                claim: { ...claim.claim, batchExpiry: { kind: "other", value: "900000" } },
+            }),
+        ],
+        [
+            "recoveryLocktime",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                claim: { ...claim.claim, recoveryLocktime: { kind: "height", value: "-1" } },
+            }),
+        ],
+        [
+            "outpoint",
+            (claim: ReturnType<typeof lockedClaim>) => ({
+                ...claim,
+                claim: { ...claim.claim, outpoint: { txid: "zz", vout: 0 } },
+            }),
+        ],
+        ["updatedAt", (claim: ReturnType<typeof lockedClaim>) => ({ ...claim, updatedAt: -1 })],
+    ])("rejects a malformed %s without returning a valid sibling", (_field, mutate) => {
+        const batch = { claims: [lockedClaim(), mutate(lockedClaim())] };
+        expect(() => decodeClaimsSnapshot(batch)).toThrowError(TaxiError);
+        expect(() => decodeClaimsSnapshot(batch)).toThrowError(
+            expect.objectContaining({ code: ClientErrorCode.InvalidResponse }),
+        );
     });
 });
