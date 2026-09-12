@@ -895,7 +895,7 @@ describe("isolated regtest sources", () => {
         ).toThrow("127.0.0.1");
     });
 
-    it("pins Taxi to the owned project network and internal service DNS", () => {
+    it("pins Taxi to the owned network and maps the host failure proxy", () => {
         const project = "taxi12-a1b2c3d4";
         const network = `${project}_default`;
         expect(() =>
@@ -926,7 +926,8 @@ describe("isolated regtest sources", () => {
             image: `arkade-taxi:e2e-a1b2c3d4`,
         });
         expect(args).toContain(network);
-        expect(args).not.toContain("host.docker.internal");
+        expect(args).toContain("--add-host");
+        expect(args).toContain("host.docker.internal:host-gateway");
         expect(args).toContain("127.0.0.1::8080");
     });
 
