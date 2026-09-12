@@ -26,13 +26,13 @@ import {
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
-import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
+import { activeQuoteStateFor } from "./lockup.js";
 import {
     purchase,
     recycle,
     refund,
     verifyCovenantTransfer,
-    verifyIncomingClaim,
+    verifyIncomingClaimWithFreshStatus,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type IncomingClaimExpectation,
@@ -246,12 +246,10 @@ export class TaxiClient {
         trusted: IncomingClaimTrust,
         config: CovenantSpendConfig,
     ): Promise<CovenantTransfer> {
-        const snapshot = immutablePlainCopy({ claim, expect, trusted, config }, "incoming claim");
-        const decoded = decodeClaimsSnapshot({ claims: [snapshot.claim] }).claims[0]!;
-        return verifyIncomingClaim({
-            ...snapshot,
-            status: await this.status(decoded.transferId),
-        });
+        return verifyIncomingClaimWithFreshStatus(
+            { claim, expect, trusted, config },
+            this.status.bind(this),
+        );
     }
 
     async recycle(

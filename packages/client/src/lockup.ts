@@ -186,7 +186,10 @@ export const immutablePlainCopy = <T>(value: T, label = "value"): T => {
             const descriptor = descriptors[key]!;
             if (!("value" in descriptor) || !descriptor.enumerable)
                 return reject(`${path}.${key} must be an enumerable data property`);
-            result[key] = copy(descriptor.value, `${path}.${key}`);
+            Object.defineProperty(result, key, {
+                value: copy(descriptor.value, `${path}.${key}`),
+                enumerable: true,
+            });
         }
         ancestors.delete(current);
         return Object.freeze(result);

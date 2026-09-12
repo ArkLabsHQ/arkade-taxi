@@ -731,10 +731,13 @@ describe("incoming claim verification", () => {
     it("fetches fresh Taxi status and snapshots inputs before waiting for it", async () => {
         const { base, incoming } = await incomingFixture();
         let release!: (value: Response) => void;
+        let statusRequested!: () => void;
+        const requested = new Promise<void>((resolve) => (statusRequested = resolve));
         const taxiFetch = vi.fn(
             () =>
                 new Promise<Response>((resolve) => {
                     release = resolve;
+                    statusRequested();
                 }),
         );
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch: taxiFetch });
@@ -747,6 +750,7 @@ describe("incoming claim verification", () => {
         incoming.claim.transferId = "attacker";
         incoming.trusted.serverKey.fill(0);
         incoming.config.emulatorUrl = "https://attacker.example";
+        await requested;
         release(json(base.status));
         const transfer = await pending;
         expect(transfer.transferId).toBe("tr_01");
@@ -757,6 +761,65 @@ describe("incoming claim verification", () => {
         await purchase(transfer, new Uint8Array([0x51, 0x20, ...receiverKey]));
         expect(base.submissionUrls).toEqual(["https://emulator.example"]);
     });
+
+    it.each(["recovering", "locked"])(
+        "checks final Taxi status after observation when it becomes %s",
+        async (finalState) => {
+            const { base, incoming } = await incomingFixture();
+            let observed = false;
+            let current = { ...base.status, state: "locked" };
+            const reads: { observed: boolean; state: string }[] = [];
+            const taxi = new TaxiClient({
+                baseUrl: "https://taxi.example",
+                fetch: async () => {
+                    reads.push({ observed, state: current.state });
+                    return json(current);
+                },
+            });
+            expect((await taxi.status(current.transferId)).state).toBe("locked");
+            base.indexer.getVtxos.mockImplementationOnce(async () => {
+                observed = true;
+                current = { ...current, state: finalState };
+                return { vtxos: [base.coin] };
+            });
+            const pending = taxi.verifyIncomingClaim(
+                incoming.claim,
+                incoming.expect,
+                incoming.trusted,
+                incoming.config,
+            );
+            if (finalState === "recovering") await expect(pending).rejects.toThrow(/Taxi status/i);
+            else await expect(pending).resolves.toMatchObject({ transferId: "tr_01" });
+            expect(reads).toEqual([
+                { observed: false, state: "locked" },
+                { observed: true, state: finalState },
+            ]);
+            expect(base.emulator.submitTx).not.toHaveBeenCalled();
+        },
+    );
+
+    it.each(["standalone", "client"])(
+        "rejects an own enumerable __proto__ field at the %s boundary",
+        async (entry) => {
+            const { base, incoming } = await incomingFixture();
+            Object.defineProperty(incoming.claim, "__proto__", { enumerable: true, value: null });
+            const taxi = new TaxiClient({
+                baseUrl: "https://taxi.example",
+                fetch: async () => json(base.status),
+            });
+            const pending =
+                entry === "standalone"
+                    ? verifyIncomingClaim(incoming)
+                    : taxi.verifyIncomingClaim(
+                          incoming.claim,
+                          incoming.expect,
+                          incoming.trusted,
+                          incoming.config,
+                      );
+            await expect(pending).rejects.toThrow(/__proto__|unexpected|fields mismatch/i);
+            expect(base.emulator.submitTx).not.toHaveBeenCalled();
+        },
+    );
 
     it("rejects a listed locked coin when fresh Taxi status reports it spent", async () => {
         const { base, incoming } = await incomingFixture();

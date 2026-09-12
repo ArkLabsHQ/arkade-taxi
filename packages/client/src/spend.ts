@@ -638,7 +638,29 @@ export async function verifyIncomingClaim(
         [],
         "incoming claim verification",
     );
-    const { expect, trusted, config } = args;
+    const facts = incomingClaimFacts(args);
+    assertIncomingStatus(args.status, facts);
+    return verifyObservedClaim(facts, args.config, args.config);
+}
+
+type IncomingStatusReader = (transferId: string) => Promise<TransferStatusResponse>;
+
+export async function verifyIncomingClaimWithFreshStatus(
+    rawArgs: Omit<VerifyIncomingClaimArgs, "status">,
+    readStatus: IncomingStatusReader,
+): Promise<CovenantTransfer> {
+    const args = immutablePlainCopy(rawArgs, "incoming claim verification");
+    exactObjectKeys(
+        args as unknown as Record<string, unknown>,
+        ["claim", "expect", "trusted", "config"],
+        [],
+        "incoming claim verification",
+    );
+    return verifyObservedClaim(incomingClaimFacts(args), args.config, args.config, readStatus);
+}
+
+const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): ObservedClaimBase => {
+    const { expect, trusted } = args;
     exactObjectKeys(
         expect as unknown as Record<string, unknown>,
         ["receiverAddress"],
@@ -727,35 +749,38 @@ export async function verifyIncomingClaim(
     });
     if (script.address(trusted.hrp, trusted.serverKey).encode() !== descriptor.covenantAddress)
         reject("incoming covenant address mismatch");
+    return {
+        transferId: claim.transferId,
+        outpoint: { ...descriptor.outpoint },
+        params,
+        serverKey: trusted.serverKey,
+        emulatorKey: trusted.emulatorKey,
+        vtxoMinAmount: trusted.vtxoMinAmount,
+        hrp: trusted.hrp,
+        batchExpiry,
+        ...(expect.assetUnits === undefined ? {} : { contextAssetUnits: expect.assetUnits }),
+    };
+};
+
+const assertIncomingStatus = (
+    rawStatus: TransferStatusResponse,
+    facts: Pick<ObservedClaimBase, "transferId" | "outpoint">,
+): void => {
+    const status = immutablePlainCopy(rawStatus, "transfer status");
     exactObjectKeys(
-        args.status as unknown as Record<string, unknown>,
+        status as unknown as Record<string, unknown>,
         ["transferId", "state", "outpoint", "updatedAt"],
         ["spentTxid", "submissionPhase", "failureCode", "failureDetail"],
         "transfer status",
     );
-    const status = decodeStatus(args.status);
-    if (status.transferId !== claim.transferId || status.state !== "locked" || !status.outpoint)
+    decodeStatus(status);
+    if (status.transferId !== facts.transferId || status.state !== "locked" || !status.outpoint)
         return reject("Taxi status is not the incoming locked transfer");
     exactObjectKeys(status.outpoint, ["txid", "vout"], [], "Taxi locked outpoint");
-    exactOutpoint(status.outpoint, descriptor.outpoint, "Taxi locked outpoint");
+    exactOutpoint(status.outpoint, facts.outpoint, "Taxi locked outpoint");
     if (status.spentTxid || status.failureCode || status.failureDetail)
         reject("Taxi status reports a spent or failed transfer");
-    return verifyObservedClaim(
-        {
-            transferId: claim.transferId,
-            outpoint: { ...descriptor.outpoint },
-            params,
-            serverKey: trusted.serverKey,
-            emulatorKey: trusted.emulatorKey,
-            vtxoMinAmount: trusted.vtxoMinAmount,
-            hrp: trusted.hrp,
-            batchExpiry,
-            ...(expect.assetUnits === undefined ? {} : { contextAssetUnits: expect.assetUnits }),
-        },
-        config,
-        config,
-    );
-}
+};
 
 type ObservedClaimBase = Omit<CoinExpectation, "dependencies" | "arkdUrl" | "emulatorUrl"> & {
     trustedServerUnrollScript?: Uint8Array;
@@ -766,6 +791,7 @@ async function verifyObservedClaim(
     facts: ObservedClaimBase,
     advertisedUrls: Pick<CovenantSpendConfig, "arkdUrl" | "emulatorUrl">,
     rawConfig: CovenantSpendConfig,
+    readStatus?: IncomingStatusReader,
 ): Promise<CovenantTransfer> {
     const arkdUrl = normalizeUrl(advertisedUrls.arkdUrl, "advertised arkd URL");
     const emulatorUrl = normalizeUrl(advertisedUrls.emulatorUrl, "advertised emulator URL");
@@ -880,6 +906,7 @@ async function verifyObservedClaim(
             observed.expiry.value !== facts.batchExpiry.value)
     )
         reject("observed batch expiry mismatch");
+    if (readStatus !== undefined) assertIncomingStatus(await readStatus(facts.transferId), facts);
     const lifecycleKey = [
         boundDependencies.network,
         arkdUrl,
