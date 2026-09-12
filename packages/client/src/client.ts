@@ -45,6 +45,7 @@ export interface TaxiClientOptions {
 }
 
 type ClaimEventName = "claims-snapshot" | "claims-changed";
+const MAX_RECEIVER_BATCH = 64;
 
 export interface EventSourceLike {
     addEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
@@ -147,12 +148,14 @@ export class TaxiClient {
     async listClaims(args: {
         receiverAddresses: readonly string[];
     }): Promise<ClaimsSnapshotResponse> {
+        const receiverAddresses = this.claimReceiverAddresses(args.receiverAddresses);
         return decodeClaimsSnapshot(
-            await this.request("GET", this.claimsPath("/v1/claims", args.receiverAddresses)),
+            await this.request("GET", this.claimsPath("/v1/claims", receiverAddresses)),
         );
     }
 
     subscribeClaims(args: SubscribeClaimsArgs): ClaimSubscription {
+        const receiverAddresses = this.claimReceiverAddresses(args.receiverAddresses);
         if (this.eventSourceFactory === undefined) {
             throw new TaxiError(
                 ClientErrorCode.EventSourceUnavailable,
@@ -163,7 +166,7 @@ export class TaxiClient {
         let source: EventSourceLike;
         try {
             source = this.eventSourceFactory(
-                `${this.baseUrl}${this.claimsPath("/v1/claims/events", args.receiverAddresses)}`,
+                `${this.baseUrl}${this.claimsPath("/v1/claims/events", receiverAddresses)}`,
             );
         } catch (cause) {
             throw new TaxiError(
@@ -253,6 +256,17 @@ export class TaxiClient {
         const query = new URLSearchParams();
         for (const address of addresses) query.append("receiver", address);
         return `${path}?${query.toString()}`;
+    }
+
+    private claimReceiverAddresses(addresses: readonly string[]): string[] {
+        const unique = [...new Set(addresses)];
+        if (unique.length === 0 || unique.length > MAX_RECEIVER_BATCH) {
+            throw new TaxiError(
+                ClientErrorCode.InvalidReceiverBatch,
+                `taxi: receiver batch must contain between 1 and ${MAX_RECEIVER_BATCH} unique addresses`,
+            );
+        }
+        return unique;
     }
 
     private async request(method: string, path: string, body?: unknown): Promise<unknown> {

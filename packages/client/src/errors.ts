@@ -24,6 +24,7 @@ export const ClientErrorCode = {
     Network: "NETWORK_ERROR",
     Http: "HTTP_ERROR",
     InvalidResponse: "INVALID_RESPONSE",
+    InvalidReceiverBatch: "INVALID_RECEIVER_BATCH",
     EventSourceUnavailable: "EVENT_SOURCE_UNAVAILABLE",
 } as const;
 

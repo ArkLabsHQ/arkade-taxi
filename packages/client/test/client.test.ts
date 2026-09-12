@@ -366,18 +366,44 @@ describe("receiver claims", () => {
         );
     });
 
-    it("lists claims with one receiver query parameter per address", async () => {
+    it("lists claims with one receiver query parameter per unique address", async () => {
         const first = receiverAddress.encode();
         const second = `${first}/second`;
         const { taxi, fetch } = client(ok({ claims: [lockedClaim()] }));
 
-        await expect(taxi.listClaims({ receiverAddresses: [first, second] })).resolves.toEqual({
-            claims: [lockedClaim()],
-        });
+        await expect(
+            taxi.listClaims({ receiverAddresses: [first, first, second, first] }),
+        ).resolves.toEqual({ claims: [lockedClaim()] });
         expect(fetch.calls[0]?.url).toBe(
             `${BASE}/v1/claims?receiver=${encodeURIComponent(first)}&receiver=${encodeURIComponent(second)}`,
         );
     });
+
+    it.each([
+        ["empty", []],
+        ["too-large", Array.from({ length: 65 }, (_, index) => `receiver-${index}`)],
+    ])(
+        "rejects a %s receiver batch before creating a transport",
+        async (_name, receiverAddresses) => {
+            const fetch = recordingFetch(ok({ claims: [] }));
+            const eventSourceFactory = vi.fn(() => new FakeEventSource("unused"));
+            const taxi = new TaxiClient({ baseUrl: BASE, fetch, eventSourceFactory });
+
+            await expect(taxi.listClaims({ receiverAddresses })).rejects.toMatchObject({
+                code: ClientErrorCode.InvalidReceiverBatch,
+            });
+            expect(() =>
+                taxi.subscribeClaims({
+                    receiverAddresses,
+                    onSnapshot: vi.fn(),
+                    onChanged: vi.fn(),
+                    onError: vi.fn(),
+                }),
+            ).toThrow(expect.objectContaining({ code: ClientErrorCode.InvalidReceiverBatch }));
+            expect(fetch.calls).toHaveLength(0);
+            expect(eventSourceFactory).not.toHaveBeenCalled();
+        },
+    );
 
     it("rejects a malformed claims list response", async () => {
         const { taxi } = client(ok({ claims: [{ ...lockedClaim(), updatedAt: -1 }] }));
@@ -390,10 +416,11 @@ describe("receiver claims", () => {
         const source = new FakeEventSource("unused");
         const onSnapshot = vi.fn();
         const onChanged = vi.fn();
+        const first = receiverAddress.encode();
+        const second = `${first}/second`;
         const eventSourceFactory = vi.fn((url: string) => {
-            expect(url).toContain(`receiver=${encodeURIComponent(receiverAddress.encode())}`);
-            expect(url).toContain(
-                `receiver=${encodeURIComponent(`${receiverAddress.encode()}/second`)}`,
+            expect(url).toBe(
+                `${BASE}/v1/claims/events?receiver=${encodeURIComponent(first)}&receiver=${encodeURIComponent(second)}`,
             );
             return source;
         });
@@ -403,7 +430,7 @@ describe("receiver claims", () => {
         });
 
         const close = taxi.subscribeClaims({
-            receiverAddresses: [receiverAddress.encode(), `${receiverAddress.encode()}/second`],
+            receiverAddresses: [first, first, second, first],
             onSnapshot,
             onChanged,
             onError: vi.fn(),
@@ -449,19 +476,34 @@ describe("receiver claims", () => {
         const source = new FakeEventSource("unused");
         const onError = vi.fn();
         const boom = new Error("consumer failed");
+        const onSnapshot = vi
+            .fn<(snapshot: { claims: unknown[] }) => void>()
+            .mockImplementationOnce(() => {
+                throw boom;
+            });
+        const onChanged = vi
+            .fn<(event: { claims: unknown[] }) => void>()
+            .mockImplementationOnce(() => {
+                throw boom;
+            });
         const taxi = new TaxiClient({ baseUrl: BASE, eventSourceFactory: () => source });
         taxi.subscribeClaims({
             receiverAddresses: [receiverAddress.encode()],
-            onSnapshot: () => {
-                throw boom;
-            },
-            onChanged: vi.fn(),
+            onSnapshot,
+            onChanged,
             onError,
         });
 
         expect(() =>
             source.emit("claims-snapshot", JSON.stringify({ claims: [lockedClaim()] })),
         ).toThrow(boom);
+        source.emit("claims-snapshot", JSON.stringify({ claims: [lockedClaim()] }));
+        expect(() =>
+            source.emit("claims-changed", JSON.stringify({ claims: [lockedClaim()] })),
+        ).toThrow(boom);
+        source.emit("claims-changed", JSON.stringify({ claims: [lockedClaim()] }));
+        expect(onSnapshot).toHaveBeenCalledTimes(2);
+        expect(onChanged).toHaveBeenCalledTimes(2);
         expect(onError).not.toHaveBeenCalled();
     });
 
