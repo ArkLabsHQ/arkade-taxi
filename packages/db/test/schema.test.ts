@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { Database } from "better-sqlite3";
 import { ADVANCE_STATES, applyMigrations, MIGRATIONS } from "../src/schema.js";
-import { AdvanceRepository } from "../src/advances.js";
-import { PolicyRepository } from "../src/policy.js";
 
 function fresh(): Database {
     const db = new DatabaseCtor(":memory:");
@@ -41,6 +36,7 @@ const RAW_ADVANCE = {
     topup: 300n,
     asset_txid: null,
     asset_group_index: null,
+    asset_units: null,
     locktime: 100n,
     covenant_address: "tark1qexample",
     fare_currency: "sats",
@@ -64,129 +60,63 @@ function insertRaw(db: Database, overrides: Record<string, unknown> = {}): void 
 }
 
 describe("migrations", () => {
-    it.each([false, true])(
-        "upgrades v1 without inventing funding facts (populated: %s)",
-        (populated) => {
-            const db = fresh();
-            applyMigrations(db, [MIGRATIONS[0]!]);
-            if (populated) insertRaw(db);
-            applyMigrations(db);
-            const repo = new AdvanceRepository(db);
-            expect(repo.listMissingFundingSnapshotIds()).toEqual(populated ? ["a1"] : []);
-            if (populated) {
-                expect(
-                    db
-                        .prepare(
-                            "SELECT topup, batch_expiry_kind, batch_expiry_value FROM advances",
-                        )
-                        .get(),
-                ).toEqual({ topup: 300n, batch_expiry_kind: null, batch_expiry_value: null });
-                expect(() => repo.get("a1")).toThrow(/a1.*missing funding snapshot/);
-            }
-            expect(tableNames(db)).toContain("operator_input_reservations");
-            expect(userVersion(db)).toBe(8);
-        },
-    );
-    it("adds stable candidate height without losing a v6 candidate across reopen", () => {
-        const directory = mkdtempSync(join(tmpdir(), "taxi-v6-stable-"));
-        const path = join(directory, "state.sqlite");
-        let db: Database | undefined;
-        try {
-            db = new DatabaseCtor(path);
-            db.defaultSafeIntegers(true);
-            applyMigrations(
-                db,
-                MIGRATIONS.filter(({ id }) => id <= 6),
-            );
-            insertRaw(db, { id: "stable" });
-            db.prepare(
-                `UPDATE advances SET observation_stable_tip_hash = ?,
-                 observation_stable_count = 1 WHERE id = 'stable'`,
-            ).run("34".repeat(32));
-            db.close();
-            db = new DatabaseCtor(path);
-            db.defaultSafeIntegers(true);
-            applyMigrations(db);
-            expect(userVersion(db)).toBe(8);
+    it("defines one fresh schema; old development databases are unsupported", () => {
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1]);
+        expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
+        const db = migrated();
+        expect(userVersion(db)).toBe(1);
+        expect(tableNames(db).sort()).toEqual([
+            "advances",
+            "operator_input_reservations",
+            "policy",
+            "policy_audit",
+            "sqlite_sequence",
+        ]);
+        const columns = db
+            .prepare<[], { name: string }>("PRAGMA table_info(advances)")
+            .all()
+            .map(({ name }) => name)
+            .sort();
+        expect(columns).toEqual(
+            `
+            id state receiver_key sender_key operator_key dust topup asset_txid asset_group_index
+            asset_units locktime covenant_address fare_currency fare_units fare_asset_txid
+            fare_asset_group_index outpoint_txid outpoint_vout spent_txid created_at updated_at expires_at
+            batch_expiry_kind batch_expiry_value operator_inputs_json unsigned_lockup_tx unsigned_lockup_id
+            submission_key ark_txid submitted_at recovery_txid recovery_submitted_at last_observed_at
+            failure_code failure_detail signed_envelope_digest submission_phase signed_lockup_envelope
+            prepared_ark_tx prepared_checkpoints_json server_final_ark_tx server_checkpoints_json
+            submission_lease_owner submission_lease_until submission_attempts submission_last_attempt_at
+            submission_next_attempt_at finalized_at submission_lease_token observation_tip_hash
+            observation_tip_height observation_stable_tip_hash observation_stable_count observation_stable_tip_height
+            recovery_locktime_kind recovery_phase recovery_graph_digest recovery_expected_txid
+            recovery_prepared_ark_tx recovery_prepared_checkpoints_json recovery_response_ark_tx
+            recovery_response_checkpoints_json recovery_lease_owner recovery_lease_token recovery_lease_until
+            recovery_attempts recovery_last_attempt_at recovery_next_attempt_at
+        `
+                .trim()
+                .split(/\s+/)
+                .sort(),
+        );
+        for (const [index, names] of [
+            ["advances_state_locktime", ["state", "locktime"]],
+            ["advances_state_batch_expiry", ["state", "batch_expiry_kind", "batch_expiry_value"]],
+            ["advances_outpoint", ["outpoint_txid", "outpoint_vout"]],
+            ["advances_receiver_updated", ["receiver_key", "updated_at", "id"]],
+        ] as const) {
             expect(
                 db
-                    .prepare(
-                        `SELECT observation_stable_tip_hash AS hash,
-                         observation_stable_tip_height AS height,
-                         observation_stable_count AS count FROM advances WHERE id = 'stable'`,
-                    )
-                    .get(),
-            ).toEqual({ hash: "34".repeat(32), height: null, count: 1n });
-        } finally {
-            db?.close();
-            rmSync(directory, { recursive: true, force: true });
+                    .prepare<[], { name: string }>(`PRAGMA index_info(${index})`)
+                    .all()
+                    .map(({ name }) => name),
+            ).toEqual(names);
         }
-    });
-    it("marks pre-phase locking rows unresumable while retaining reservations", () => {
-        const directory = mkdtempSync(join(tmpdir(), "taxi-v3-"));
-        const path = join(directory, "state.sqlite");
-        let db: Database | undefined;
-        try {
-            db = new DatabaseCtor(path);
-            db.defaultSafeIntegers(true);
-            applyMigrations(
-                db,
-                MIGRATIONS.filter(({ id }) => id <= 3),
-            );
-            new PolicyRepository(db);
-            insertRaw(db, {
-                state: "locking",
-                batch_expiry_kind: "height",
-                batch_expiry_value: 200n,
-                operator_inputs_json: JSON.stringify([{ txid: "ab".repeat(32), vout: 0 }]),
-                unsigned_lockup_tx: "legacy-envelope",
-                unsigned_lockup_id: "cd".repeat(32),
-            });
-            insertRaw(db, {
-                id: "a2",
-                state: "locked",
-                batch_expiry_kind: "height",
-                batch_expiry_value: 200n,
-                operator_inputs_json: JSON.stringify([{ txid: "ef".repeat(32), vout: 1 }]),
-                unsigned_lockup_tx: "locked-envelope",
-                unsigned_lockup_id: "12".repeat(32),
-                outpoint_txid: "34".repeat(32),
-                outpoint_vout: 0,
-            });
-            db.prepare(
-                `INSERT INTO operator_input_reservations
-                 (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind,
-                  batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-            ).run("ab".repeat(32), 0, "a1", "height", 200, 1);
-            db.close();
-            db = undefined;
-
-            db = new DatabaseCtor(path);
-            db.defaultSafeIntegers(true);
-            applyMigrations(db);
-            expect(new AdvanceRepository(db).get("a1")).toMatchObject({
-                state: "locking",
-                submissionPhase: "legacy",
-                failureCode: "lockup_submission_legacy_unresumable",
-            });
-            expect(new AdvanceRepository(db).get("a2")).toMatchObject({
-                state: "locked",
-                outpoint: { txid: "34".repeat(32), vout: 0 },
-            });
-            expect(new AdvanceRepository(db).get("a2")?.submissionPhase).toBeUndefined();
-            expect(new AdvanceRepository(db).get("a2")?.failureCode).toBeUndefined();
-            expect(
-                db.prepare("SELECT count(*) AS n FROM operator_input_reservations").get(),
-            ).toEqual({ n: 1n });
-            expect(db.prepare("SELECT paused FROM policy WHERE id = 1").get()).toEqual({
-                paused: 1n,
-            });
-            db.close();
-            db = undefined;
-        } finally {
-            db?.close();
-            rmSync(directory, { recursive: true, force: true });
-        }
+        expect(
+            db
+                .prepare<[], { name: string; unique: bigint }>("PRAGMA index_list(advances)")
+                .all()
+                .find(({ name }) => name === "advances_outpoint")?.unique,
+        ).toBe(1n);
     });
     it("creates every table and stamps user_version with the highest applied id", () => {
         const db = migrated();
@@ -261,6 +191,13 @@ describe("migrations", () => {
 });
 
 describe("advances constraints", () => {
+    it("requires asset identity and quantity together", () => {
+        const db = migrated();
+        const asset = { asset_txid: new Uint8Array(32).fill(9), asset_group_index: 0n };
+        expect(() => insertRaw(db, asset)).toThrow(/CHECK constraint failed/);
+        expect(() => insertRaw(db, { asset_units: 1n })).toThrow(/CHECK constraint failed/);
+        expect(() => insertRaw(db, { ...asset, asset_units: 9007199254740993n })).not.toThrow();
+    });
     it("accepts every AdvanceState", () => {
         const db = migrated();
 

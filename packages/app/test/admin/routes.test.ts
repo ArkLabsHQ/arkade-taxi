@@ -725,6 +725,7 @@ describe("GET /admin/api/advances", () => {
                 id: "full",
                 createdAt: 2_000,
                 assetId: { txid: key(0xab), groupIndex: 2 },
+                assetUnits: 1n,
                 outpoint: { txid: "ff".repeat(32), vout: 1 },
                 spentTxid: "ee".repeat(32),
             }),

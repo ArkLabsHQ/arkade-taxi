@@ -93,6 +93,76 @@ const signedEnvelope = async (encoded: string): Promise<string> => {
 };
 
 describe("createQuote", () => {
+    it.each([
+        [true, undefined],
+        [true, "0"],
+        [false, "1"],
+    ] as const)(
+        "rejects builder quantity mismatch for asset %s and units %s",
+        async (isAsset, quantity) => {
+            const d = deps({
+                policy: {
+                    assetRules: [
+                        {
+                            assetId: isAsset ? ASSET : null,
+                            enabled: true,
+                            claim: "either",
+                            maxTopupSats: null,
+                            fares: [
+                                {
+                                    id: "sats",
+                                    currency: { kind: "sats" },
+                                    pricing: { kind: "flat", units: 10n },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            });
+            const build = lockupBuilder.buildUnsigned.bind(lockupBuilder);
+            d.lockupBuilder = {
+                buildUnsigned: async (request) => {
+                    const funding = await build(request);
+                    const envelope = decodeLockupEnvelope(funding.unsignedLockupTx);
+                    if (quantity === undefined) delete envelope.assetUnits;
+                    else envelope.assetUnits = quantity;
+                    return { ...funding, unsignedLockupTx: encodeLockupEnvelope(envelope) };
+                },
+            };
+            await expect(
+                createQuote(d, quoteBody(isAsset ? { assetId: assetIdToWire(ASSET) } : {})),
+            ).rejects.toThrow(/builder asset quantity/);
+            expect(advances.rows.size).toBe(0);
+            expect(d.reservations.listReservedOutpoints()).toEqual([]);
+        },
+    );
+    it("keeps bitcoin claims free of an asset quantity", async () => {
+        const response = await createQuote(deps(), quoteBody());
+        expect(advances.get(response.transferId)?.assetUnits).toBeUndefined();
+    });
+
+    it("mirrors receiver lookup order and returns independent records in memory", () => {
+        const BOB = new Uint8Array(32).fill(1);
+        const ALICE = new Uint8Array(32).fill(2);
+        for (const row of [
+            advance({ id: "bob-terminal", receiverKey: BOB, state: "recycled", updatedAt: 30 }),
+            advance({ id: "bob-tie-b", receiverKey: BOB, state: "locked", updatedAt: 20 }),
+            advance({ id: "foreign", updatedAt: 5 }),
+            advance({ id: "alice-tie-a", receiverKey: ALICE, updatedAt: 20 }),
+            advance({ id: "bob-older", receiverKey: BOB, state: "quoted", updatedAt: 10 }),
+        ])
+            advances.insert(row);
+        const rows = advances.byReceiverKeys([BOB, ALICE, BOB]);
+        expect(rows.map(({ id }) => id)).toEqual([
+            "bob-older",
+            "alice-tie-a",
+            "bob-tie-b",
+            "bob-terminal",
+        ]);
+        rows[0]!.state = "expired";
+        expect(advances.get("bob-older")?.state).toBe("quoted");
+        expect(advances.byReceiverKeys([])).toEqual([]);
+    });
     it("derives timestamp CLTV using the seconds margin", async () => {
         const testDeps = deps({ policy: { locktimeMarginBlocks: 999, locktimeMarginSeconds: 60 } });
         testDeps.inventory.getSpendableVtxos = async () => [
@@ -176,30 +246,41 @@ describe("createQuote", () => {
         expect(res.params.topup).toBe("230");
     });
 
-    it("round-trips an asset id", async () => {
-        const withAsset = deps({
-            policy: {
-                assetRules: [
-                    {
-                        assetId: ASSET,
-                        enabled: true,
-                        fares: [
-                            {
-                                id: "sats",
-                                currency: { kind: "sats" },
-                                pricing: { kind: "flat", units: 10n },
-                            },
-                        ],
-                        claim: "either",
-                        maxTopupSats: null,
-                    },
-                ],
-            },
-        });
-        const res = await createQuote(withAsset, quoteBody({ assetId: assetIdToWire(ASSET) }));
-        expect(res.params.assetId).toEqual(assetIdToWire(ASSET));
-        expect(advances.get(res.transferId)!.assetId).toEqual(ASSET);
-    });
+    it.each([
+        [undefined, "sats", 100n],
+        [undefined, "sameAsset", 90n],
+        ["90", "sameAsset", 90n],
+    ] as const)(
+        "persists resolved units for request %s and fare %s",
+        async (quantity, currency, expected) => {
+            const withAsset = deps({
+                policy: {
+                    assetRules: [
+                        {
+                            assetId: ASSET,
+                            enabled: true,
+                            fares: [
+                                {
+                                    id: "sats",
+                                    currency: { kind: currency },
+                                    pricing: { kind: "flat", units: 10n },
+                                },
+                            ],
+                            claim: "either",
+                            maxTopupSats: null,
+                        },
+                    ],
+                },
+            });
+            const res = await createQuote(
+                withAsset,
+                quoteBody({ assetId: assetIdToWire(ASSET), assetUnits: quantity }),
+            );
+            expect(res.params.assetId).toEqual(assetIdToWire(ASSET));
+            expect(advances.get(res.transferId)!.assetId).toEqual(ASSET);
+            expect(advances.get(res.transferId)!.assetUnits).toBe(expected);
+        },
+    );
 
     it("hands the builder the derived covenant, not a rebuilt one", async () => {
         const res = await createQuote(deps(), quoteBody());

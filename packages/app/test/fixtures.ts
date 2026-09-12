@@ -303,6 +303,13 @@ export class MemoryAdvances {
     byState(s: Advance["state"]): Advance[] {
         return [...this.rows.values()].filter((a) => a.state === s).map((a) => ({ ...a }));
     }
+    byReceiverKeys(keys: readonly Uint8Array[]): Advance[] {
+        const wanted = new Set(keys.map(bytesToHex));
+        return [...this.rows.values()]
+            .filter((advance) => wanted.has(bytesToHex(advance.receiverKey)))
+            .sort((a, b) => a.updatedAt - b.updatedAt || a.id.localeCompare(b.id))
+            .map((advance) => ({ ...advance }));
+    }
     update(a: Advance): void {
         this.updateCalls++;
         if (this.failUpdateAt === this.updateCalls) throw new Error("db write failed");

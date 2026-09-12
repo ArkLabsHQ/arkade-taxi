@@ -90,6 +90,7 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     dust: bigint;
     topup: bigint;
     assetId?: AssetIdRef;
+    assetUnits?: bigint;
     /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime. */
     locktime: bigint;
 

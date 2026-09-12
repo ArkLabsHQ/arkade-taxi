@@ -90,6 +90,7 @@ it.each([false, true])(
             id: req.advanceId,
             state: "quoted",
             ...req.params,
+            assetUnits: BigInt(envelope.assetUnits!),
             ...funding,
             fare: req.fare,
             covenantAddress: req.covenantAddress,
@@ -162,6 +163,7 @@ it.each([false, true])(
         try {
             const advances = new AdvanceRepository(reopened);
             const locked = advances.get(row.id)!;
+            expect(locked.assetUnits).toBe(expected);
             assertRecoveryStartupInvariants([locked], config());
             const runner = createRecoveryRunner({
                 advances,

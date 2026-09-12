@@ -34,7 +34,8 @@ import {
 } from "@arkade-os/sdk";
 import { createHash } from "node:crypto";
 import { buildLockupEnvelope, operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { parseLockupEnvelope } from "./arkade/psbt.js";
+import { decodeLockupEnvelope, parseLockupEnvelope } from "./arkade/psbt.js";
+import { LockupShapeError } from "./lockup.js";
 import { verifySenderFunding } from "./arkade/senderFunding.js";
 import {
     ReservationConflictError,
@@ -407,6 +408,16 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
             "builder inputs differ from reserved funding selection",
         );
 
+    const wireEnvelope = decodeLockupEnvelope(funding.unsignedLockupTx);
+    const assetUnits =
+        wireEnvelope.assetUnits === undefined
+            ? undefined
+            : satsFromWire(wireEnvelope.assetUnits, "envelope.assetUnits");
+    if ((params.assetId === undefined) !== (assetUnits === undefined))
+        throw new LockupShapeError("builder asset quantity disagrees with quote asset");
+    if (assetUnits !== undefined && assetUnits <= 0n)
+        throw new LockupShapeError("builder asset quantity must be positive");
+
     const envelope = parseLockupEnvelope(
         funding.unsignedLockupTx,
         buildRequest,
@@ -438,7 +449,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         createdAt: now,
         updatedAt: now,
         expiresAt: now + policy.quoteTtlSeconds,
-        ...(params.assetId ? { assetId: params.assetId } : {}),
+        ...(params.assetId ? { assetId: params.assetId, assetUnits } : {}),
     };
     validateFundingSnapshot(advance);
     await verifySenderFunding(

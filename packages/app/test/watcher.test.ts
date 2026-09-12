@@ -140,6 +140,7 @@ async function setup(
         id: request.advanceId,
         state: "quoted",
         ...request.params,
+        ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
         batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: {
             kind: request.funding.batchExpiry.kind,

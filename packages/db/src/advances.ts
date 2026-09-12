@@ -14,6 +14,7 @@ const COLUMNS = [
     "topup",
     "asset_txid",
     "asset_group_index",
+    "asset_units",
     "locktime",
     "covenant_address",
     "fare_currency",
@@ -86,6 +87,7 @@ interface AdvanceRow {
     topup: bigint;
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
+    asset_units: bigint | null;
     locktime: bigint;
     covenant_address: string;
     fare_currency: string;
@@ -179,6 +181,13 @@ const stringArray = (json: string, id: string): string[] => {
 
 function toParams(a: Advance): AdvanceParams {
     validateFundingSnapshot(a);
+    if (
+        (a.assetId === undefined) !== (a.assetUnits === undefined) ||
+        (a.assetUnits !== undefined && (typeof a.assetUnits !== "bigint" || a.assetUnits <= 0n))
+    )
+        throw new Error(
+            `advance ${a.id}: asset quantity must be positive exactly when assetId is present`,
+        );
     return {
         id: a.id,
         state: a.state,
@@ -189,6 +198,7 @@ function toParams(a: Advance): AdvanceParams {
         topup: a.topup,
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
+        asset_units: a.assetUnits ?? null,
         locktime: a.locktime,
         covenant_address: a.covenantAddress,
         fare_currency: a.fare.currency,
@@ -329,6 +339,7 @@ function fromRow(r: AdvanceRow): Advance {
     if (r.asset_txid !== null) {
         a.assetId = { txid: bytes(r.asset_txid), groupIndex: Number(r.asset_group_index) };
     }
+    if (r.asset_units !== null) a.assetUnits = r.asset_units;
     if (r.outpoint_txid !== null) {
         a.outpoint = { txid: r.outpoint_txid, vout: Number(r.outpoint_vout) };
     }
@@ -396,6 +407,7 @@ export class AdvanceRepository {
     readonly #update: Statement<[AdvanceParams]>;
     readonly #get: Statement<[string], AdvanceRow>;
     readonly #byState: Statement<[AdvanceState], AdvanceRow>;
+    readonly #byReceiverKeys = new Map<number, Statement<Buffer[], AdvanceRow>>();
     readonly #byOutpoint: Statement<[string, number], AdvanceRow>;
     readonly #sweepable: Statement<[bigint, bigint | null], AdvanceRow>;
     readonly #sumTopup: Statement<[AdvanceState], { total: bigint | null }>;
@@ -467,6 +479,28 @@ export class AdvanceRepository {
     byState(s: AdvanceState): Advance[] {
         assertNativeAccess(this.#db);
         return this.#byState.all(s).map(fromRow);
+    }
+
+    byReceiverKeys(receiverKeys: readonly Uint8Array[]): Advance[] {
+        assertNativeAccess(this.#db);
+        const keys = new Map<string, Buffer>();
+        for (const key of receiverKeys) {
+            if (key.length !== 32) throw new Error("receiver key must be 32 bytes");
+            const buffer = Buffer.from(key);
+            keys.set(buffer.toString("hex"), buffer);
+        }
+        if (keys.size === 0) return [];
+        let statement = this.#byReceiverKeys.get(keys.size);
+        if (!statement) {
+            statement = this.#db
+                .prepare<Buffer[], AdvanceRow>(
+                    `SELECT * FROM advances WHERE receiver_key IN (${Array(keys.size).fill("?").join(", ")})
+                     ORDER BY updated_at ASC, id ASC`,
+                )
+                .safeIntegers(true);
+            this.#byReceiverKeys.set(keys.size, statement);
+        }
+        return statement.all(...keys.values()).map(fromRow);
     }
 
     byOutpoint(o: Outpoint): Advance | undefined {

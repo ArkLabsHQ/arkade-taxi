@@ -47,6 +47,53 @@ beforeEach(() => {
 });
 
 describe("round-trip fidelity", () => {
+    it.each([undefined, 0n, -1n])("rejects asset quantity %s", (assetUnits) => {
+        const row = advance({
+            assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },
+            assetUnits,
+        });
+        expect(() => repo.insert(row)).toThrow(/asset.*quantity/i);
+        repo.insert(advance());
+        expect(() => repo.update(row)).toThrow(/asset.*quantity/i);
+    });
+
+    it("rejects a bitcoin advance with an asset quantity", () => {
+        expect(() => repo.insert(advance({ assetUnits: 1n }))).toThrow(/asset.*quantity/i);
+    });
+
+    it("looks up deduplicated receiver keys in update and id order across states", () => {
+        const BOB = new Uint8Array(32).fill(1);
+        const ALICE = new Uint8Array(32).fill(2);
+        for (const row of [
+            advance({ id: "bob-terminal", receiverKey: BOB, state: "recycled", updatedAt: 30 }),
+            advance({ id: "bob-tie-b", receiverKey: BOB, state: "locked", updatedAt: 20 }),
+            advance({ id: "foreign", updatedAt: 5 }),
+            advance({ id: "alice-tie-a", receiverKey: ALICE, updatedAt: 20 }),
+            advance({
+                id: "bob-older",
+                receiverKey: BOB,
+                state: "recovering",
+                updatedAt: 10,
+                assetId: { txid: new Uint8Array(32).fill(3), groupIndex: 0 },
+                assetUnits: ABOVE_MAX_SAFE,
+            }),
+        ])
+            repo.insert(row);
+        expect(repo.byReceiverKeys([BOB, ALICE, BOB]).map(({ id }) => id)).toEqual([
+            "bob-older",
+            "alice-tie-a",
+            "bob-tie-b",
+            "bob-terminal",
+        ]);
+        expect(repo.byReceiverKeys([BOB])[0]?.assetUnits).toBe(ABOVE_MAX_SAFE);
+        expect(repo.byReceiverKeys([ALICE]).map(({ id }) => id)).toEqual(["alice-tie-a"]);
+        expect(repo.byReceiverKeys([new Uint8Array(32)])).toEqual([]);
+        expect(repo.byReceiverKeys([])).toEqual([]);
+    });
+
+    it.each([0, 31, 33])("rejects a %s byte receiver key", (size) => {
+        expect(() => repo.byReceiverKeys([new Uint8Array(size)])).toThrow(/32 bytes/);
+    });
     it("expedites only an idle resumable submission without changing durable artifacts", () => {
         repo.insert(
             advance({
@@ -358,12 +405,15 @@ describe("round-trip fidelity", () => {
 
     it("round-trips an asset-variant advance through two queryable columns", () => {
         const assetId = { txid: Uint8Array.from({ length: 32 }, (_, i) => 255 - i), groupIndex: 4 };
-        repo.insert(advance({ assetId }));
+        repo.insert(advance({ assetId, assetUnits: ABOVE_MAX_SAFE }));
 
         const got = repo.get("adv-1")!;
 
         expect(Array.from(got.assetId!.txid)).toEqual(Array.from(assetId.txid));
         expect(got.assetId!.groupIndex).toBe(4);
+        expect(got.assetUnits).toBe(ABOVE_MAX_SAFE);
+        repo.update({ ...got, assetUnits: ABOVE_MAX_SAFE + 1n });
+        expect(repo.get(got.id)?.assetUnits).toBe(ABOVE_MAX_SAFE + 1n);
         expect(typeof got.assetId!.groupIndex).toBe("number");
         const byAsset = db
             .prepare<[number], { id: string }>(
@@ -858,6 +908,7 @@ describe("update", () => {
                 outpoint: { txid: "99".repeat(32), vout: 1 },
                 spentTxid: "88".repeat(32),
                 assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 2 },
+                assetUnits: 1n,
             }),
         );
 
@@ -867,6 +918,7 @@ describe("update", () => {
         expect(got.outpoint).toBeUndefined();
         expect(got.spentTxid).toBeUndefined();
         expect(got.assetId).toBeUndefined();
+        expect(got.assetUnits).toBeUndefined();
     });
 
     it("refuses to silently no-op on an unknown id", () => {
