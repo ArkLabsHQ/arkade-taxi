@@ -9,8 +9,15 @@ import {
     type CovenantSpendInput,
     type DustCovenantParams,
 } from "@arkade-taxi/covenant";
-import type { LockupResponse, TransferStatusResponse } from "@arkade-taxi/protocol";
 import {
+    quoteParamsFromWire,
+    type AssetIdValue,
+    type LockupResponse,
+    type ReceiverClaimWire,
+    type TransferStatusResponse,
+} from "@arkade-taxi/protocol";
+import {
+    ArkAddress,
     Extension,
     EmulatorPacket,
     MultisigTapscript,
@@ -36,7 +43,7 @@ import {
 import { base64, hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
 import { tapLeafHash } from "@scure/btc-signer/payment.js";
-import { decodeInfo, decodeLockup, decodeStatus } from "./decode.js";
+import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./decode.js";
 import { WeakValueRegistry } from "./lifecycle.js";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
 import type { VerifiedQuote } from "./verify.js";
@@ -65,6 +72,28 @@ export interface VerifyCovenantTransferArgs {
     lockup: LockupResponse;
     status: TransferStatusResponse;
     config: CovenantSpendConfig;
+}
+
+export interface IncomingClaimExpectation {
+    receiverAddress: string;
+    assetId?: AssetIdValue;
+    assetUnits?: bigint;
+}
+
+export interface IncomingClaimTrust {
+    serverKey: Uint8Array;
+    emulatorKey: Uint8Array;
+    operatorKey: Uint8Array;
+    vtxoMinAmount: bigint;
+    hrp: string;
+}
+
+export interface VerifyIncomingClaimArgs {
+    claim: ReceiverClaimWire;
+    expect: IncomingClaimExpectation;
+    trusted: IncomingClaimTrust;
+    config: CovenantSpendConfig;
+    status: TransferStatusResponse;
 }
 
 export interface ReceiverWalletInput {
@@ -580,8 +609,166 @@ export async function verifyCovenantTransfer({
         reject("Taxi status reports a spent or failed transfer");
 
     const decodedInfo = decodeInfo(quoteState.authorization.info);
-    const arkdUrl = normalizeUrl(decodedInfo.arkdUrl, "advertised arkd URL");
-    const emulatorUrl = normalizeUrl(decodedInfo.emulatorUrl, "advertised emulator URL");
+    return verifyObservedClaim(
+        {
+            transferId: quoteState.transferId,
+            outpoint: { ...lockup.outpoint },
+            params: immutablePlainCopy(quoteState.context.params, "transfer covenant parameters"),
+            serverKey: Uint8Array.from(quoteState.context.serverKey),
+            emulatorKey: Uint8Array.from(quoteState.authorization.trustedEmulatorKey),
+            vtxoMinAmount: quoteState.context.vtxoMinAmount,
+            hrp: quoteState.context.hrp,
+            trustedServerUnrollScript: quoteState.context.trustedServerUnrollScript,
+            ...(quoteState.validated.envelope.assetUnits === undefined
+                ? {}
+                : { contextAssetUnits: BigInt(quoteState.validated.envelope.assetUnits) }),
+        },
+        decodedInfo,
+        rawConfig,
+    );
+}
+
+export async function verifyIncomingClaim(
+    rawArgs: VerifyIncomingClaimArgs,
+): Promise<CovenantTransfer> {
+    const args = immutablePlainCopy(rawArgs, "incoming claim verification");
+    exactObjectKeys(
+        args as unknown as Record<string, unknown>,
+        ["claim", "expect", "trusted", "config", "status"],
+        [],
+        "incoming claim verification",
+    );
+    const { expect, trusted, config } = args;
+    exactObjectKeys(
+        expect as unknown as Record<string, unknown>,
+        ["receiverAddress"],
+        ["assetId", "assetUnits"],
+        "incoming claim expectation",
+    );
+    exactObjectKeys(
+        trusted as unknown as Record<string, unknown>,
+        ["serverKey", "emulatorKey", "operatorKey", "vtxoMinAmount", "hrp"],
+        [],
+        "incoming claim trust",
+    );
+    for (const key of [trusted.serverKey, trusted.emulatorKey, trusted.operatorKey])
+        if (!(key instanceof Uint8Array) || key.length !== 32)
+            reject("trusted identity must be a 32-byte public key");
+    if (typeof trusted.vtxoMinAmount !== "bigint" || trusted.vtxoMinAmount <= 0n)
+        reject("trusted minimum VTXO amount is invalid");
+    if (typeof trusted.hrp !== "string" || !trusted.hrp) reject("trusted address HRP is invalid");
+    const claim = decodeClaimsSnapshot({ claims: [args.claim] }).claims[0]!;
+    if (claim.state !== "locked" || claim.claimable !== true || claim.claim === undefined)
+        return reject("incoming claim is not a claimable locked transfer");
+    const descriptor = claim.claim;
+    if (
+        typeof expect.receiverAddress !== "string" ||
+        claim.receiverAddress !== expect.receiverAddress
+    )
+        reject("incoming receiver address mismatch");
+    const receiver = ArkAddress.decode(expect.receiverAddress);
+    if (receiver.encode() !== expect.receiverAddress)
+        reject("incoming receiver address is not canonical");
+    if (receiver.hrp !== trusted.hrp) reject("incoming receiver address HRP mismatch");
+    exactBytes(receiver.serverPubKey, trusted.serverKey, "incoming receiver server key");
+    const params = quoteParamsFromWire(descriptor.params);
+    exactBytes(receiver.vtxoTaprootKey, params.receiverKey, "incoming receiver key");
+    exactBytes(params.operatorKey, trusted.operatorKey, "incoming operator key");
+    if (expect.assetId !== undefined) {
+        exactObjectKeys(
+            expect.assetId as unknown as Record<string, unknown>,
+            ["txid", "groupIndex"],
+            [],
+            "expected asset identity",
+        );
+        if (!(expect.assetId.txid instanceof Uint8Array) || expect.assetId.txid.length !== 32)
+            reject("expected asset txid must be 32 bytes");
+    }
+    if (params.assetId === undefined) {
+        if (
+            expect.assetId !== undefined ||
+            expect.assetUnits !== undefined ||
+            descriptor.assetUnits !== undefined
+        )
+            reject("bitcoin claim unexpectedly declares assets");
+    } else {
+        if (
+            expect.assetId === undefined ||
+            !sameBytes(params.assetId.txid, expect.assetId.txid) ||
+            params.assetId.groupIndex !== expect.assetId.groupIndex
+        )
+            reject("incoming asset identity mismatch");
+        if (
+            typeof expect.assetUnits !== "bigint" ||
+            expect.assetUnits <= 0n ||
+            descriptor.assetUnits === undefined ||
+            BigInt(descriptor.assetUnits) !== expect.assetUnits
+        )
+            reject("incoming asset quantity mismatch");
+    }
+    const batchExpiry = {
+        kind: descriptor.batchExpiry.kind,
+        value: BigInt(descriptor.batchExpiry.value),
+    };
+    if (
+        params.locktime <= 0n ||
+        params.locktime > 0xffff_ffffn ||
+        descriptor.recoveryLocktime.kind !== (params.locktime < 500_000_000n ? "height" : "time") ||
+        descriptor.recoveryLocktime.kind !== batchExpiry.kind ||
+        BigInt(descriptor.recoveryLocktime.value) !== params.locktime ||
+        batchExpiry.value <= params.locktime
+    )
+        reject("incoming tagged recovery locktime or batch expiry mismatch");
+    const script = new DustCovenantScript({
+        serverKey: trusted.serverKey,
+        emulatorKey: trusted.emulatorKey,
+        params,
+        vtxoMinAmount: trusted.vtxoMinAmount,
+    });
+    if (script.address(trusted.hrp, trusted.serverKey).encode() !== descriptor.covenantAddress)
+        reject("incoming covenant address mismatch");
+    exactObjectKeys(
+        args.status as unknown as Record<string, unknown>,
+        ["transferId", "state", "outpoint", "updatedAt"],
+        ["spentTxid", "submissionPhase", "failureCode", "failureDetail"],
+        "transfer status",
+    );
+    const status = decodeStatus(args.status);
+    if (status.transferId !== claim.transferId || status.state !== "locked" || !status.outpoint)
+        return reject("Taxi status is not the incoming locked transfer");
+    exactObjectKeys(status.outpoint, ["txid", "vout"], [], "Taxi locked outpoint");
+    exactOutpoint(status.outpoint, descriptor.outpoint, "Taxi locked outpoint");
+    if (status.spentTxid || status.failureCode || status.failureDetail)
+        reject("Taxi status reports a spent or failed transfer");
+    return verifyObservedClaim(
+        {
+            transferId: claim.transferId,
+            outpoint: { ...descriptor.outpoint },
+            params,
+            serverKey: trusted.serverKey,
+            emulatorKey: trusted.emulatorKey,
+            vtxoMinAmount: trusted.vtxoMinAmount,
+            hrp: trusted.hrp,
+            batchExpiry,
+            ...(expect.assetUnits === undefined ? {} : { contextAssetUnits: expect.assetUnits }),
+        },
+        config,
+        config,
+    );
+}
+
+type ObservedClaimBase = Omit<CoinExpectation, "dependencies" | "arkdUrl" | "emulatorUrl"> & {
+    trustedServerUnrollScript?: Uint8Array;
+    batchExpiry?: CapabilityState["expiry"];
+};
+
+async function verifyObservedClaim(
+    facts: ObservedClaimBase,
+    advertisedUrls: Pick<CovenantSpendConfig, "arkdUrl" | "emulatorUrl">,
+    rawConfig: CovenantSpendConfig,
+): Promise<CovenantTransfer> {
+    const arkdUrl = normalizeUrl(advertisedUrls.arkdUrl, "advertised arkd URL");
+    const emulatorUrl = normalizeUrl(advertisedUrls.emulatorUrl, "advertised emulator URL");
     if (
         rawConfig &&
         typeof rawConfig === "object" &&
@@ -663,19 +850,17 @@ export async function verifyCovenantTransfer({
     ]);
     const info = arkInfo as ArkInfo;
     if (
-        !sameBytes(
-            boundDependencies.serverUnrollScript.script,
-            quoteState.context.trustedServerUnrollScript,
-        )
+        facts.trustedServerUnrollScript !== undefined &&
+        !sameBytes(boundDependencies.serverUnrollScript.script, facts.trustedServerUnrollScript)
     )
         reject("trusted server unroll script changed");
     validateProviderFacts(
         {
             network: boundDependencies.network,
-            serverKey: quoteState.context.serverKey,
-            emulatorKey: quoteState.authorization.trustedEmulatorKey,
-            dust: quoteState.context.params.dust,
-            vtxoMinAmount: quoteState.context.vtxoMinAmount,
+            serverKey: facts.serverKey,
+            emulatorKey: facts.emulatorKey,
+            dust: facts.params.dust,
+            vtxoMinAmount: facts.vtxoMinAmount,
             serverUnrollScript: boundDependencies.serverUnrollScript.script,
         },
         info,
@@ -683,29 +868,26 @@ export async function verifyCovenantTransfer({
     );
 
     const base: CoinExpectation = {
-        transferId: quoteState.transferId,
-        outpoint: { ...lockup.outpoint },
-        params: immutablePlainCopy(quoteState.context.params, "transfer covenant parameters"),
-        serverKey: Uint8Array.from(quoteState.context.serverKey),
-        emulatorKey: Uint8Array.from(quoteState.authorization.trustedEmulatorKey),
-        vtxoMinAmount: quoteState.context.vtxoMinAmount,
-        hrp: quoteState.context.hrp,
+        ...facts,
         dependencies: boundDependencies,
         arkdUrl,
         emulatorUrl,
-        ...(quoteState.validated.envelope.assetUnits === undefined
-            ? {}
-            : { contextAssetUnits: BigInt(quoteState.validated.envelope.assetUnits) }),
     };
     const observed = await observe(base);
+    if (
+        facts.batchExpiry !== undefined &&
+        (observed.expiry.kind !== facts.batchExpiry.kind ||
+            observed.expiry.value !== facts.batchExpiry.value)
+    )
+        reject("observed batch expiry mismatch");
     const lifecycleKey = [
         boundDependencies.network,
         arkdUrl,
         emulatorUrl,
-        hex.encode(quoteState.context.serverKey),
-        hex.encode(quoteState.authorization.trustedEmulatorKey),
-        lockup.outpoint.txid,
-        lockup.outpoint.vout,
+        hex.encode(facts.serverKey),
+        hex.encode(facts.emulatorKey),
+        facts.outpoint.txid,
+        facts.outpoint.vout,
     ].join("|");
     const lifecycle = registry.getOrCreate(lifecycleKey, () => ({
         state: "available",

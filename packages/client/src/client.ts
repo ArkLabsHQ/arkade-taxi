@@ -11,6 +11,7 @@ import {
     type LockupResponse,
     type QuoteRequestBody,
     type QuoteResponse,
+    type ReceiverClaimWire,
     type TransferStatusResponse,
     type FundingInputValue,
     fundingInputToWire,
@@ -25,14 +26,17 @@ import {
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
-import { activeQuoteStateFor } from "./lockup.js";
+import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
 import {
     purchase,
     recycle,
     refund,
     verifyCovenantTransfer,
+    verifyIncomingClaim,
     type CovenantSpendConfig,
     type CovenantTransfer,
+    type IncomingClaimExpectation,
+    type IncomingClaimTrust,
     type ReceiverWalletInput,
 } from "./spend.js";
 import type { Identity } from "@arkade-os/sdk";
@@ -233,6 +237,20 @@ export class TaxiClient {
             lockup,
             status: await this.status(transferId),
             config,
+        });
+    }
+
+    async verifyIncomingClaim(
+        claim: ReceiverClaimWire,
+        expect: IncomingClaimExpectation,
+        trusted: IncomingClaimTrust,
+        config: CovenantSpendConfig,
+    ): Promise<CovenantTransfer> {
+        const snapshot = immutablePlainCopy({ claim, expect, trusted, config }, "incoming claim");
+        const decoded = decodeClaimsSnapshot({ claims: [snapshot.claim] }).claims[0]!;
+        return verifyIncomingClaim({
+            ...snapshot,
+            status: await this.status(decoded.transferId),
         });
     }
 

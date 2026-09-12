@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runInNewContext } from "node:vm";
 import {
+    ArkAddress,
     CSVMultisigTapscript,
     DefaultVtxo,
     Extension,
@@ -23,17 +24,19 @@ import { base64, hex } from "@scure/base";
 import { verifyQuote } from "../src/verify.js";
 import { activeQuoteStateFor } from "../src/lockup.js";
 import { payoutPkScript, refundTopup } from "@arkade-taxi/covenant";
-import { fareFromWire, quoteParamsFromWire } from "@arkade-taxi/protocol";
+import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
 import {
     purchase,
     recycle,
     refund,
     verifyCovenantTransfer,
+    verifyIncomingClaim,
     CovenantSpendAmbiguousError,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type ReceiverWalletInput,
+    type VerifyIncomingClaimArgs,
 } from "../src/spend.js";
 import {
     NOW,
@@ -296,6 +299,482 @@ const setup = async (
         submitted: () => submitted,
     };
 };
+
+const incomingFixture = async (withAsset = true) => {
+    const authorization = withAsset ? assetArgs() : args();
+    const base = await setup(
+        authorization,
+        withAsset
+            ? [
+                  {
+                      assetId: asset.AssetId.create("12".repeat(32), 7).toString(),
+                      amount: authorization.assetUnits!,
+                  },
+              ]
+            : [],
+    );
+    const state = activeQuoteStateFor(base.verified);
+    const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
+    const claim: ReceiverClaimWire = {
+        transferId: base.status.transferId,
+        receiverAddress,
+        state: "locked",
+        claimable: true,
+        updatedAt: NOW,
+        claim: {
+            params: structuredClone(state.authorization.quote.params),
+            covenantAddress: state.authorization.quote.covenantAddress,
+            outpoint: { ...base.status.outpoint },
+            fare: structuredClone(state.authorization.quote.fare),
+            batchExpiry: { kind: "height", value: "900000" },
+            recoveryLocktime: { kind: "height", value: state.context.params.locktime.toString() },
+            ...(withAsset ? { assetUnits: authorization.assetUnits!.toString() } : {}),
+        },
+    };
+    const incoming: VerifyIncomingClaimArgs = {
+        claim,
+        expect: {
+            receiverAddress,
+            ...(withAsset
+                ? {
+                      assetId: structuredClone(authorization.expect.assetId!),
+                      assetUnits: authorization.assetUnits!,
+                  }
+                : {}),
+        },
+        trusted: {
+            serverKey: Uint8Array.from(serverKey),
+            emulatorKey: Uint8Array.from(emulatorKey),
+            operatorKey: Uint8Array.from(operatorKey),
+            vtxoMinAmount: VTXO_MIN,
+            hrp: "ark",
+        },
+        config: { ...base.config },
+        status: { ...base.status, outpoint: { ...base.status.outpoint } },
+    };
+    return { base, incoming };
+};
+
+describe("incoming claim verification", () => {
+    it.each([true, false])(
+        "mints a spend capability for an observed incoming claim (asset=%s)",
+        async (withAsset) => {
+            const { base, incoming } = await incomingFixture(withAsset);
+            const transfer = await verifyIncomingClaim(incoming);
+            expect(transfer).toMatchObject({
+                transferId: "tr_01",
+                outpoint: base.lockup.outpoint,
+                value: 330n,
+            });
+            await purchase(transfer, new Uint8Array([0x51, 0x20, ...receiverKey]));
+            expect(base.submitted()).toBeDefined();
+        },
+    );
+
+    const mutations: [string, (value: VerifyIncomingClaimArgs) => void][] = [
+        [
+            "receiver address",
+            (a) => {
+                a.claim.receiverAddress = new ArkAddress(serverKey, otherKey, "ark").encode();
+            },
+        ],
+        [
+            "receiver key",
+            (a) => {
+                a.claim.claim!.params.receiverKey = hex.encode(otherKey);
+            },
+        ],
+        [
+            "noncanonical address",
+            (a) => {
+                a.expect.receiverAddress = a.claim.receiverAddress =
+                    a.claim.receiverAddress.toUpperCase();
+            },
+        ],
+        [
+            "address HRP",
+            (a) => {
+                a.expect.receiverAddress = a.claim.receiverAddress = new ArkAddress(
+                    serverKey,
+                    receiverKey,
+                    "tark",
+                ).encode();
+            },
+        ],
+        [
+            "address server",
+            (a) => {
+                a.expect.receiverAddress = a.claim.receiverAddress = new ArkAddress(
+                    otherKey,
+                    receiverKey,
+                    "ark",
+                ).encode();
+            },
+        ],
+        [
+            "trusted server",
+            (a) => {
+                a.trusted.serverKey = otherKey;
+            },
+        ],
+        [
+            "trusted emulator",
+            (a) => {
+                a.trusted.emulatorKey = otherKey;
+            },
+        ],
+        [
+            "trusted operator",
+            (a) => {
+                a.trusted.operatorKey = otherKey;
+            },
+        ],
+        [
+            "operator params",
+            (a) => {
+                a.claim.claim!.params.operatorKey = hex.encode(otherKey);
+            },
+        ],
+        [
+            "sender params",
+            (a) => {
+                a.claim.claim!.params.senderKey = hex.encode(otherKey);
+            },
+        ],
+        [
+            "topup params",
+            (a) => {
+                a.claim.claim!.params.topup = "331";
+            },
+        ],
+        [
+            "dust params",
+            (a) => {
+                a.claim.claim!.params.dust = "331";
+            },
+        ],
+        [
+            "asset ID",
+            (a) => {
+                a.expect.assetId!.groupIndex++;
+            },
+        ],
+        [
+            "asset quantity",
+            (a) => {
+                a.expect.assetUnits = a.expect.assetUnits! - 1n;
+            },
+        ],
+        [
+            "missing expected asset",
+            (a) => {
+                delete a.expect.assetId;
+            },
+        ],
+        [
+            "missing expected units",
+            (a) => {
+                delete a.expect.assetUnits;
+            },
+        ],
+        [
+            "missing descriptor units",
+            (a) => {
+                delete a.claim.claim!.assetUnits;
+            },
+        ],
+        [
+            "zero units",
+            (a) => {
+                a.claim.claim!.assetUnits = "0";
+                a.expect.assetUnits = 0n;
+            },
+        ],
+        [
+            "unsafe number units",
+            (a) => {
+                a.expect.assetUnits = Number(a.expect.assetUnits) as unknown as bigint;
+            },
+        ],
+        [
+            "covenant address",
+            (a) => {
+                a.claim.claim!.covenantAddress = a.claim.receiverAddress;
+            },
+        ],
+        [
+            "outpoint",
+            (a) => {
+                a.claim.claim!.outpoint.vout++;
+            },
+        ],
+        [
+            "tap tree injection",
+            (a) => {
+                Object.assign(a.claim.claim!, { tapTree: "00" });
+            },
+        ],
+        [
+            "batch expiry value",
+            (a) => {
+                a.claim.claim!.batchExpiry.value = "899999";
+            },
+        ],
+        [
+            "batch expiry kind",
+            (a) => {
+                a.claim.claim!.batchExpiry.kind = "time";
+            },
+        ],
+        [
+            "recovery value",
+            (a) => {
+                a.claim.claim!.recoveryLocktime.value = "799999";
+            },
+        ],
+        [
+            "recovery kind",
+            (a) => {
+                a.claim.claim!.recoveryLocktime.kind = "time";
+            },
+        ],
+        [
+            "listing state",
+            (a) => {
+                a.claim.state = "recovering";
+            },
+        ],
+        [
+            "claimable",
+            (a) => {
+                a.claim.claimable = false;
+            },
+        ],
+        [
+            "listing spent marker",
+            (a) => {
+                a.claim.spentTxid = "aa".repeat(32);
+            },
+        ],
+        [
+            "Taxi state",
+            (a) => {
+                a.status.state = "recovering";
+            },
+        ],
+        [
+            "Taxi transfer ID",
+            (a) => {
+                a.status.transferId = "another-transfer";
+            },
+        ],
+        [
+            "Taxi spent marker",
+            (a) => {
+                a.status.spentTxid = "aa".repeat(32);
+            },
+        ],
+        [
+            "Taxi failure",
+            (a) => {
+                a.status.failureCode = "failed";
+            },
+        ],
+        [
+            "Taxi failure detail",
+            (a) => {
+                a.status.failureDetail = "failed";
+            },
+        ],
+        [
+            "Taxi outpoint extra",
+            (a) => {
+                Object.assign(a.status.outpoint!, { script: "00" });
+            },
+        ],
+        [
+            "minimum amount",
+            (a) => {
+                a.trusted.vtxoMinAmount = 11n;
+            },
+        ],
+        [
+            "arkd URL",
+            (a) => {
+                a.config.arkdUrl = "https://attacker.example";
+            },
+        ],
+        [
+            "emulator URL",
+            (a) => {
+                a.config.emulatorUrl = "https://attacker.example";
+            },
+        ],
+        [
+            "URL credentials",
+            (a) => {
+                a.config.arkdUrl = "https://attacker@arkd.example";
+            },
+        ],
+        [
+            "network",
+            (a) => {
+                a.config.network = "bitcoin";
+            },
+        ],
+        [
+            "server unroll script",
+            (a) => {
+                a.config.serverUnrollScript = "00";
+            },
+        ],
+    ];
+
+    it.each(mutations)("rejects a changed %s", async (_label, mutate) => {
+        const { base, incoming } = await incomingFixture();
+        mutate(incoming);
+        await expect(verifyIncomingClaim(incoming)).rejects.toThrow();
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ["value", { value: 331 }],
+        ["script", { script: "5120" + "00".repeat(32) }],
+        ["outpoint", { txid: "ab".repeat(32) }],
+        ["expiry", { expiresAtHeight: 899999 }],
+        ["spent", { isSpent: true }],
+        [
+            "asset units",
+            {
+                assets: [
+                    { assetId: asset.AssetId.create("12".repeat(32), 7).toString(), amount: 1n },
+                ],
+            },
+        ],
+        [
+            "asset ID",
+            {
+                assets: [
+                    {
+                        assetId: asset.AssetId.create("13".repeat(32), 7).toString(),
+                        amount: 9_007_199_254_740_993n,
+                    },
+                ],
+            },
+        ],
+    ])("rejects changed indexed %s", async (_label, patch) => {
+        const { base, incoming } = await incomingFixture();
+        base.indexer.getVtxos.mockResolvedValueOnce({ vtxos: [{ ...base.coin, ...patch }] });
+        await expect(verifyIncomingClaim(incoming)).rejects.toThrow();
+    });
+
+    it("does not grant spend authority to a listing or copied capability", async () => {
+        const { incoming } = await incomingFixture();
+        const transfer = await verifyIncomingClaim(incoming);
+        for (const raw of [incoming.claim, { ...transfer }]) {
+            await expect(purchase(raw as CovenantTransfer, new Uint8Array())).rejects.toThrow(
+                /capability/i,
+            );
+            await expect(
+                recycle(raw as CovenantTransfer, {} as ReceiverWalletInput, new Uint8Array()),
+            ).rejects.toThrow(/capability/i);
+        }
+    });
+
+    it("shares consumption with sender-originated verification of the same coin", async () => {
+        const { base, incoming } = await incomingFixture();
+        const transfer = await verifyIncomingClaim(incoming);
+        await purchase(base.transfer, new Uint8Array([0x51, 0x20, ...receiverKey]));
+        await expect(
+            purchase(transfer, new Uint8Array([0x51, 0x20, ...receiverKey])),
+        ).rejects.toThrow(/already consumed/i);
+    });
+
+    it("rejects accessors without reading them and accepts cross-realm byte snapshots", async () => {
+        const { incoming } = await incomingFixture();
+        const read = vi.fn(() => incoming.claim);
+        const accessor = Object.defineProperty({ ...incoming }, "claim", {
+            enumerable: true,
+            get: read,
+        });
+        await expect(verifyIncomingClaim(accessor)).rejects.toThrow(/data property/i);
+        expect(read).not.toHaveBeenCalled();
+        incoming.trusted.serverKey = runInNewContext("new Uint8Array(bytes)", {
+            bytes: [...serverKey],
+        }) as Uint8Array;
+        await expect(verifyIncomingClaim(incoming)).resolves.toMatchObject({ transferId: "tr_01" });
+    });
+
+    it("uses descriptor snapshots without reading proxy properties", async () => {
+        const { incoming } = await incomingFixture();
+        incoming.claim = new Proxy(incoming.claim, {
+            get() {
+                throw new Error("untrusted property read");
+            },
+        });
+        await expect(verifyIncomingClaim(incoming)).resolves.toMatchObject({ transferId: "tr_01" });
+    });
+
+    it("pins all incoming facts before asynchronous provider observation", async () => {
+        const { base, incoming } = await incomingFixture();
+        const pending = verifyIncomingClaim(incoming);
+        incoming.claim.claim!.params.receiverKey = hex.encode(otherKey);
+        incoming.trusted.serverKey.fill(0);
+        incoming.expect.assetUnits = 1n;
+        incoming.config.emulatorUrl = "https://attacker.example";
+        incoming.status.outpoint!.vout++;
+        const transfer = await pending;
+        await purchase(transfer, new Uint8Array([0x51, 0x20, ...receiverKey]));
+        expect(base.submissionUrls).toEqual(["https://emulator.example"]);
+    });
+
+    it("fetches fresh Taxi status and snapshots inputs before waiting for it", async () => {
+        const { base, incoming } = await incomingFixture();
+        let release!: (value: Response) => void;
+        const taxiFetch = vi.fn(
+            () =>
+                new Promise<Response>((resolve) => {
+                    release = resolve;
+                }),
+        );
+        const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch: taxiFetch });
+        const pending = taxi.verifyIncomingClaim(
+            incoming.claim,
+            incoming.expect,
+            incoming.trusted,
+            incoming.config,
+        );
+        incoming.claim.transferId = "attacker";
+        incoming.trusted.serverKey.fill(0);
+        incoming.config.emulatorUrl = "https://attacker.example";
+        release(json(base.status));
+        const transfer = await pending;
+        expect(transfer.transferId).toBe("tr_01");
+        expect(taxiFetch).toHaveBeenCalledWith(
+            "https://taxi.example/v1/transfers/tr_01",
+            expect.anything(),
+        );
+        await purchase(transfer, new Uint8Array([0x51, 0x20, ...receiverKey]));
+        expect(base.submissionUrls).toEqual(["https://emulator.example"]);
+    });
+
+    it("rejects a listed locked coin when fresh Taxi status reports it spent", async () => {
+        const { base, incoming } = await incomingFixture();
+        const taxi = new TaxiClient({
+            baseUrl: "https://taxi.example",
+            fetch: async () =>
+                json({ ...base.status, state: "purchased", spentTxid: "ab".repeat(32) }),
+        });
+        await expect(
+            taxi.verifyIncomingClaim(
+                incoming.claim,
+                incoming.expect,
+                incoming.trusted,
+                incoming.config,
+            ),
+        ).rejects.toThrow(/Taxi status/i);
+    });
+});
 
 const receiverFunding = async (
     leaf?: Uint8Array,

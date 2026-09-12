@@ -26,11 +26,15 @@ export {
     recycle,
     refund,
     verifyCovenantTransfer,
+    verifyIncomingClaim,
     CovenantSpendAmbiguousError,
     type CovenantSpendConfig,
     type CovenantTransfer,
+    type IncomingClaimExpectation,
+    type IncomingClaimTrust,
     type ReceiverWalletInput,
     type VerifyCovenantTransferArgs,
+    type VerifyIncomingClaimArgs,
 } from "./spend.js";
 export {
     decodeInfo,
