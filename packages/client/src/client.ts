@@ -3,6 +3,8 @@ import {
     bytesToHex,
     satsToWire,
     type AssetIdValue,
+    type ClaimsChangedEvent,
+    type ClaimsSnapshotResponse,
     type ErrorResponse,
     type InfoResponse,
     type LockupRequestBody,
@@ -13,7 +15,14 @@ import {
     type FundingInputValue,
     fundingInputToWire,
 } from "@arkade-taxi/protocol";
-import { decodeInfo, decodeLockup, decodeQuote, decodeStatus } from "./decode.js";
+import {
+    decodeClaimsChanged,
+    decodeClaimsSnapshot,
+    decodeInfo,
+    decodeLockup,
+    decodeQuote,
+    decodeStatus,
+} from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
 import { activeQuoteStateFor } from "./lockup.js";
@@ -32,6 +41,26 @@ import type { VerifiedQuote } from "./verify.js";
 export interface TaxiClientOptions {
     baseUrl: string;
     fetch?: typeof fetch;
+    eventSourceFactory?: (url: string) => EventSourceLike;
+}
+
+type ClaimEventName = "claims-snapshot" | "claims-changed";
+
+export interface EventSourceLike {
+    addEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
+    addEventListener(type: "error", listener: (event: unknown) => void): void;
+    removeEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
+    removeEventListener(type: "error", listener: (event: unknown) => void): void;
+    close(): void;
+}
+
+export type ClaimSubscription = () => void;
+
+export interface SubscribeClaimsArgs {
+    receiverAddresses: readonly string[];
+    onSnapshot: (snapshot: ClaimsSnapshotResponse) => void;
+    onChanged: (event: ClaimsChangedEvent) => void;
+    onError: (error: TaxiError) => void;
 }
 
 export interface QuoteRequest {
@@ -61,10 +90,16 @@ const errorFrom = (status: number, text: string, where: string): TaxiError => {
 export class TaxiClient {
     private readonly baseUrl: string;
     private readonly fetchImpl: typeof fetch;
+    private readonly eventSourceFactory: ((url: string) => EventSourceLike) | undefined;
 
     constructor(opts: TaxiClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
         this.fetchImpl = opts.fetch ?? globalThis.fetch;
+        this.eventSourceFactory =
+            opts.eventSourceFactory ??
+            (typeof globalThis.EventSource === "undefined"
+                ? undefined
+                : (url) => new globalThis.EventSource(url) as unknown as EventSourceLike);
     }
 
     async info(): Promise<InfoResponse> {
@@ -109,6 +144,81 @@ export class TaxiClient {
         return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
     }
 
+    async listClaims(args: {
+        receiverAddresses: readonly string[];
+    }): Promise<ClaimsSnapshotResponse> {
+        return decodeClaimsSnapshot(
+            await this.request("GET", this.claimsPath("/v1/claims", args.receiverAddresses)),
+        );
+    }
+
+    subscribeClaims(args: SubscribeClaimsArgs): ClaimSubscription {
+        if (this.eventSourceFactory === undefined) {
+            throw new TaxiError(
+                ClientErrorCode.EventSourceUnavailable,
+                "taxi: EventSource is not available in this environment",
+            );
+        }
+
+        let source: EventSourceLike;
+        try {
+            source = this.eventSourceFactory(
+                `${this.baseUrl}${this.claimsPath("/v1/claims/events", args.receiverAddresses)}`,
+            );
+        } catch (cause) {
+            throw new TaxiError(
+                ClientErrorCode.Network,
+                "taxi: claim subscription could not connect",
+                {
+                    cause,
+                },
+            );
+        }
+
+        const invalidEvent = (cause: unknown): TaxiError =>
+            new TaxiError(ClientErrorCode.InvalidResponse, "taxi: claim event is invalid", {
+                cause,
+            });
+        const dispatch = <T>(
+            event: { data: string },
+            decode: (value: unknown) => T,
+            callback: (value: T) => void,
+        ) => {
+            let value: T;
+            try {
+                value = decode(JSON.parse(event.data));
+            } catch (cause) {
+                args.onError(invalidEvent(cause));
+                return;
+            }
+            callback(value);
+        };
+        const onSnapshot = (event: { data: string }) =>
+            dispatch(event, decodeClaimsSnapshot, args.onSnapshot);
+        const onChanged = (event: { data: string }) =>
+            dispatch(event, decodeClaimsChanged, args.onChanged);
+        const onTransportError = (event: unknown) =>
+            args.onError(
+                new TaxiError(ClientErrorCode.Network, "taxi: claim subscription transport error", {
+                    cause: event,
+                }),
+            );
+
+        source.addEventListener("claims-snapshot", onSnapshot);
+        source.addEventListener("claims-changed", onChanged);
+        source.addEventListener("error", onTransportError);
+
+        let closed = false;
+        return () => {
+            if (closed) return;
+            closed = true;
+            source.removeEventListener("claims-snapshot", onSnapshot);
+            source.removeEventListener("claims-changed", onChanged);
+            source.removeEventListener("error", onTransportError);
+            source.close();
+        };
+    }
+
     async verifyTransfer(
         verified: VerifiedQuote,
         lockup: LockupResponse,
@@ -137,6 +247,12 @@ export class TaxiClient {
 
     async refund(transfer: CovenantTransfer, senderIdentity: Identity): Promise<string> {
         return refund(transfer, senderIdentity);
+    }
+
+    private claimsPath(path: string, addresses: readonly string[]): string {
+        const query = new URLSearchParams();
+        for (const address of addresses) query.append("receiver", address);
+        return `${path}?${query.toString()}`;
     }
 
     private async request(method: string, path: string, body?: unknown): Promise<unknown> {

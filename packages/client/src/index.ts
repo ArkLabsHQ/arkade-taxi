@@ -1,4 +1,11 @@
-export { TaxiClient, type QuoteRequest, type TaxiClientOptions } from "./client.js";
+export {
+    TaxiClient,
+    type ClaimSubscription,
+    type EventSourceLike,
+    type QuoteRequest,
+    type SubscribeClaimsArgs,
+    type TaxiClientOptions,
+} from "./client.js";
 export {
     ClientErrorCode,
     QuoteVerificationError,

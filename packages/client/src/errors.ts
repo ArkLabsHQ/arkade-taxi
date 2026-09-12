@@ -24,6 +24,7 @@ export const ClientErrorCode = {
     Network: "NETWORK_ERROR",
     Http: "HTTP_ERROR",
     InvalidResponse: "INVALID_RESPONSE",
+    EventSourceUnavailable: "EVENT_SOURCE_UNAVAILABLE",
 } as const;
 
 export const VerificationErrorCode = {

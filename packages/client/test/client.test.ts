@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { QuoteRequestBody } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
+import type { EventSourceLike } from "../src/client.js";
 import { decodeClaimsChanged, decodeClaimsSnapshot } from "../src/index.js";
 import { ClientErrorCode, TaxiError } from "../src/errors.js";
 import { signLockup } from "../src/lockup.js";
@@ -264,6 +265,48 @@ describe("receiver claims", () => {
         };
     };
 
+    class FakeEventSource implements EventSourceLike {
+        readonly close = vi.fn();
+        readonly listeners = new Map<
+            string,
+            Set<((event: { data: string }) => void) | ((event: unknown) => void)>
+        >();
+
+        constructor(readonly url: string) {}
+
+        addEventListener(
+            type: "claims-snapshot" | "claims-changed",
+            listener: (event: { data: string }) => void,
+        ): void;
+        addEventListener(type: "error", listener: (event: unknown) => void): void;
+        addEventListener(
+            type: string,
+            listener: ((event: { data: string }) => void) | ((event: unknown) => void),
+        ): void {
+            const listeners = this.listeners.get(type) ?? new Set();
+            listeners.add(listener);
+            this.listeners.set(type, listeners);
+        }
+
+        removeEventListener(
+            type: "claims-snapshot" | "claims-changed",
+            listener: (event: { data: string }) => void,
+        ): void;
+        removeEventListener(type: "error", listener: (event: unknown) => void): void;
+        removeEventListener(
+            type: string,
+            listener: ((event: { data: string }) => void) | ((event: unknown) => void),
+        ): void {
+            this.listeners.get(type)?.delete(listener);
+        }
+
+        emit(type: string, data?: string): void {
+            for (const listener of this.listeners.get(type) ?? []) {
+                listener({ data: data ?? "" });
+            }
+        }
+    }
+
     it("decodes complete locked claim batches and changed events", () => {
         const claim = lockedClaim();
         expect(decodeClaimsSnapshot({ claims: [claim] })).toEqual({ claims: [claim] });
@@ -321,5 +364,166 @@ describe("receiver claims", () => {
         expect(() => decodeClaimsSnapshot(batch)).toThrowError(
             expect.objectContaining({ code: ClientErrorCode.InvalidResponse }),
         );
+    });
+
+    it("lists claims with one receiver query parameter per address", async () => {
+        const first = receiverAddress.encode();
+        const second = `${first}/second`;
+        const { taxi, fetch } = client(ok({ claims: [lockedClaim()] }));
+
+        await expect(taxi.listClaims({ receiverAddresses: [first, second] })).resolves.toEqual({
+            claims: [lockedClaim()],
+        });
+        expect(fetch.calls[0]?.url).toBe(
+            `${BASE}/v1/claims?receiver=${encodeURIComponent(first)}&receiver=${encodeURIComponent(second)}`,
+        );
+    });
+
+    it("rejects a malformed claims list response", async () => {
+        const { taxi } = client(ok({ claims: [{ ...lockedClaim(), updatedAt: -1 }] }));
+        await expect(
+            taxi.listClaims({ receiverAddresses: [receiverAddress.encode()] }),
+        ).rejects.toMatchObject({ code: ClientErrorCode.InvalidResponse });
+    });
+
+    it("subscribes once for multiple receivers and dispatches named claim events", () => {
+        const source = new FakeEventSource("unused");
+        const onSnapshot = vi.fn();
+        const onChanged = vi.fn();
+        const eventSourceFactory = vi.fn((url: string) => {
+            expect(url).toContain(`receiver=${encodeURIComponent(receiverAddress.encode())}`);
+            expect(url).toContain(
+                `receiver=${encodeURIComponent(`${receiverAddress.encode()}/second`)}`,
+            );
+            return source;
+        });
+        const taxi = new TaxiClient({
+            baseUrl: BASE,
+            eventSourceFactory,
+        });
+
+        const close = taxi.subscribeClaims({
+            receiverAddresses: [receiverAddress.encode(), `${receiverAddress.encode()}/second`],
+            onSnapshot,
+            onChanged,
+            onError: vi.fn(),
+        });
+        const body = { claims: [lockedClaim()] };
+        source.emit("claims-snapshot", JSON.stringify(body));
+        source.emit("claims-changed", JSON.stringify(body));
+
+        expect(onSnapshot).toHaveBeenCalledWith(body);
+        expect(onChanged).toHaveBeenCalledWith(body);
+        expect(eventSourceFactory).toHaveBeenCalledTimes(1);
+        close();
+    });
+
+    it("reports malformed event data without dispatching a partial claim batch", () => {
+        const source = new FakeEventSource("unused");
+        const onSnapshot = vi.fn();
+        const onChanged = vi.fn();
+        const onError = vi.fn();
+        const taxi = new TaxiClient({ baseUrl: BASE, eventSourceFactory: () => source });
+        taxi.subscribeClaims({
+            receiverAddresses: [receiverAddress.encode()],
+            onSnapshot,
+            onChanged,
+            onError,
+        });
+
+        source.emit("claims-snapshot", "not json");
+        source.emit(
+            "claims-changed",
+            JSON.stringify({ claims: [lockedClaim(), { ...lockedClaim(), updatedAt: -1 }] }),
+        );
+
+        expect(onSnapshot).not.toHaveBeenCalled();
+        expect(onChanged).not.toHaveBeenCalled();
+        expect(onError).toHaveBeenCalledTimes(2);
+        expect(onError).toHaveBeenLastCalledWith(
+            expect.objectContaining({ code: ClientErrorCode.InvalidResponse }),
+        );
+    });
+
+    it("does not treat a consumer callback failure as malformed event data", () => {
+        const source = new FakeEventSource("unused");
+        const onError = vi.fn();
+        const boom = new Error("consumer failed");
+        const taxi = new TaxiClient({ baseUrl: BASE, eventSourceFactory: () => source });
+        taxi.subscribeClaims({
+            receiverAddresses: [receiverAddress.encode()],
+            onSnapshot: () => {
+                throw boom;
+            },
+            onChanged: vi.fn(),
+            onError,
+        });
+
+        expect(() =>
+            source.emit("claims-snapshot", JSON.stringify({ claims: [lockedClaim()] })),
+        ).toThrow(boom);
+        expect(onError).not.toHaveBeenCalled();
+    });
+
+    it("surfaces transport errors without closing the reconnecting EventSource", () => {
+        const source = new FakeEventSource("unused");
+        const onError = vi.fn();
+        const taxi = new TaxiClient({ baseUrl: BASE, eventSourceFactory: () => source });
+        taxi.subscribeClaims({
+            receiverAddresses: [receiverAddress.encode()],
+            onSnapshot: vi.fn(),
+            onChanged: vi.fn(),
+            onError,
+        });
+
+        source.emit("error");
+
+        expect(onError).toHaveBeenCalledWith(
+            expect.objectContaining({ code: ClientErrorCode.Network }),
+        );
+        expect(source.close).not.toHaveBeenCalled();
+    });
+
+    it("removes handlers and closes an EventSource only once", () => {
+        const source = new FakeEventSource("unused");
+        const onSnapshot = vi.fn();
+        const taxi = new TaxiClient({ baseUrl: BASE, eventSourceFactory: () => source });
+        const close = taxi.subscribeClaims({
+            receiverAddresses: [receiverAddress.encode()],
+            onSnapshot,
+            onChanged: vi.fn(),
+            onError: vi.fn(),
+        });
+
+        close();
+        close();
+        source.emit("claims-snapshot", JSON.stringify({ claims: [lockedClaim()] }));
+
+        expect(source.close).toHaveBeenCalledTimes(1);
+        expect(onSnapshot).not.toHaveBeenCalled();
+        expect(source.listeners.get("claims-snapshot")).toEqual(new Set());
+        expect(source.listeners.get("claims-changed")).toEqual(new Set());
+        expect(source.listeners.get("error")).toEqual(new Set());
+    });
+
+    it("fails with a stable error when EventSource is unavailable", () => {
+        const saved = globalThis.EventSource;
+        try {
+            Object.defineProperty(globalThis, "EventSource", {
+                configurable: true,
+                value: undefined,
+            });
+            const taxi = new TaxiClient({ baseUrl: BASE });
+            expect(() =>
+                taxi.subscribeClaims({
+                    receiverAddresses: [receiverAddress.encode()],
+                    onSnapshot: vi.fn(),
+                    onChanged: vi.fn(),
+                    onError: vi.fn(),
+                }),
+            ).toThrow(expect.objectContaining({ code: "EVENT_SOURCE_UNAVAILABLE" }));
+        } finally {
+            Object.defineProperty(globalThis, "EventSource", { configurable: true, value: saved });
+        }
     });
 });
