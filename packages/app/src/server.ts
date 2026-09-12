@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import { createAdminRouter } from "./admin/index.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes.js";
+import { ReceiverClaimFeed } from "./claimFeed.js";
 
-export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy"> {
+export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
     advances: AdvanceRepository;
     policy: PolicyRepository;
     /** Tick period, so the admin surface can derive its own staleness bar. */
@@ -55,7 +56,8 @@ export function createApp(deps: ServerDeps): Hono {
             return c.json({ code: "shutting_down", error: "service is shutting down" }, 503);
         await next();
     });
-    app.route("/", createRoutes(deps));
+    const claimFeed = new ReceiverClaimFeed(deps);
+    app.route("/", createRoutes({ ...deps, claimFeed }));
     app.route(ADMIN_PREFIX, createAdminRouter(adminDeps(deps)));
     return app;
 }

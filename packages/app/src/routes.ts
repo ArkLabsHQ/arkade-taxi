@@ -1,4 +1,6 @@
 import { Hono, type Context } from "hono";
+import { streamSSE } from "hono/streaming";
+import { TERMINAL_STATES } from "@arkade-taxi/core";
 import {
     bytesToHex,
     PROTOCOL_VERSION,
@@ -12,8 +14,11 @@ import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
+import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
+import { ReceiverClaimFeed } from "./claimFeed.js";
 
 export interface RouteDeps extends QuoteDeps {
+    claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
     sweeper: Pick<Sweeper, "status">;
     reconciler: Pick<LockupReconciler, "status">;
     /** Seconds since the last completed tick after which /health reports
@@ -293,6 +298,7 @@ const assertFinancialMutationReady = (deps: RouteDeps): void => {
 
 export function createRoutes(deps: RouteDeps): Hono {
     const app = new Hono();
+    const claimFeed = deps.claimFeed ?? new ReceiverClaimFeed(deps);
 
     const handle = async (c: Context, fn: () => unknown | Promise<unknown>) => {
         try {
@@ -343,6 +349,107 @@ export function createRoutes(deps: RouteDeps): Hono {
     });
 
     app.get("/v1/transfers/:id", (c) => handle(c, () => getTransfer(deps, c.req.param("id"))));
+
+    app.get("/v1/claims", (c) =>
+        handle(c, () => ({
+            claims: listReceiverClaims(
+                deps,
+                parseReceiverAddresses(
+                    new URL(c.req.url).searchParams.getAll("receiver"),
+                    deps.config,
+                ),
+                ACTIVE_CLAIM_STATES,
+            ),
+        })),
+    );
+
+    app.get("/v1/claims/events", (c) => {
+        try {
+            const receivers = parseReceiverAddresses(
+                new URL(c.req.url).searchParams.getAll("receiver"),
+                deps.config,
+            );
+            const baseline = listReceiverClaims(deps, receivers, [
+                ...ACTIVE_CLAIM_STATES,
+                ...TERMINAL_STATES,
+            ]);
+            const snapshot = baseline.filter((claim) =>
+                ACTIVE_CLAIM_STATES.some((state) => state === claim.state),
+            );
+            return streamSSE(c, async (stream) => {
+                let unsubscribe: (() => void) | undefined;
+                let heartbeat: ReturnType<typeof setInterval> | undefined;
+                let resolveEnded!: () => void;
+                const ended = new Promise<void>((resolve) => {
+                    resolveEnded = resolve;
+                });
+                const stop = () => stream.abort();
+                const cleanup = () => {
+                    clearInterval(heartbeat);
+                    unsubscribe?.();
+                    c.req.raw.signal.removeEventListener("abort", stop);
+                    resolveEnded();
+                };
+                stream.onAbort(cleanup);
+                c.req.raw.signal.addEventListener("abort", stop, { once: true });
+                if (c.req.raw.signal.aborted) {
+                    stop();
+                    return;
+                }
+                let writing = Promise.resolve();
+                const write = (frame: string): Promise<void> => {
+                    const next = writing.then(async () => {
+                        if (stream.aborted) return;
+                        // Hono write/writeSSE swallow transport errors; pipe propagates them.
+                        await stream.pipe(
+                            new ReadableStream({
+                                start(controller) {
+                                    controller.enqueue(new TextEncoder().encode(frame));
+                                    controller.close();
+                                },
+                            }),
+                        );
+                    });
+                    writing = next.catch(stop);
+                    return next;
+                };
+                try {
+                    const initial = write(
+                        `event: claims-snapshot\ndata: ${JSON.stringify({ claims: snapshot })}\n\n`,
+                    );
+                    unsubscribe = claimFeed.subscribe(
+                        receivers.receiverKeys,
+                        {
+                            onChanged: (event) =>
+                                write(`event: claims-changed\ndata: ${JSON.stringify(event)}\n\n`),
+                            onError: stop,
+                        },
+                        baseline,
+                    );
+                    await initial;
+                    if (stream.aborted) return;
+                    let heartbeatPending = false;
+                    heartbeat = setInterval(() => {
+                        if (heartbeatPending) return;
+                        heartbeatPending = true;
+                        void write(": heartbeat\n\n")
+                            .catch(stop)
+                            .finally(() => {
+                                heartbeatPending = false;
+                            });
+                    }, 15_000);
+                    await ended;
+                } catch {
+                    stop();
+                } finally {
+                    cleanup();
+                }
+            });
+        } catch (error) {
+            const err = ServiceError.from(error);
+            return c.json(toErrorResponse(err), err.status);
+        }
+    });
 
     // Liveness, not readiness: 200 whenever the process can serve. A stale
     // sweeper means arkd is unreachable, and restarting the container cannot

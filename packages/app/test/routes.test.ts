@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ArkAddress } from "@arkade-os/sdk";
+import { SSEStreamingApi } from "hono/streaming";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
 import type {
@@ -15,6 +17,7 @@ import { createServiceLifecycle } from "../src/lifecycle.js";
 import type { SweeperStatus } from "../src/sweeper.js";
 import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
+    advance,
     config,
     emulatorKey,
     EXPIRY_HEIGHT,
@@ -23,6 +26,8 @@ import {
     operatorKey,
     policy as basePolicy,
     quoteBody,
+    receiverKey,
+    senderKey,
     serverKey,
     quoteInfrastructure,
     serverUnroll,
@@ -82,6 +87,311 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
 });
 
 const app = (over: Partial<Policy> = {}) => createRoutes(deps(over));
+
+const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
+const senderAddress = new ArkAddress(serverKey, senderKey, "ark").encode();
+const claimsUrl = (path: string, receivers = [receiverAddress]) =>
+    `${path}?${new URLSearchParams(receivers.map((receiver) => ["receiver", receiver]))}`;
+
+describe("receiver claim routes", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => {
+        const timers = vi.getTimerCount();
+        vi.restoreAllMocks();
+        vi.useRealTimers();
+        expect(timers).toBe(0);
+    });
+
+    it("returns one active snapshot for repeated and deduplicated receivers", async () => {
+        advances.insert(advance({ id: "alice", receiverKey: senderKey, state: "recovering" }));
+        advances.insert(advance({ id: "bob", state: "locking" }));
+        advances.insert(advance({ id: "spent", state: "purchased" }));
+        const reads = vi.spyOn(advances, "byReceiverKeys");
+        const response = await app().request(
+            claimsUrl("/v1/claims", [receiverAddress, senderAddress, receiverAddress]),
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({
+            claims: [
+                {
+                    transferId: "alice",
+                    receiverAddress: senderAddress,
+                    state: "recovering",
+                    claimable: false,
+                    updatedAt: NOW,
+                },
+                {
+                    transferId: "bob",
+                    receiverAddress,
+                    state: "locking",
+                    claimable: false,
+                    updatedAt: NOW,
+                },
+            ],
+        });
+        expect(reads).toHaveBeenCalledTimes(1);
+        expect(reads.mock.calls[0]![0]).toHaveLength(2);
+    });
+
+    it("returns an empty snapshot when the receiver has no active claims", async () => {
+        advances.insert(advance({ state: "purchased" }));
+        const response = await app().request(claimsUrl("/v1/claims"));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ claims: [] });
+    });
+
+    describe.each(["/v1/claims", "/v1/claims/events"])("%s validation", (path) => {
+        it.each([
+            ["no receivers", []],
+            ["empty receiver", [""]],
+            ["malformed receiver", ["ark1broken"]],
+            ["noncanonical address", [receiverAddress.toUpperCase()]],
+            ["wrong network", [new ArkAddress(serverKey, receiverKey, "tark").encode()]],
+            ["wrong server", [new ArkAddress(senderKey, receiverKey, "ark").encode()]],
+            [
+                "more than 64 unique addresses",
+                Array.from({ length: 65 }, (_, i) =>
+                    new ArkAddress(serverKey, new Uint8Array(32).fill(i + 1), "ark").encode(),
+                ),
+            ],
+        ])("rejects %s with a stable JSON error before streaming", async (_name, receivers) => {
+            const response = await app().request(claimsUrl(path, receivers));
+            expect(response.status).toBe(400);
+            expect(response.headers.get("content-type")).toContain("application/json");
+            expect(await response.json()).toMatchObject({ code: "invalid_receiver_batch" });
+        });
+
+        it("does not expose persisted invariant details", async () => {
+            advances.insert(advance({ unsignedLockupTx: "private invariant detail" }));
+            const response = await app().request(claimsUrl(path));
+            expect(response.status).toBe(500);
+            expect(await response.json()).toEqual({
+                code: "internal_error",
+                error: "internal error",
+            });
+        });
+    });
+
+    it("immediately snapshots a locked claim, batches changes and includes its terminal transition", async () => {
+        const quote = (await (await post("/v1/transfers", quoteBody())).json()) as QuoteResponse;
+        const lockup = await post(`/v1/transfers/${quote.transferId}/lockup`, {
+            signedLockupTx: "signed",
+        });
+        expect(lockup.status).toBe(202);
+        advances.update({
+            ...advances.get(quote.transferId)!,
+            state: "locked",
+            outpoint: { txid: "cd".repeat(32), vout: 0 },
+        });
+        const controller = new AbortController();
+        const response = await app().request(claimsUrl("/v1/claims/events"), {
+            signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        const read = async () => new TextDecoder().decode((await reader.read()).value);
+        try {
+            expect(response.status).toBe(200);
+            expect(response.headers.get("content-type")).toBe("text/event-stream");
+            expect(await read()).toContain(
+                'event: claims-snapshot\ndata: {"claims":[{"transferId":"adv-1"',
+            );
+            advances.update({
+                ...advances.get(quote.transferId)!,
+                state: "purchased",
+                spentTxid: "ef".repeat(32),
+            });
+            advances.insert(advance({ id: "adv-2", state: "locking" }));
+            const changed = read();
+            await vi.advanceTimersByTimeAsync(250);
+            const frame = await changed;
+            expect(frame).toContain("event: claims-changed\n");
+            const body = JSON.parse(frame.split("data: ")[1]!);
+            expect(body.claims).toEqual([
+                expect.objectContaining({
+                    transferId: "adv-1",
+                    state: "purchased",
+                    spentTxid: "ef".repeat(32),
+                    claimable: false,
+                }),
+                expect.objectContaining({ transferId: "adv-2", state: "locking" }),
+            ]);
+            expect(body.claims[0]).not.toHaveProperty("claim");
+        } finally {
+            controller.abort();
+            await reader.cancel();
+        }
+    });
+
+    it("shares one sampler across open streams and removes aborted receivers", async () => {
+        const router = app();
+        const a = new AbortController();
+        const b = new AbortController();
+        const responseA = await router.request(
+            claimsUrl("/v1/claims/events", [receiverAddress, senderAddress]),
+            { signal: a.signal },
+        );
+        const responseB = await router.request(claimsUrl("/v1/claims/events"), {
+            signal: b.signal,
+        });
+        const readerA = responseA.body!.getReader();
+        const readerB = responseB.body!.getReader();
+        const reads = vi.spyOn(advances, "byReceiverKeys");
+        try {
+            expect(responseA.status).toBe(200);
+            expect(responseB.status).toBe(200);
+            await readerA.read();
+            await readerB.read();
+            await vi.advanceTimersByTimeAsync(250);
+            expect(reads).toHaveBeenCalledTimes(1);
+            expect(reads.mock.calls[0]![0]).toHaveLength(2);
+            a.abort();
+            await readerA.cancel();
+            reads.mockClear();
+            await vi.advanceTimersByTimeAsync(250);
+            expect(reads).toHaveBeenCalledTimes(1);
+            expect(reads.mock.calls[0]![0]).toEqual([receiverKey]);
+        } finally {
+            a.abort();
+            b.abort();
+            await readerA.cancel();
+            await readerB.cancel();
+        }
+    });
+
+    it("does not repeat the snapshot on an unchanged first tick", async () => {
+        advances.insert(advance({ state: "locking" }));
+        const controller = new AbortController();
+        const response = await app().request(claimsUrl("/v1/claims/events"), {
+            signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        try {
+            expect(response.status).toBe(200);
+            await reader.read();
+            const frames: string[] = [];
+            const next = reader
+                .read()
+                .then((chunk) => frames.push(new TextDecoder().decode(chunk.value)));
+            await vi.advanceTimersByTimeAsync(250);
+            expect(frames).toEqual([]);
+            advances.update(advance({ state: "purchased" }));
+            await vi.advanceTimersByTimeAsync(250);
+            await next;
+            expect(frames).toHaveLength(1);
+            expect(frames[0]).toContain('"state":"purchased"');
+        } finally {
+            controller.abort();
+            await reader.cancel();
+        }
+    });
+
+    it("writes heartbeat comments at 15 seconds and cleans up on reader cancellation", async () => {
+        const response = await app().request(claimsUrl("/v1/claims/events"));
+        const reader = response.body!.getReader();
+        try {
+            expect(response.status).toBe(200);
+            await reader.read();
+            const heartbeat = reader.read();
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(new TextDecoder().decode((await heartbeat).value)).toBe(": heartbeat\n\n");
+        } finally {
+            await reader.cancel();
+        }
+    });
+
+    it("does not replay pre-existing terminal history on connection", async () => {
+        advances.insert(advance({ id: "history", state: "purchased" }));
+        const controller = new AbortController();
+        const response = await app().request(claimsUrl("/v1/claims/events"), {
+            signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        try {
+            const initial = new TextDecoder().decode((await reader.read()).value);
+            expect(initial).toBe('event: claims-snapshot\ndata: {"claims":[]}\n\n');
+            const frames: string[] = [];
+            const next = reader
+                .read()
+                .then((chunk) => frames.push(new TextDecoder().decode(chunk.value)));
+            await vi.advanceTimersByTimeAsync(250);
+            expect(frames).toEqual([]);
+            advances.insert(advance({ id: "new", state: "locking" }));
+            await vi.advanceTimersByTimeAsync(250);
+            await next;
+            expect(frames).toHaveLength(1);
+            expect(frames[0]).toContain('"transferId":"new"');
+            expect(frames[0]).not.toContain('"transferId":"history"');
+        } finally {
+            controller.abort();
+            await reader.cancel();
+        }
+    });
+
+    it.each(["before request", "before initial read"])(
+        "cleans up when aborted %s",
+        async (when) => {
+            const controller = new AbortController();
+            if (when === "before request") controller.abort();
+            const response = await app().request(claimsUrl("/v1/claims/events"), {
+                signal: controller.signal,
+            });
+            controller.abort();
+            expect(response.status).toBe(200);
+            await vi.advanceTimersByTimeAsync(0);
+            const reads = vi.spyOn(advances, "byReceiverKeys");
+            await vi.advanceTimersByTimeAsync(15_000);
+            expect(reads).not.toHaveBeenCalled();
+            await response.body!.cancel();
+        },
+    );
+
+    it("closes an established stream when a later claim cannot be projected", async () => {
+        const controller = new AbortController();
+        const response = await app().request(claimsUrl("/v1/claims/events"), {
+            signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        try {
+            expect(response.status).toBe(200);
+            await reader.read();
+            advances.insert(advance({ unsignedLockupTx: "private invariant detail" }));
+            const ended = reader.read();
+            await vi.advanceTimersByTimeAsync(250);
+            expect(await ended).toEqual({ done: true, value: undefined });
+        } finally {
+            controller.abort();
+            await reader.cancel();
+        }
+    });
+
+    it.each(["snapshot", "change", "heartbeat"])("cleans up a failed %s write", async (stage) => {
+        const controller = new AbortController();
+        const fail = () =>
+            vi
+                .spyOn(SSEStreamingApi.prototype, "pipe")
+                .mockRejectedValueOnce(new Error("private writer failure"));
+        if (stage === "snapshot") fail();
+        const response = await app().request(claimsUrl("/v1/claims/events"), {
+            signal: controller.signal,
+        });
+        const reader = response.body!.getReader();
+        try {
+            expect(response.status).toBe(200);
+            if (stage !== "snapshot") {
+                await reader.read();
+                fail();
+                if (stage === "change") advances.insert(advance({ state: "locking" }));
+            }
+            const ended = reader.read();
+            await vi.advanceTimersByTimeAsync(stage === "heartbeat" ? 15_000 : 250);
+            expect(await ended).toEqual({ done: true, value: undefined });
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            controller.abort();
+            await reader.cancel();
+        }
+    });
+});
 
 describe("runtime admission and readiness", () => {
     it.each([
