@@ -163,6 +163,19 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
     }
 
     const current = Number(db.pragma("user_version", { simple: true }));
+    if (
+        migrations === MIGRATIONS &&
+        current > 0 &&
+        (current !== 1 ||
+            !db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'asset_units' AND type = 'INTEGER'",
+                )
+                .get())
+    )
+        throw new Error(
+            "Incompatible development schema: recreate the database before starting this service",
+        );
     const pending = ordered.filter((m) => m.id > current);
     if (pending.length === 0) return;
     const target = pending[pending.length - 1]!.id;

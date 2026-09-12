@@ -60,6 +60,51 @@ function insertRaw(db: Database, overrides: Record<string, unknown> = {}): void 
 }
 
 describe("migrations", () => {
+    it.each([1, 2, 3, 4, 5, 6, 7, 8])(
+        "rejects development schema v%s without modifying its schema or data",
+        (version) => {
+            const db = fresh();
+            try {
+                db.exec(`
+                    CREATE TABLE advances (id TEXT PRIMARY KEY, topup INTEGER NOT NULL);
+                    CREATE INDEX advances_topup ON advances (topup);
+                    INSERT INTO advances VALUES ('legacy-payment', 9007199254740993);
+                `);
+                db.pragma(`user_version = ${version}`);
+                const before = db.serialize();
+
+                expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+
+                expect(db.serialize()).toEqual(before);
+                expect(userVersion(db)).toBe(version);
+                expect(db.prepare("SELECT * FROM advances").all()).toEqual([
+                    { id: "legacy-payment", topup: 9007199254740993n },
+                ]);
+            } finally {
+                db.close();
+            }
+        },
+    );
+
+    it("reopens a canonical v1 database without changing its schema or data", () => {
+        const first = migrated();
+        insertRaw(first);
+        const before = first.serialize();
+        first.close();
+        const reopened = new DatabaseCtor(before);
+        reopened.defaultSafeIntegers(true);
+        try {
+            expect(() => applyMigrations(reopened)).not.toThrow();
+            expect(reopened.serialize()).toEqual(before);
+            expect(userVersion(reopened)).toBe(1);
+            expect(reopened.prepare("SELECT id, topup, asset_units FROM advances").all()).toEqual([
+                { id: "a1", topup: 300n, asset_units: null },
+            ]);
+        } finally {
+            reopened.close();
+        }
+    });
+
     it("defines one fresh schema; old development databases are unsupported", () => {
         expect(MIGRATIONS.map(({ id }) => id)).toEqual([1]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
