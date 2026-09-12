@@ -1,6 +1,6 @@
 import { ArkAddress, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import * as client from "../src/index.js";
 import {
     args,
@@ -120,7 +120,6 @@ const request = (a = args()): client.RequestVerifiedQuoteArgs => ({
     receiverAddress: new ArkAddress(serverKey, receiverKey, "ark").encode(),
     senderKey: a.expect.senderKey,
     selectedVtxos: [coin()],
-    senderSats: a.senderSats,
     assetId: a.expect.assetId,
     assetUnits: a.assetUnits,
     expect: {
@@ -199,7 +198,7 @@ describe("requestVerifiedQuote", () => {
         if (kind === "fare") r.expect.maxFare.units = 9n;
         if (kind === "currency") r.expect.maxFare = { currency: "asset", units: 10n };
         if (kind === "locktime") r.expect.minLocktime = 800_001n;
-        if (kind === "amount") r.senderSats = 9n;
+        if (kind === "amount") r.selectedVtxos[0].value = 9;
         if (kind === "expiry") r.now = 1_000_000_060;
         await expect(transport().taxi.requestVerifiedQuote(r)).rejects.toThrow();
     });
@@ -260,7 +259,6 @@ describe("requestVerifiedQuote", () => {
         r.trustedEmulatorKey = Uint8Array.from(r.trustedEmulatorKey);
         const a = args();
         const fetch = recordingFetch((url) => {
-            r.senderSats = 1n;
             r.selectedVtxos[0].value = 1;
             r.expect.maxFare.units = 0n;
             r.trustedEmulatorKey.fill(0);
@@ -270,5 +268,23 @@ describe("requestVerifiedQuote", () => {
         const result = await taxi.requestVerifiedQuote(r);
         expect(result.senderInputs[0].value).toBe(10n);
         expect(JSON.parse(String(fetch.calls[1].init.body)).senderSats).toBe("10");
+    });
+
+    it.each([
+        { values: [10, 20], total: 30n },
+        { values: [Number.MAX_SAFE_INTEGER, 2], total: 9_007_199_254_740_993n },
+    ])("derives and verifies the exact selected total $total", async ({ values, total }) => {
+        expectTypeOf<client.RequestVerifiedQuoteArgs>().not.toHaveProperty("senderSats");
+        const r = request();
+        r.selectedVtxos = values.map((value, vout) => ({ ...coin(), value, vout }));
+        const senderInputs = client.fundingInputsFromVtxos(r.selectedVtxos);
+        const a = args();
+        a.quote = quote(params(), { senderInputs, senderSats: total });
+        Object.assign(r, { senderSats: 0n });
+        const { taxi, fetch } = transport(a);
+        const result = await taxi.requestVerifiedQuote(r);
+        expect(result.senderInputs.reduce((sum, input) => sum + input.value, 0n)).toBe(total);
+        expect(result.verified.senderInputIndexes).toEqual([0, 1]);
+        expect(JSON.parse(String(fetch.calls[1].init.body)).senderSats).toBe(total.toString());
     });
 });

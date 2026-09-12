@@ -81,14 +81,13 @@ export interface QuoteRequest {
     assetId?: AssetIdValue;
     assetUnits?: bigint;
     fareId?: string;
-    /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
-     * payment, where the operator funds the whole thing. */
+    /** Exact sum of the selected sender input values. */
     senderSats: bigint;
 }
 
 export interface RequestVerifiedQuoteArgs extends Omit<
     VerifyQuoteArgs,
-    "quote" | "info" | "senderInputs" | "expect"
+    "quote" | "info" | "senderInputs" | "senderSats" | "expect"
 > {
     receiverAddress: string;
     senderKey: Uint8Array;
@@ -161,14 +160,21 @@ export class TaxiClient {
                 "taxi: receiver address must be canonical and match the trusted network and server",
             );
         const senderInputs = fundingInputsFromVtxos(selectedVtxos);
+        const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
         const receiverKey = receiver.vtxoTaprootKey;
         const info = await this.info();
-        const quote = await this.requestQuote({ ...request, receiverKey, senderInputs });
+        const quote = await this.requestQuote({
+            ...request,
+            receiverKey,
+            senderInputs,
+            senderSats,
+        });
         const verified = verifyQuote({
             ...request,
             quote,
             info,
             senderInputs,
+            senderSats,
             expect: {
                 ...request.expect,
                 receiverKey,
