@@ -1,53 +1,53 @@
 name: e2e
 
-# Opt-in, never a merge gate: this boots a multi-container regtest stack, so it
-# goes red for reasons no diff owns. Label a PR `run-e2e` to run it there.
 on:
+    workflow_call:
+        inputs:
+            ref:
+                description: "Ref of this repo to test"
+                required: false
+                type: string
+                default: ""
     workflow_dispatch:
         inputs:
             ref:
                 description: "Ref of this repo to test (blank = the dispatch ref)"
                 required: false
+                type: string
                 default: ""
-            files:
-                description: "vitest filename filter, space separated"
-                required: false
-                default: ""
-            profiles:
-                description: "arkade-regtest profiles to bring up"
-                required: false
-                default: ""
-    pull_request:
-        types: [labeled, synchronize, reopened]
 
 concurrency:
-    group: e2e-${{ github.ref }}
+    group: e2e-${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
 
-env:
-    E2E_FILES: ${{ inputs.files || '' }}
-    # base + ark + emulator. The taxi talks to arkd and the emulator, nothing else.
-    E2E_PROFILES: ${{ inputs.profiles || 'emulator' }}
-    # Pinned, not `master`: this job is a control on THIS repo, so the stack under
-    # it has to hold still. arkade-regtest's own CI watches its drift.
-    REGTEST_REF: 597a6dfd360b8d77b80060fcd0f52daf8370ab12
+permissions:
+    contents: read
 
 jobs:
     e2e:
-        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-e2e')
         runs-on: ubuntu-latest
-        # On the host, not in a container: the suite needs the stack's localhost ports.
         timeout-minutes: 45
+        env:
+            AUTOMINE_INTERVAL: "0"
         steps:
             - uses: actions/checkout@v5
               with:
-                  ref: ${{ inputs.ref }}
+                  ref: ${{ inputs.ref || github.sha }}
 
             - uses: actions/checkout@v5
               with:
                   repository: ArkLabsHQ/arkade-regtest
-                  ref: ${{ env.REGTEST_REF }}
+                  ref: master
+                  fetch-depth: 1
                   path: arkade-regtest
+
+            - name: Record arkade-regtest master
+              run: |
+                  REGTEST_SHA=$(git -C arkade-regtest rev-parse HEAD)
+                  echo "arkade-regtest master: $REGTEST_SHA"
+
+            - name: Remove the provenance checkout before the image build
+              run: rm -rf arkade-regtest
 
             - uses: pnpm/action-setup@v4
             - uses: actions/setup-node@v5
@@ -65,67 +65,24 @@ jobs:
                   done
                   exit 1
 
-            # Before Docker, so a broken workspace fails in a minute rather than
-            # twenty. The suite itself runs from source, not from dist.
-            - name: Build
+            - name: Build packages for the release tarballs
               run: pnpm -r build
 
-            # arkade-regtest reads `../.env.regtest` as its own override file.
-            # AUTOMINE_INTERVAL=0 stops the auto-miner advancing the tip under the
-            # locktime scenarios: arkd's regtest locktimes are block-denominated.
-            - name: Configure the stack
-              run: |
-                  set -eu
-                  printf 'REGTEST_PROFILES=%s\nAUTOMINE_INTERVAL=0\n' "$E2E_PROFILES" > .env.regtest
-
-            - name: Start the regtest stack
-              working-directory: arkade-regtest
-              timeout-minutes: 20
-              run: node regtest.mjs start --profile "$E2E_PROFILES"
-
-            # Fails the job if either service is not serving, and prints the two
-            # keys `.env.regtest.example` tells an operator to copy. Both are
-            # compressed (66 hex); the config wants the 64-hex x-only form.
-            - name: Probe arkd and the emulator
-              run: |
-                  set -euo pipefail
-                  curl -fsS http://localhost:7070/v1/info | jq -r '"arkd signerPubkey: " + .signerPubkey'
-                  curl -fsS http://localhost:7073/v1/info | jq -r '"emulator signerPubkey: " + .signerPubkey'
-
-            # No `--`: pnpm forwards it verbatim and vitest ignores what follows.
-            # Array, not `$E2E_FILES`: a dispatch input is split, never interpreted.
-            - name: E2E suite
-              run: |
-                  set -eu
-                  read -ra e2e_files <<< "$E2E_FILES" || true
-                  pnpm exec vitest run --config vitest.e2e.config.ts \
-                    --reporter=verbose --reporter=json --outputFile.json=e2e-results.json \
-                    "${e2e_files[@]}"
-
-            # Runs even when the suite step failed, so an empty or short run is
-            # reported as such rather than masked by the earlier red.
-            - name: Assert the suite actually ran
-              if: ${{ !cancelled() }}
-              run: node e2e/assert-ran.mjs e2e-results.json
+            - name: Run the complete production-artifact E2E suite
+              run: pnpm e2e:stack
 
             - uses: actions/upload-artifact@v4
-              if: ${{ !cancelled() }}
+              if: ${{ always() }}
               with:
-                  name: e2e-results
-                  path: e2e-results.json
+                  name: e2e-${{ github.run_id }}-${{ github.run_attempt }}
+                  path: |
+                      e2e-artifacts/stack.json
+                      e2e-results.json
+                      e2e-artifacts/results.json
+                      e2e-artifacts/taxi.log
+                      e2e-artifacts/stack.log
+                      e2e-artifacts/failure.log
+                      e2e-artifacts/proxy-events.json
+                      e2e-artifacts/boundary-diagnostics.jsonl
+                      e2e-artifacts/cltv-evidence.json
                   if-no-files-found: warn
-
-            - name: Dump diagnostics on failure
-              if: failure()
-              working-directory: arkade-regtest
-              run: |
-                  docker compose -f docker/compose.base.yml -f docker/compose.ark.yml ps || true
-                  for c in bitcoin bitcoin-miner postgres nbxplorer fulcrum mempool_api mempool_web arkd-wallet arkd emulator; do
-                    echo "===== logs: $c ====="
-                    docker logs --tail 120 "$c" 2>&1 || true
-                  done
-
-            - name: Cleanup
-              if: always()
-              working-directory: arkade-regtest
-              run: node regtest.mjs clean

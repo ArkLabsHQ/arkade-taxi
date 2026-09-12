@@ -16,4 +16,5 @@ docs/superpowers/
 
 .reference/
 e2e-results.json
+e2e-artifacts/
 **/.build/

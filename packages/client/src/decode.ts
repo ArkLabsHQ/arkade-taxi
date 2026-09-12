@@ -146,6 +146,9 @@ export function decodeStatus(res: TransferStatusResponse): TransferStatusRespons
         uint(res.updatedAt, "status.updatedAt");
         if (res.outpoint !== undefined) outpoint(res.outpoint, "status.outpoint");
         if (res.spentTxid !== undefined) bytes32(res.spentTxid, "status.spentTxid");
+        if (res.submissionPhase !== undefined) str(res.submissionPhase, "status.submissionPhase");
+        if (res.failureCode !== undefined) str(res.failureCode, "status.failureCode");
+        if (res.failureDetail !== undefined) str(res.failureDetail, "status.failureDetail");
         return res;
     });
 }

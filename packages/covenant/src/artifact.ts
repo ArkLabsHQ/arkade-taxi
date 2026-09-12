@@ -4,7 +4,7 @@ import { subDustScript } from "./pin.js";
 import { refundTopup, validateParams, type DustCovenantParams } from "./params.js";
 
 /**
- * sdk 0.4.67 emits `Program`, `AsmToken`, `InputDef` and friends into the
+ * The SDK declarations emit `Program`, `AsmToken`, `InputDef` and friends into the
  * `arkade` namespace's VALUE space (`declare const index_Program: typeof
  * Program`), so `arkade.Program` does not resolve as a type. Re-derived from
  * the one construct signature the d.ts does get right.

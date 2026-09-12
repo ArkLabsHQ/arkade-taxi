@@ -10,7 +10,7 @@ import { hex } from "@scure/base";
  * output nobody can spend.
  */
 export interface LockupOutput {
-    role: "covenant" | "operator-fare" | "sender-change";
+    role: "covenant" | "operator-fare" | "sender-change" | "operator-change";
     script: Uint8Array;
     /** Sats on this output. For an asset output this is the HOST value, not the
      * payment — an asset cannot occupy an output on its own. */

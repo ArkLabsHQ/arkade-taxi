@@ -2,9 +2,11 @@
 
 Dust-free transfers on Arkade. An operator fronts the dust unit; a covenant guarantees repayment.
 
-> **Status: early.** The covenant is ported and vector-verified against its Go
-> reference, but nothing here has yet been exercised against a live emulator or
-> arkd. See [What is and is not verified](#what-is-and-is-not-verified).
+Taxi provides joint-funded lockups, wallet-side claims and refunds, durable
+submission, canonical spend observation, and automatic recovery. It runs as one
+Docker service with SQLite on persistent `/data`. See the [runbook](docs/runbook.md)
+for deployment and recovery operations and [release verification](#release-verification)
+for the production gate.
 
 ## The problem
 
@@ -48,23 +50,55 @@ So the operator **cannot censor a claim**: a receiver spends with the Arkade
 Service and emulator signatures alone. The operator must be reachable at lockup
 and is irrelevant afterwards.
 
-**The operator never touches the asset.** Every operator payout is a sats value.
-The asset always lands on the receiver or returns to the sender. This is a sats
-liquidity service, not an asset custodian.
+**Transfer principal stays with the receiver or sender.** The operator lends
+sats and receives the covenant's pinned sats repayment. A separately authorized
+fare at lockup can be denominated in sats or an allowed asset. In v1 a sats
+fare is an operator-funded self-payment, not customer revenue. An asset fare
+is paid from sender asset funding and is operator revenue.
 
 **No fee is expressible inside the covenant.** `recycle` pins the operator's
-output to _exactly_ `topup`, not a satoshi more. Revenue is therefore collected
-out-of-band at lockup, as a separate output. That is a constraint, not a choice.
+output to _exactly_ `topup`, not a satoshi more. A sender-funded asset fare is
+collected at lockup as a separate output in the verified funding graph. The quote binds
+the fare currency, asset and exact units as well as the principal.
 
 ## Layout
 
-| Package             | What it is                                                   |
-| ------------------- | ------------------------------------------------------------ |
-| `packages/covenant` | script builders, taptree, address derivation, golden vectors |
-| `packages/core`     | policy, pricing, ledger state machine — pure, no I/O         |
-| `packages/db`       | SQLite persistence                                           |
-| `packages/protocol` | wire types shared by client and service                      |
-| `packages/client`   | wallet-facing SDK                                            |
+| Package             | What it is                                                           |
+| ------------------- | -------------------------------------------------------------------- |
+| `packages/covenant` | script builders, taptree, address derivation, golden vectors         |
+| `packages/core`     | policy, pricing, ledger state machine — pure, no I/O                 |
+| `packages/db`       | SQLite persistence                                                   |
+| `packages/protocol` | wire types shared by client and service                              |
+| `packages/client`   | wallet-facing SDK                                                    |
+| `packages/app`      | HTTP service, operator wallet, reconciliation, recovery and admin UI |
+
+## Transfer lifecycle
+
+The quote atomically reserves operator inputs and capacity. The client verifies
+the complete funding graph against independently trusted provider identities,
+then signs only sender inputs and sender checkpoints. Submission persists the
+exact signed envelope before a worker performs the provider calls. An identical
+retry is idempotent; an ambiguous outcome retains its reservations and exact
+graph across restart.
+
+Taxi records `locked` only when the exact covenant outpoint is observed
+spendable. The receiver can `recycle` or `purchase`, and the sender can refund.
+These wallet operations contact the Arkade Service and emulator directly. An
+offline receiver does not need to participate in lockup. Taxi records terminal
+states only after validating the canonical spend, including its signatures,
+outputs, assets and repayment.
+
+Taxi guarantees recovery of its covenant VTXOs before batch expiry through
+admission headroom checks, persisted tagged deadlines, deadline-prioritized
+recovery, restart reconciliation and warning/critical alerts. Operators must
+keep recovery dependencies available and respond before the execution budget
+is exhausted; an unspent covenant at expiry is a critical incident.
+
+The deployed Arkade Service's special covenant settlement is an external
+assumption. Taxi does not implement it, and a dedicated upstream forfeit
+mechanism is outside Taxi's scope. Provider identity/version checks cannot
+certify this assumption: the complete live covenant-spend suite is a deployment
+gate. See [architecture](docs/architecture.md) for the exact boundary.
 
 ## Development
 
@@ -85,35 +119,34 @@ Regenerate the golden vectors from the Go reference (requires Go):
 pnpm vectors
 ```
 
-## What is and is not verified
+## Release verification
 
-**Verified.** The TypeScript covenant produces byte-identical scripts to the Go
+The TypeScript covenant produces byte-identical scripts to the Go
 reference at `49ae96d` across 10 parameter sets covering both the asset and
 bitcoin variants and both output-pinning branches. The mutation guards were each
 observed to fail before being reverted.
 
-That byte-identity carries VM assurance transitively: the Go reference's own
-tests execute those exact bytes through `arkade.NewEngine`, so "these scripts
-run correctly under the Arkade VM" is established without this repo re-proving
-it. What it does not establish is that a spend of a real covenant succeeds.
+The production release gate additionally runs real joint lockups, all claim and
+refund paths, premature and eligible recovery, lost responses, duplicate POSTs,
+restarts, provider outages and pre-expiry warning/critical recovery against a
+fresh, unpinned `ArkLabsHQ/arkade-regtest` `master` checkout:
 
-`scripts/probe-live.mjs` derives a covenant against a running arkd and emulator
-and prints the address. Against arkd `v0.9.16` and emulator `v0.0.7` on regtest
-— `dust=330`, `vtxoMinAmount=1`, so the sub-dust window is open — both variants
-derive four-leaf `tark1…` addresses from the live signer keys. It is read-only:
-it signs nothing and submits nothing.
+```bash
+pnpm e2e:stack
+node e2e/assert-ran.mjs e2e-results.json
+```
 
-**Not verified.** No spend has been constructed or broadcast. `LockupBuilder`
-and `RecoveryRunner` are injectable interfaces awaiting a live transaction
-layer, so the joint-funded lockup, the emulator co-signing a claim, and arkd
-accepting it are all untested. The relationship between the covenant's recovery
-`locktime` and the covenant VTXO's own batch expiry is inferred from the
-covenant's structure and not yet confirmed; it is kept as a config value for
-that reason.
+All 17 functional/resilience scenarios and both integrity assertions must pass,
+with zero skips, using the built production image and packed client. The
+harness records the exact master SHA, source identity, image identities and
+SDK version in `e2e-artifacts/stack.json`; retain it with the results and logs.
+It owns a unique project and leaves existing regtest resources untouched.
 
-The upstream covenant PR is still open, so the scripts may change in review.
-`packages/covenant` is deliberately small and isolated so that stays a
-one-package edit.
+The npm registry reported stable `@arkade-os/sdk` **0.4.72** on 2026-09-12 via
+`pnpm view @arkade-os/sdk version dist-tags --json`; that is the version used
+by the lockfile. Repeat discovery before an upgrade and repeat the entire gate
+against current regtest master. A successful run proves that recorded provider
+combination, not every future deployment. See [E2E instructions](e2e/README.md).
 
 ## License
 

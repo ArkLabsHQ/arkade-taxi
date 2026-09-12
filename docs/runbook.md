@@ -1,188 +1,203 @@
 # Runbook
 
-Operating the taxi. Read [architecture](./architecture.md) for why the service
-is shaped this way and [environment](./environment.md) for the variables.
+Run one Taxi process with persistent SQLite storage. Taxi guarantees that its
+covenant VTXOs are recovered before batch expiry: operate the recovery worker,
+maintain its dependencies and act on headroom alerts before the execution
+budget runs out. The deployed Arkade Service's special covenant settlement is
+an external assumption. Taxi does not implement that settlement, and a
+dedicated upstream forfeit mechanism is outside this service's scope.
 
-> **State of the service.** `packages/app` currently holds configuration and
-> error mapping only. The HTTP surface, the admin UI, the sweeper and the
-> transaction-building layer are not built yet, and the e2e scenarios that would
-> exercise them are registered as explicit skips (see `e2e/README.md`). What
-> follows describes operating the service as designed; sections covering a
-> surface that does not exist yet say so.
+## Deployment
 
-## The one sentence that matters
-
-**The sweeper is the only component whose failure costs the operator money
-rather than merely blocking a payment.** Everything else fails loudly and
-expensively in someone's time. A sweeper that stops running quietly converts
-recoverable capital into capital nobody is coming back for.
-
-Rank incidents by that. A dead HTTP listener means no new business. A dead
-sweeper means the business you already did stops being repaid.
-
-## Starting
-
-The image runs `dist/cli.js serve` and expects a writable volume at `/data`:
-
-```bash
-docker run --rm \
-  -v taxi-data:/data \
-  --env-file .env \
-  -p 8080:8080 \
-  ghcr.io/<owner>/arkade-taxi:<X.Y.Z>
-```
-
-The tag is `X.Y.Z`, not `vX.Y.Z` — the release workflow strips the `v`. Pinning
-`:vX.Y.Z` gets `manifest unknown`.
-
-Locally:
+Build and verify the release before admitting funds:
 
 ```bash
 pnpm -r build
-node packages/app/dist/cli.js serve
+pnpm typecheck
+pnpm test
+pnpm format:check
+pnpm e2e:stack
+node e2e/assert-ran.mjs e2e-results.json
+docker build -t arkade-taxi:release-candidate .
 ```
 
-Boot fails fast and loudly on bad configuration: `ConfigError` lists every
-offending variable at once. It does not start half-configured.
+The complete E2E uses the production image and packed client. Retain
+`e2e-artifacts/stack.json`, results, Taxi logs and stack logs together: the
+manifest identifies the exact freshly cloned regtest master SHA and images.
+Provider identity and health alone do not prove the external settlement
+assumption. Repeat the live deployment gate after changing providers.
 
-The container healthcheck polls `/health` on `TAXI_HTTP_PORT` — _not built yet_.
-Until it is, an unhealthy container is indistinguishable from a healthy one.
+Supply `TAXI_OPERATOR_PRIVKEY` from a secret manager in the process environment.
+Store the other [environment settings](environment.md) in an access-controlled
+deployment configuration. `/data` must be durable and writable by UID/GID
+`10001:10001`; it contains both Taxi's ledger and the public SDK wallet tables
+(`taxi_sdk_*`). Keep the private key backup separately. The key is not stored in
+SQLite or diagnostic artifacts.
 
-### First boot quotes nothing
+For example, after a secret-aware launcher has populated the environment:
 
-This is not a fault. `DEFAULT_POLICY` seeds `paused: true` with every cap at
-zero and an empty asset allowlist, because the service refuses to guess an
-operator's pricing. Set the fee schedule, the caps and the allowlist through the
-admin UI, then unpause. Every edit is written to `policy_audit` with the actor
-that made it.
+```bash
+docker run --name taxi --restart unless-stopped \
+  --mount type=volume,source=taxi-data,target=/data \
+  --env-file /secure/taxi/public.env \
+  --env TAXI_OPERATOR_PRIVKEY \
+  -p 127.0.0.1:8080:8080 \
+  arkade-taxi:release-candidate
+```
 
-## Reading exposure
+Use an immutable image digest for deployed releases. The image runs as
+`10001:10001`, defaults to `/data/taxi.db`, and starts `dist/cli.js serve`.
+Graceful termination drains owned work and preserves durable intents. Do not
+start another writer against the same database during shutdown or restore.
 
-Outstanding capital is `Σ topup` over advances in state `locked`. It is **locked
-capital, not expected loss** — every advance is recoverable at its `locktime`.
-The real risks are capital lockup and recovery failing, in that order of
-frequency and the reverse order of cost.
+A trusted reverse proxy owns TLS and authentication. Protect both `/admin` and
+the bare `/api/*` admin aliases; they share Taxi's HTTP listener. Remove any
+inbound `X-Taxi-Operator`, replace it with the authenticated operator identity,
+and prevent direct access to the backend port. Taxi validates and audits this
+header but does not authenticate it. Request JSON cannot choose the actor.
 
-`computeExposure` returns three numbers, and the admin UI surfaces them:
+Pin the Arkade Service and emulator public keys independently of Taxi. Check
+the configured network, dust, minimum amount, indexer and Esplora API URLs.
+Taxi checks live provider identity and capabilities and closes admission on
+drift. Clients independently verify the same trust facts before signing.
 
-| Field                   | What it tells you                                       |
-| ----------------------- | ------------------------------------------------------- |
-| `outstandingSats`       | capital currently fronted                               |
-| `lockedCount`           | how many advances are carrying it                       |
-| `oldestUnsweptLocktime` | the earliest locktime still unswept — the sweeper's lag |
+## Liveness, readiness and first admission
 
-`oldestUnsweptLocktime` is the number to alert on. Compare it against the chain
-tip: once the tip passes it and the advance is still `locked`, the sweeper is
-behind. A single number that only moves forward when the sweeper does its job.
+`GET /health` reports liveness after configuration/database initialization and
+remains available during provider outages. Use it for the container healthcheck.
+`GET /ready` reports operational readiness, including startup reconciliation,
+fresh provider identity and clocks, usable reserves, submission/recovery
+blockers and deadline headroom. Do not turn an upstream outage into a liveness
+restart loop. Read its structured blockers, runtime and sweeper details.
 
-Quotes are refused when a cap would be breached, and each refusal has its own
-reason, returned verbatim as the wire error code:
+First boot is paused, with zero caps and no asset rules. Through the
+authenticated admin UI, configure the fee rules, limits and reserves, fund the
+operator wallet, inspect synchronization and then resume. Resume refreshes
+state and refuses while any safety blocker remains. Policy and operation
+changes carry an audit actor.
 
-| Reason                          | HTTP | Meaning                                    |
-| ------------------------------- | ---- | ------------------------------------------ |
-| `paused`                        | 503  | the operator chose not to quote; retryable |
-| `asset_not_allowed`             | 409  | not on the allowlist                       |
-| `topup_exceeds_max_per_payment` | 409  | one payment too large                      |
-| `exceeds_max_outstanding`       | 409  | the aggregate cap                          |
-| `max_concurrent_advances`       | 409  | the count cap                              |
-| `topup_outside_covenant_range`  | 409  | a misconfigured dust/vtxoMinAmount pair    |
+In v1 a sats fare is an operator-funded self-payment, not customer revenue.
+Budget operator liquidity for the topup, sats fare or asset-fare hosting sats,
+and change requirements. A sender-funded asset fare is operator revenue.
+Changing fare rules does not change these funding allocations.
 
-`paused` is 503 because it is transient and a client should come back. The rest
-are 409: the same request keeps losing until the operator's state changes.
+## Monitoring and expiry response
 
-The last one is a configuration bug wearing a policy refusal's clothes. If you
-see it, check `TAXI_DUST` and `TAXI_VTXO_MIN_AMOUNT` against arkd rather than
-adjusting caps.
+Exposure includes `locking`, `locked` and `recovering` advances; quote
+reservations consume operator inventory, and lockup claims atomically enforce
+the outstanding-sat and concurrent-advance limits. A submitted recovery is not
+repayment until its canonical spend is observed. Monitor active advance counts,
+reserved capacity, `lastSuccessfulObservationAt`, `lastSuccessfulRecoveryAt`,
+the latest recovery error, `sweeper.nearestDeadline`, `sweeper.blockers` and the
+admin advance list's deadline details.
 
-## When the sweeper falls behind
+Deadlines are tagged `height` or `time`. Compare height with verified chain
+height and time with chain median time past, never wall-clock time or a guessed
+blocks-to-seconds conversion. Warning defaults are 72 blocks or 43,200 seconds
+remaining; critical defaults are 12 blocks or 7,200 seconds. The independent
+minimum admission headroom defaults are 144 blocks and 86,400 seconds.
 
-Symptoms, in the order you will notice them: `oldestUnsweptLocktime` older than
-the chain tip; `lockedCount` that stops falling; advances sitting in `locked`
-well past their `locktime`.
+Alert on `recovery_deadline_warning` and page immediately on
+`recovery_deadline_critical`, `covenant_unspent_at_expiry`, missing clocks,
+quarantined graphs or stale recovery observations. Critical/expired deadlines
+automatically pause new admission. Recovery continues while admission is paused
+or inventory is unsafe, provided recovery identities and chain clocks verify.
 
-Work the diagnosis in this order, cheapest first.
+At warning: pause, inspect the exact advance/outpoint and deadline domain, check
+Arkade Service/emulator/indexer/Esplora availability and pins, then rescan.
+Inspect the durable submission/recovery phase, failure code, attempt count and
+next attempt. If retryable and no live lease exists, use the matching retry
+operation. At critical: retain the pause, prioritize restoring the existing
+recovery path and keep observing its exact transaction until canonical
+repayment is recorded. An unspent covenant at expiry is a failed recovery
+incident; preserve evidence and escalate to the provider. Never mark it repaid
+or clear reservations to make readiness green.
 
-1. **Is the sweeper running at all?** Its structured log lines and its metric are
-   the first check. A crash loop and a silent no-op look identical from the
-   ledger.
-2. **Is the emulator reachable?** The recovery leaf is a CLTV over
-   `Multisig[server, ⊕refund]`, so the emulator signature is required. An
-   emulator that is down blocks the operator's own recovery, not just
-   receivers' claims. Most common cause, least intuitive.
-3. **Is arkd reachable, and is it the same arkd?** If `TAXI_SERVER_PUBKEY` no
-   longer matches the `signerPubkey` at `TAXI_ARKD_URL` — an operator signer
-   rotation, or a pointer moved to a different instance — recovery spends will
-   not validate.
-4. **Has `TAXI_VTXO_MIN_AMOUNT` or `TAXI_DUST` changed since those advances were
-   locked?** Neither is persisted per advance, so the sweeper rebuilds the refund
-   script from today's configuration. A changed value derives a different
-   taptree and cannot satisfy a covenant committed to the old one. Put the old
-   value back; do not "fix forward".
-5. **Has the chain tip actually passed `locktime`?** On a regtest stack with the
-   auto-miner disabled it may simply not have. `sweepable` filters on
-   `locktime <= currentHeight` and returns the oldest first.
+## Pause, rescan and retry
 
-**Pause quoting while you work.** It stops new exposure accumulating on top of
-the exposure you are already failing to retire.
+The admin UI exposes these audited operations. Their equivalent authenticated
+routes accept `POST` with `Content-Type: application/json` and body `{}`:
 
-### The failure the design has not ruled out
+| Route                                      | Effect                                                  |
+| ------------------------------------------ | ------------------------------------------------------- |
+| `/admin/api/pause`                         | Pause admission while recovery and observation continue |
+| `/admin/api/resume`                        | Refresh and resume only if all safety checks pass       |
+| `/admin/api/rescan`                        | Refresh runtime, reconcile and prompt recovery          |
+| `/admin/api/advances/:id/retry-submission` | Expedite the retained retryable submission phase        |
+| `/admin/api/advances/:id/retry-recovery`   | Expedite the retained retryable recovery graph          |
 
-The covenant output is itself a virtual output with its own batch expiry, and it
-cannot be renewed by the operator alone — renewing means spending it, which means
-satisfying a leaf. So `locktime` must sit far enough inside that expiry for
-recovery to fire first, and `locktimeMarginBlocks` is the headroom.
+The retry routes return 409 for live leases or incompatible phases. They do
+not replace a graph, release reservations, clear quarantine or force a terminal
+state. Repeated lockup POSTs must carry the identical signed envelope. A
+successful rescan/retry response means the operation was accepted, not that
+financial recovery is complete.
 
-**This is inferred from the covenant's structure and has not been confirmed
-against arkd.** If a sweep fails at a locktime that has demonstrably passed, and
-the checks above are clean, suspect that the covenant VTXO expired first.
-Capture the outpoint and its batch before doing anything else — that observation
-is worth more than the recovery.
+For `locking`, the worker resumes `claimed`, `prepared` or `responded` facts.
+A lost submit response can be reconciled by authenticated lookup of the exact
+pending signed graph. `failed` and `legacy` phases require diagnosis; the
+service will not manufacture missing signed facts. For `recovering`, a
+prepared graph survives a timeout and restart; a submitted graph waits for
+canonical observation. Do not edit leases, phases or signed artifacts by hand.
+For a spent covenant still shown active, rescan and inspect the actual spending
+transaction. The watcher verifies its leaf and outputs before classifying it.
 
-## Pausing quoting
+Pause closes new admission, including new lockup acceptance. Existing durable
+work, claims, refunds and recovery continue. Let unsubmitted quotes expire and
+verify their reservations release before declaring the service drained.
 
-Set `paused: true` through the admin UI. It takes effect on the next quote; no
-restart. `admit` returns `paused` first, before any other check, so no cap or
-allowlist reasoning runs.
+## Backup and restore
 
-What pausing does **not** do:
+1. Pause admission and inspect every active deadline. Schedule a backup only
+   when the remaining headroom exceeds the shutdown, backup and restart budget.
+2. Gracefully stop the sole Taxi process and confirm it exited. Copy the entire
+   `/data` volume, including any SQLite journal/WAL sidecars, using a consistent
+   volume snapshot or backup tool. Never copy only a live database file.
+3. Encrypt the backup and record its checksum, image digest, configuration and
+   key identifier. Back up the private key independently through the secret
+   manager. Resume the same deployment and verify readiness and active advances.
+4. Rehearse restore into a new volume and one process with the same image,
+   configuration and operator key. Restrict public admission during restore;
+   allow the required provider connections for startup reconciliation.
+5. Confirm SQLite opens, SDK wallet state reloads, every outstanding advance and
+   reservation is present, and startup reconciles canonical spends and resumes
+   exact durable graphs. Use pause before reopening public traffic, inspect
+   readiness and deadline diagnostics, then explicitly resume.
 
-- It does not stop the sweeper, and must not. Pausing is how you stop taking on
-  new exposure while retiring the old.
-- It does not touch advances already `locked`, or quotes already issued and not
-  yet locked up. An outstanding quote can still be taken up until it expires.
-- It does not block claims or refunds. Those have no endpoints — the operator is
-  a payout destination, never a signer, and cannot censor a claim by design.
+An old backup may omit advances accepted after it. Do not admit traffic from
+such a snapshot until those obligations are reconstructed from authoritative
+records; the service cannot infer missing history from the operator key alone.
+Keep the original volume recoverable until the restored deployment is verified.
 
-To stop new work _and_ let outstanding quotes die out, pause and wait
-`quoteTtlSeconds`; `quoted` advances become `expired` on their own.
+## Key rotation
 
-## Recovering from a stuck advance
+Pause admission, wait for quote expiry and resolve all `locking`, `locked` and
+`recovering` advances to canonically observed terminal states. Verify zero
+reservations and exposure, and separately account for the old wallet balance.
+Back up the database and old key, gracefully stop, install the new secret and
+provision/fund its wallet in a separate persistent deployment. Recheck provider
+pins, policy, reserve and readiness before resuming. Retain the old key and
+database for reconciliation and old-wallet funds. Do not replace the key on a
+deployment with outstanding advances or discard the old payout key.
 
-Identify which state it is stuck in first. The ledger only moves on observed
-chain state, so "stuck" nearly always means an observation was missed, not that
-a transition was refused.
+Use the same drain procedure before changing provider keys, dust, minimum
+amount or recovery budgets. Startup validates active graphs against the current
+configuration and refuses incompatible recovery; bypassing that guard destroys
+the operational guarantee.
 
-**Stuck in `locking`.** The lockup was handed to the client and nothing came
-back. The `locking → quoted` edge exists to release it — but check the chain
-first. If the lockup actually confirmed and you release the quote, you have an
-untracked covenant on chain: capital the sweeper does not know to recover. Look
-for the covenant outpoint before releasing. If it exists, drive the advance to
-`locked` instead.
+## Upgrade and rollback
 
-**Stuck in `locked` with the covenant already spent.** The receiver claimed, or
-the sender refunded, and the watcher missed the spend. The terminal state is
-decided by the transaction, not by the service: read the spending txid and
-reconcile to `recycled`, `purchased` or `refunded` accordingly. Do not guess
-from which party you expected to act.
+Discover the current stable SDK with
+`pnpm view @arkade-os/sdk version dist-tags --json`; the 2026-09-12 registry
+checkpoint is stable `0.4.72` (the `rc` tag is a separate prerelease). Run all
+repository, image, package and fresh-master E2E gates after dependency changes.
+Record the actual master SHA from the current run's `stack.json`, not a previous
+log or a pinned checkout.
 
-**Stuck in `locked` past `locktime`.** That is the sweeper section above.
-
-**Stuck in `quoted` past `expiresAt`.** Harmless. `isExpired` only applies to
-`quoted`, and no capital has moved — nothing was locked up.
-
-Two things to hold on to while working any of these:
-
-- **Never mark a terminal state from optimism.** `recycled` on a claim you did
-  not observe is a lie in the ledger, and the sweeper trusts the ledger.
-- **The operator cannot censor.** If a receiver is claiming and you would rather
-  they did not, there is no lever here. That is the security property, working.
+Pause, drain when changing recovery-sensitive configuration, take a consistent
+backup, stop the old process and start the tested image against the persistent
+volume. Database migrations run at open; retain the pre-upgrade snapshot and
+image. Confirm startup reconciliation, exact active obligations and readiness,
+then resume. If startup fails, preserve diagnostics and the current volume.
+Rollback to the old image with its compatible pre-upgrade backup only after
+accounting for every network effect since that snapshot; never run an old image
+against an unsupported newer schema or erase newer financial facts.

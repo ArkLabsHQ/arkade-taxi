@@ -38,8 +38,8 @@ unconstructible outside that module. There is no `submitLockup(transferId, …)`
 
 ## Where the trusted keys come from
 
-From the Arkade Service and emulator **your wallet is already talking to**, not
-from the operator:
+From the underlying Arkade operator and emulator **your wallet is already
+talking to**, not from the taxi operator:
 
 ```ts
 import { hex } from "@scure/base";
@@ -63,7 +63,20 @@ const trustedEmulatorKey = hexToBytes(info.emulatorKey);
 
 Pinning against `info` compares the operator's claim to the operator's claim.
 
+The same rule applies to `trustedServerUnrollScript`. Obtain it from the Arkade
+operator your wallet already trusts and validate `arkdInfo.checkpointTapscript`
+with the public SDK's `assertValidServerUnrollScript` and a policy derived from
+your locally configured network. Pass the returned `.script`; never copy the
+unroll script out of the taxi envelope and call that trusted.
+
 ## The flow
+
+The same code runs in a browser and in Node.js 22.12 or newer. Browsers use
+their native `fetch`, `TextEncoder`, and `TextDecoder`; Node uses the matching
+globals. The client signing path does not require `Buffer`, `node:crypto`, or
+the service's Node-only envelope parser. `TaxiClient({ fetch })` configures only
+requests to the Taxi HTTP API; it does not replace the ambient fetch used by
+the public SDK covenant providers.
 
 ```ts
 import {
@@ -71,10 +84,12 @@ import {
     QuoteVerificationError,
     TaxiError,
     VerificationErrorCode,
+    signLockup,
     verifyQuote,
     type QuoteExpectation,
     type VerifiedQuote,
 } from "@arkade-taxi/client";
+import { asset, scriptFromTapLeafScript } from "@arkade-os/sdk";
 
 const taxi = new TaxiClient({ baseUrl: "https://taxi.example" });
 
@@ -82,21 +97,64 @@ const taxi = new TaxiClient({ baseUrl: "https://taxi.example" });
 //    malformed body raises TaxiError rather than reaching your logic.
 const info = await taxi.info();
 
-// 2. Ask for a quote.
+// 2. Select spendable VTXOs using your wallet's coin-selection policy, then
+//    preserve their exact funding evidence. Never synthesize these values.
+const selectedVtxos = await selectTaxiFunding(wallet);
+const expiryOf = (vtxo) => {
+    if (vtxo.expiresAtHeight !== undefined)
+        return { kind: "height", value: BigInt(vtxo.expiresAtHeight) };
+    if (vtxo.expiresAt !== undefined)
+        return { kind: "time", value: BigInt(Math.floor(vtxo.expiresAt.getTime() / 1000)) };
+    throw new Error("selected VTXO has no tagged expiry");
+};
+const holdingsOf = (vtxo) => {
+    const groups = [...(vtxo.assets ?? [])]
+        .sort((a, b) => a.assetId.localeCompare(b.assetId))
+        .map(({ assetId, amount }) =>
+            asset.AssetGroup.create(
+                asset.AssetId.fromString(assetId),
+                null,
+                [],
+                [asset.AssetOutput.create(vtxo.vout, amount)],
+                [],
+            ),
+        );
+    return groups.length ? asset.Packet.create(groups).serialize() : undefined;
+};
+const senderInputs = selectedVtxos.map((vtxo) => {
+    const assetPacket = holdingsOf(vtxo);
+    return {
+        txid: vtxo.txid,
+        vout: vtxo.vout,
+        value: BigInt(vtxo.value),
+        tapTree: vtxo.tapTree,
+        spendLeaf: scriptFromTapLeafScript(vtxo.forfeitTapLeafScript),
+        expiry: expiryOf(vtxo),
+        ...(assetPacket ? { assetPacket } : {}),
+    };
+});
+const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
+
+// 3. Ask for a quote. assetUnits remains bigint and crosses the wire as an
+//    exact decimal string, including values above Number.MAX_SAFE_INTEGER.
 const quote = await taxi.requestQuote({
+    senderInputs,
     receiverKey, // 32-byte x-only
     senderKey, // 32-byte x-only
     assetId, // optional; omit for a sub-dust bitcoin transfer
-    senderSats: 0n, // sats you contribute; 0n = the operator funds it all
+    assetUnits, // optional exact asset quantity
+    fareId, // optional id selected from info.assetRules
+    senderSats,
 });
 
-// 3. Verify. Everything you are willing to accept goes in `expect`.
+// 4. Verify. Everything you are willing to accept goes in `expect`; funding,
+//    tagged expiries and the unroll script come from independent wallet state.
 const expectation: QuoteExpectation = {
     receiverKey,
     senderKey,
     assetId,
     maxTopupSats: 330n,
-    maxFeeSats: 50n,
+    maxFare: { currency: "sats", units: 50n },
     minLocktime: 800_000n,
 };
 
@@ -106,24 +164,56 @@ const verified: VerifiedQuote = verifyQuote({
     expect: expectation,
     trustedServerKey,
     trustedEmulatorKey,
-    vtxoMinAmount: 1n,
+    vtxoMinAmount: BigInt(info.vtxoMinAmount),
     hrp: "tark", // "ark" on mainnet
+    senderInputs,
+    senderSats,
+    assetUnits,
+    trustedServerUnrollScript,
 });
 
-// 4. Sign your own inputs on the PSBT the operator prepared. Its topup input is
-//    already contributed; yours are not.
-const signedLockupTx = await wallet.signPsbt(verified.quote.unsignedLockupTx);
+// 5. Sign. `identity` is the same public SDK Identity your Arkade wallet uses.
+const signedLockupTx = await signLockup({ verified, identity: wallet.identity });
 
-// 5. Submit. Takes the VerifiedQuote, not an id.
+// 6. Submit. Takes the VerifiedQuote, never a caller-supplied transfer id.
 const { txid, outpoint } = await taxi.submitLockup(verified, signedLockupTx);
 
-// 6. Poll.
-const state = await taxi.status(quote.transferId);
+// 7. Poll until your application reaches a terminal state.
+let state = await taxi.status(verified.quote.transferId);
+while (!terminalStates.has(state.state)) {
+    await waitBeforePolling();
+    state = await taxi.status(verified.quote.transferId);
+}
 ```
 
-`verified` also carries `params` (decoded to `bigint`/`Uint8Array`) and `script`,
-the `DustCovenantScript` you will need to build the receiver's claim later. Keep
-it rather than re-deriving.
+`prepareAndSubmitLockup(verified, identity)` safely composes steps 5 and 6 when
+you do not need to retain the signed envelope. `signLockup` first reconstructs
+and validates the complete graph from the original authorization, then calls
+`identity.sign` with only the independently derived sender input indexes. It
+also pre-signs checkpoint input 0 for checkpoints belonging to sender inputs.
+Batch-capable identities receive the Arkade transaction and sender checkpoints in
+one `signMultiple` interaction. It accepts only canonical `SigHash.DEFAULT`,
+verifies every returned sender signature, refuses signatures on operator-owned
+inputs or checkpoints, and preserves all unsigned graph bytes.
+
+Submission is queued and idempotent. A successful POST normally returns HTTP
+202 after atomically storing the exact signed envelope; a leased background
+worker performs and resumes provider submission/finalization. Poll status until
+it becomes `locked`. Repeating the identical signed envelope reports the
+current state and does not start a second inline network effect. A different
+envelope for the same transfer is a conflict. A timeout or ambiguous provider
+result remains `locking`; keep polling instead of constructing a replacement
+transaction.
+
+Status may carry `submissionPhase`, `failureCode`, and `failureDetail`. A phase
+of `failed` or `legacy` requires operator action and blocks new admission; the
+client should keep the transfer identifier and must not construct a replacement
+graph.
+
+`verified` also carries `params` (decoded to `bigint`/`Uint8Array`), `script`,
+the independently decoded `envelope`, and the validated `senderInputIndexes`.
+It is a runtime capability as well as a TypeScript brand: copying or mutating it
+does not produce another usable signing/submission capability.
 
 ## What `verifyQuote` checks, in order
 
@@ -143,11 +233,12 @@ with two problems reports the earlier one.
 | 9    | quoted operator matches `/v1/info`         | `OPERATOR_KEY_MISMATCH`     |
 | 10   | quoted `dust` matches `/v1/info`           | `DUST_MISMATCH`             |
 | 11   | `topup` ≤ `maxTopupSats`                   | `TOPUP_ABOVE_MAX`           |
-| 12   | `feeSats` ≤ `maxFeeSats`                   | `FEE_ABOVE_MAX`             |
+| 12   | fare currency/asset/units are authorized   | `FEE_ABOVE_MAX`             |
 | 13   | `locktime` ≥ `minLocktime`                 | `LOCKTIME_BELOW_MIN`        |
 | 14   | not expired                                | `QUOTE_EXPIRED`             |
 | 15   | parameters build a valid covenant          | `INVALID_COVENANT_PARAMS`   |
 | 16   | re-derived address == `covenantAddress`    | `COVENANT_ADDRESS_MISMATCH` |
+| 17   | full lockup graph matches original funding | `MALFORMED_QUOTE`           |
 
 Steps 3 and 4 are what make step 16 mean anything.
 
@@ -196,12 +287,12 @@ decoded. Read the decoded one.
 
 ## After the lockup
 
-There are no claim or refund endpoints, and that is the design rather than an
-omission. Every leaf is `Multisig[server, ⊕script]` — the operator is a payout
-destination and never a signer — so a receiver claims with the Arkade Service
-and emulator signatures alone, and a sender refunds with its own signature plus
-those two. The operator cannot censor either, and only watches for the spend to
-reconcile its ledger.
+There are no Taxi claim or refund endpoints. These are wallet-side covenant
+spends submitted through the configured public SDK `EmulatorProvider`; the Taxi
+service only watches the resulting outpoint spend to reconcile its ledger. The
+Taxi payout key is a destination, not a leaf signer. The actual leaves require
+the Arkade Service and the covenant's tweaked emulator key, while `refundSender`
+also requires the verified sender key.
 
 Which means the wallet, not the operator, owns what happens next:
 
@@ -209,8 +300,88 @@ Which means the wallet, not the operator, owns what happens next:
   the operator in sats.
 - `purchase` — the receiver keeps the whole covenant; the operator was paid at
   lockup.
-- `refundSender` — the sender cancels before `locktime`.
+- `refund` (`refundSender` leaf) — the sender cancels with its own identity.
 
-The transaction-building for these is not yet in this repository; see
-`e2e/README.md` for the scenarios that will cover it and what each of them is
-waiting on.
+Never pass a transfer id or a status object to these operations. First exchange
+the verified quote, the exact lockup response and fresh Taxi/indexer/provider
+facts for an opaque `CovenantTransfer` capability:
+
+```ts
+const transfer = await taxi.verifyTransfer(verified, lockup, {
+    arkdUrl,
+    emulatorUrl,
+    network,
+    serverUnrollScript: serverUnrollScriptHex,
+    chainHeight: currentHeight,
+});
+
+const txid = await taxi.purchase(transfer, verifiedReceiverAccountScript);
+// or: await taxi.recycle(transfer, receiverWalletInput, verifiedReceiverAccountScript)
+// or: await taxi.refund(transfer, senderIdentity)
+```
+
+The capability binds the provider URLs and keys, network, asset/fare/top-up,
+parties, locktime, covenant output index/value/script and the currently
+spendable indexed outpoint. Its displayed properties are a detached snapshot,
+not authorization. `recycle` additionally requires a `ReceiverWalletInput`
+whose exact outpoint, value, canonical tree/leaf proof, expiry, assets and
+identity are independently checked; it is always input 1 after the covenant at
+input 0.
+
+Provider destinations and implementations are isolated when the capability is
+created. The public config contains only primitive URLs and trust facts; custom
+provider objects and functions are rejected. The client constructs private SDK
+REST providers for the Arkade Service, indexer and emulator from the verified
+URLs. Their URLs and private prototype snapshots cannot be replaced through
+caller-held objects.
+The SDK REST providers use the realm's `globalThis.fetch`, independently of the
+Taxi client's ordinary HTTP option: `TaxiClient({ fetch })` does not configure
+covenant provider calls. Consequently, same-realm code that can replace or
+intercept the global fetch remains inside the transport trust boundary and can
+observe, redirect or forge those calls. Applications must initialize and
+protect a trusted global fetch before using covenant spends, prevent untrusted
+code from running in that realm, use TLS, and enforce the expected reverse
+proxy trust policy. Current Arkade Service and emulator information is checked
+again before graph construction, before any owner signature, and immediately
+before submission. Network, keys, checkpoint script, dust, minimum amount or
+required OP_RETURN-capacity drift aborts that operation.
+
+The owner identity signs only Arkade transaction and checkpoint inputs it owns.
+The emulator call then supplies the server/emulator covenant signatures and
+returns the final graph. The client rejects changed unsigned fields or metadata, reordered
+checkpoints, a changed txid, unexpected keys or leaf hashes, non-default
+sighashes, malformed signatures and loss of an owner's signature. It returns
+only that independently verified Arkade transaction id. It does not call a generic
+forfeit builder or make a second Arkade Service submission.
+
+`EmulatorProvider.submitTx` is a network effect. A transport failure can be
+ambiguous. Each capability and exact outpoint/provider tuple is one-shot within
+the process while any matching capability remains live: concurrent use, replay
+after success, and replay after an ambiguous response are rejected. The shared
+registry holds only weak lifecycle references and cleans dead outpoint entries;
+each live opaque capability holds its lifecycle strongly. A
+`CovenantSpendAmbiguousError` includes the independently known `expectedTxid`;
+persist the operation/outpoint in the calling application and observe that txid
+and the exact covenant outpoint before deciding recovery. Do not blindly rebuild
+and resubmit. Pre-submission validation failures also consume the capability
+conservatively. Browser restarts erase in-memory guards, so durable caller
+idempotency and exact-transaction retry behavior must be verified against the
+live emulator. Live Arkade Service/emulator acceptance, including the
+three-`OP_RETURN` refund shape supported by this client, remains part of the
+provider E2E suite described in `e2e/README.md`.
+
+If the receiver remains offline, Taxi's persisted recovery worker returns funds
+through the permissionless recovery leaf after its tagged locktime and before
+batch expiry. Applications should retain transfer identifiers and observe
+terminal status after reconnecting. `recovering` means an exact recovery intent
+or submission exists; `recovered` requires canonical observation. Height and
+time deadlines use independent chain clocks, and quote `expiresAt` is a separate
+Unix-seconds deadline.
+
+Taxi owns this pre-expiry recovery guarantee. The deployed Arkade Service's
+special covenant settlement is an external assumption, not a client capability
+flag or a Taxi implementation. A dedicated upstream forfeit mechanism is out
+of scope. Run all 17 live scenarios and both integrity checks against current
+regtest master before adopting a changed provider deployment; retain that run's
+`stack.json` master SHA and image identities with its results. The stable SDK
+registry checkpoint on 2026-09-12 is `@arkade-os/sdk` 0.4.72.

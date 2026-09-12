@@ -9,7 +9,17 @@ export interface TaxiConfig {
     dbPath: string;
     httpPort: number;
     arkdUrl: string;
+    indexerUrl: string;
+    esploraUrl: string;
     emulatorUrl: string;
+    minExpiryHeadroomBlocks: bigint;
+    recoveryBroadcastBlocks: bigint;
+    recoveryCriticalBlocks: bigint;
+    minExpiryHeadroomSeconds: bigint;
+    recoveryBroadcastSeconds: bigint;
+    recoveryCriticalSeconds: bigint;
+    reconcileIntervalMs: number;
+    operatorMinReserveSats: bigint;
     /** The operator signs its own funding inputs at lockup. It is never a
      * covenant signer — no leaf carries its key in a multisig. */
     operatorPrivkey: Uint8Array;
@@ -66,13 +76,26 @@ const port = z
     .default("8080");
 
 const url = z.string().url("must be an absolute URL");
+const interval = positiveSats
+    .refine((v) => v <= 2_147_483_647n, "must fit a positive timer interval")
+    .transform(Number);
 
 const SCHEMA = z
     .object({
         TAXI_DB_PATH: z.string().min(1, "must not be empty").default(":memory:"),
         TAXI_HTTP_PORT: port,
         TAXI_ARKD_URL: url,
+        TAXI_INDEXER_URL: url,
+        TAXI_ESPLORA_URL: url,
         TAXI_EMULATOR_URL: url,
+        TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
+        TAXI_RECOVERY_BROADCAST_BLOCKS: positiveSats.default("72"),
+        TAXI_RECOVERY_CRITICAL_BLOCKS: positiveSats.default("12"),
+        TAXI_MIN_EXPIRY_HEADROOM_SECONDS: positiveSats.default("86400"),
+        TAXI_RECOVERY_BROADCAST_SECONDS: positiveSats.default("43200"),
+        TAXI_RECOVERY_CRITICAL_SECONDS: positiveSats.default("7200"),
+        TAXI_RECONCILE_INTERVAL_MS: interval.default("30000"),
+        TAXI_OPERATOR_MIN_RESERVE_SATS: positiveSats.default("10000"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
         TAXI_SERVER_PUBKEY: hexKey,
         TAXI_EMULATOR_PUBKEY: hexKey,
@@ -82,6 +105,34 @@ const SCHEMA = z
         TAXI_ADDRESS_HRP: z.string().min(1, "must not be empty").default("ark"),
     })
     .superRefine((v, ctx) => {
+        if (v.TAXI_RECOVERY_CRITICAL_SECONDS >= v.TAXI_RECOVERY_BROADCAST_SECONDS) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_RECOVERY_CRITICAL_SECONDS"],
+                message: "must be less than TAXI_RECOVERY_BROADCAST_SECONDS",
+            });
+        }
+        if (v.TAXI_RECOVERY_BROADCAST_SECONDS >= v.TAXI_MIN_EXPIRY_HEADROOM_SECONDS) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_RECOVERY_BROADCAST_SECONDS"],
+                message: "must be less than TAXI_MIN_EXPIRY_HEADROOM_SECONDS",
+            });
+        }
+        if (v.TAXI_RECOVERY_CRITICAL_BLOCKS >= v.TAXI_RECOVERY_BROADCAST_BLOCKS) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_RECOVERY_CRITICAL_BLOCKS"],
+                message: "must be less than TAXI_RECOVERY_BROADCAST_BLOCKS",
+            });
+        }
+        if (v.TAXI_RECOVERY_BROADCAST_BLOCKS >= v.TAXI_MIN_EXPIRY_HEADROOM_BLOCKS) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_RECOVERY_BROADCAST_BLOCKS"],
+                message: "must be less than TAXI_MIN_EXPIRY_HEADROOM_BLOCKS",
+            });
+        }
         if (v.TAXI_VTXO_MIN_AMOUNT > v.TAXI_DUST) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -108,7 +159,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         dbPath: v.TAXI_DB_PATH,
         httpPort: v.TAXI_HTTP_PORT,
         arkdUrl: v.TAXI_ARKD_URL,
+        indexerUrl: v.TAXI_INDEXER_URL,
+        esploraUrl: v.TAXI_ESPLORA_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,
+        minExpiryHeadroomBlocks: v.TAXI_MIN_EXPIRY_HEADROOM_BLOCKS,
+        recoveryBroadcastBlocks: v.TAXI_RECOVERY_BROADCAST_BLOCKS,
+        recoveryCriticalBlocks: v.TAXI_RECOVERY_CRITICAL_BLOCKS,
+        minExpiryHeadroomSeconds: v.TAXI_MIN_EXPIRY_HEADROOM_SECONDS,
+        recoveryBroadcastSeconds: v.TAXI_RECOVERY_BROADCAST_SECONDS,
+        recoveryCriticalSeconds: v.TAXI_RECOVERY_CRITICAL_SECONDS,
+        reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
+        operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
         serverPubkey: v.TAXI_SERVER_PUBKEY,
         emulatorPubkey: v.TAXI_EMULATOR_PUBKEY,
@@ -123,11 +184,11 @@ export async function resolveRuntimeConfig(cfg: TaxiConfig): Promise<RuntimeConf
     let operatorKey: Uint8Array;
     try {
         operatorKey = await SingleKey.fromPrivateKey(cfg.operatorPrivkey).xOnlyPublicKey();
-    } catch (cause) {
+    } catch {
         throw new ConfigError([
             {
                 variable: "TAXI_OPERATOR_PRIVKEY",
-                message: `is not a valid secp256k1 private key: ${String(cause)}`,
+                message: "is not a valid secp256k1 private key",
             },
         ]);
     }

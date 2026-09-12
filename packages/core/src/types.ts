@@ -10,6 +10,7 @@ export type AdvanceState =
     | "quoted"
     | "locking"
     | "locked"
+    | "recovering"
     | "recycled"
     | "purchased"
     | "refunded"
@@ -25,9 +26,61 @@ export const TERMINAL_STATES = [
 ] as const satisfies readonly AdvanceState[];
 
 export type Outpoint = { txid: string; vout: number };
+export type ExpiryDeadline = { kind: "height"; value: bigint } | { kind: "time"; value: bigint };
+
+export interface FundingSnapshot {
+    batchExpiry: ExpiryDeadline;
+    recoveryLocktime?: ExpiryDeadline;
+    operatorInputs: Outpoint[];
+    unsignedLockupTx: string;
+    unsignedLockupId: string;
+}
+
+export interface SubmissionState {
+    submissionKey?: string;
+    signedEnvelopeDigest?: string;
+    submissionPhase?: "claimed" | "prepared" | "responded" | "finalized" | "failed" | "legacy";
+    signedLockupEnvelope?: string;
+    preparedArkTx?: string;
+    preparedCheckpoints?: string[];
+    serverFinalArkTx?: string;
+    serverCheckpoints?: string[];
+    submissionLeaseOwner?: string;
+    submissionLeaseToken?: string;
+    submissionLeaseUntil?: number;
+    submissionAttempts?: number;
+    submissionLastAttemptAt?: number;
+    submissionNextAttemptAt?: number;
+    finalizedAt?: number;
+    arkTxid?: string;
+    submittedAt?: number;
+    recoveryTxid?: string;
+    recoverySubmittedAt?: number;
+    recoveryPhase?: "prepared" | "submitted" | "failed" | "legacy";
+    recoveryGraphDigest?: string;
+    recoveryExpectedTxid?: string;
+    recoveryPreparedArkTx?: string;
+    recoveryPreparedCheckpoints?: string[];
+    recoveryResponseArkTx?: string;
+    recoveryResponseCheckpoints?: string[];
+    recoveryLeaseOwner?: string;
+    recoveryLeaseToken?: string;
+    recoveryLeaseUntil?: number;
+    recoveryAttempts?: number;
+    recoveryLastAttemptAt?: number;
+    recoveryNextAttemptAt?: number;
+    lastObservedAt?: number;
+    observationTipHash?: string;
+    observationTipHeight?: number;
+    observationStableTipHash?: string;
+    observationStableTipHeight?: number;
+    observationStableCount?: number;
+    failureCode?: string;
+    failureDetail?: string;
+}
 
 /** One fronted dust unit, from quote to settlement. */
-export interface Advance {
+export interface Advance extends FundingSnapshot, SubmissionState {
     id: string;
     state: AdvanceState;
 
@@ -37,6 +90,7 @@ export interface Advance {
     dust: bigint;
     topup: bigint;
     assetId?: AssetIdRef;
+    /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime. */
     locktime: bigint;
 
     /** Derived from the params; the client verifies against its own derivation. */
@@ -72,6 +126,7 @@ export interface Policy {
      * means spending it, which means satisfying a leaf — so recovery must fire
      * first. UNVERIFIED against arkd; kept configurable for that reason. */
     locktimeMarginBlocks: number;
+    locktimeMarginSeconds: number;
     /**
      * What this operator serves, and on what terms, per asset. An entry with
      * `assetId: null` is the plain sub-dust bitcoin case.

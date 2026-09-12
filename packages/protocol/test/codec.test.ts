@@ -10,6 +10,7 @@ import {
     satsToWire,
 } from "../src/codec.js";
 import type { AssetIdWire, QuoteParams } from "../src/index.js";
+import { covenantSpendInputFromWire, covenantSpendInputToWire } from "../src/codec.js";
 
 const bytes = (...b: number[]) => new Uint8Array(b);
 const hex32 = (byte: string) => byte.repeat(32);
@@ -172,5 +173,113 @@ describe("quoteParamsFromWire", () => {
     it("round-trips the asset variant", () => {
         const w = { ...wire(), assetId: { txid: hex32("11"), groupIndex: 7 } };
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+    });
+});
+import * as fundingCodec from "../src/codec.js";
+describe("funding input wire", () => {
+    const wire = {
+        txid: "ab".repeat(32),
+        vout: 0,
+        value: "100",
+        tapTree: "00",
+        spendLeaf: "51",
+        expiry: { kind: "time", value: "1789132933" },
+    };
+    it("decodes exact tagged expiry evidence and bytes", () => {
+        expect(fundingCodec.fundingInputFromWire(wire)).toMatchObject({
+            value: 100n,
+            expiry: { kind: "time", value: 1789132933n },
+            spendLeaf: new Uint8Array([81]),
+        });
+    });
+    it.each([
+        { value: 100 },
+        { txid: "ab" },
+        { tapTree: "GG" },
+        { vout: -1 },
+        { expiry: { kind: "height", value: 99 } },
+        { expiry: { kind: "other", value: "99" } },
+        { assetPacket: "0" },
+    ])("rejects malformed funding %j", (over) => {
+        expect(() => fundingCodec.fundingInputFromWire({ ...wire, ...over })).toThrow();
+    });
+});
+
+describe("covenant spend input wire", () => {
+    const wire = () => ({
+        txid: "ab".repeat(32),
+        vout: 7,
+        value: "9007199254740993",
+        tapTree: "010203",
+        selectedLeaf: "51c0",
+        controlBlock: {
+            version: 0xc1,
+            internalKey: "12".repeat(32),
+            merklePath: ["34".repeat(32)],
+        },
+        assetPacket: "0001",
+    });
+
+    it("round-trips exact bigint, tree, selected leaf, control block, and asset bytes", () => {
+        const decoded = covenantSpendInputFromWire(wire());
+        expect(decoded).toMatchObject({
+            txid: "ab".repeat(32),
+            vout: 7,
+            value: 9_007_199_254_740_993n,
+            tapTree: new Uint8Array([1, 2, 3]),
+            tapLeafScript: [
+                {
+                    version: 0xc1,
+                    internalKey: new Uint8Array(32).fill(0x12),
+                    merklePath: [new Uint8Array(32).fill(0x34)],
+                },
+                new Uint8Array([0x51, 0xc0]),
+            ],
+            assetPacket: new Uint8Array([0, 1]),
+        });
+        expect(covenantSpendInputToWire(decoded)).toEqual(wire());
+    });
+
+    it.each([
+        { txid: "AB".repeat(32) },
+        { value: 1 },
+        { tapTree: "" },
+        { selectedLeaf: "51c2" },
+        { assetPacket: "" },
+        { controlBlock: { ...wire().controlBlock, internalKey: "12" } },
+        { controlBlock: { ...wire().controlBlock, merklePath: ["34"] } },
+        { controlBlock: { ...wire().controlBlock, extra: true } },
+        { extra: true },
+    ])("rejects non-canonical covenant spend input %j", (over) => {
+        expect(() => covenantSpendInputFromWire({ ...wire(), ...over })).toThrow();
+    });
+
+    it("returns detached bytes", () => {
+        const decoded = covenantSpendInputFromWire(wire());
+        const encoded = covenantSpendInputToWire(decoded);
+        decoded.tapTree[0] = 0xff;
+        decoded.tapLeafScript[0].internalKey[0] = 0xff;
+        decoded.tapLeafScript[1][0] = 0xff;
+        decoded.assetPacket![0] = 0xff;
+        expect(encoded).toEqual(wire());
+    });
+
+    it("rejects an accessor-forged Merkle path without invoking it", () => {
+        let reads = 0;
+        const merklePath = ["34".repeat(32)];
+        Object.defineProperty(merklePath, "0", {
+            enumerable: true,
+            get() {
+                reads++;
+                return "34".repeat(32);
+            },
+        });
+        expect(() =>
+            covenantSpendInputFromWire({
+                ...wire(),
+                controlBlock: { ...wire().controlBlock, merklePath },
+            }),
+        ).toThrow(/data property|shape/i);
+        expect(reads).toBe(0);
     });
 });

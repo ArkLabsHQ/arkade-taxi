@@ -3,6 +3,7 @@ import { bytesToHex } from "@arkade-taxi/protocol";
 import type { QuoteRequestBody } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
 import { TaxiError } from "../src/errors.js";
+import { signLockup } from "../src/lockup.js";
 import { verifyQuote } from "../src/verify.js";
 import {
     args,
@@ -11,6 +12,7 @@ import {
     quote,
     receiverKey,
     recordingFetch,
+    senderIdentity,
     senderKey,
 } from "./fixtures.js";
 
@@ -81,9 +83,9 @@ describe("info", () => {
 describe("requestQuote", () => {
     it("POSTs the request encoded as wire hex and decimal strings", async () => {
         const { taxi, fetch } = client(ok(quote()));
-        expect(await taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n })).toEqual(
-            quote(),
-        );
+        expect(
+            await taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n, senderInputs: [] }),
+        ).toEqual(quote());
         const call = fetch.calls[0]!;
         expect(call.url).toBe(`${BASE}/v1/transfers`);
         expect(call.init.method).toBe("POST");
@@ -91,6 +93,7 @@ describe("requestQuote", () => {
             receiverKey: bytesToHex(receiverKey),
             senderKey: bytesToHex(senderKey),
             senderSats: "0",
+            senderInputs: [],
         });
     });
 
@@ -100,6 +103,7 @@ describe("requestQuote", () => {
             receiverKey,
             senderKey,
             senderSats: 1n,
+            senderInputs: [],
             assetId: { txid: new Uint8Array(32).fill(0x11), groupIndex: 3 },
         });
         expect(JSON.parse(String(fetch.calls[0]!.init.body)).assetId).toEqual({
@@ -108,10 +112,26 @@ describe("requestQuote", () => {
         });
     });
 
+    it("encodes an exact large asset quantity and selected fare", async () => {
+        const { taxi, fetch } = client(ok(quote()));
+        await taxi.requestQuote({
+            receiverKey,
+            senderKey,
+            senderSats: 1n,
+            senderInputs: [],
+            assetUnits: 9_007_199_254_740_993n,
+            fareId: "same-asset",
+        });
+        expect(JSON.parse(String(fetch.calls[0]!.init.body))).toMatchObject({
+            assetUnits: "9007199254740993",
+            fareId: "same-asset",
+        });
+    });
+
     it("throws INVALID_RESPONSE when the quote fails the codecs", async () => {
         const { taxi } = client(ok({ ...quote(), fare: { currency: "sats", units: "1e3" } }));
         await expect(
-            taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n }),
+            taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n, senderInputs: [] }),
         ).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     });
 });
@@ -119,22 +139,81 @@ describe("requestQuote", () => {
 describe("submitLockup", () => {
     it("takes the transfer id from the verified quote, not from the caller", async () => {
         const verified = verifyQuote(args());
+        const signedLockupTx = await signLockup({ verified, identity: senderIdentity });
         const { taxi, fetch } = client(
             ok({ txid: "aa".repeat(32), outpoint: { txid: "aa".repeat(32), vout: 0 } }),
         );
-        const res = await taxi.submitLockup(verified, "cHNidP8BAA==");
+        const res = await taxi.submitLockup(verified, signedLockupTx);
         expect(res.outpoint.vout).toBe(0);
         expect(fetch.calls[0]?.url).toBe(`${BASE}/v1/transfers/tr_01/lockup`);
         expect(JSON.parse(String(fetch.calls[0]!.init.body))).toEqual({
-            signedLockupTx: "cHNidP8BAA==",
+            signedLockupTx,
         });
+    });
+
+    it("does not reread a transferId accessor that redirects after validation", async () => {
+        const verified = verifyQuote(args());
+        const signedLockupTx = await signLockup({ verified, identity: senderIdentity });
+        let reads = 0;
+        try {
+            Object.defineProperty(verified.quote, "transferId", {
+                configurable: true,
+                enumerable: true,
+                get: () => {
+                    reads += 1;
+                    return reads === 1 ? "tr_01" : "../../redirect";
+                },
+            });
+        } catch {
+            // A frozen public view is also an acceptable defense.
+        }
+        const { taxi, fetch } = client(
+            ok({ txid: "aa".repeat(32), outpoint: { txid: "aa".repeat(32), vout: 0 } }),
+        );
+        await taxi.submitLockup(verified, signedLockupTx);
+        expect(fetch.calls[0]?.url).toBe(`${BASE}/v1/transfers/tr_01/lockup`);
+        expect(reads).toBe(0);
     });
 
     it("throws INVALID_RESPONSE when the lockup response is malformed", async () => {
         const verified = verifyQuote(args());
+        const signedLockupTx = await signLockup({ verified, identity: senderIdentity });
         const { taxi } = client(ok({ txid: "zz", outpoint: { txid: "aa", vout: 0 } }));
-        await expect(taxi.submitLockup(verified, "cHNidP8=")).rejects.toMatchObject({
+        await expect(taxi.submitLockup(verified, signedLockupTx)).rejects.toMatchObject({
             code: "INVALID_RESPONSE",
+        });
+    });
+
+    it("rejects an unsigned envelope before sending it", async () => {
+        const verified = verifyQuote(args());
+        const { taxi, fetch } = client(ok({}));
+        await expect(
+            taxi.submitLockup(verified, verified.quote.unsignedLockupTx),
+        ).rejects.toThrow();
+        expect(fetch.calls).toHaveLength(0);
+    });
+
+    it("prepares, verifies, and submits through one safe method", async () => {
+        const verified = verifyQuote(args());
+        const { taxi, fetch } = client(
+            ok({ txid: "aa".repeat(32), outpoint: { txid: "aa".repeat(32), vout: 0 } }),
+        );
+        await expect(taxi.prepareAndSubmitLockup(verified, senderIdentity)).resolves.toMatchObject({
+            txid: "aa".repeat(32),
+        });
+        expect(fetch.calls).toHaveLength(1);
+    });
+
+    it("surfaces the Task 5 submission-unavailable response", async () => {
+        const verified = verifyQuote(args());
+        const { taxi } = client(() =>
+            jsonResponse(503, {
+                error: "sender signing and validated submission are not configured",
+                code: "lockup_submission_unavailable",
+            }),
+        );
+        await expect(taxi.prepareAndSubmitLockup(verified, senderIdentity)).rejects.toMatchObject({
+            code: "lockup_submission_unavailable",
         });
     });
 });

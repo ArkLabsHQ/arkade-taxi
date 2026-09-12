@@ -10,9 +10,23 @@ import {
     type QuoteRequestBody,
     type QuoteResponse,
     type TransferStatusResponse,
+    type FundingInputValue,
+    fundingInputToWire,
 } from "@arkade-taxi/protocol";
 import { decodeInfo, decodeLockup, decodeQuote, decodeStatus } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
+import { assertSignedLockup, signLockup } from "./lockup.js";
+import { activeQuoteStateFor } from "./lockup.js";
+import {
+    purchase,
+    recycle,
+    refund,
+    verifyCovenantTransfer,
+    type CovenantSpendConfig,
+    type CovenantTransfer,
+    type ReceiverWalletInput,
+} from "./spend.js";
+import type { Identity } from "@arkade-os/sdk";
 import type { VerifiedQuote } from "./verify.js";
 
 export interface TaxiClientOptions {
@@ -21,9 +35,12 @@ export interface TaxiClientOptions {
 }
 
 export interface QuoteRequest {
+    senderInputs: FundingInputValue[];
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     assetId?: AssetIdValue;
+    assetUnits?: bigint;
+    fareId?: string;
     /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
      * payment, where the operator funds the whole thing. */
     senderSats: bigint;
@@ -61,8 +78,11 @@ export class TaxiClient {
             receiverKey: bytesToHex(req.receiverKey),
             senderKey: bytesToHex(req.senderKey),
             senderSats: satsToWire(req.senderSats),
+            senderInputs: req.senderInputs.map(fundingInputToWire),
         };
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
+        if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
+        if (req.fareId !== undefined) wire.fareId = req.fareId;
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
         decodeQuote(body);
         return body;
@@ -71,14 +91,52 @@ export class TaxiClient {
     /** Takes a `VerifiedQuote` rather than a transfer id: the only way to obtain
      * one is `verifyQuote`, so a lockup cannot be submitted unverified. */
     async submitLockup(verified: VerifiedQuote, signedLockupTx: string): Promise<LockupResponse> {
-        const path = `/v1/transfers/${encodeURIComponent(verified.quote.transferId)}/lockup`;
+        const transferId = assertSignedLockup(verified, signedLockupTx);
+        const path = `/v1/transfers/${encodeURIComponent(transferId)}/lockup`;
         const wire: LockupRequestBody = { signedLockupTx };
         return decodeLockup((await this.request("POST", path, wire)) as LockupResponse);
+    }
+
+    async prepareAndSubmitLockup(
+        verified: VerifiedQuote,
+        identity: Identity,
+    ): Promise<LockupResponse> {
+        return this.submitLockup(verified, await signLockup({ verified, identity }));
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {
         const path = `/v1/transfers/${encodeURIComponent(transferId)}`;
         return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
+    }
+
+    async verifyTransfer(
+        verified: VerifiedQuote,
+        lockup: LockupResponse,
+        config: CovenantSpendConfig,
+    ): Promise<CovenantTransfer> {
+        const transferId = activeQuoteStateFor(verified).transferId;
+        return verifyCovenantTransfer({
+            verified,
+            lockup,
+            status: await this.status(transferId),
+            config,
+        });
+    }
+
+    async recycle(
+        transfer: CovenantTransfer,
+        receiverWalletInput: ReceiverWalletInput,
+        destination: Uint8Array,
+    ): Promise<string> {
+        return recycle(transfer, receiverWalletInput, destination);
+    }
+
+    async purchase(transfer: CovenantTransfer, destination: Uint8Array): Promise<string> {
+        return purchase(transfer, destination);
+    }
+
+    async refund(transfer: CovenantTransfer, senderIdentity: Identity): Promise<string> {
+        return refund(transfer, senderIdentity);
     }
 
     private async request(method: string, path: string, body?: unknown): Promise<unknown> {

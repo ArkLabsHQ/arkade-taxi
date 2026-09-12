@@ -358,6 +358,11 @@ body.is-alarm .headline__sweeper {
     background: var(--panel);
 }
 
+.states.operational {
+    grid-template-columns: repeat(6, minmax(120px, 1fr));
+    border-top: 0;
+}
+
 .states > div {
     flex: 1 1 110px;
     padding: 10px 14px;
@@ -593,4 +598,17 @@ td.n {
     padding: 18px 14px;
     color: var(--text-faint);
     font: 400 12.5px/1.5 var(--mono);
+}
+
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+}
+
+.pagination .note {
+    margin: 0;
 }

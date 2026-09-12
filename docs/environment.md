@@ -4,12 +4,10 @@ Every variable `loadConfig` reads, its default, and what a wrong value does.
 The source of truth is `packages/app/src/config.ts`; `.env.regtest.example` is a
 filled-in copy for a local `arkade-regtest` stack.
 
-Configuration arrives in three layers, and only the first is here:
-
-1. **environment** — the values below. Read once, at boot.
-2. **config file** — same names, lower precedence than the environment.
-3. **live overrides in the database** — fee policy, exposure caps, asset
-   allowlist, pause switch. These win, and every edit is audited.
+`loadConfig` reads the process environment once at boot. There is no application
+config-file loader; `docker --env-file` is one way to populate that environment.
+Live fee rules, exposure caps and the pause switch are separate database policy,
+and every operator edit is audited.
 
 The consequence worth knowing before you go looking for a missing knob: **the
 caps and the fee schedule are not environment variables.** They live in the
@@ -25,6 +23,8 @@ deliberate — it refuses to guess a price.
 | `TAXI_DB_PATH`          | `:memory:` | no       | path                            |
 | `TAXI_HTTP_PORT`        | `8080`     | no       | 1–65535                         |
 | `TAXI_ARKD_URL`         | —          | **yes**  | absolute URL                    |
+| `TAXI_INDEXER_URL`      | —          | **yes**  | absolute URL                    |
+| `TAXI_ESPLORA_URL`      | —          | **yes**  | absolute API URL                |
 | `TAXI_EMULATOR_URL`     | —          | **yes**  | absolute URL                    |
 | `TAXI_OPERATOR_PRIVKEY` | —          | **yes**  | 64 hex (32-byte private key)    |
 | `TAXI_SERVER_PUBKEY`    | —          | **yes**  | 64 hex (32-byte x-only)         |
@@ -36,6 +36,23 @@ deliberate — it refuses to guess a price.
 
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
+
+The persistent operator runtime also requires `TAXI_INDEXER_URL` and
+`TAXI_ESPLORA_URL` (absolute URLs). SDK 0.4.72 `ArkInfo` does not advertise either
+endpoint. Co-location of the indexer with arkd is a deployment choice, so Taxi
+does not guess it; point Esplora at its API prefix, such as `/api` for mempool.
+
+Runtime budgets are positive decimal integers. Height budgets are
+`TAXI_MIN_EXPIRY_HEADROOM_BLOCKS=144`, `TAXI_RECOVERY_BROADCAST_BLOCKS=72`, and
+`TAXI_RECOVERY_CRITICAL_BLOCKS=12`. Time budgets are
+`TAXI_MIN_EXPIRY_HEADROOM_SECONDS=86400`, `TAXI_RECOVERY_BROADCAST_SECONDS=43200`,
+and `TAXI_RECOVERY_CRITICAL_SECONDS=7200`. Each set independently requires
+critical < broadcast < minimum headroom. No conversion between units occurs.
+`TAXI_RECONCILE_INTERVAL_MS=30000` controls refresh and snapshot staleness;
+`TAXI_OPERATOR_MIN_RESERVE_SATS=10000` requires verified usable wallet capacity.
+The live policy has separate `locktimeMarginBlocks=144` and
+`locktimeMarginSeconds=86400` fields. Timestamp CLTV is compared with chain
+median time past (BIP-113), never the process clock or chain height.
 
 ### `TAXI_DB_PATH`
 
@@ -78,8 +95,12 @@ into the pinned payout output of every covenant, so every repayment lands
 somewhere the operator cannot spend from. Nothing detects this until money has
 moved.
 
-It is a credential. Not in the image, not in the repository, not in a workflow
-file.
+Supply it through the deployment's secret manager as `TAXI_OPERATOR_PRIVKEY`.
+The application has no `_FILE` setting: a secret-aware launcher must inject the
+value into the process environment. Never bake it into an image, commit it,
+put it on a command line or include it in logs. Keep an encrypted, independently
+recoverable backup of the key separate from the database backup. See the
+[key rotation procedure](runbook.md#key-rotation).
 
 ### `TAXI_SERVER_PUBKEY` and `TAXI_EMULATOR_PUBKEY`
 
@@ -123,8 +144,12 @@ outstanding first. (The rebuild only differs where `topup > dust −
 vtxoMinAmount`, which is every pure-asset payment, since those set
 `topup = dust`.)
 
-The same reasoning applies to `TAXI_DUST`, which enters both the pinned payout
-amounts and `refundTopup`.
+`dust` and the parties are persisted per advance, along with funding and signed
+graph facts. Runtime provider pins, the configured minimum amount and recovery
+budgets must nevertheless remain compatible with those graphs. Startup
+reconstructs and validates every active recovery and fails closed on a mismatch.
+Drain `quoted`, `locking`, `locked` and `recovering` work before changing these
+deployment parameters; do not work around a failed startup by deleting rows.
 
 ### `TAXI_LOG_LEVEL`
 

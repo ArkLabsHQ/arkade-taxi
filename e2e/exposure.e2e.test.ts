@@ -1,75 +1,33 @@
-/**
- * Scenario 8. Runs for real, but only over `@arkade-taxi/core` — it is the
- * admission decision, not an HTTP 409 from a running operator. The controls
- * matter more than the rejection: a cap test that fires because the policy was
- * paused, or because the asset was not on the allowlist, proves nothing.
- */
-
 import { expect } from "vitest";
-import { admit, computeExposure } from "@arkade-taxi/core";
-import { DUST, VTXO_MIN, advance, policy, quoteRequest } from "./fixtures.js";
 import { liveScenario } from "./scenarios.js";
+import { admin, lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
 
-liveScenario("exposure-cap-rejects-quote", () => {
-    const locked = [
-        advance({ id: "a1", topup: 400n }),
-        advance({ id: "a2", topup: 300n }),
-        advance({ id: "a3", topup: 5_000n, state: "quoted" }),
-        advance({ id: "a4", topup: 5_000n, state: "recovered" }),
-    ];
-
-    const exposure = computeExposure(locked);
-    expect(exposure.outstandingSats).toBe(700n);
-    expect(exposure.lockedCount).toBe(2);
-
-    const req = quoteRequest();
-
-    const refused = admit(req, policy({ maxOutstandingSats: 1_000n }), exposure, DUST, VTXO_MIN);
-    expect(refused).toEqual({ ok: false, reason: "exceeds_max_outstanding" });
-
-    const admitted = admit(req, policy({ maxOutstandingSats: 2_000n }), exposure, DUST, VTXO_MIN);
-    expect(admitted).toEqual({
-        ok: true,
-        topup: DUST,
-        fare: { currency: "sats", units: 1n },
-        claim: "either",
-    });
-
-    const boundary = admit(req, policy({ maxOutstandingSats: 1_030n }), exposure, DUST, VTXO_MIN);
-    expect(boundary).toEqual({
-        ok: true,
-        topup: DUST,
-        fare: { currency: "sats", units: 1n },
-        claim: "either",
-    });
-    const overBoundary = admit(
-        req,
-        policy({ maxOutstandingSats: 1_029n }),
-        exposure,
-        DUST,
-        VTXO_MIN,
-    );
-    expect(overBoundary).toEqual({ ok: false, reason: "exceeds_max_outstanding" });
-
-    const perPayment = admit(
-        req,
-        policy({ maxPerPaymentTopupSats: 100n }),
-        exposure,
-        DUST,
-        VTXO_MIN,
-    );
-    expect(perPayment).toEqual({ ok: false, reason: "topup_exceeds_max_per_payment" });
-
-    // Headroom on the sats cap, or that check fires first and this proves nothing.
-    const concurrency = admit(
-        req,
-        policy({ maxConcurrentAdvances: 2, maxOutstandingSats: 10_000n }),
-        exposure,
-        DUST,
-        VTXO_MIN,
-    );
-    expect(concurrency).toEqual({ ok: false, reason: "max_concurrent_advances" });
-
-    const paused = admit(req, policy({ paused: true }), exposure, DUST, VTXO_MIN);
-    expect(paused).toEqual({ ok: false, reason: "paused" });
+liveScenario("exposure-cap-rejects-quote", async () => {
+    const live = await openLive();
+    try {
+        const first = await lock(
+            live,
+            await quoteFor(live, "receiverSats", await sizedSender(live)),
+        );
+        const nextCoin = await sizedSender(live);
+        const before = await admin("status");
+        expect(before.exposure.outstandingSats).toBe("1");
+        expect(before.exposure.activeCount).toBe(1);
+        await admin("policy", { maxOutstandingSats: "1" });
+        await expect(quoteFor(live, "receiverSats", nextCoin)).rejects.toMatchObject({
+            code: "exceeds_max_outstanding",
+        });
+        expect((await admin("status")).exposure).toEqual(before.exposure);
+        await admin("policy", { maxOutstandingSats: "2" });
+        const second = await lock(live, await quoteFor(live, "receiverSats", nextCoin));
+        expect((await admin("status")).exposure.outstandingSats).toBe("2");
+        for (const locked of [first, second]) {
+            const txid = await live.client.purchase(locked.transfer, locked.destination);
+            await terminal(live, locked, "purchased", txid);
+        }
+        expect((await admin("status")).exposure.outstandingSats).toBe("0");
+    } finally {
+        await admin("policy", { maxOutstandingSats: "10000000" });
+        await live.close();
+    }
 });

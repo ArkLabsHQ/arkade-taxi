@@ -6,7 +6,76 @@
  * which of six keys was wrong.
  */
 
-import type { FareWire, AssetIdWire, QuoteParams } from "./index.js";
+import type { FareWire, AssetIdWire, QuoteParams, CovenantSpendInputWire } from "./index.js";
+import type { FundingInputWire } from "./index.js";
+
+export interface FundingInputValue {
+    txid: string;
+    vout: number;
+    value: bigint;
+    tapTree: Uint8Array;
+    spendLeaf: Uint8Array;
+    assetPacket?: Uint8Array;
+    expiry: { kind: "time" | "height"; value: bigint };
+}
+
+export interface CovenantSpendInputValue {
+    txid: string;
+    vout: number;
+    value: bigint;
+    tapTree: Uint8Array;
+    tapLeafScript: [
+        { version: number; internalKey: Uint8Array; merklePath: Uint8Array[] },
+        Uint8Array,
+    ];
+    assetPacket?: Uint8Array;
+}
+
+export function fundingInputFromWire(input: unknown, label = "fundingInput"): FundingInputValue {
+    if (!input || typeof input !== "object" || Array.isArray(input)) fail(label, "expected object");
+    const w = input as FundingInputWire;
+    if (hexToBytes(w.txid, `${label}.txid`).length !== 32) fail(label, "txid must be 32 bytes");
+    if (!Number.isInteger(w.vout) || w.vout < 0 || w.vout > 0xffffffff) fail(label, "invalid vout");
+    const value = satsFromWire(w.value, `${label}.value`);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER))
+        fail(label, "value exceeds SDK safe integer range");
+    const tapTree = hexToBytes(w.tapTree, `${label}.tapTree`);
+    const spendLeaf = hexToBytes(w.spendLeaf, `${label}.spendLeaf`);
+    if (!tapTree.length || !spendLeaf.length) fail(label, "empty tree or leaf");
+    if (!w.expiry || (w.expiry.kind !== "time" && w.expiry.kind !== "height"))
+        fail(label, "invalid expiry kind");
+    const expiry = {
+        kind: w.expiry.kind,
+        value: satsFromWire(w.expiry.value, `${label}.expiry.value`),
+    };
+    if (expiry.value <= 0n || expiry.value > BigInt(Number.MAX_SAFE_INTEGER))
+        fail(label, "invalid expiry value");
+    return {
+        txid: w.txid,
+        vout: w.vout,
+        value,
+        tapTree,
+        spendLeaf,
+        expiry,
+        ...(w.assetPacket !== undefined
+            ? { assetPacket: hexToBytes(w.assetPacket, `${label}.assetPacket`) }
+            : {}),
+    };
+}
+
+export function fundingInputToWire(input: FundingInputValue): FundingInputWire {
+    const wire = {
+        txid: input.txid,
+        vout: input.vout,
+        value: satsToWire(input.value),
+        tapTree: bytesToHex(input.tapTree),
+        spendLeaf: bytesToHex(input.spendLeaf),
+        expiry: { kind: input.expiry.kind, value: satsToWire(input.expiry.value) },
+        ...(input.assetPacket !== undefined ? { assetPacket: bytesToHex(input.assetPacket) } : {}),
+    };
+    fundingInputFromWire(wire);
+    return wire;
+}
 
 /** Structurally identical to `@arkade-taxi/covenant`'s `AssetIdRef`, restated
  * so the wire package depends on nothing. */
@@ -33,6 +102,132 @@ const fail = (label: string, reason: string): never => {
 
 const HEX = /^[0-9a-f]*$/;
 const DECIMAL = /^[0-9]+$/;
+
+const exactKeys = (
+    value: Record<string, unknown>,
+    required: readonly string[],
+    optional: readonly string[],
+    label: string,
+): void => {
+    const allowed = new Set([...required, ...optional]);
+    for (const key of required)
+        if (!Object.prototype.hasOwnProperty.call(value, key)) fail(label, `missing ${key}`);
+    for (const key of Object.keys(value)) if (!allowed.has(key)) fail(label, `unexpected ${key}`);
+};
+
+const record = (input: unknown, label: string): Record<string, unknown> => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) fail(label, "expected object");
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) fail(label, "expected plain object");
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    for (const [key, descriptor] of Object.entries(descriptors))
+        if (!("value" in descriptor) || !descriptor.enumerable)
+            fail(label, `non-data property ${key}`);
+    return input as Record<string, unknown>;
+};
+
+const dataArray = (input: unknown, label: string): unknown[] => {
+    if (!Array.isArray(input)) fail(label, "expected array");
+    const array = input as unknown[];
+    if (Object.getPrototypeOf(array) !== Array.prototype) fail(label, "expected plain array");
+    const descriptors = Object.getOwnPropertyDescriptors(array);
+    const keys = Reflect.ownKeys(descriptors).filter((key) => key !== "length");
+    if (
+        keys.length !== array.length ||
+        keys.some(
+            (key) =>
+                typeof key !== "string" ||
+                !/^(0|[1-9][0-9]*)$/.test(key) ||
+                Number(key) >= array.length,
+        )
+    )
+        fail(label, "array shape is invalid");
+    return Array.from({ length: array.length }, (_, index) => {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable)
+            fail(label, `index ${index} must be an enumerable data property`);
+        return descriptor.value;
+    });
+};
+
+export function covenantSpendInputFromWire(
+    input: unknown,
+    label = "covenantSpendInput",
+): CovenantSpendInputValue {
+    const wire = record(input, label);
+    exactKeys(
+        wire,
+        ["txid", "vout", "value", "tapTree", "selectedLeaf", "controlBlock"],
+        ["assetPacket"],
+        label,
+    );
+    const txid = typeof wire.txid === "string" ? wire.txid : fail(label, "txid must be a string");
+    if (hexToBytes(txid, `${label}.txid`).length !== 32)
+        fail(label, "txid must be 32-byte lowercase hex");
+    const vout = typeof wire.vout === "number" ? wire.vout : fail(label, "vout must be a number");
+    if (!Number.isSafeInteger(vout) || vout < 0 || vout > 0xffffffff) fail(label, "invalid vout");
+    const value = satsFromWire(wire.value as string, `${label}.value`);
+    if (value <= 0n) fail(label, "value must be positive");
+    const tapTree = hexToBytes(wire.tapTree as string, `${label}.tapTree`);
+    const selectedLeaf = hexToBytes(wire.selectedLeaf as string, `${label}.selectedLeaf`);
+    if (!tapTree.length || selectedLeaf.length < 2) fail(label, "empty tree or leaf");
+    const control = record(wire.controlBlock, `${label}.controlBlock`);
+    exactKeys(control, ["version", "internalKey", "merklePath"], [], `${label}.controlBlock`);
+    const version =
+        typeof control.version === "number"
+            ? control.version
+            : fail(label, "control-block version must be a number");
+    if (!Number.isInteger(version) || version < 0 || version > 0xff)
+        fail(label, "invalid control-block version");
+    const internalKey = hexToBytes(
+        control.internalKey as string,
+        `${label}.controlBlock.internalKey`,
+    );
+    if (internalKey.length !== 32) fail(label, "control-block internal key must be 32 bytes");
+    const encodedMerklePath = dataArray(control.merklePath, `${label}.controlBlock.merklePath`);
+    const merklePath = encodedMerklePath.map((path: unknown, index: number) => {
+        const decoded = hexToBytes(path as string, `${label}.controlBlock.merklePath[${index}]`);
+        if (decoded.length !== 32) fail(label, "control-block merkle node must be 32 bytes");
+        return decoded;
+    });
+    if ((version & 0xfe) !== selectedLeaf[selectedLeaf.length - 1])
+        fail(label, "selected leaf version does not match control block");
+    const assetPacket =
+        wire.assetPacket === undefined
+            ? undefined
+            : hexToBytes(wire.assetPacket as string, `${label}.assetPacket`);
+    if (assetPacket !== undefined && !assetPacket.length) fail(label, "asset packet is empty");
+    return {
+        txid,
+        vout,
+        value,
+        tapTree,
+        tapLeafScript: [{ version, internalKey, merklePath }, selectedLeaf],
+        ...(assetPacket === undefined ? {} : { assetPacket }),
+    };
+}
+
+export function covenantSpendInputToWire(input: CovenantSpendInputValue): CovenantSpendInputWire {
+    const wire: CovenantSpendInputWire = {
+        txid: input.txid,
+        vout: input.vout,
+        value: satsToWire(input.value),
+        tapTree: bytesToHex(Uint8Array.from(input.tapTree)),
+        selectedLeaf: bytesToHex(Uint8Array.from(input.tapLeafScript[1])),
+        controlBlock: {
+            version: input.tapLeafScript[0].version,
+            internalKey: bytesToHex(Uint8Array.from(input.tapLeafScript[0].internalKey)),
+            merklePath: input.tapLeafScript[0].merklePath.map((path) =>
+                bytesToHex(Uint8Array.from(path)),
+            ),
+        },
+        ...(input.assetPacket === undefined
+            ? {}
+            : { assetPacket: bytesToHex(Uint8Array.from(input.assetPacket)) }),
+    };
+    covenantSpendInputFromWire(wire);
+    return wire;
+}
 
 export function hexToBytes(s: string, label: string): Uint8Array {
     if (typeof s !== "string") fail(label, `expected a hex string, got ${typeof s}`);

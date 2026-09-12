@@ -1,48 +1,52 @@
-/**
- * "Did my test run?", not "did the job pass?" — usage:
- *   node e2e/assert-ran.mjs [results.json]
- *
- * The expected skip count is read out of scenarios.ts, never restated, so the
- * gate and the manifest cannot drift apart.
- */
-
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const results = process.argv[2] ?? "e2e-results.json";
-const manifestPath = join(dirname(fileURLToPath(import.meta.url)), "scenarios.ts");
-
-const die = (msg) => {
-    console.error(`e2e: ${msg}`);
-    process.exit(1);
-};
-
-if (!existsSync(results)) die(`no result file at ${results} — the suite never ran`);
-
-const manifest = readFileSync(manifestPath, "utf8");
-const constant = (name) => {
-    // No backslashes: this string survives a YAML block scalar and a shell.
-    const m = manifest.match(new RegExp(name + "[^0-9]*([0-9]+)"));
-    if (!m) die(`${name} is missing from ${manifestPath}`);
-    return Number(m[1]);
-};
-
-const expectedSkipped = constant("EXPECTED_STACK_SCENARIOS");
-const expectedLive = constant("EXPECTED_LIVE_SCENARIOS");
-
-const r = JSON.parse(readFileSync(results, "utf8"));
-const skipped = r.numPendingTests + r.numTodoTests;
-
-const problems = [];
-if (r.numTotalTests === 0) problems.push("collected no tests at all");
-if (r.numFailedTests !== 0) problems.push(`${r.numFailedTests} failed`);
-if (skipped !== expectedSkipped) {
-    problems.push(`skipped ${skipped}, manifest declares ${expectedSkipped} blocked`);
-}
-if (r.numPassedTests < expectedLive) {
-    problems.push(`passed ${r.numPassedTests}, fewer than the ${expectedLive} scenarios that run`);
+export function validateResults(result, ids, integrityCount = 0) {
+    const problems = [];
+    if (result.success !== true) problems.push("suite did not succeed");
+    if (result.numFailedTests !== 0 || result.numPendingTests !== 0 || result.numTodoTests !== 0)
+        problems.push("failed, skipped or todo tests present");
+    const assertions = (result.testResults ?? []).flatMap((suite) => suite.assertionResults ?? []);
+    if (assertions.length !== ids.length + integrityCount)
+        problems.push(
+            `expected ${ids.length} scenarios and ${integrityCount} integrity assertions`,
+        );
+    if (result.numTotalTests !== assertions.length || result.numPassedTests !== assertions.length)
+        problems.push("reported test counts disagree with executed assertions");
+    const seen = new Map();
+    for (const assertion of assertions) {
+        const id = /^\[([^\]]+)\]/.exec(assertion.title ?? "")?.[1];
+        if (assertion.status !== "passed")
+            problems.push(`${id ?? assertion.title}: ${assertion.status}`);
+        if (!id) continue;
+        if (!ids.includes(id)) problems.push(`unknown scenario ${id}`);
+        seen.set(id, (seen.get(id) ?? 0) + 1);
+    }
+    for (const id of ids)
+        if (seen.get(id) !== 1)
+            problems.push(`${id}: expected once, observed ${seen.get(id) ?? 0}`);
+    return problems;
 }
 
-console.log(`e2e: ${r.numPassedTests} passed, ${skipped} skipped, ${r.numFailedTests} failed`);
-if (problems.length > 0) die(problems.join("; "));
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    try {
+        const manifest = readFileSync(
+            join(dirname(fileURLToPath(import.meta.url)), "scenarios.ts"),
+            "utf8",
+        );
+        const ids = [...manifest.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
+        const total = Number(/EXPECTED_TOTAL\s*=\s*(\d+)/.exec(manifest)?.[1]);
+        if (total !== 17 || ids.length !== total || new Set(ids).size !== total)
+            throw new Error("manifest must contain seventeen unique live scenarios");
+        const results = JSON.parse(readFileSync(process.argv[2] ?? "e2e-results.json", "utf8"));
+        const problems = validateResults(results, ids, 2);
+        if (problems.length) throw new Error(problems.join("; "));
+        console.log(
+            `e2e: ${ids.length} scenarios passed, 0 failed, 0 skipped; ${results.numPassedTests} total assertions`,
+        );
+    } catch (error) {
+        console.error(`e2e: ${error.message}`);
+        process.exitCode = 1;
+    }
+}

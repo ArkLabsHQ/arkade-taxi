@@ -1,5 +1,28 @@
 import type { ErrorResponse } from "@arkade-taxi/protocol";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
+import {
+    DatabaseBusyError,
+    PolicyRevisionConflictError,
+    RecoveryBudgetConflictError,
+} from "@arkade-taxi/db";
+import { LockupShapeError } from "./lockup.js";
+
+const SENSITIVE_LABEL =
+    /\b(?:(?:[a-z][a-z0-9]{0,31}[-_]){0,2}(?:secret|credential|token|password|cookie)|private[-_ ]?key|privkey|seed(?: phrase)?|mnemonic|signed[-_ ]?(?:psbt|transaction|tx)|psbt|api[-_ ]?key|authorization|bearer)\b/i;
+
+export function sanitizeOperationalError(error: unknown, fallback = "operation failed"): string {
+    if (!(error instanceof Error)) return fallback;
+    let message = error.message.split(/[\r\n]/, 1)[0]?.trim() || fallback;
+    message = message
+        .replace(/\b[5KL][1-9A-HJ-NP-Za-km-z]{50,51}\b/g, "[redacted]")
+        .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}\b/g, "[redacted]");
+    const sensitive = SENSITIVE_LABEL.exec(message);
+    if (sensitive) message = `${message.slice(0, sensitive.index)}${sensitive[0]}=[redacted]`;
+    message = message
+        .replace(/\b[0-9a-f]{64,}\b/gi, "[redacted]")
+        .replace(/\b[A-Za-z0-9+/]{80,}={0,2}\b/g, "[redacted]");
+    return message.slice(0, 256);
+}
 
 /** Stable machine-readable codes the client matches on. `ErrorResponse.error`
  * is prose and may change; these may not. */
@@ -8,12 +31,13 @@ export const ErrorCode = {
     NotFound: "not_found",
     InvalidState: "invalid_state",
     QuoteExpired: "quote_expired",
+    InvalidLockupSignature: "invalid_lockup_signature",
     LockupFailed: "lockup_failed",
     /** The advance could not be moved out of `locking`, which has no edge to any
      * terminal state. Operator-visible on purpose: it needs reconciling. */
     LockupStranded: "lockup_stranded",
     NoLocktimeHeadroom: "no_locktime_headroom",
-    /** A seam that is still waiting on a live arkd and emulator. */
+    /** Reserved wire code; no production handler emits it. */
     NotImplemented: "not_implemented",
     Internal: "internal_error",
 } as const;
@@ -33,6 +57,14 @@ export class ServiceError extends Error {
 
     static from(e: unknown): ServiceError {
         if (e instanceof ServiceError) return e;
+        if (e instanceof DatabaseBusyError)
+            return new ServiceError(e.code, 503, e.message, { cause: e });
+        if (e instanceof PolicyRevisionConflictError)
+            return new ServiceError(e.code, 409, e.message, { cause: e });
+        if (e instanceof RecoveryBudgetConflictError)
+            return new ServiceError(e.code, 503, e.message, { cause: e });
+        if (e instanceof LockupShapeError)
+            return new ServiceError(e.code, 503, e.message, { cause: e });
         if (e instanceof Error && e.message.startsWith("protocol: ")) {
             return new ServiceError(ErrorCode.InvalidRequest, 400, e.message, { cause: e });
         }

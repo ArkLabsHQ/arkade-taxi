@@ -14,6 +14,11 @@ const advance = (state: AdvanceState, topup: bigint, locktime: bigint): Advance 
     dust: 330n,
     topup,
     locktime,
+    recoveryLocktime: { kind: "height", value: locktime },
+    batchExpiry: { kind: "height", value: locktime + 500n },
+    operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
+    unsignedLockupTx: "unsigned",
+    unsignedLockupId: "bb".repeat(32),
     covenantAddress: "tark1qexample",
     fare: { currency: "sats", units: 10n },
     createdAt: 1_000,
@@ -22,6 +27,32 @@ const advance = (state: AdvanceState, topup: bigint, locktime: bigint): Advance 
 });
 
 describe("computeExposure", () => {
+    it("does not report a numeric oldest locktime across mixed expiry domains", () => {
+        const timed = {
+            ...advance("locked", 100n, 1757000000n),
+            recoveryLocktime: { kind: "time" as const, value: 1757000000n },
+            batchExpiry: { kind: "time" as const, value: 1757086400n },
+        };
+        const height = advance("locked", 200n, 800000n);
+        expect(computeExposure([timed, height])).toEqual({
+            outstandingSats: 300n,
+            lockedCount: 2,
+            oldestUnsweptLocktime: null,
+        });
+        expect(computeExposure([height, timed]).oldestUnsweptLocktime).toBeNull();
+    });
+    it("selects timestamp recovery only against chain median time", () => {
+        const timed: Advance = {
+            ...advance("locked", 330n, 1789132000n),
+            recoveryLocktime: { kind: "time", value: 1789132000n },
+            batchExpiry: { kind: "time", value: 1789132933n },
+        };
+        expect(sweepable([timed], 200n)).toEqual([]);
+        expect(sweepable([timed], 200n, 1789131999n)).toEqual([]);
+        expect(sweepable([timed], 200n, 1789132000n)).toEqual([timed]);
+        const height = advance("locked", 330n, 500n);
+        expect(sweepable([height], 499n, 1789132000n)).toEqual([]);
+    });
     it("reports zero exposure for no advances", () => {
         expect(computeExposure([])).toEqual({
             outstandingSats: 0n,
@@ -30,12 +61,13 @@ describe("computeExposure", () => {
         });
     });
 
-    it("sums topup over locked advances only", () => {
+    it("sums deployed topup including locking and recovering", () => {
         const advances = [
             advance("locked", 100n, 800_000n),
             advance("locked", 230n, 810_000n),
             advance("quoted", 999n, 700_000n),
             advance("locking", 999n, 700_000n),
+            advance("recovering", 50n, 700_000n),
             advance("recycled", 999n, 700_000n),
             advance("purchased", 999n, 700_000n),
             advance("refunded", 999n, 700_000n),
@@ -43,8 +75,8 @@ describe("computeExposure", () => {
             advance("expired", 999n, 700_000n),
         ];
         expect(computeExposure(advances)).toEqual({
-            outstandingSats: 330n,
-            lockedCount: 2,
+            outstandingSats: 1379n,
+            lockedCount: 4,
             oldestUnsweptLocktime: 800_000n,
         });
     });
@@ -86,6 +118,39 @@ describe("computeExposure", () => {
 });
 
 describe("sweepable", () => {
+    it("orders each tagged domain by batch expiry, locktime, and id without comparing domains", () => {
+        const heightLaterLock = {
+            ...advance("locked", 1n, 800_100n),
+            id: "height-b",
+            batchExpiry: { kind: "height" as const, value: 900_000n },
+        };
+        const heightEarlierExpiry = {
+            ...advance("locked", 1n, 800_200n),
+            id: "height-a",
+            batchExpiry: { kind: "height" as const, value: 899_000n },
+        };
+        const timed = {
+            ...advance("locked", 1n, 1_757_000_000n),
+            id: "time-a",
+            recoveryLocktime: { kind: "time" as const, value: 1_757_000_000n },
+            batchExpiry: { kind: "time" as const, value: 1_757_086_400n },
+        };
+
+        expect(
+            sweepable([timed, heightLaterLock, heightEarlierExpiry], 900_000n, 1_757_000_000n),
+        ).toEqual([heightEarlierExpiry, heightLaterLock, timed]);
+    });
+
+    it("uses id as the final deterministic tie breaker", () => {
+        const b = {
+            ...advance("locked", 1n, 800_000n),
+            id: "b",
+            batchExpiry: { kind: "height" as const, value: 900_000n },
+        };
+        const a = { ...b, id: "a" };
+        expect(sweepable([b, a], 900_000n).map((item) => item.id)).toEqual(["a", "b"]);
+    });
+
     it("returns nothing for no advances", () => {
         expect(sweepable([], 900_000n)).toEqual([]);
     });
@@ -104,6 +169,16 @@ describe("sweepable", () => {
 
     it("excludes an advance one block short of its locktime", () => {
         expect(sweepable([advance("locked", 1n, 900_001n)], 900_000n)).toEqual([]);
+    });
+
+    it("excludes missing and mismatched recovery locktime tags", () => {
+        const missing = { ...advance("locked", 1n, 1n), recoveryLocktime: undefined };
+        const mixed = {
+            ...advance("locked", 1n, 1n),
+            recoveryLocktime: { kind: "height" as const, value: 1n },
+            batchExpiry: { kind: "time" as const, value: 2_000_000_000n },
+        };
+        expect(sweepable([missing, mixed], 900_000n, 2_000_000_000n)).toEqual([]);
     });
 
     it.each([

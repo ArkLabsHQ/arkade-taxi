@@ -4,6 +4,9 @@
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
@@ -16,7 +19,9 @@
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*",
         "@arkade-taxi/protocol": "workspace:*",
-        "@arkade-os/sdk": "0.4.67",
-        "@scure/base": "^2.0.0"
+        "@arkade-os/sdk": "0.4.72",
+        "@noble/hashes": "^2.0.1",
+        "@scure/base": "^2.0.0",
+        "@scure/btc-signer": "2.0.1"
     }
 }

@@ -10,7 +10,10 @@ import type {
 } from "@arkade-taxi/protocol";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
+import { ServiceError } from "../src/errors.js";
+import { createServiceLifecycle } from "../src/lifecycle.js";
 import type { SweeperStatus } from "../src/sweeper.js";
+import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
     config,
     emulatorKey,
@@ -21,6 +24,8 @@ import {
     policy as basePolicy,
     quoteBody,
     serverKey,
+    quoteInfrastructure,
+    serverUnroll,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
 
@@ -30,30 +35,209 @@ const STALE_AFTER = 120;
 let advances: MemoryAdvances;
 let lockupBuilder: FakeLockupBuilder;
 let sweeperStatus: SweeperStatus;
+let reconcilerStatus: ReconcilerStatus;
 let clock: number;
 let ids: number;
 
 const okSweeper = (): SweeperStatus => ({
     lastTickAt: NOW,
     lastTickHeight: EXPIRY_HEIGHT,
-    recoveredTotal: 3,
+    lastTickMedianTime: BigInt(NOW),
+    recoverySubmittedTotal: 3,
     failedTotal: 0,
     lastError: null,
+    lastRecoveryError: null,
+    lockedCount: 2,
+    recoveringCount: 1,
+    lastSuccessfulObservationAt: NOW - 2,
+    lastSuccessfulRecoveryAt: NOW - 1,
+    nearestDeadline: {
+        height: {
+            advanceId: "adv-height",
+            kind: "height",
+            locktime: 850_000n,
+            batchExpiry: 900_000n,
+            remaining: 10_000n,
+            severity: "eligible",
+            code: "recovery_eligible",
+        },
+        time: null,
+    },
+    oldestUnsweptLocktime: { height: 850_000n, time: null },
+    blockers: [],
+    deadlines: [],
 });
 
 const deps = (over: Partial<Policy> = {}): RouteDeps => ({
+    ...quoteInfrastructure(advances, () => basePolicy(over)),
     advances,
-    policy: { get: () => basePolicy(over) },
     config: config(),
     now: () => clock,
     randomId: () => `adv-${++ids}`,
-    covenantExpiry: async () => EXPIRY_HEIGHT,
     lockupBuilder,
+    lockupSubmitter: lockupBuilder,
     sweeper: { status: () => sweeperStatus },
+    reconciler: { status: () => reconcilerStatus },
     sweeperStaleAfterSeconds: STALE_AFTER,
 });
 
 const app = (over: Partial<Policy> = {}) => createRoutes(deps(over));
+
+describe("runtime admission and readiness", () => {
+    it.each([
+        { blockers: [] },
+        { blockers: ["runtime_checking"] },
+        { blockers: ["runtime_stale"] },
+        { blockers: ["server_identity_mismatch"] },
+    ])(
+        "gates readiness and quotes on provider safety $blockers during a routine stream refresh",
+        async ({ blockers }) => {
+            let refreshing = false;
+            let enter!: () => void;
+            let release!: () => void;
+            const entered = new Promise<void>((resolve) => (enter = resolve));
+            const gate = new Promise<void>((resolve) => (release = resolve));
+            const lifecycle = createServiceLifecycle({
+                listen: async () => ({ stopAccepting() {}, finished: async () => {} }),
+                verifyRuntime: async () => {},
+                reconcile: async () => {},
+                firstRecoveryTick: async () => {},
+                startStreams: async () => {
+                    if (refreshing) {
+                        enter();
+                        await gate;
+                    }
+                },
+                startBackground() {},
+                stopBackground() {},
+                stopRuntime() {},
+                abort() {},
+                drain: async () => {},
+                disposeProviders: async () => {},
+                closeDatabase() {},
+                shutdownTimeoutMs: 50,
+                forceTerminate() {},
+            });
+            const routeDeps = deps();
+            const router = createRoutes({
+                ...routeDeps,
+                startup: lifecycle.status,
+                runtime: {
+                    ...routeDeps.runtime,
+                    assertAdmission: routeDeps.runtime!.assertAdmission,
+                    safety: () => ({ ...routeDeps.runtime!.safety(), blockers }),
+                },
+            });
+            await lifecycle.start();
+            await lifecycle.refresh();
+            refreshing = true;
+            const refresh = lifecycle.refresh();
+            await entered;
+            try {
+                const ready = await router.request("/ready");
+                expect(ready.status).toBe(blockers.length ? 503 : 200);
+                expect((await ready.json()).blockers).toEqual(blockers);
+                const quote = await router.request("/v1/transfers", {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(quoteBody()),
+                });
+                expect(quote.status).toBe(blockers.length ? 503 : 200);
+                expect(advances.rows.size).toBe(blockers.length ? 0 : 1);
+                expect(lockupBuilder.built).toHaveLength(blockers.length ? 0 : 1);
+            } finally {
+                release();
+                await refresh;
+            }
+        },
+    );
+
+    it("denies lockup admission after a provider becomes unsafe", async () => {
+        const quoteResponse = (await (
+            await post("/v1/transfers", quoteBody())
+        ).json()) as QuoteResponse;
+        const router = createRoutes({
+            ...deps(),
+            runtime: {
+                ...deps().runtime,
+                safety: () => ({
+                    checkedAt: 1000,
+                    chainHeight: null,
+                    chainTime: null,
+                    walletSynced: false,
+                    providerIdentityOk: false,
+                    blockers: ["server_identity_mismatch"],
+                }),
+                assertAdmission: async () => {
+                    throw new ServiceError("runtime_unsafe", 503, "server_identity_mismatch");
+                },
+            },
+        });
+        const response = await router.request(`/v1/transfers/${quoteResponse.transferId}/lockup`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ signedLockupTx: "signed" }),
+        });
+        expect(response.status).toBe(503);
+        expect(advances.get(quoteResponse.transferId)?.state).toBe("quoted");
+        expect(lockupBuilder.submitted).toHaveLength(0);
+    });
+    it("serves liveness but denies readiness and quotes while provider safety is unknown", async () => {
+        const router = createRoutes({
+            ...deps(),
+            runtime: {
+                ...deps().runtime,
+                safety: () => ({
+                    checkedAt: 1000,
+                    chainHeight: null,
+                    chainTime: null,
+                    walletSynced: false,
+                    providerIdentityOk: false,
+                    blockers: ["runtime_unchecked"],
+                }),
+                assertAdmission: async () => {
+                    throw new ServiceError("runtime_unsafe", 503, "runtime_unchecked");
+                },
+            },
+        });
+        expect((await router.request("/health")).status).toBe(200);
+        expect((await router.request("/ready")).status).toBe(503);
+        expect((await router.request("/v1/info")).status).toBe(200);
+        const quote = await router.request("/v1/transfers", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(quoteBody()),
+        });
+        expect(quote.status).toBe(503);
+        expect(advances.rows.size).toBe(0);
+        expect(lockupBuilder.built).toHaveLength(0);
+    });
+
+    it("denies a previously quoted lockup before startup completes without any effect", async () => {
+        const quoteResponse = (await (
+            await post("/v1/transfers", quoteBody())
+        ).json()) as QuoteResponse;
+        const router = createRoutes({
+            ...deps(),
+            startup: () => ({
+                phase: "reconciliation",
+                complete: false,
+                blocker: "startup_reconciliation_pending",
+            }),
+        });
+
+        const response = await router.request(`/v1/transfers/${quoteResponse.transferId}/lockup`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ signedLockupTx: "psbt" }),
+        });
+
+        expect(response.status).toBe(503);
+        expect((await response.json()) as ErrorResponse).toMatchObject({ code: "not_ready" });
+        expect(advances.get(quoteResponse.transferId)?.state).toBe("quoted");
+        expect(lockupBuilder.submitted).toHaveLength(0);
+    });
+});
 
 const post = (path: string, body: unknown, over: Partial<Policy> = {}) =>
     app(over).request(path, {
@@ -64,8 +248,9 @@ const post = (path: string, body: unknown, over: Partial<Policy> = {}) =>
 
 beforeEach(() => {
     advances = new MemoryAdvances();
-    lockupBuilder = new FakeLockupBuilder();
+    lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     sweeperStatus = okSweeper();
+    reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
     clock = NOW;
     ids = 0;
 });
@@ -90,7 +275,7 @@ describe("GET /v1/info", () => {
                     assetId: null,
                     enabled: true,
                     fares: [
-                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "8" } },
+                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "10" } },
                     ],
                     claim: "either",
                     maxTopupSats: null,
@@ -121,7 +306,7 @@ describe("POST /v1/transfers", () => {
         const body = (await res.json()) as QuoteResponse;
         expect(body.transferId).toBe("adv-1");
         expect(body.params.topup).toBe("330");
-        expect(body.fare.units).toBe("8");
+        expect(body.fare.units).toBe("10");
         expect(body.expiresAt).toBe(NOW + 60);
     });
 
@@ -160,11 +345,11 @@ describe("POST /v1/transfers/:id/lockup", () => {
         return ((await res.json()) as QuoteResponse).transferId;
     };
 
-    it("returns the txid and covenant outpoint", async () => {
+    it("returns 202 with the candidate txid and covenant outpoint until observed", async () => {
         const id = await quoted();
         const res = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
 
-        expect(res.status).toBe(200);
+        expect(res.status).toBe(202);
         expect((await res.json()) as LockupResponse).toEqual({
             txid: lockupBuilder.outpoint.txid,
             outpoint: lockupBuilder.outpoint,
@@ -177,13 +362,13 @@ describe("POST /v1/transfers/:id/lockup", () => {
         expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
     });
 
-    it("returns 409 for a transfer that is not quoted", async () => {
+    it("returns 202 for an exact duplicate while locking", async () => {
         const id = await quoted();
         await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
 
         const res = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
-        expect(res.status).toBe(409);
-        expect(((await res.json()) as ErrorResponse).code).toBe("invalid_state");
+        expect(res.status).toBe(202);
+        expect(((await res.json()) as LockupResponse).outpoint).toEqual(lockupBuilder.outpoint);
     });
 
     it("returns 400 when signedLockupTx is missing", async () => {
@@ -193,14 +378,14 @@ describe("POST /v1/transfers/:id/lockup", () => {
         expect(((await res.json()) as ErrorResponse).code).toBe("invalid_request");
     });
 
-    it("returns 502 when the submission fails, leaving the quote usable", async () => {
+    it("returns 202 when submission is ambiguous and keeps the advance locking", async () => {
         const id = await quoted();
         lockupBuilder.failSubmit = new Error("arkd refused");
 
         const res = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
-        expect(res.status).toBe(502);
-        expect(((await res.json()) as ErrorResponse).code).toBe("lockup_failed");
-        expect(advances.get(id)!.state).toBe("quoted");
+        expect(res.status).toBe(202);
+        expect(((await res.json()) as LockupResponse).outpoint).toEqual(lockupBuilder.outpoint);
+        expect(advances.get(id)!.state).toBe("locking");
     });
 
     it("decodes a url-encoded transfer id", async () => {
@@ -227,6 +412,31 @@ describe("GET /v1/transfers/:id", () => {
         const res = await app().request("/v1/transfers/nope");
         expect(res.status).toBe(404);
         expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
+    });
+
+    it("redacts persisted failure detail while preserving safe status identifiers", async () => {
+        const quote = (await (await post("/v1/transfers", quoteBody())).json()) as QuoteResponse;
+        const current = advances.get(quote.transferId)!;
+        const txid = "ab".repeat(32);
+        advances.update({
+            ...current,
+            state: "locking",
+            outpoint: { txid, vout: 2 },
+            failureCode: "lockup_submission_ambiguous",
+            failureDetail: "client_secret=never-reveal access_token=short-access-value",
+        });
+
+        const body = (await (
+            await app().request(`/v1/transfers/${quote.transferId}`)
+        ).json()) as TransferStatusResponse;
+
+        expect(body).toMatchObject({
+            state: "locking",
+            failureCode: "lockup_submission_ambiguous",
+            outpoint: { txid, vout: 2 },
+        });
+        expect(JSON.stringify(body)).not.toMatch(/never-reveal|short-access-value/);
+        expect(body.failureDetail).toContain("[redacted]");
     });
 });
 
@@ -259,6 +469,130 @@ describe("GET /health", () => {
 });
 
 describe("GET /ready", () => {
+    it("is 503 without both verified chain clocks even when providers report no other blocker", async () => {
+        const router = createRoutes({
+            ...deps(),
+            runtime: {
+                ...deps().runtime,
+                safety: () => ({
+                    checkedAt: NOW * 1000,
+                    chainHeight: null,
+                    chainTime: BigInt(NOW),
+                    walletSynced: true,
+                    providerIdentityOk: true,
+                    blockers: [],
+                }),
+                assertAdmission: async () => {},
+            },
+        });
+        expect((await router.request("/ready")).status).toBe(503);
+        expect((await router.request("/health")).status).toBe(200);
+    });
+
+    it("publishes tagged deadlines and blocks readiness on a critical covenant", async () => {
+        sweeperStatus = {
+            ...okSweeper(),
+            blockers: [
+                {
+                    advanceId: "critical",
+                    kind: "time",
+                    locktime: BigInt(NOW),
+                    batchExpiry: BigInt(NOW + 7_200),
+                    remaining: 7_200n,
+                    severity: "critical",
+                    code: "recovery_deadline_critical",
+                },
+            ],
+        };
+        const response = await app().request("/ready");
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({
+            sweeper: {
+                lockedCount: 2,
+                recoveringCount: 1,
+                lastTickMedianTime: NOW.toString(),
+                nearestDeadline: {
+                    height: { kind: "height", batchExpiry: "900000" },
+                    time: null,
+                },
+                oldestUnsweptLocktime: { height: "850000", time: null },
+                blockers: [
+                    {
+                        advanceId: "critical",
+                        kind: "time",
+                        batchExpiry: String(NOW + 7_200),
+                        severity: "critical",
+                    },
+                ],
+            },
+        });
+        expect((await app().request("/health")).status).toBe(200);
+    });
+
+    it("publishes null remaining when the matching chain clock is unavailable", async () => {
+        const unavailable = {
+            ...okSweeper().nearestDeadline.height!,
+            remaining: null,
+            code: "chain_height_unavailable",
+        };
+        sweeperStatus = {
+            ...okSweeper(),
+            nearestDeadline: { height: unavailable, time: null },
+            blockers: [unavailable],
+        };
+        expect(await (await app().request("/health")).json()).toMatchObject({
+            sweeper: {
+                nearestDeadline: { height: { remaining: null } },
+                blockers: [{ remaining: null }],
+            },
+        });
+    });
+
+    it("is 503 before the startup reconciler has completed catch-up", async () => {
+        reconcilerStatus = { lastTickAt: null, locking: 1, blockers: [] };
+        const res = await app().request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reconciler: { lastTickAt: null, locking: 1 },
+            reason: "the lockup reconciler has not completed a tick",
+        });
+    });
+
+    it("publishes cached watcher catch-up state with the reconciler", async () => {
+        reconcilerStatus = {
+            lastTickAt: NOW,
+            locking: 2,
+            blockers: [],
+            lastWatcherScanAt: NOW - 1,
+            watching: 3,
+        };
+
+        const body = await (await app().request("/health")).json();
+
+        expect(body.reconciler).toMatchObject({
+            lastTickAt: NOW,
+            locking: 2,
+            lastWatcherScanAt: NOW - 1,
+            watching: 3,
+        });
+    });
+
+    it("is 503 while a proved reserved-input conflict pauses lockup admission", async () => {
+        reconcilerStatus = {
+            lastTickAt: NOW,
+            locking: 1,
+            blockers: ["reserved_input_conflict"],
+        };
+        const res = await app().request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reconciler: { locking: 1, blockers: ["reserved_input_conflict"] },
+            reason: "reserved_input_conflict",
+        });
+    });
+
     it("is 503 once the last tick is older than the staleness bar", async () => {
         clock = NOW + STALE_AFTER + 1;
         const res = await app().request("/ready");
@@ -285,5 +619,36 @@ describe("GET /ready", () => {
         expect(await res.json()).toMatchObject({
             sweeper: { lastError: "emulator unreachable", failedTotal: 2 },
         });
+    });
+
+    it("sanitizes provider metadata and recovery failures at health boundaries", async () => {
+        const secret = "22".repeat(32);
+        sweeperStatus = { ...okSweeper(), lastError: `signed transaction=${secret}` };
+        const router = createRoutes({
+            ...deps(),
+            runtime: {
+                ...deps().runtime,
+                assertAdmission: async () => {},
+                safety: () => ({
+                    checkedAt: NOW,
+                    chainHeight: EXPIRY_HEIGHT,
+                    chainTime: BigInt(NOW),
+                    walletSynced: true,
+                    providerIdentityOk: true,
+                    blockers: [],
+                    provider: {
+                        network: `seed phrase=${secret}`,
+                        identityOk: true,
+                        serverPubkey: "aa".repeat(32),
+                        emulatorPubkey: "bb".repeat(32),
+                    },
+                }),
+            },
+        });
+
+        const body = await (await router.request("/health")).text();
+
+        expect(body).not.toContain(secret);
+        expect(body).toContain("[redacted]");
     });
 });

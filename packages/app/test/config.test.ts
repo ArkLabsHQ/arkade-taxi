@@ -7,6 +7,8 @@ const HEX32 = "11".repeat(32);
 
 const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
     TAXI_ARKD_URL: "https://arkd.example",
+    TAXI_INDEXER_URL: "https://indexer.example",
+    TAXI_ESPLORA_URL: "https://esplora.example/api",
     TAXI_EMULATOR_URL: "https://emulator.example",
     TAXI_OPERATOR_PRIVKEY: "03".repeat(32),
     TAXI_SERVER_PUBKEY: HEX32,
@@ -17,6 +19,54 @@ const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
 });
 
 describe("loadConfig", () => {
+    it("requires an explicit chain endpoint and orders time budgets independently", () => {
+        expect(() => loadConfig(env({ TAXI_ESPLORA_URL: undefined }))).toThrow(/TAXI_ESPLORA_URL/);
+        expect(() =>
+            loadConfig(
+                env({
+                    TAXI_RECOVERY_CRITICAL_SECONDS: "60",
+                    TAXI_RECOVERY_BROADCAST_SECONDS: "60",
+                }),
+            ),
+        ).toThrow(/TAXI_RECOVERY_CRITICAL_SECONDS/);
+        expect(() =>
+            loadConfig(
+                env({
+                    TAXI_RECOVERY_BROADCAST_SECONDS: "120",
+                    TAXI_MIN_EXPIRY_HEADROOM_SECONDS: "120",
+                }),
+            ),
+        ).toThrow(/TAXI_RECOVERY_BROADCAST_SECONDS/);
+    });
+    it("requires an explicit indexer endpoint rather than guessing its deployment", () => {
+        expect(() => loadConfig(env({ TAXI_INDEXER_URL: undefined }))).toThrow(/TAXI_INDEXER_URL/);
+        expect(loadConfig(env()).indexerUrl).toBe("https://indexer.example");
+    });
+
+    it("validates ordered recovery thresholds and exact reserve amounts", () => {
+        const cfg = loadConfig(env({ TAXI_OPERATOR_MIN_RESERVE_SATS: "9007199254740993" }));
+        expect(cfg.operatorMinReserveSats).toBe(9007199254740993n);
+        expect(cfg.recoveryCriticalBlocks < cfg.recoveryBroadcastBlocks).toBe(true);
+        expect(cfg.recoveryBroadcastBlocks < cfg.minExpiryHeadroomBlocks).toBe(true);
+        expect(() =>
+            loadConfig(
+                env({ TAXI_RECOVERY_CRITICAL_BLOCKS: "12", TAXI_RECOVERY_BROADCAST_BLOCKS: "12" }),
+            ),
+        ).toThrow(/TAXI_RECOVERY_CRITICAL_BLOCKS/);
+        expect(() =>
+            loadConfig(
+                env({
+                    TAXI_RECOVERY_BROADCAST_BLOCKS: "144",
+                    TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: "144",
+                }),
+            ),
+        ).toThrow(/TAXI_RECOVERY_BROADCAST_BLOCKS/);
+        for (const value of ["0", "-1", "1.5", "9007199254740993"]) {
+            expect(() => loadConfig(env({ TAXI_RECONCILE_INTERVAL_MS: value }))).toThrow(
+                /TAXI_RECONCILE_INTERVAL_MS/,
+            );
+        }
+    });
     it("applies defaults for the optional vars", () => {
         const cfg = loadConfig(env());
         expect(cfg.dbPath).toBe(":memory:");

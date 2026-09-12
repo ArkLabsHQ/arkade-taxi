@@ -5,6 +5,7 @@ import { verifyQuote } from "../src/verify.js";
 import {
     addressFor,
     args,
+    assetArgs,
     HRP,
     info,
     NOW,
@@ -45,14 +46,9 @@ describe("verifyQuote — happy path", () => {
     });
 
     it("accepts an asset quote when the caller asked for that asset", () => {
-        const p = { ...params(), assetId: asset };
-        const a = args();
-        const v = verifyQuote({
-            ...a,
-            quote: { ...quote(), params: quoteParamsToWire(p), covenantAddress: addressFor(p) },
-            expect: { ...a.expect, assetId: asset },
-        });
-        expect(v.params.assetId).toEqual(asset);
+        const a = assetArgs();
+        const v = verifyQuote(a);
+        expect(v.params.assetId).toEqual(a.expect.assetId);
     });
 });
 
@@ -235,6 +231,38 @@ describe("verifyQuote — independent address rebuild", () => {
             { quote: { ...quote(), params: { ...quoteParamsToWire(params()), topup: "0" } } },
             "INVALID_COVENANT_PARAMS",
         );
+    });
+});
+
+describe("verifyQuote — independent lockup rebuild", () => {
+    it("retains the decoded envelope and independently derived sender indexes", () => {
+        const verified = verifyQuote(args());
+        expect(verified.envelope.unsignedTxId).toBe(verified.quote.lockup.unsignedTxId);
+        expect(verified.senderInputIndexes).toEqual([0]);
+    });
+
+    it("rejects sender funding other than the caller authorized", () => {
+        const a = args();
+        a.senderInputs[0].value += 1n;
+        expect(() => verifyQuote(a)).toThrow();
+    });
+
+    it("rejects senderSats other than the funding sum and graph allocation", () => {
+        expect(() => verifyQuote({ ...args(), senderSats: 11n })).toThrow();
+    });
+
+    it("rejects an untrusted server unroll leaf", () => {
+        expect(() =>
+            verifyQuote({ ...args(), trustedServerUnrollScript: new Uint8Array([0x51]) }),
+        ).toThrow();
+    });
+
+    it("rejects an asset quantity other than the caller authorized", () => {
+        expect(() => verifyQuote({ ...assetArgs(), assetUnits: 1n })).toThrow();
+    });
+
+    it("rejects a lockup minimum inconsistent with advertised info", () => {
+        expect(() => verifyQuote({ ...args(), vtxoMinAmount: VTXO_MIN + 1n })).toThrow();
     });
 });
 

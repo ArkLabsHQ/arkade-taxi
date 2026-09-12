@@ -22,15 +22,6 @@
             <h1>arkade-taxi <span>operator console</span></h1>
             <div class="bar__right">
                 <span class="pill" id="service-state">loading</span>
-                <span class="field-label" id="actor-label">Actor</span>
-                <input
-                    type="text"
-                    id="actor"
-                    aria-labelledby="actor-label"
-                    placeholder="who is editing"
-                    autocomplete="username"
-                    spellcheck="false"
-                />
                 <button type="button" id="refresh">Refresh</button>
                 <span class="meta" id="updated">never updated</span>
             </div>
@@ -46,11 +37,11 @@
                     </div>
                     <dl class="satellites">
                         <div>
-                            <dt>Locked advances</dt>
+                            <dt>Active advances</dt>
                             <dd id="locked-count">—</dd>
                         </div>
                         <div>
-                            <dt>Oldest unswept locktime</dt>
+                            <dt>Oldest unswept (height / time)</dt>
                             <dd id="oldest-locktime">—</dd>
                         </div>
                         <div>
@@ -74,6 +65,43 @@
             </section>
 
             <dl class="states" id="states"></dl>
+
+            <section class="panel" aria-labelledby="readiness-heading">
+                <div class="panel__head">
+                    <h2 id="readiness-heading">Operational readiness</h2>
+                    <div class="actions">
+                        <button type="button" id="rescan">Rescan</button>
+                        <span class="meta" id="readiness-state">unknown</span>
+                    </div>
+                </div>
+                <dl class="states operational">
+                    <div>
+                        <dt>Startup phase</dt>
+                        <dd id="startup-phase">—</dd>
+                    </div>
+                    <div>
+                        <dt>Usable inventory</dt>
+                        <dd id="usable-inventory">—</dd>
+                    </div>
+                    <div>
+                        <dt>Reserved inventory</dt>
+                        <dd id="reserved-inventory">—</dd>
+                    </div>
+                    <div>
+                        <dt>Provider network</dt>
+                        <dd id="provider-network">—</dd>
+                    </div>
+                    <div>
+                        <dt>Height expiry</dt>
+                        <dd id="height-expiry">—</dd>
+                    </div>
+                    <div>
+                        <dt>Time expiry</dt>
+                        <dd id="time-expiry">—</dd>
+                    </div>
+                </dl>
+                <p class="note" id="readiness-blockers"></p>
+            </section>
 
             <div class="cols">
                 <section class="panel" aria-labelledby="policy-heading">
@@ -120,6 +148,10 @@
                                 <input type="number" id="locktimeMarginBlocks" min="0" step="1" />
                             </p>
                             <p class="field">
+                                <label for="locktimeMarginSeconds">Locktime margin (seconds)</label>
+                                <input type="number" id="locktimeMarginSeconds" min="0" step="1" />
+                            </p>
+                            <p class="field">
                                 <label for="quoteTtlSeconds">Quote TTL (seconds)</label>
                                 <input type="number" id="quoteTtlSeconds" min="1" step="1" />
                             </p>
@@ -159,7 +191,7 @@
                     <div class="scroll">
                         <table>
                             <caption class="sr-only">
-                                Advances, newest first
+                                Advances ordered by safety urgency in the current snapshot
                             </caption>
                             <thead>
                                 <tr>
@@ -169,12 +201,20 @@
                                     <th scope="col" class="n">Fee</th>
                                     <th scope="col" class="n">Locktime</th>
                                     <th scope="col" class="n">Age</th>
+                                    <th scope="col">Phase</th>
+                                    <th scope="col">Action</th>
                                     <th scope="col">Covenant</th>
                                 </tr>
                             </thead>
                             <tbody id="advances-body"></tbody>
                         </table>
                         <p class="empty" id="advances-empty" hidden>No advances.</p>
+                    </div>
+                    <div class="pagination">
+                        <p class="note" id="advances-note" aria-live="polite">
+                            Current snapshot pagination starts on refresh.
+                        </p>
+                        <button type="button" id="advances-more" hidden>Load more</button>
                     </div>
                 </section>
             </div>

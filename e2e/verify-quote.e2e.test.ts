@@ -1,110 +1,148 @@
 import { expect } from "vitest";
-import {
-    QuoteVerificationError,
-    VerificationErrorCode,
-    verifyQuote,
-    type VerifyQuoteArgs,
-} from "@arkade-taxi/client";
-import { bytesToHex } from "@arkade-taxi/protocol";
-import {
-    addressFor,
-    params,
-    rogueEmulatorKey,
-    rogueServerKey,
-    serverKey,
-    verifyArgs,
-} from "./fixtures.js";
+import { verifyQuote, VerificationErrorCode as Code } from "@arkade-taxi/client";
+import type { QuoteResponse } from "@arkade-taxi/protocol";
 import { liveScenario } from "./scenarios.js";
+import { lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
 
-const codeOf = (tamper: (a: VerifyQuoteArgs) => void): string => {
-    const a = verifyArgs();
-    tamper(a);
+liveScenario("verify-quote-rejects-tampered-params", async () => {
+    const live = await openLive();
     try {
-        verifyQuote(a);
-    } catch (e) {
-        if (e instanceof QuoteVerificationError) return e.code;
-        throw e;
-    }
-    throw new Error("verifyQuote accepted a quote it was given to reject");
-};
-
-liveScenario("verify-quote-rejects-tampered-params", () => {
-    // Control: the untampered quote verifies, so every rejection below is the
-    // tamper and not a broken fixture.
-    expect(verifyQuote(verifyArgs()).quote.transferId).toBe("tr_e2e_01");
-
-    // Params that still satisfy every explicit bound but derive a different
-    // address. Only the rebuild catches these.
-    expect(codeOf((a) => (a.quote.params.topup = "200"))).toBe(VerificationErrorCode.Address);
-    expect(codeOf((a) => (a.quote.params.locktime = "900000"))).toBe(VerificationErrorCode.Address);
-    expect(
-        codeOf(
-            (a) => (a.quote.covenantAddress = addressFor({ ...params(), dust: 400n, topup: 400n })),
-        ),
-    ).toBe(VerificationErrorCode.Address);
-
-    expect(codeOf((a) => (a.quote.params.receiverKey = bytesToHex(rogueEmulatorKey)))).toBe(
-        VerificationErrorCode.ReceiverKey,
-    );
-    expect(codeOf((a) => (a.quote.params.senderKey = bytesToHex(rogueEmulatorKey)))).toBe(
-        VerificationErrorCode.SenderKey,
-    );
-    expect(codeOf((a) => (a.quote.params.operatorKey = bytesToHex(rogueEmulatorKey)))).toBe(
-        VerificationErrorCode.OperatorKey,
-    );
-    expect(codeOf((a) => (a.quote.params.assetId = { txid: "ab".repeat(32), groupIndex: 0 }))).toBe(
-        VerificationErrorCode.AssetId,
-    );
-    expect(codeOf((a) => (a.quote.params.dust = "329"))).toBe(VerificationErrorCode.Dust);
-    expect(codeOf((a) => (a.quote.params.topup = "331"))).toBe(VerificationErrorCode.Topup);
-    expect(codeOf((a) => (a.quote.params.topup = "5"))).toBe(VerificationErrorCode.InvalidParams);
-    expect(codeOf((a) => (a.quote.fare = { currency: "sats", units: "11" }))).toBe(
-        VerificationErrorCode.Fee,
-    );
-
-    // Currency is part of the authorisation: a client that agreed to sats must
-    // not be charged the same number of some asset's units.
-    expect(
-        codeOf(
-            (a) =>
-                (a.quote.fare = {
-                    currency: "asset",
-                    units: "1",
-                    assetId: { txid: "99".repeat(32), groupIndex: 0 },
+        const offered = await quoteFor(live, "receiverSats", await sizedSender(live, true), true);
+        const mutations: [string, (quote: QuoteResponse) => void, string][] = [
+            [
+                "receiver",
+                (q) => {
+                    q.params.receiverKey = live.info.operatorKey;
+                },
+                Code.ReceiverKey,
+            ],
+            [
+                "sender",
+                (q) => {
+                    q.params.senderKey = live.info.operatorKey;
+                },
+                Code.SenderKey,
+            ],
+            [
+                "operator",
+                (q) => {
+                    q.params.operatorKey = q.params.senderKey;
+                },
+                Code.OperatorKey,
+            ],
+            [
+                "asset txid",
+                (q) => {
+                    q.params.assetId!.txid = "ff".repeat(32);
+                },
+                Code.AssetId,
+            ],
+            [
+                "asset group",
+                (q) => {
+                    q.params.assetId!.groupIndex += 1;
+                },
+                Code.AssetId,
+            ],
+            [
+                "dust",
+                (q) => {
+                    q.params.dust = "331";
+                },
+                Code.Dust,
+            ],
+            [
+                "topup",
+                (q) => {
+                    q.params.topup = "2";
+                },
+                Code.Topup,
+            ],
+            [
+                "locktime",
+                (q) => {
+                    q.params.locktime = "0";
+                },
+                Code.Locktime,
+            ],
+            [
+                "address",
+                (q) => {
+                    q.covenantAddress = live.fixture.sender.address;
+                },
+                Code.Address,
+            ],
+            [
+                "fare units",
+                (q) => {
+                    q.fare.units = "2";
+                },
+                Code.Fee,
+            ],
+            [
+                "fare currency",
+                (q) => {
+                    q.fare = { currency: "asset", units: "1", assetId: q.params.assetId };
+                },
+                Code.Fee,
+            ],
+            [
+                "expiry",
+                (q) => {
+                    q.expiresAt = 1;
+                },
+                Code.Expired,
+            ],
+        ];
+        for (const [name, mutate, code] of mutations) {
+            const quote = structuredClone(offered.quote);
+            mutate(quote);
+            expect(() => verifyQuote({ ...offered.args, quote }), name).toThrowError(
+                expect.objectContaining({ code }),
+            );
+        }
+        for (const field of ["serverKey", "emulatorKey"] as const) {
+            expect(() =>
+                verifyQuote({
+                    ...offered.args,
+                    info: { ...live.info, [field]: offered.quote.params.senderKey },
                 }),
-        ),
-    ).toBe(VerificationErrorCode.Fee);
-    expect(codeOf((a) => (a.quote.params.locktime = "600000"))).toBe(
-        VerificationErrorCode.Locktime,
-    );
-    expect(codeOf((a) => (a.now = a.quote.expiresAt))).toBe(VerificationErrorCode.Expired);
-    expect(codeOf((a) => (a.info.protocolVersion = 2))).toBe(VerificationErrorCode.ProtocolVersion);
-    expect(codeOf((a) => (a.info.serverKey = bytesToHex(rogueServerKey)))).toBe(
-        VerificationErrorCode.ServerKey,
-    );
-    expect(codeOf((a) => (a.info.emulatorKey = bytesToHex(rogueEmulatorKey)))).toBe(
-        VerificationErrorCode.EmulatorKey,
-    );
-
-    const rogueAddress = addressFor(params(), { serverKey, emulatorKey: rogueEmulatorKey });
-    expect(rogueAddress).not.toBe(addressFor(params()));
-
-    const forged = verifyArgs();
-    forged.info.emulatorKey = bytesToHex(rogueEmulatorKey);
-    forged.quote.covenantAddress = rogueAddress;
-
-    // Unpinned, the forgery verifies: the address the client re-derives is the
-    // address the operator quoted, because both used the operator's emulator.
-    const unpinned: VerifyQuoteArgs = { ...forged, trustedEmulatorKey: rogueEmulatorKey };
-    expect(verifyQuote(unpinned).quote.covenantAddress).toBe(rogueAddress);
-
-    // Pinned, it dies before the address is ever derived.
-    let rejected: unknown;
-    try {
-        verifyQuote(forged);
-    } catch (e) {
-        rejected = e;
+            ).toThrowError(
+                expect.objectContaining({
+                    code: field === "serverKey" ? Code.ServerKey : Code.EmulatorKey,
+                }),
+            );
+        }
+        for (const mutate of [
+            (q: QuoteResponse) => {
+                q.unsignedLockupTx = "cHNidP8BAA==";
+            },
+            (q: QuoteResponse) => {
+                q.lockup.covenantOutputIndex += 1;
+            },
+            (q: QuoteResponse) => {
+                q.lockup.unsignedTxId = "aa".repeat(32);
+            },
+            (q: QuoteResponse) => {
+                q.lockup.senderInputIndexes = [];
+            },
+            (q: QuoteResponse) => {
+                q.lockup.operatorInputIndexes = [];
+            },
+        ]) {
+            const quote = structuredClone(offered.quote);
+            mutate(quote);
+            expect(() => verifyQuote({ ...offered.args, quote })).toThrow();
+        }
+        expect(verifyQuote(offered.args).quote.transferId).toBe(offered.quote.transferId);
+        const locked = await lock(live, offered);
+        await terminal(
+            live,
+            locked,
+            "purchased",
+            await live.client.purchase(locked.transfer, locked.destination),
+        );
+    } finally {
+        await live.close();
     }
-    expect(rejected).toBeInstanceOf(QuoteVerificationError);
-    expect((rejected as QuoteVerificationError).code).toBe(VerificationErrorCode.EmulatorKey);
 });

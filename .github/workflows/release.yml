@@ -15,10 +15,14 @@ env:
     IMAGE: ${{ github.repository }}
 
 jobs:
+    e2e:
+        uses: ./.github/workflows/e2e.yml
+
     # The tag is vX.Y.Z; docker/metadata-action's {{version}} STRIPS the v, so the
     # image is ghcr.io/<owner>/arkade-taxi:X.Y.Z. Anything pinning :vX.Y.Z gets
     # `manifest unknown`.
     image:
+        needs: e2e
         runs-on: ubuntu-latest
         permissions:
             contents: read
@@ -53,11 +57,9 @@ jobs:
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
 
-    # Runs after the image so a failure here cannot block it. npm names are not
-    # claimed and a first publish is not undoable, so this is opt-in even on a tag.
     packages:
         if: ${{ inputs.dry_run != true && startsWith(github.ref, 'refs/tags/v') && vars.PUBLISH_PACKAGES == 'true' }}
-        needs: image
+        needs: [e2e, image]
         runs-on: ubuntu-latest
         permissions:
             contents: read

@@ -6,6 +6,9 @@ on:
     pull_request:
 
 jobs:
+    e2e:
+        uses: ./.github/workflows/e2e.yml
+
     gates:
         runs-on: ubuntu-latest
         steps:

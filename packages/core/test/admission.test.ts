@@ -45,6 +45,7 @@ const policy = (overrides: Partial<Policy> = {}): Policy => ({
     maxPerPaymentTopupSats: 1_000n,
     maxConcurrentAdvances: 10,
     locktimeMarginBlocks: 144,
+    locktimeMarginSeconds: 86400,
     assetRules: [rule(), rule({ assetId: USDT, fares: [ticketFare, cutFare] })],
     quoteTtlSeconds: 60,
     ...overrides,

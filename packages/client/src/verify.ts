@@ -3,7 +3,7 @@
  * the client is about to fund; nothing here trusts it.
  *
  * The address rebuild in step 8 is only meaningful because steps 2 and 3 pin
- * the Arkade Service and emulator keys against ones the caller already trusts.
+ * the Arkade operator and emulator keys against ones the caller already trusts.
  * An operator naming an emulator it controls would derive an address that
  * agrees with its own quote.
  */
@@ -12,11 +12,18 @@ import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covena
 import {
     PROTOCOL_VERSION,
     type AssetIdValue,
+    type FundingInputValue,
     type InfoResponse,
     type QuoteResponse,
 } from "@arkade-taxi/protocol";
 import { causeMessage, decodeInfo, decodeQuote } from "./decode.js";
 import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
+import {
+    immutablePlainCopy,
+    registerVerifiedQuote,
+    validateLockup,
+    type LockupEnvelope,
+} from "./lockup.js";
 
 declare const verified: unique symbol;
 
@@ -27,6 +34,8 @@ export type VerifiedQuote = {
     readonly quote: QuoteResponse;
     readonly params: DustCovenantParams;
     readonly script: DustCovenantScript;
+    readonly envelope: LockupEnvelope;
+    readonly senderInputIndexes: number[];
 } & { readonly [verified]: true };
 
 export interface QuoteExpectation {
@@ -52,6 +61,10 @@ export interface VerifyQuoteArgs {
     trustedEmulatorKey: Uint8Array;
     vtxoMinAmount: bigint;
     hrp: string;
+    senderInputs: FundingInputValue[];
+    senderSats: bigint;
+    assetUnits?: bigint;
+    trustedServerUnrollScript: Uint8Array;
     /** Unix seconds. Injected only so expiry is testable; defaults to the clock. */
     now?: number;
 }
@@ -81,6 +94,7 @@ const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" :
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
 export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
+    args = immutablePlainCopy(args, "quote verification request");
     const { expect, trustedServerKey, trustedEmulatorKey, vtxoMinAmount, hrp } = args;
 
     const info = rewrap(VerificationErrorCode.MalformedInfo, () => decodeInfo(args.info));
@@ -94,7 +108,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     if (!sameBytes(info.serverKey, trustedServerKey)) {
         reject(
             VerificationErrorCode.ServerKey,
-            "operator named an Arkade Service key you do not trust",
+            "operator named an Arkade operator key you do not trust",
         );
     }
     if (!sameBytes(info.emulatorKey, trustedEmulatorKey)) {
@@ -131,7 +145,6 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
             `quote dust ${params.dust} is not the advertised ${info.dust}`,
         );
     }
-
     if (params.topup > expect.maxTopupSats) {
         reject(
             VerificationErrorCode.Topup,
@@ -192,5 +205,30 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
         );
     }
 
-    return { quote: args.quote, params, script } as VerifiedQuote;
+    const lockupContext = {
+        params,
+        covenantScript: Uint8Array.from(script.pkScript),
+        fare: quote.fare,
+        senderInputs: args.senderInputs,
+        senderSats: args.senderSats,
+        ...(args.assetUnits !== undefined ? { assetUnits: args.assetUnits } : {}),
+        serverKey: trustedServerKey,
+        operatorKey: info.operatorKey,
+        trustedServerUnrollScript: args.trustedServerUnrollScript,
+        vtxoMinAmount,
+        hrp,
+    };
+    const validated = validateLockup({ quote: args.quote, ...lockupContext });
+    const result = Object.freeze({
+        quote: immutablePlainCopy(args.quote, "verified quote view"),
+        params: immutablePlainCopy(params, "verified parameters view"),
+        script,
+        envelope: immutablePlainCopy(validated.envelope, "verified envelope view"),
+        senderInputIndexes: immutablePlainCopy(
+            validated.envelope.senderInputIndexes,
+            "verified sender indexes view",
+        ),
+    }) as VerifiedQuote;
+    registerVerifiedQuote(result, args, lockupContext, validated);
+    return result;
 }

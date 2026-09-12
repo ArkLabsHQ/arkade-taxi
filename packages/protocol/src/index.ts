@@ -22,6 +22,12 @@ export {
     fareFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
+    fundingInputFromWire,
+    fundingInputToWire,
+    type FundingInputValue,
+    covenantSpendInputFromWire,
+    covenantSpendInputToWire,
+    type CovenantSpendInputValue,
 } from "./codec.js";
 
 export interface AssetIdWire {
@@ -79,6 +85,7 @@ export interface AssetRuleWire {
 }
 
 export interface QuoteRequestBody {
+    senderInputs: FundingInputWire[];
     receiverKey: string;
     senderKey: string;
     assetId?: AssetIdWire;
@@ -102,6 +109,7 @@ export interface QuoteParams {
 }
 
 export interface QuoteResponse {
+    lockup: LockupCommitment;
     transferId: string;
     params: QuoteParams;
     covenantAddress: string;
@@ -115,12 +123,45 @@ export interface QuoteResponse {
      * instant, never merely past it.
      */
     expiresAt: number;
-    /** Base64 PSBT with the operator's topup input already contributed. */
+    /** Base64 JSON envelope containing the joint PSBT and all checkpoint PSBTs. */
     unsignedLockupTx: string;
 }
 
+export interface FundingInputWire {
+    txid: string;
+    vout: number;
+    value: string;
+    tapTree: string;
+    spendLeaf: string;
+    /** Canonical SDK asset.Packet holdings: existing groups, no inputs/metadata,
+     * one output per group at this input's vout, sorted by asset ID. */
+    assetPacket?: string;
+    expiry: { kind: "time" | "height"; value: string };
+}
+
+export interface CovenantSpendInputWire {
+    txid: string;
+    vout: number;
+    value: string;
+    tapTree: string;
+    selectedLeaf: string;
+    controlBlock: {
+        version: number;
+        internalKey: string;
+        merklePath: string[];
+    };
+    assetPacket?: string;
+}
+
+export interface LockupCommitment {
+    covenantOutputIndex: number;
+    senderInputIndexes: number[];
+    operatorInputIndexes: number[];
+    unsignedTxId: string;
+}
+
 export interface LockupRequestBody {
-    /** Base64 PSBT with the sender's inputs signed. */
+    /** Base64 envelope with sender Ark inputs and owned checkpoints signed. */
     signedLockupTx: string;
 }
 
@@ -134,6 +175,9 @@ export interface TransferStatusResponse {
     state: string;
     outpoint?: { txid: string; vout: number };
     spentTxid?: string;
+    submissionPhase?: string;
+    failureCode?: string;
+    failureDetail?: string;
     updatedAt: number;
 }
 

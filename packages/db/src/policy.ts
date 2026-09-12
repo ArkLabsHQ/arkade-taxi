@@ -1,6 +1,7 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { AssetRule, Policy } from "@arkade-taxi/core";
 import { assetRulesFromJson, assetRulesToJson } from "./assetRules.js";
+import { assertNativeAccess } from "./coordination.js";
 
 export interface AuditRow {
     id: number;
@@ -25,6 +26,7 @@ export const DEFAULT_POLICY: Policy = {
     maxPerPaymentTopupSats: 0n,
     maxConcurrentAdvances: 0,
     locktimeMarginBlocks: 144,
+    locktimeMarginSeconds: 86400,
     assetRules: [],
     quoteTtlSeconds: 60,
 };
@@ -35,6 +37,7 @@ const COLUMN_OF = {
     maxPerPaymentTopupSats: "max_per_payment_topup_sats",
     maxConcurrentAdvances: "max_concurrent_advances",
     locktimeMarginBlocks: "locktime_margin_blocks",
+    locktimeMarginSeconds: "locktime_margin_seconds",
     assetRules: "asset_rules",
     quoteTtlSeconds: "quote_ttl_seconds",
 } as const satisfies Record<keyof Policy, string>;
@@ -45,11 +48,13 @@ type PolicyValue = Policy[keyof Policy];
 type Bound = string | number | bigint | null;
 
 interface PolicyRow {
+    revision: bigint;
     paused: bigint;
     max_outstanding_sats: bigint;
     max_per_payment_topup_sats: bigint;
     max_concurrent_advances: bigint;
     locktime_margin_blocks: bigint;
+    locktime_margin_seconds: bigint;
     asset_rules: string;
     quote_ttl_seconds: bigint;
 }
@@ -95,6 +100,7 @@ const fromRow = (r: PolicyRow): Policy => ({
     maxPerPaymentTopupSats: r.max_per_payment_topup_sats,
     maxConcurrentAdvances: Number(r.max_concurrent_advances),
     locktimeMarginBlocks: Number(r.locktime_margin_blocks),
+    locktimeMarginSeconds: Number(r.locktime_margin_seconds),
     assetRules: assetRulesFromJson(r.asset_rules),
     quoteTtlSeconds: Number(r.quote_ttl_seconds),
 });
@@ -109,6 +115,7 @@ export class PolicyRepository {
     readonly #setters = new Map<keyof Policy, Statement<[Bound]>>();
 
     constructor(db: Database) {
+        assertNativeAccess(db);
         this.#db = db;
         this.#get = db
             .prepare<[], PolicyRow>("SELECT * FROM policy WHERE id = 1")
@@ -136,12 +143,19 @@ export class PolicyRepository {
     }
 
     get(): Policy {
+        assertNativeAccess(this.#db);
+        return this.getSnapshot().policy;
+    }
+
+    getSnapshot(): PolicySnapshot {
+        assertNativeAccess(this.#db);
         const row = this.#get.get();
         if (!row) throw new Error("policy: row 1 is missing");
-        return fromRow(row);
+        return { policy: fromRow(row), revision: row.revision };
     }
 
     update(patch: Partial<Policy>, actor: string): Policy {
+        assertNativeAccess(this.#db);
         if (actor.trim() === "") throw new Error("policy: an edit must name its actor");
 
         const entries = Object.entries(patch).filter(([, v]) => v !== undefined) as [
@@ -154,28 +168,30 @@ export class PolicyRepository {
             }
         }
 
-        const current = this.get();
-        const changed = entries.filter(([f, v]) => !unchanged(current[f], v));
-        if (changed.length === 0) return current;
-
-        const changedAt = Date.now();
-        this.#db.transaction(() => {
-            for (const [field, value] of changed) {
-                this.#setters.get(field)!.run(encode(value));
-                this.#audit.run({
-                    changed_at: changedAt,
-                    field,
-                    old_value: serialize(current[field]),
-                    new_value: serialize(value),
-                    actor,
-                });
-            }
-        })();
-
-        return this.get();
+        return this.#db
+            .transaction(() => {
+                const current = this.get();
+                const changed = entries.filter(([f, v]) => !unchanged(current[f], v));
+                if (changed.length === 0) return current;
+                const changedAt = Date.now();
+                for (const [field, value] of changed) {
+                    this.#setters.get(field)!.run(encode(value));
+                    this.#audit.run({
+                        changed_at: changedAt,
+                        field,
+                        old_value: serialize(current[field]),
+                        new_value: serialize(value),
+                        actor,
+                    });
+                }
+                this.#db.prepare("UPDATE policy SET revision = revision + 1 WHERE id = 1").run();
+                return this.get();
+            })
+            .immediate();
     }
 
     history(limit: number): AuditRow[] {
+        assertNativeAccess(this.#db);
         return this.#history.all(limit).map((r) => ({
             id: Number(r.id),
             changedAt: Number(r.changed_at),
@@ -185,4 +201,23 @@ export class PolicyRepository {
             actor: r.actor,
         }));
     }
+
+    recordOperation(action: string, actor: string): void {
+        assertNativeAccess(this.#db);
+        if (!/^[a-z][a-z0-9-]{0,63}$/.test(action))
+            throw new Error("policy: invalid operation audit action");
+        if (actor.trim() === "") throw new Error("policy: an operation must name its actor");
+        this.#audit.run({
+            changed_at: Date.now(),
+            field: "operation",
+            old_value: "",
+            new_value: action,
+            actor,
+        });
+    }
+}
+
+export interface PolicySnapshot {
+    policy: Policy;
+    revision: bigint;
 }

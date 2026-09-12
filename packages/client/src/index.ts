@@ -13,6 +13,18 @@ export {
     type VerifiedQuote,
     type VerifyQuoteArgs,
 } from "./verify.js";
+export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup.js";
+export {
+    purchase,
+    recycle,
+    refund,
+    verifyCovenantTransfer,
+    CovenantSpendAmbiguousError,
+    type CovenantSpendConfig,
+    type CovenantTransfer,
+    type ReceiverWalletInput,
+    type VerifyCovenantTransferArgs,
+} from "./spend.js";
 export {
     decodeInfo,
     decodeLockup,
