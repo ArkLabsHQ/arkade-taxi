@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Seventeen live scenarios and two integrity assertions must all pass. Skips,
+Nineteen live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
@@ -14,6 +14,12 @@ Run the complete isolated stack harness:
 ```bash
 pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
+```
+
+Check registration integrity without starting network services:
+
+```bash
+pnpm vitest run --config vitest.e2e.config.ts e2e/suite-integrity.e2e.test.ts
 ```
 
 The harness shallow-clones unpinned `master`, discovers the current emulator
@@ -60,7 +66,7 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all seventeen
+- `assert-ran.mjs` validates Vitest's JSON report independently: all nineteen
   scenarios and both integrity assertions must pass with zero failures, skips,
   or todos.
 
@@ -72,15 +78,30 @@ client verification, persistent operator state, and restart reconciliation.
 It also covers lost submit responses, duplicate requests, stale provider
 identity, and warning/critical recovery deadlines before VTXO expiry.
 
+The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
+select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,
+verify and submit the sender lockup, and discover `locking` then `locked` through
+one SSE subscription containing two receiver addresses. Bob verifies the incoming
+claim independently, recycles 200 USDT with his own sats input, or purchases
+200 USDT after Alice authorizes 201 USDT and Taxi receives a 1 USDT fare output.
+Both flows check the indexed transaction graph and exact wallet balances.
+
+For these selected inputs Taxi advances 1 sat. The current covenant pins the
+recycle repayment to a 1-sat operator-key OP_RETURN receipt; the purchase fare
+also has a 1-sat OP_RETURN carrier. These outputs are verified in the indexed
+transactions and do not increase Taxi's spendable wallet balance. Public evidence
+in `receiver-sse-recycle.json` and `receiver-sse-purchase.json` includes the exact
+run project, asset IDs, base units, event order, and transaction IDs.
+
 Taxi guarantees recovery of its covenant VTXOs before batch expiry. The
 deployed Arkade Service's special covenant settlement is an external
 assumption; this suite exercises that deployment behavior and does not imply
 that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
-The registry's stable/latest version on 2026-09-12 is 0.4.72. The harness always
+The registry's stable/latest version on 2026-09-13 is 0.4.72. The harness always
 clones master afresh; read the tested SHA from the current `stack.json` and
-retain it with all 19 passing results. Capture the existing default project's
+retain it with all 21 passing assertions. Capture the existing default project's
 container, volume and network inventory before and after, and verify that no
 resources with the run's exact ownership labels remain after successful cleanup.
 

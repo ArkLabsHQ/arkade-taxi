@@ -37,8 +37,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         );
         const ids = [...manifest.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
         const total = Number(/EXPECTED_TOTAL\s*=\s*(\d+)/.exec(manifest)?.[1]);
-        if (total !== 17 || ids.length !== total || new Set(ids).size !== total)
-            throw new Error("manifest must contain seventeen unique live scenarios");
+        if (total !== 19 || ids.length !== total || new Set(ids).size !== total)
+            throw new Error("manifest must contain nineteen unique live scenarios");
         const results = JSON.parse(readFileSync(process.argv[2] ?? "e2e-results.json", "utf8"));
         const problems = validateResults(results, ids, 2);
         if (problems.length) throw new Error(problems.join("; "));

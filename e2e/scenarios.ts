@@ -16,6 +16,14 @@ export const SCENARIOS = [
     },
     { id: "purchase-receiver-holds-no-vtxo", title: "purchase into an empty receiver wallet" },
     { id: "subdust-bitcoin-recycle", title: "sub-dust bitcoin recycle" },
+    {
+        id: "receiver-sse-recycle",
+        title: "receiver SSE discovery verifies and recycles 200 USDT",
+    },
+    {
+        id: "receiver-sse-asset-fare-purchase",
+        title: "receiver SSE discovery purchases 200 USDT after a 1 USDT fare",
+    },
     { id: "sender-refund-before-locktime", title: "sender-signed refund before locktime" },
     {
         id: "premature-recovery-rejected",
@@ -63,7 +71,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 17;
+export const EXPECTED_TOTAL = 19;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);
