@@ -459,14 +459,15 @@ if (JSON.stringify(taxiE2ePortBindings) !== JSON.stringify(taxiE2eExpectedPortBi
   fail(\`${"${taxiE2eProvenance}"} published-port binding contract changed\`);
 }
 const taxiE2eBaseServices = ${JSON.stringify(baseServices)};
-async function refreshPublishedPorts(profiles, requiredServices, requiredNames) {
+async function refreshPublishedPorts(profiles, requiredServices, requiredNames, options = {}) {
+  const { attempts = 40, optional = false } = options;
   const required = new Set(requiredServices || taxiE2ePortBindings.map(([, service]) => service));
   const names = requiredNames ? new Set(requiredNames) : undefined;
   const selected = taxiE2ePortBindings.filter(([name, service]) => required.has(service) && (!names || names.has(name)));
   const pending = new Map(selected.map((binding) => [binding[0], binding]));
   const resolved = [];
   let last = {};
-  for (let attempt = 1; attempt <= 40; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     last = {};
     for (const [name, [, service, internal]] of pending) {
       const result = composePort(service, internal, profiles);
@@ -481,28 +482,38 @@ async function refreshPublishedPorts(profiles, requiredServices, requiredNames) 
     }
     if (!pending.size) {
       log(\`${"${taxiE2eProvenance}"} Resolved published ports: ${"${JSON.stringify(resolved)}"}\`);
-      return;
+      return true;
     }
-    if (attempt < 40) await sleep(250);
+    if (attempt < attempts) await sleep(250);
   }
-  fail(\`${"${taxiE2eProvenance}"} published-port refresh timed out after 40 attempts; last=${"${JSON.stringify(last)}"}\`);
+  if (optional) return false;
+  fail(\`${"${taxiE2eProvenance}"} published-port refresh timed out after ${"${attempts}"} attempts; last=${"${JSON.stringify(last)}"}\`);
 }
 
 async function waitForCurrentArkdAdmin(profiles) {
   let last;
   for (let attempt = 1; attempt <= 120; attempt++) {
-    await refreshPublishedPorts(profiles, undefined, ['ARKD_PORT', 'ARKD_ADMIN_PORT']);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    try {
-      const response = await fetch('http://127.0.0.1:' + process.env.ARKD_ADMIN_PORT + '/v1/admin/wallet/status', { signal: controller.signal });
-      await response.body?.cancel();
-      if (response.ok) return;
-      last = 'HTTP ' + response.status;
-    } catch (error) {
-      last = error instanceof Error ? error.message : String(error);
-    } finally {
-      clearTimeout(timer);
+    const portsReady = await refreshPublishedPorts(
+      profiles,
+      undefined,
+      ['ARKD_PORT', 'ARKD_ADMIN_PORT'],
+      { attempts: 1, optional: true },
+    );
+    if (!portsReady) {
+      last = 'published ports unavailable';
+    } else {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch('http://127.0.0.1:' + process.env.ARKD_ADMIN_PORT + '/v1/admin/wallet/status', { signal: controller.signal });
+        await response.body?.cancel();
+        if (response.ok) return;
+        last = 'HTTP ' + response.status;
+      } catch (error) {
+        last = error instanceof Error ? error.message : String(error);
+      } finally {
+        clearTimeout(timer);
+      }
     }
     if (attempt < 120) await sleep(3000);
   }

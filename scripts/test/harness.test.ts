@@ -56,7 +56,7 @@ import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS } from "../e2e-stack.mjs";
 import { expiryOf } from "../e2e-wallets.mjs";
 
-it("refreshes both rebound arkd ports until the current real HTTP admin endpoint is ready", async () => {
+it("survives transiently absent arkd ports and rebinds to the current admin endpoint", async () => {
     const readyServer = createServer((_request, response) => response.writeHead(200).end("ready"));
     let current = readyServer;
     const oldServer = createServer((_request, response) => {
@@ -106,11 +106,20 @@ it("refreshes both rebound arkd ports until the current real HTTP admin endpoint
         transformed.regtest.replace(/^import .*;$/m, ""),
     );
     let setupCalls = 0;
+    let portLookups = 0;
     try {
         await run(
             { env: environment },
-            () => ({ code: 0, stdout: `127.0.0.1:${(current.address() as AddressInfo).port}` }),
-            (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+            () => {
+                portLookups++;
+                if (portLookups <= 82)
+                    return { code: 1, stdout: "", stderr: "container is restarting" };
+                return {
+                    code: 0,
+                    stdout: `127.0.0.1:${(current.address() as AddressInfo).port}`,
+                };
+            },
+            async () => {},
             () => {},
             (message: string) => {
                 throw new Error(message);
@@ -130,6 +139,7 @@ it("refreshes both rebound arkd ports until the current real HTTP admin endpoint
             },
         );
         expect(setupCalls).toBe(1);
+        expect(portLookups).toBeGreaterThan(82);
         const port = String((readyServer.address() as AddressInfo).port);
         expect(environment.ARKD_ADMIN_PORT).toBe(port);
         expect(environment.ARKD_PORT).toBe(port);
@@ -730,11 +740,12 @@ describe("isolated regtest sources", () => {
         expect(transformed.regtest).toContain("TAXI_E2E_REGTEST_SHA");
         expect(transformed.regtest).toContain("TAXI_E2E_PROJECT");
         expect(transformed.regtest).toContain("published-port binding contract changed");
-        expect(transformed.regtest).toContain(
-            "await refreshPublishedPorts(profiles, undefined, ['ARKD_PORT', 'ARKD_ADMIN_PORT'])",
-        );
+        expect(transformed.regtest).toContain("{ attempts: 1, optional: true }");
+        expect(transformed.regtest).toContain("if (!portsReady)");
         expect(transformed.regtest).toContain("await waitForCurrentArkdAdmin(waveProfiles)");
-        expect(transformed.regtest).toContain("for (let attempt = 1; attempt <= 40; attempt++)");
+        expect(transformed.regtest).toContain(
+            "for (let attempt = 1; attempt <= attempts; attempt++)",
+        );
         expect(transformed.regtest).toContain("await sleep(250)");
         expect(transformed.regtest).toContain("last=${JSON.stringify(last)}");
         expect(transformed.regtest).not.toContain("http://localhost:${");
