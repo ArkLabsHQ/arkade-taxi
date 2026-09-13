@@ -21,6 +21,14 @@ carrier; the asset-bearing self-output is not quote inventory.
 Reserve accounting applies the same expiry headroom as quote funding. Reusing an
 asset carrier or other non-quoteable standard coin does not consume that reserve,
 so collection can continue while quote admission is already reserve-blocked.
+The collector rechecks current headroom and unreserved inventory before settlement
+and registration, including after restart. `proceeds_reserve_unavailable` retains
+the original job and reservations until sufficient safe reserve is available.
+Collection batches also respect the advertised `vtxoMaxAmount`: excess receipts
+wait for a later batch, and an oversized carrier is not selected. If no valid
+output fits, `proceeds_output_limit_exceeded` blocks submission. A previously
+authorized job that exceeds a changed limit stays reserved; do not edit its plan
+or clear reservations to bypass the blocker.
 
 Inspect `proceeds` in `/health`, or `readiness.proceeds` in `/admin/api/status`:
 it reports the active job,

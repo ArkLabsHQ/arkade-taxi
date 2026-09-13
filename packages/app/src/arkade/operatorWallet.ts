@@ -43,7 +43,7 @@ export function createOperatorRuntime(
     let activeAdmission: Promise<void> | undefined;
     let queuedRefresh: Promise<RuntimeSafety> | undefined;
     let settlement: Promise<void> | undefined;
-    let settlementGuard: (() => void) | undefined;
+    let settlementGuard: (() => void | Promise<void>) | undefined;
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -111,7 +111,7 @@ export function createOperatorRuntime(
                         ) => {
                             if (!settlementGuard)
                                 throw new Error("proceeds_submission_not_authorized");
-                            settlementGuard();
+                            await settlementGuard();
                             return providers.arkProvider.registerIntent(intent);
                         },
                     }),
@@ -295,7 +295,7 @@ export function createOperatorRuntime(
         stop,
         async withSettlement<T>(
             work: (wallet: Wallet) => Promise<T>,
-            guard: () => void,
+            guard: () => void | Promise<void>,
         ): Promise<T> {
             if (settlement) throw new Error("proceeds_worker_active");
             await refresh();

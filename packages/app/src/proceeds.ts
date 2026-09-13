@@ -35,6 +35,10 @@ const fail = (code: string): never => {
 };
 const total = (coins: readonly VirtualCoin[]) =>
     coins.reduce((sum, c) => sum + BigInt(c.value), 0n);
+const withinOutputLimit = (amount: bigint, maxAmount: bigint) => {
+    if (typeof maxAmount !== "bigint") fail("proceeds_output_limit_invalid");
+    return maxAmount < 0n || amount <= maxAmount;
+};
 const holdings = (coins: readonly VirtualCoin[]) => {
     const values = new Map<string, bigint>();
     for (const coin of coins)
@@ -65,6 +69,19 @@ const canonical = (c: ExtendedVirtualCoin, cfg: RuntimeConfig) => {
         );
     } catch {
         return false;
+    }
+};
+const reserveValue = (c: ExtendedVirtualCoin, cfg: RuntimeConfig, clock: TimeHeight) => {
+    if (c.assets?.length || !canSpendOffchain(c, clock)) return 0n;
+    try {
+        const expiry = normalizeExpiry(c);
+        const height = expiry.kind === "height";
+        const at = height ? clock.height : Math.floor(clock.timestamp.getTime() / 1000);
+        if (at === undefined || !Number.isSafeInteger(at)) return 0n;
+        const headroom = height ? cfg.minExpiryHeadroomBlocks : cfg.minExpiryHeadroomSeconds;
+        return expiry.value - BigInt(at) >= headroom ? BigInt(c.value) : 0n;
+    } catch {
+        return 0n;
     }
 };
 
@@ -151,6 +168,7 @@ export function planProceeds(
     fees: IntentFeeConfig,
     address: string,
     clock: TimeHeight,
+    maxAmount: bigint,
 ): CollectionPlan {
     const expectedAddress = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp);
     if (
@@ -178,45 +196,41 @@ export function planProceeds(
                 a.value - b.value ||
                 key(a).localeCompare(key(b)),
         );
-    let selected = [...receipts];
-    let fee = proceedsFee(selected, fees, hex.encode(expectedAddress.pkScript));
+    if (!withinOutputLimit(cfg.dust, maxAmount)) fail("proceeds_output_limit_exceeded");
+    const script = hex.encode(expectedAddress.pkScript);
+    const selected: ExtendedVirtualCoin[] = [];
+    for (const receipt of receipts) {
+        const projected = [...selected, receipt];
+        if (withinOutputLimit(total(projected) - proceedsFee(projected, fees, script), maxAmount))
+            selected.push(receipt);
+    }
+    if (!selected.length) fail("proceeds_output_limit_exceeded");
+    const collected = selected.map(outpoint);
+    let fee = proceedsFee(selected, fees, script);
     if (total(selected) - fee < cfg.dust) {
-        const reserveValue = (c: ExtendedVirtualCoin) => {
-            if (c.assets?.length) return 0n;
-            try {
-                const expiry = normalizeExpiry(c);
-                const height = expiry.kind === "height";
-                const at = height ? clock.height : Math.floor(clock.timestamp.getTime() / 1000);
-                if (at === undefined || !Number.isSafeInteger(at)) return 0n;
-                const headroom = height
-                    ? cfg.minExpiryHeadroomBlocks
-                    : cfg.minExpiryHeadroomSeconds;
-                return expiry.value - BigInt(at) >= headroom ? BigInt(c.value) : 0n;
-            } catch {
-                return 0n;
-            }
-        };
-        const reserve = available.reduce((sum, c) => sum + reserveValue(c), 0n);
+        const reserve = available.reduce((sum, c) => sum + reserveValue(c, cfg, clock), 0n);
+        let overLimit = false;
         const sponsor = available.find((c) => {
-            const projected = [...receipts, c];
-            const consumedReserve = reserveValue(c);
-            return (
-                (consumedReserve === 0n ||
-                    reserve - consumedReserve >= cfg.operatorMinReserveSats) &&
-                total(projected) -
-                    proceedsFee(projected, fees, hex.encode(expectedAddress.pkScript)) >=
-                    cfg.dust
-            );
+            const projected = [...selected, c];
+            const consumedReserve = reserveValue(c, cfg, clock);
+            if (consumedReserve > 0n && reserve - consumedReserve < cfg.operatorMinReserveSats)
+                return false;
+            const amount = total(projected) - proceedsFee(projected, fees, script);
+            if (amount < cfg.dust) return false;
+            if (withinOutputLimit(amount, maxAmount)) return true;
+            overLimit = true;
+            return false;
         });
-        if (!sponsor) fail("proceeds_reserve_unavailable");
+        if (!sponsor)
+            fail(overLimit ? "proceeds_output_limit_exceeded" : "proceeds_reserve_unavailable");
         selected.push(sponsor!);
-        fee = proceedsFee(selected, fees, hex.encode(expectedAddress.pkScript));
+        fee = proceedsFee(selected, fees, script);
     }
     if (fee > cfg.proceedsMaxFeeSats) fail("proceeds_fee_cap_exceeded");
     return {
         inputs: selected.map(outpoint),
         coins: selected.map(facts),
-        receipts: receipts.map(outpoint),
+        receipts: collected,
         address,
         amount: (total(selected) - fee).toString(),
         assets: holdings(selected),
@@ -419,6 +433,7 @@ export function createProceedsCollector(deps: Deps) {
                 info.fees?.intentFee ?? {},
                 await wallet.getAddress(),
                 { height: tip.height, timestamp: new Date(tip.time * 1000) },
+                info.vtxoMaxAmount,
             );
             if (stopped) return;
             jobs.create(randomUUID(), plan, now(), taxiLocks);
@@ -466,20 +481,82 @@ export function createProceedsCollector(deps: Deps) {
             }
         }, leaseMs / 3);
         try {
+            let guard: (submitting?: boolean) => Promise<ExtendedVirtualCoin[]>;
+            let prepared: ExtendedVirtualCoin[] | undefined;
             await runtime.withSettlement(
                 async (wallet) => {
-                    const coins = await wallet.getSpendableVtxos({ withRecoverable: true });
-                    const selected = plan.inputs.map((p) => coins.find((c) => key(c) === key(p))!);
-                    if (
-                        selected.some((c) => !c || !canonical(c, config)) ||
-                        !isDeepStrictEqual(selected.map(facts), plan.coins)
-                    )
-                        fail("proceeds_input_unavailable");
-                    const guard = async () => {
+                    guard = async (submitting = false) => {
                         if (stopped) fail("proceeds_stopped");
                         const verified = await verifyProviders(config, runtime.providers);
                         if (verified.blockers.length || !verified.info)
                             fail("proceeds_provider_unsafe");
+                        if (!withinOutputLimit(BigInt(plan.amount), verified.info!.vtxoMaxAmount))
+                            fail("proceeds_output_limit_exceeded");
+                        const [coins, tip, sdkLocks, current] = await Promise.all([
+                            wallet.getSpendableVtxos({ withRecoverable: true }),
+                            wallet.onchainProvider.getChainTip(),
+                            runtime.storage.intentRepository.getLockedVtxoOutpoints(),
+                            submitting
+                                ? runtime.providers.indexerProvider.getVtxos({
+                                      outpoints: plan.inputs,
+                                  })
+                                : undefined,
+                        ]);
+                        if (
+                            !Number.isSafeInteger(tip.height) ||
+                            tip.height < 0 ||
+                            !Number.isSafeInteger(tip.time) ||
+                            tip.time <= 0
+                        )
+                            fail("proceeds_chain_tip_invalid");
+                        if (new Set(coins.map(key)).size !== coins.length)
+                            fail("proceeds_duplicate_inventory");
+                        if (
+                            current &&
+                            (current.vtxos.length !== plan.inputs.length ||
+                                new Set(current.vtxos.map(key)).size !== plan.inputs.length ||
+                                plan.inputs.some(
+                                    (p) => !current.vtxos.some((c) => key(c) === key(p)),
+                                ))
+                        )
+                            fail("proceeds_inputs_missing");
+                        const selected = current
+                            ? prepared!.map((c) => ({
+                                  ...c,
+                                  ...current.vtxos.find((v) => key(v) === key(c))!,
+                              }))
+                            : plan.inputs.map((p) => coins.find((c) => key(c) === key(p))!);
+                        if (
+                            selected.some((c) => !c || !canonical(c, config)) ||
+                            !isDeepStrictEqual(selected.map(facts), plan.coins)
+                        )
+                            fail("proceeds_input_unavailable");
+                        const clock = { height: tip.height, timestamp: new Date(tip.time * 1000) };
+                        const receiptKeys = new Set(plan.receipts.map(key));
+                        const sponsor = selected.find((c) => !receiptKeys.has(key(c)));
+                        if (sponsor && !canSpendOffchain(sponsor, clock))
+                            fail("proceeds_input_unavailable");
+                        const locked = new Set(
+                            [
+                                ...reservations.listReservedOutpoints(),
+                                ...sdkLocks,
+                                ...plan.inputs,
+                            ].map(key),
+                        );
+                        const reserve = coins.reduce(
+                            (sum, c) =>
+                                sum +
+                                (!locked.has(key(c)) && canonical(c, config)
+                                    ? reserveValue(c, config, clock)
+                                    : 0n),
+                            0n,
+                        );
+                        if (
+                            sponsor &&
+                            reserveValue(sponsor, config, clock) > 0n &&
+                            reserve < config.operatorMinReserveSats
+                        )
+                            fail("proceeds_reserve_unavailable");
                         const fee = proceedsFee(
                             selected,
                             verified.info!.fees?.intentFee ?? {},
@@ -487,9 +564,11 @@ export function createProceedsCollector(deps: Deps) {
                         );
                         if (fee.toString() !== plan.fee || fee > BigInt(plan.maxFee))
                             fail("proceeds_fee_authorization_changed");
+                        if (stopped) fail("proceeds_stopped");
                         jobs.assertLease(id, owner, now());
+                        return selected;
                     };
-                    await guard();
+                    const selected = (prepared = await guard());
                     jobs.update(id, "settling", null, null);
                     const commitment = await wallet.settle({
                         inputs: selected,
@@ -498,9 +577,8 @@ export function createProceedsCollector(deps: Deps) {
                     jobs.update(id, "settling", "proceeds_output_pending", commitment);
                     await confirmOutput(id, plan, commitment);
                 },
-                () => {
-                    if (stopped) fail("proceeds_stopped");
-                    jobs.assertLease(id, owner, now());
+                async () => {
+                    await guard(true);
                 },
             );
         } finally {

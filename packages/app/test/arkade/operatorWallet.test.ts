@@ -42,6 +42,7 @@ function setup() {
     let taxiReserved: { txid: string; vout: number }[] = [];
     let reservationReadFails = false;
     let address = new ArkAddress(serverKey, operatorKey, "tark").encode();
+    let walletConfig: WalletConfig;
     const wallet = {
         getAddress: async () => address,
         getSpendableVtxos: async () => {
@@ -77,6 +78,7 @@ function setup() {
             emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
         },
         walletFactory: async (_cfg: WalletConfig) => {
+            walletConfig = _cfg;
             created++;
             return wallet as unknown as Wallet;
         },
@@ -88,6 +90,9 @@ function setup() {
     return {
         runtime,
         db,
+        get walletConfig() {
+            return walletConfig;
+        },
         setAddress: (value: string) => {
             address = value;
         },
@@ -137,6 +142,32 @@ function setup() {
 }
 
 describe("persistent operator runtime safety", () => {
+    it("awaits the current settlement guard before registering an intent", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let checking = false;
+        const work = s.runtime.withSettlement(
+            async () => s.walletConfig.arkProvider!.registerIntent({} as never),
+            async () => {
+                checking = true;
+                await gate;
+            },
+        );
+        try {
+            await vi.waitFor(() => expect(checking).toBe(true));
+            expect(register).not.toHaveBeenCalled();
+        } finally {
+            release();
+            await work;
+        }
+        expect(register).toHaveBeenCalledTimes(1);
+    });
     it("pins an active settlement wallet across provider refresh and drains before disposal", async () => {
         const s = setup();
         await s.runtime.refresh();

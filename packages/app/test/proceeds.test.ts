@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ArkAddress, Estimator } from "@arkade-os/sdk";
 import {
     openDatabase,
@@ -14,6 +17,7 @@ import {
     planProceeds,
     proceedsFee,
     reconcileProceeds,
+    type CollectionPlan,
 } from "../src/proceeds.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import { bytesToHex } from "@arkade-taxi/protocol";
@@ -28,32 +32,53 @@ const carrier = fundingCoin({ value: 2000 });
 const spare = fundingCoin({ value: 1000, vout: 1 });
 const address = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode();
 const clock = { height: 700000, timestamp: new Date("2026-09-12T00:00:00Z") };
-const makePlan = () => planProceeds([receipt], [carrier, spare], [], cfg, {}, address, clock);
+const makePlan = () => planProceeds([receipt], [carrier, spare], [], cfg, {}, address, clock, -1n);
 const databases: Database[] = [];
+const directories: string[] = [];
 afterEach(() => {
-    for (const db of databases.splice(0)) db.close();
+    for (const db of databases.splice(0)) if (db.open) db.close();
+    for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function setup() {
-    const db = openDatabase(":memory:");
+function setup(
+    plan: CollectionPlan = makePlan(),
+    inventory = [receipt, spare, carrier],
+    durable = false,
+) {
+    const directory = durable ? mkdtempSync(join(tmpdir(), "taxi-proceeds-replay-")) : undefined;
+    if (directory) directories.push(directory);
+    const dbPath = directory ? join(directory, "taxi.db") : ":memory:";
+    let db = openDatabase(dbPath);
     databases.push(db);
-    const jobs = new ProceedsRepository(db);
-    const plan = makePlan();
+    let jobs = new ProceedsRepository(db);
     jobs.create("job", plan, 100);
     let now = 100;
     let intents: any[] = [];
-    let coins = [receipt, spare];
-    let outputs = coins;
+    let sdkLocks: typeof plan.inputs = [];
+    let coins = plan.inputs.map((p) =>
+        inventory.find((c) => c.txid === p.txid && c.vout === p.vout)!,
+    );
+    let outputs = inventory;
+    let tip = { height: clock.height, time: Math.floor(clock.timestamp.getTime() / 1000) };
+    let submitGuard: (() => void | Promise<void>) | undefined;
+    let beforeSubmit = () => {};
     const info = arkInfo({ fees: { intentFee: {}, txFeeRate: "0" } });
-    const settle = vi.fn(async () => "cc".repeat(32));
+    const settle = vi.fn(async (_params: unknown) => "cc".repeat(32));
     const wallet = {
         getAddress: async () => address,
-        getSpendableVtxos: async () => outputs,
+        getSpendableVtxos: async () =>
+            outputs.filter((c) => !sdkLocks.some((p) => p.txid === c.txid && p.vout === c.vout)),
+        getVtxos: async () =>
+            outputs.filter((c) => !sdkLocks.some((p) => p.txid === c.txid && p.vout === c.vout)),
         arkProvider: { getInfo: async () => info },
         onchainProvider: {
-            getChainTip: async () => ({ height: 700000, time: Math.floor(Date.now() / 1000) }),
+            getChainTip: async () => tip,
         },
-        settle,
+        settle: async (params: unknown) => {
+            beforeSubmit();
+            await submitGuard?.();
+            return settle(params);
+        },
     };
     const runtime = {
         wallet,
@@ -68,32 +93,56 @@ function setup() {
         storage: {
             intentRepository: {
                 getIntents: async () => intents,
-                getLockedVtxoOutpoints: async () => [],
+                getLockedVtxoOutpoints: async () => sdkLocks,
             },
         },
         withSettlement: async (work: any, guard: any) => {
-            guard();
-            return work(wallet);
+            submitGuard = guard;
+            try {
+                return await work(wallet);
+            } finally {
+                submitGuard = undefined;
+            }
         },
     };
     const deps = {
         config: cfg,
         runtime,
-        jobs,
+        get jobs() {
+            return jobs;
+        },
         reservations: new ReservationRepository(db),
         advances: { byState: () => [] },
         now: () => now,
     } as unknown as Parameters<typeof createProceedsCollector>[0];
     return {
         deps,
-        jobs,
+        get jobs() {
+            return jobs;
+        },
         settle,
         info,
+        restartDatabase() {
+            db.close();
+            db = openDatabase(dbPath);
+            databases.push(db);
+            jobs = new ProceedsRepository(db);
+            deps.reservations = new ReservationRepository(db);
+        },
+        setTip(value: typeof tip) {
+            tip = value;
+        },
+        beforeSubmit(work: () => void) {
+            beforeSubmit = work;
+        },
         setNow(value: number) {
             now = value;
         },
         setIntents(value: any[]) {
             intents = value;
+        },
+        setSdkLocks(value: typeof sdkLocks) {
+            sdkLocks = value;
         },
         finish() {
             coins = coins.map((c) => ({ ...c, isSpent: true, settledBy: "cc".repeat(32) }));
@@ -102,7 +151,7 @@ function setup() {
                     value: Number(plan.amount),
                     txid: "dd".repeat(32),
                     commitmentTxIds: ["cc".repeat(32)],
-                    assets: [],
+                    assets: plan.assets.map((a) => ({ ...a, amount: BigInt(a.amount) })),
                 }),
             ];
         },
@@ -113,6 +162,53 @@ function setup() {
 }
 
 describe("proceeds planning", () => {
+    it("does not create a plan when every otherwise valid sponsor exceeds the output maximum", () => {
+        expect(() =>
+            planProceeds(
+                [receipt],
+                [{ ...carrier, value: 1000 }, spare],
+                [],
+                cfg,
+                {},
+                address,
+                clock,
+                1000n,
+            ),
+        ).toThrow("proceeds_output_limit_exceeded");
+    });
+    it("selects a fitting sponsor when the preferred asset carrier would exceed the maximum", () => {
+        const existing = { ...carrier, value: 1000, assets: [{ assetId: "a", amount: 5n }] };
+        const fitting = { ...spare, value: 999 };
+        const reserve = fundingCoin({ txid: "ee".repeat(32), value: 1000 });
+        const plan = planProceeds(
+            [receipt],
+            [existing, fitting, reserve],
+            [],
+            cfg,
+            {},
+            address,
+            clock,
+            1000n,
+        );
+        expect(plan.amount).toBe("1000");
+        expect(plan.inputs).toEqual([
+            { txid: receipt.txid, vout: 0 },
+            { txid: spare.txid, vout: 1 },
+        ]);
+        expect(plan.assets).toEqual([]);
+    });
+    it("defers excess receipts to keep individually valid inputs within one output's maximum", () => {
+        const first = { ...receipt, value: 600, assets: [{ assetId: "a", amount: 7n }] };
+        const second = { ...receipt, vout: 1, value: 600, assets: [{ assetId: "b", amount: 8n }] };
+        const plan = planProceeds([first, second], [], [], cfg, {}, address, clock, 1000n);
+        expect(plan.amount).toBe("600");
+        expect(plan.receipts).toEqual([{ txid: first.txid, vout: 0 }]);
+        expect(plan.inputs).toEqual(plan.receipts);
+        expect(plan.assets).toEqual([{ assetId: "a", amount: "7" }]);
+        const next = planProceeds([second], [], [], cfg, {}, address, clock, 1000n);
+        expect(next.amount).toBe("600");
+        expect(next.assets).toEqual([{ assetId: "b", amount: "8" }]);
+    });
     it("quotes height-based expiry with the same fee parameters as SDK 0.4.72", () => {
         const fee = vi.spyOn(Estimator.prototype, "evalOffchainInput");
         try {
@@ -135,9 +231,9 @@ describe("proceeds planning", () => {
         expect(plan.maxFee).toBe("0");
     });
     it("never spends reserved or foreign sponsors", () => {
-        expect(() => planProceeds([receipt], [spare], [spare], cfg, {}, address, clock)).toThrow(
-            /reserve/,
-        );
+        expect(() =>
+            planProceeds([receipt], [spare], [spare], cfg, {}, address, clock, -1n),
+        ).toThrow(/reserve/);
         expect(() =>
             planProceeds(
                 [receipt],
@@ -147,6 +243,7 @@ describe("proceeds planning", () => {
                 {},
                 address,
                 clock,
+                -1n,
             ),
         ).toThrow(/reserve/);
     });
@@ -159,7 +256,7 @@ describe("proceeds planning", () => {
                 { assetId: "a", amount: 5n },
             ],
         };
-        const plan = planProceeds([received], [spare, existing], [], cfg, {}, address, clock);
+        const plan = planProceeds([received], [spare, existing], [], cfg, {}, address, clock, -1n);
         expect(plan.inputs).toEqual([
             { txid: receipt.txid, vout: 0 },
             { txid: existing.txid, vout: 0 },
@@ -188,7 +285,16 @@ describe("proceeds planning", () => {
                           ),
                       }),
             });
-            const plan = planProceeds([receipt], [safe, expiring], [], cfg, {}, address, clock);
+            const plan = planProceeds(
+                [receipt],
+                [safe, expiring],
+                [],
+                cfg,
+                {},
+                address,
+                clock,
+                -1n,
+            );
             expect(plan.inputs).toEqual([
                 { txid: receipt.txid, vout: 0 },
                 { txid: expiring.txid, vout: 0 },
@@ -198,14 +304,14 @@ describe("proceeds planning", () => {
     );
     it("can collect with an asset carrier without consuming an already depleted quote reserve", () => {
         const existing = fundingCoin({ value: 1000, assets: [{ assetId: "a", amount: 2n }] });
-        const plan = planProceeds([receipt], [existing], [], cfg, {}, address, clock);
+        const plan = planProceeds([receipt], [existing], [], cfg, {}, address, clock, -1n);
         expect(plan.amount).toBe("1001");
         expect(plan.assets).toEqual([{ assetId: "a", amount: "2" }]);
     });
     it("rejects duplicate ordinary inventory instead of inflating the spare reserve", () => {
-        expect(() => planProceeds([receipt], [spare, spare], [], cfg, {}, address, clock)).toThrow(
-            /duplicate/,
-        );
+        expect(() =>
+            planProceeds([receipt], [spare, spare], [], cfg, {}, address, clock, -1n),
+        ).toThrow(/duplicate/);
     });
     it("preserves every asset group exactly and rejects unexpected payout ownership", () => {
         const assets = [
@@ -220,6 +326,7 @@ describe("proceeds planning", () => {
             {},
             address,
             clock,
+            -1n,
         );
         expect(plan.assets).toEqual([
             { assetId: "a", amount: "3" },
@@ -234,6 +341,7 @@ describe("proceeds planning", () => {
                 {},
                 address,
                 clock,
+                -1n,
             ),
         ).toThrow(/ownership/);
     });
@@ -247,6 +355,7 @@ describe("proceeds planning", () => {
                 { offchainInput: "1.0" },
                 address,
                 clock,
+                -1n,
             ),
         ).toThrow(/fee_cap/);
         const plan = planProceeds(
@@ -257,6 +366,7 @@ describe("proceeds planning", () => {
             { offchainInput: "1.0" },
             address,
             clock,
+            -1n,
         );
         expect(plan.fee).toBe("2");
         expect(plan.amount).toBe("999");
@@ -308,6 +418,110 @@ describe("proceeds restart reconciliation", () => {
 });
 
 describe("durable proceeds collector", () => {
+    it.each(["sponsor", "accumulated receipts"])(
+        "does not call SDK settlement for a persisted %s plan exceeding the current maximum",
+        async (kind) => {
+            const receipts = [
+                { ...receipt, value: 600 },
+                { ...receipt, value: 600, vout: 1 },
+            ];
+            const plan =
+                kind === "sponsor"
+                    ? makePlan()
+                    : planProceeds(receipts, [], [], cfg, {}, address, clock, -1n);
+            const s = kind === "sponsor" ? setup(plan) : setup(plan, receipts);
+            s.info.vtxoMaxAmount = 1000n;
+            const collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
+            expect(s.settle).not.toHaveBeenCalled();
+            expect(
+                await s.deps.runtime.storage.intentRepository.getIntents({
+                    containingInputs: plan.inputs,
+                }),
+            ).toEqual([]);
+            expect(s.jobs.active()?.plan).toEqual(plan);
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        },
+    );
+    it("blocks registration if the advertised maximum shrinks after preflight", async () => {
+        const s = setup();
+        s.beforeSubmit(() => {
+            s.info.vtxoMaxAmount = 1000n;
+        });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+    it("revalidates exact canonical inputs when the SDK pending spend hides them from wallet reads", async () => {
+        const s = setup();
+        s.beforeSubmit(() => s.setSdkLocks(makePlan().inputs));
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+        expect(collector.status().blocker).toBe("proceeds_output_pending");
+    });
+    it.each(["height", "time"])(
+        "rechecks protected sponsor reserve after persisted %s headroom crosses on restart",
+        async (kind) => {
+            const assetReceipt = { ...receipt, assets: [{ assetId: "a", amount: 1000000n }] };
+            const expiring = {
+                ...carrier,
+                ...(kind === "height"
+                    ? { expiresAtHeight: 700144 }
+                    : {
+                          expiresAtHeight: undefined,
+                          expiresAt: new Date(clock.timestamp.getTime() + 86400000),
+                      }),
+            };
+            const plan = planProceeds(
+                [assetReceipt],
+                [spare, expiring],
+                [],
+                cfg,
+                {},
+                address,
+                clock,
+                -1n,
+            );
+            expect(plan.inputs).toEqual([
+                { txid: receipt.txid, vout: 0 },
+                { txid: spare.txid, vout: 1 },
+            ]);
+            const s = setup(plan, [assetReceipt, spare, expiring], true);
+            createProceedsCollector(s.deps).stop();
+            s.restartDatabase();
+            s.setTip({ height: 700001, time: Math.floor(clock.timestamp.getTime() / 1000) + 1 });
+            const collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            expect(collector.status().blocker).toBe("proceeds_reserve_unavailable");
+            expect(s.jobs.active()?.plan).toEqual(plan);
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+            expect(s.settle).not.toHaveBeenCalled();
+            s.setOutputs([
+                assetReceipt,
+                spare,
+                expiring,
+                fundingCoin({ value: 1000, txid: "ee".repeat(32) }),
+            ]);
+            await collector.tick();
+            expect(s.settle).toHaveBeenCalledTimes(1);
+        },
+    );
+    it("rechecks reserve at the registration boundary after the preflight was safe", async () => {
+        const expiring = { ...carrier, expiresAtHeight: 700144 };
+        const s = setup(makePlan(), [receipt, spare, expiring]);
+        s.beforeSubmit(() =>
+            s.setTip({ height: 700001, time: Math.floor(clock.timestamp.getTime() / 1000) }),
+        );
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_reserve_unavailable");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        expect(s.settle).not.toHaveBeenCalled();
+    });
     it("verifies an immediately indexed self-output before returning from settlement", async () => {
         const s = setup();
         s.settle.mockImplementation(async () => {
