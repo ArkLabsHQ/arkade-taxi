@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, resolveRuntimeConfig } from "../src/config.js";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { operatorKey } from "./fixtures.js";
+import { ArkAddress, DefaultVtxo, SingleKey } from "@arkade-os/sdk";
+import { emulatorKey, operatorPrivkey, serverKey } from "./fixtures.js";
+import { arkInfo } from "./arkade/fixtures.js";
 
 const HEX32 = "11".repeat(32);
 
@@ -19,6 +21,14 @@ const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
 });
 
 describe("loadConfig", () => {
+    it("defaults proceeds fee authorization to zero and accepts only non-negative integers", () => {
+        expect(loadConfig(env()).proceedsMaxFeeSats).toBe(0n);
+        expect(loadConfig(env({ TAXI_PROCEEDS_MAX_FEE_SATS: "12" })).proceedsMaxFeeSats).toBe(12n);
+        for (const value of ["-1", "0.5", "NaN", "1e3", ""])
+            expect(() => loadConfig(env({ TAXI_PROCEEDS_MAX_FEE_SATS: value }))).toThrow(
+                /TAXI_PROCEEDS_MAX_FEE_SATS/,
+            );
+    });
     it("requires an explicit chain endpoint and orders time budgets independently", () => {
         expect(() => loadConfig(env({ TAXI_ESPLORA_URL: undefined }))).toThrow(/TAXI_ESPLORA_URL/);
         expect(() =>
@@ -175,9 +185,46 @@ describe("aggregated validation", () => {
 });
 
 describe("resolveRuntimeConfig", () => {
-    it("derives the operator x-only pubkey from the privkey", async () => {
-        const cfg = await resolveRuntimeConfig(loadConfig(env()));
-        expect(cfg.operatorKey).toEqual(operatorKey);
-        expect(cfg.dust).toBe(330n);
+    const configured = () =>
+        loadConfig(
+            env({
+                TAXI_SERVER_PUBKEY: bytesToHex(serverKey),
+                TAXI_EMULATOR_PUBKEY: bytesToHex(emulatorKey),
+                TAXI_ADDRESS_HRP: "tark",
+            }),
+        );
+    const providers = (info = arkInfo()) => ({
+        arkProvider: { getInfo: async () => info },
+        emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+    });
+
+    it.each([5n, 1024n])(
+        "derives the canonical wallet payout separately from its signer at delay %s",
+        async (delay) => {
+            const signer = await SingleKey.fromPrivateKey(operatorPrivkey).xOnlyPublicKey();
+            const tree = new DefaultVtxo.Script({
+                pubKey: signer,
+                serverPubKey: serverKey,
+                csvTimelock: { value: delay, type: delay < 512n ? "blocks" : "seconds" },
+            });
+            const cfg = await resolveRuntimeConfig(
+                configured(),
+                providers(arkInfo({ unilateralExitDelay: delay })),
+            );
+            expect(cfg.operatorKey).toEqual(
+                ArkAddress.decode(tree.address("tark", serverKey).encode()).vtxoTaprootKey,
+            );
+            expect(cfg.operatorKey).not.toEqual(signer);
+            expect(cfg.operatorSignerKey).toEqual(signer);
+        },
+    );
+
+    it("does not derive a payout from an unverified provider identity", async () => {
+        await expect(
+            resolveRuntimeConfig(
+                configured(),
+                providers(arkInfo({ signerPubkey: bytesToHex(emulatorKey) })),
+            ),
+        ).rejects.toThrow(/server_identity_mismatch/);
     });
 });

@@ -7,6 +7,36 @@ budget runs out. The deployed Arkade Service's special covenant settlement is
 an external assumption. Taxi does not implement that settlement, and a
 dedicated upstream forfeit mechanism is outside this service's scope.
 
+Operator proceeds are separate: a background collector validates fare and
+repayment receipts against terminal persisted advances and consolidates only
+those canonical wallet receipts, plus an ordinary unreserved operator coin
+when required. It uses SDK `Wallet.settle`, preserves all asset groups and
+never spends a covenant, sender or receiver input. Keep spare bitcoin-only
+VTXOs above `TAXI_OPERATOR_MIN_RESERVE_SATS` available for carrier consolidation.
+Collection prefers an existing spendable asset-bearing operator carrier, retaining
+every asset group, before using bitcoin-only reserve. This avoids progressively
+turning quoteable reserve into separate asset carriers. Keep distinct bitcoin-only
+coins for quote funding and the minimum reserve after creating the first asset
+carrier; the asset-bearing self-output is not quote inventory.
+Reserve accounting applies the same expiry headroom as quote funding. Reusing an
+asset carrier or other non-quoteable standard coin does not consume that reserve,
+so collection can continue while quote admission is already reserve-blocked.
+
+Inspect `proceeds` in `/health`, or `readiness.proceeds` in `/admin/api/status`:
+it reports the active job,
+state, blocker, exact authorized fee and commitment. New quotes wait while a
+collection job is active, until its exact spendable self-output is verified;
+`/ready` reports `proceeds_collecting` or
+`proceeds_output_pending`. Existing covenant recovery continues independently.
+The fee cap defaults to zero; `proceeds_fee_cap_exceeded` requires deliberately configuring
+`TAXI_PROCEEDS_MAX_FEE_SATS` for the deployment's settlement fees. Existing
+jobs retain their original authorization. An ambiguous settlement keeps its
+inputs reserved across restart until every input and its spendable output
+prove completion. SDK 0.4.72 intents have no default expiry; do not delete
+these reservations or resubmit manually. Reconcile the recorded SDK intent
+with the Arkade operator before any manual repair. Back up both `proceeds_*`
+and `taxi_sdk_*` with the advance ledger, and drain collection before key rotation.
+
 ## Deployment
 
 Build and verify the release before admitting funds:

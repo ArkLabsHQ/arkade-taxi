@@ -1,5 +1,6 @@
 import {
     SingleKey,
+    ArkAddress,
     Wallet,
     EsploraProvider,
     canSpendOffchain,
@@ -8,7 +9,7 @@ import {
 import type { Database } from "@arkade-taxi/db";
 import type { Outpoint } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import type { TaxiConfig } from "../config.js";
+import type { RuntimeConfig } from "../config.js";
 import { ServiceError } from "../errors.js";
 import { createProviders, verifyProviders, normalizeExpiry } from "./providers.js";
 import { createOperatorStorage } from "./sqlExecutor.js";
@@ -29,7 +30,7 @@ export interface OperatorRuntimeOptions {
 }
 
 export function createOperatorRuntime(
-    config: TaxiConfig,
+    config: RuntimeConfig,
     db: Database,
     options: OperatorRuntimeOptions = {},
 ) {
@@ -41,6 +42,8 @@ export function createOperatorRuntime(
     let admission: Promise<void> | undefined;
     let activeAdmission: Promise<void> | undefined;
     let queuedRefresh: Promise<RuntimeSafety> | undefined;
+    let settlement: Promise<void> | undefined;
+    let settlementGuard: (() => void) | undefined;
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -89,6 +92,10 @@ export function createOperatorRuntime(
             typeof value === "bigint" ? value.toString() : value,
         );
         if (wallet && (result.blockers.length || fingerprint !== infoFingerprint)) {
+            if (settlement) {
+                result.blockers.push("operator_settlement_provider_changed");
+                return result;
+            }
             await wallet.dispose();
             wallet = undefined;
         }
@@ -97,7 +104,17 @@ export function createOperatorRuntime(
             if (!wallet) {
                 wallet = await (options.walletFactory ?? Wallet.create)({
                     identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
-                    arkProvider: providers.arkProvider,
+                    arkProvider: Object.assign(Object.create(providers.arkProvider), {
+                        getInfo: async () => verified.info!,
+                        registerIntent: async (
+                            intent: Parameters<typeof providers.arkProvider.registerIntent>[0],
+                        ) => {
+                            if (!settlementGuard)
+                                throw new Error("proceeds_submission_not_authorized");
+                            settlementGuard();
+                            return providers.arkProvider.registerIntent(intent);
+                        },
+                    }),
                     indexerProvider: providers.indexerProvider,
                     onchainProvider:
                         options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
@@ -110,6 +127,16 @@ export function createOperatorRuntime(
                 await wallet.dispose();
                 wallet = undefined;
                 return closed("runtime_stopped");
+            }
+            const address = ArkAddress.decode(await wallet.getAddress());
+            if (
+                address.encode() !==
+                new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).encode()
+            ) {
+                result.blockers.push("operator_payout_mismatch");
+                await wallet.dispose();
+                wallet = undefined;
+                return result;
             }
             const [tip, coins] = await Promise.allSettled([
                 wallet.onchainProvider.getChainTip(),
@@ -266,6 +293,26 @@ export function createOperatorRuntime(
             return wallet;
         },
         stop,
+        async withSettlement<T>(
+            work: (wallet: Wallet) => Promise<T>,
+            guard: () => void,
+        ): Promise<T> {
+            if (settlement) throw new Error("proceeds_worker_active");
+            await refresh();
+            if (settlement || !wallet || stopped) throw new Error("proceeds_wallet_unavailable");
+            let release!: () => void;
+            settlement = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            settlementGuard = guard;
+            try {
+                return await work(wallet);
+            } finally {
+                settlementGuard = undefined;
+                settlement = undefined;
+                release();
+            }
+        },
         async assertRecovery() {
             const state = await refresh();
             const blockers = state.blockers.filter((code) => !admissionOnlyBlockers.has(code));
@@ -321,6 +368,7 @@ export function createOperatorRuntime(
             stop();
             await admission;
             await pending;
+            await settlement;
             await wallet?.dispose();
             wallet = undefined;
         },

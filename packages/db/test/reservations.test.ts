@@ -12,6 +12,7 @@ import {
     PolicyRepository,
     RecoveryBudgetConflictError,
     ReservationRepository,
+    ProceedsRepository,
     applyMigrations,
 } from "../src/index.js";
 
@@ -73,6 +74,16 @@ const reserve = (advance = quote()) =>
     });
 
 describe("durable reservations", () => {
+    it("atomically excludes proceeds inputs from new quote reservations in both directions", () => {
+        const jobs = new ProceedsRepository(db);
+        jobs.create("job", { inputs: [input()] }, 1);
+        expect(() => reserve()).toThrow(/already reserved/);
+        expect(advances.get("quote-1")).toBeUndefined();
+        jobs.complete("job", "cc".repeat(32));
+        reserve();
+        expect(() => jobs.create("next", { inputs: [input()] }, 2)).toThrow(/already reserved/);
+        expect(jobs.get("next")).toBeUndefined();
+    });
     it("serializes simultaneous claims on separate workers at 300 sats and one advance", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-worker-cap-"));
         const path = join(directory, "taxi.sqlite");

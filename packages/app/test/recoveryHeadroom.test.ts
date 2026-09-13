@@ -3,6 +3,7 @@ import { base64, hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
     arkade,
+    ArkAddress,
     Extension,
     SingleKey,
     Transaction,
@@ -256,6 +257,8 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
             },
         },
         wallet: {
+            getAddress: async () =>
+                new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode(),
             getSpendableVtxos: async () => {
                 if (h.failure === "inventory") throw new Error("wallet unavailable");
                 if (h.failure === "stale") h.now += cfg.reconcileIntervalMs;

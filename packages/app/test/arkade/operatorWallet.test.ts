@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase, type Database } from "@arkade-taxi/db";
 import {
     Wallet,
+    ArkAddress,
     VtxoScript,
     CSVMultisigTapscript,
     networks,
@@ -10,9 +11,10 @@ import {
     type ContractManager,
 } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { config, emulatorKey, serverKey } from "../fixtures.js";
+import { config, emulatorKey, operatorKey, serverKey } from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
 import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
+import { resolveRuntimeConfig } from "../../src/config.js";
 
 const databases: Database[] = [];
 afterEach(() => {
@@ -39,8 +41,9 @@ function setup() {
     let coins: Partial<ExtendedVirtualCoin>[] = [{}];
     let taxiReserved: { txid: string; vout: number }[] = [];
     let reservationReadFails = false;
+    let address = new ArkAddress(serverKey, operatorKey, "tark").encode();
     const wallet = {
-        getAddress: async () => "tark1test",
+        getAddress: async () => address,
         getSpendableVtxos: async () => {
             inventoryReads++;
             await pause;
@@ -85,6 +88,9 @@ function setup() {
     return {
         runtime,
         db,
+        setAddress: (value: string) => {
+            address = value;
+        },
         setCoin: (v: Partial<ExtendedVirtualCoin>) => {
             coins = [v];
         },
@@ -131,6 +137,56 @@ function setup() {
 }
 
 describe("persistent operator runtime safety", () => {
+    it("pins an active settlement wallet across provider refresh and drains before disposal", async () => {
+        const s = setup();
+        await s.runtime.refresh();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let entered = false;
+        const work = s.runtime.withSettlement(
+            async () => {
+                entered = true;
+                await gate;
+            },
+            () => {},
+        );
+        await vi.waitFor(() => expect(entered).toBe(true));
+        s.setInfo(arkInfo({ digest: "changed" }));
+        expect((await s.runtime.refresh()).blockers).toContain(
+            "operator_settlement_provider_changed",
+        );
+        expect(s.counts().disposed).toBe(0);
+        const dispose = s.runtime.dispose();
+        await Promise.resolve();
+        expect(s.counts().disposed).toBe(0);
+        release();
+        await Promise.all([work, dispose]);
+        expect(s.counts().disposed).toBe(1);
+    });
+    it("counts spendable subdust repayment but excludes asset fare carriers from the sats funding reserve", async () => {
+        const s = setup();
+        s.setCoins([
+            { vout: 0, value: 20000 },
+            { vout: 1, value: 1, isPreconfirmed: true, virtualStatus: { state: "preconfirmed" } },
+            { vout: 2, value: 1, assets: [{ assetId: "12".repeat(34), amount: 1000000n }] },
+        ]);
+        expect((await s.runtime.refresh()).inventory).toEqual({
+            usableSats: 20001n,
+            usableVtxos: 2,
+            reservedSats: 0n,
+            reservedVtxos: 0,
+        });
+    });
+    it("closes admission before reading inventory when the wallet payout differs from configuration", async () => {
+        const s = setup();
+        s.setAddress(new ArkAddress(serverKey, emulatorKey, "tark").encode());
+        const snapshot = await s.runtime.refresh();
+        expect(snapshot.blockers).toContain("operator_payout_mismatch");
+        expect(s.ioCounts().inventoryReads).toBe(0);
+        expect(s.runtime.wallet).toBeUndefined();
+    });
     it("publishes cached provider identity and exact usable inventory without I/O on read", async () => {
         const s = setup();
         await s.runtime.refresh();
@@ -166,18 +222,18 @@ describe("persistent operator runtime safety", () => {
             ]).onchainAddress(networks.regtest),
         });
         let coin: ExtendedVirtualCoin;
-        const runtime = createOperatorRuntime(config({ addressHrp: "tark" }), db, {
-            providers: {
-                arkProvider: { getInfo: async () => info },
-                emulatorProvider: {
-                    getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }),
-                },
-            },
+        const providers = {
+            arkProvider: { getInfo: async () => info },
+            emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+        };
+        const resolved = await resolveRuntimeConfig(config({ addressHrp: "tark" }), providers);
+        const runtime = createOperatorRuntime(resolved, db, {
+            providers,
             onchainProvider: {
                 getChainTip: async () => ({ height: 100, time: 1789132000, hash: "aa".repeat(32) }),
             } as WalletConfig["onchainProvider"],
             walletFactory: async (cfg) => {
-                vi.spyOn(cfg.arkProvider!, "getInfo").mockResolvedValue(info);
+                expect(await cfg.arkProvider!.getInfo()).toEqual(info);
                 const wallet = await Wallet.create(cfg);
                 const script = wallet.offchainTapscript;
                 coin = {

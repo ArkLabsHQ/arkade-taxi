@@ -2,6 +2,21 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 const context = new AsyncLocalStorage();
 
+export function ownedPayoutOutpoints(rows) {
+    return rows.flatMap((row) => {
+        if (
+            !["recycled", "purchased", "refunded", "recovered"].includes(row.state) ||
+            !row.arkTxid ||
+            !row.spentTxid
+        )
+            return [];
+        return [
+            ...(BigInt(row.fare.units) > 0n ? [{ txid: row.arkTxid, vout: 1 }] : []),
+            ...(row.state !== "purchased" ? [{ txid: row.spentTxid, vout: 0 }] : []),
+        ];
+    });
+}
+
 export function assertScenarioBoundary(rows) {
     const active = rows.find((row) =>
         ["quoted", "locking", "locked", "recovering"].includes(row.state),

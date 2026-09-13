@@ -120,7 +120,7 @@ export class FakeLockupBuilder implements LockupBuilder {
                 senderInputIndexes: [...envelope.senderInputIndexes],
                 operatorInputIndexes: [...envelope.operatorInputIndexes],
                 senderKey: advance.senderKey,
-                operatorKey: advance.operatorKey,
+                operatorSignerKey: this.config.operatorSignerKey,
                 outpoint: this.outpoint,
             };
         }
@@ -268,6 +268,7 @@ export async function createQuote(
                     ...deps.runtime,
                     safety: () => {
                         assertCurrent();
+                        assertReady?.();
                         return deps.runtime.safety();
                     },
                 },
@@ -467,7 +468,6 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     try {
         currentSpendable = await deps.inventory.getSpendableVtxos();
         currentLocks = await deps.inventory.getLockedVtxoOutpoints();
-        latestSafety = deps.runtime.safety();
         const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
         if (
             currentLocks.length !== before.size ||
@@ -482,6 +482,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
             { cause },
         );
     }
+    latestSafety = deps.runtime.safety();
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,

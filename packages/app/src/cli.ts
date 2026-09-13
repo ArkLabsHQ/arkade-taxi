@@ -8,6 +8,7 @@ import {
     openDatabase,
     PolicyRepository,
     ReservationRepository,
+    ProceedsRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
 import { sanitizeOperationalError, ServiceError } from "./errors.js";
@@ -21,6 +22,7 @@ import { createLockupReconciler } from "./reconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
+import { createProceedsCollector } from "./proceeds.js";
 
 const seconds = () => Math.floor(Date.now() / 1000);
 
@@ -40,6 +42,13 @@ async function runServe(): Promise<void> {
     );
     const runtime = createOperatorRuntime(config, db, {
         reservedOutpoints: () => reservations.listReservedOutpoints(),
+    });
+    const proceeds = createProceedsCollector({
+        config,
+        runtime,
+        advances,
+        reservations,
+        jobs: new ProceedsRepository(db),
     });
     const lockupSubmitter = productionLockupSubmitter(
         config,
@@ -147,6 +156,7 @@ async function runServe(): Promise<void> {
         sweeperRunning: () => running,
         rescan: () => lifecycle.refresh(),
         startup: () => lifecycle.status(),
+        proceeds: () => proceeds.status(),
         accepting: () => accepting,
         shutdownSignal: shutdown.signal,
     });
@@ -187,6 +197,7 @@ async function runServe(): Promise<void> {
                     "sweep",
                 );
             if (result.failed > 0) throw new Error("recovery_tick_failed");
+            void proceeds.tick();
         },
         startStreams: () => watcher.start(),
         startBackground(prompt) {
@@ -211,11 +222,12 @@ async function runServe(): Promise<void> {
         stopRuntime: () => runtime.stop(),
         abort() {
             submission.stop();
+            proceeds.stop();
             sweeper.stop();
             watcherStop ??= watcher.stop();
         },
         async drain() {
-            await Promise.all([watcherStop, submission.drain()]);
+            await Promise.all([watcherStop, submission.drain(), proceeds.drain()]);
         },
         disposeProviders: () => runtime.dispose(),
         closeDatabase: () => db.close(),

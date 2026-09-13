@@ -86,7 +86,7 @@ describe("migrations", () => {
         },
     );
 
-    it("reopens a canonical v1 database without changing its schema or data", () => {
+    it("reopens the canonical database without changing its schema or data", () => {
         const first = migrated();
         insertRaw(first);
         const before = first.serialize();
@@ -105,7 +105,7 @@ describe("migrations", () => {
         }
     });
 
-    it("defines one fresh schema; old development databases are unsupported", () => {
+    it("adds proceeds storage without migrating unsupported development schemas", () => {
         expect(MIGRATIONS.map(({ id }) => id)).toEqual([1]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
@@ -115,6 +115,8 @@ describe("migrations", () => {
             "operator_input_reservations",
             "policy",
             "policy_audit",
+            "proceeds_inputs",
+            "proceeds_jobs",
             "sqlite_sequence",
         ]);
         const columns = db
@@ -162,6 +164,16 @@ describe("migrations", () => {
                 .all()
                 .find(({ name }) => name === "advances_outpoint")?.unique,
         ).toBe(1n);
+    });
+    it("rejects old v1 without proceeds storage without changing its data", () => {
+        const db = migrated();
+        insertRaw(db);
+        db.exec("DROP TABLE proceeds_inputs; DROP TABLE proceeds_jobs");
+        db.pragma("user_version = 1");
+        const before = db.serialize();
+        expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+        expect(db.serialize()).toEqual(before);
+        db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {
         const db = migrated();

@@ -437,7 +437,14 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     );
     const operatorTrees = operatorInputs.map((input) => {
         if (input.assetPacket) reject("operator funding cannot carry assets");
-        return inputTree(input, context.operatorKey, context.serverKey);
+        const closure = attempt("operator funding multisig", () =>
+            MultisigTapscript.decode(input.spendLeaf),
+        );
+        const signer = closure.params.pubkeys.find((key) => !sameBytes(key, context.serverKey));
+        if (!signer) reject("operator funding signer is missing");
+        const tree = inputTree(input, signer!, context.serverKey);
+        exactBytes(tree.tweakedPublicKey, context.operatorKey, "operator funding payout");
+        return tree;
     });
     const holdings = allInputs.map(inputAssets);
     const totals = new Map<string, bigint>();

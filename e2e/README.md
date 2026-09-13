@@ -81,15 +81,31 @@ identity, and warning/critical recovery deadlines before VTXO expiry.
 The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
 select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,
 verify and submit the sender lockup, and discover `locking` then `locked` through
-one SSE subscription containing two receiver addresses. Bob verifies the incoming
+one SSE subscription containing two receiver addresses, with live transfers to both
+addresses received over that same subscription. Bob verifies the incoming
 claim independently, recycles 200 USDT with his own sats input, or purchases
 200 USDT after Alice authorizes 201 USDT and Taxi receives a 1 USDT fare output.
 Both flows check the indexed transaction graph and exact wallet balances.
 
-For these selected inputs Taxi advances 1 sat. The current covenant pins the
-recycle repayment to a 1-sat operator-key OP_RETURN receipt; the purchase fare
-also has a 1-sat OP_RETURN carrier. These outputs are verified in the indexed
-transactions and do not increase Taxi's spendable wallet balance. Public evidence
+For these selected inputs Taxi advances 1 sat. Repayment and fare outputs target
+the canonical Arkade wallet output key, independently of its funding signing key.
+Taxi's production proceeds collector consolidates canonical subdust receipts
+with an ordinary operator coin using the standard SDK wallet settlement path.
+The live test waits for that service-owned collection, checks the receipt's
+settlement commitment and its spendable wallet output. No test-only recovery
+or manual consolidation is performed. The zero-default collection fee cap is
+zero on regtest. The harness explicitly sets all four upstream intent fee
+programs to `0.0`, verifies the advertised values and records them in `stack.json`;
+upstream defaults are not assumed to be zero. The 1-sat recycle repayment restores Taxi's spendable sats balance. Purchase
+increases Taxi's spendable USDT by exactly 1,000,000 base units; its total sats
+decrease by the 1-sat advance, with all carrier sats included in the balance.
+The provider fixture allocates its existing 100,000 sats as two 50,000-sat coins,
+alongside the bootstrapped 500,000-sat coin, leaving separate quote and reserve
+coins after the first asset carrier is created. Cleanup waits for every owned
+terminal advance's payout receipts and an idle collector before releasing the
+scenario. Only exact pre-effect collection/readiness refusals are retried, with
+the original expiry and three-attempt bound retained.
+Both indexed outputs and wallet-recognized proceeds are asserted. Public evidence
 in `receiver-sse-recycle.json` and `receiver-sse-purchase.json` includes the exact
 run project, asset IDs, base units, event order, and transaction IDs.
 

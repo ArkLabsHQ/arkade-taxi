@@ -26,3 +26,4 @@ export function openDatabase(path: string): Database {
     applyMigrations(db);
     return db;
 }
+export * from "./proceeds.js";

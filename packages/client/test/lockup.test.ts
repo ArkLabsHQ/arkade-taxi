@@ -21,10 +21,27 @@ import {
     params,
     quote,
     senderIdentity,
+    otherKey,
 } from "./fixtures.js";
 
 const signer = (sign: Identity["sign"]): Identity =>
     Object.assign(Object.create(senderIdentity), { sign }) as Identity;
+
+describe("operator payout ownership", () => {
+    it("verifies a taproot payout independently from the raw funding signer", async () => {
+        const authorization = args();
+        expect(authorization.info.operatorKey).not.toBe(
+            hex.encode(await operatorIdentity.xOnlyPublicKey()),
+        );
+        expect(() => verifyQuote(authorization)).not.toThrow();
+    });
+    it("rejects a self-consistent payout not owned by the advertised funding tree", () => {
+        const authorization = args();
+        authorization.info.operatorKey = hex.encode(otherKey);
+        authorization.quote = quote({ ...params(), operatorKey: otherKey });
+        expect(() => verifyQuote(authorization)).toThrow(/operator funding payout/);
+    });
+});
 
 const rewrite = (
     encoded: string,

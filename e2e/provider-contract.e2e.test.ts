@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { expect } from "vitest";
 import { EsploraProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
 import { openDatabase } from "@arkade-taxi/db";
-import { loadConfig } from "../packages/app/src/config.js";
+import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
 import {
     assertVtxoSnapshotContains,
@@ -20,7 +20,7 @@ import {
 import { liveScenario } from "./scenarios.js";
 
 liveScenario("provider-contract", async () => {
-    const config = loadConfig(process.env);
+    const config = await resolveRuntimeConfig(loadConfig(process.env));
     const cli = process.env.ARKADE_REGTEST_CLI;
     const esplora = process.env.ARKADE_ESPLORA_URL;
     if (!cli || !esplora)
@@ -48,18 +48,34 @@ liveScenario("provider-contract", async () => {
         const wallet = runtime.wallet;
         expect(wallet, JSON.stringify(runtime.safety().blockers)).toBeDefined();
         const address = await wallet!.getAddress();
-        execFileSync(
-            process.execPath,
-            [
-                cli,
-                ...buildArkFundingArgs({
-                    address,
-                    amount: 100_000,
-                    password: process.env.ARKD_PASSWORD,
-                }),
-            ],
-            { timeout: 120000, stdio: "pipe" },
+        const prior = new Set(
+            (await wallet!.getVtxos()).map((coin) => `${coin.txid}:${coin.vout}`),
         );
+        for (const amount of [50_000, 50_000])
+            execFileSync(
+                process.execPath,
+                [
+                    cli,
+                    ...buildArkFundingArgs({
+                        address,
+                        amount,
+                        password: process.env.ARKD_PASSWORD,
+                    }),
+                ],
+                { timeout: 120000, stdio: "pipe" },
+            );
+        await expect
+            .poll(
+                async () =>
+                    (await wallet!.getVtxos()).filter(
+                        (coin) =>
+                            !prior.has(`${coin.txid}:${coin.vout}`) &&
+                            coin.value === 50_000 &&
+                            !coin.assets?.length,
+                    ).length,
+                { timeout: 30_000, interval: 500 },
+            )
+            .toBe(2);
         const received = await wallet!.getVtxos();
         const receivedSnapshot = canonicalVtxoSnapshot(received, normalizeExpiry);
         console.info(

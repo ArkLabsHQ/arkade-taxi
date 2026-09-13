@@ -155,6 +155,14 @@ export class ReservationRepository {
                     .safeIntegers(true);
                 for (const input of advance.operatorInputs) {
                     if (conflict.get(input.txid, input.vout)) throw new ReservationConflictError();
+                    if (
+                        this.#db
+                            .prepare(
+                                "SELECT 1 FROM proceeds_inputs WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new ReservationConflictError();
                 }
                 this.#advances.insert(advance);
                 const insert = this.#db.prepare(
@@ -323,7 +331,7 @@ export class ReservationRepository {
         return this.#db
             .prepare<unknown[], { txid: string; vout: bigint }>(
                 `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
-             ${advanceId === undefined ? "" : "WHERE advance_id = ?"} ORDER BY outpoint_txid, outpoint_vout`,
+             ${advanceId === undefined ? "UNION ALL SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM proceeds_inputs" : "WHERE advance_id = ?"} ORDER BY txid, vout`,
             )
             .safeIntegers(true)
             .all(...(advanceId === undefined ? [] : [advanceId]))

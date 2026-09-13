@@ -6,15 +6,71 @@ import {
     asset,
     Extension,
     ArkAddress,
+    MultisigTapscript,
+    scriptFromTapLeafScript,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { buildLockupEnvelope, inputAssets } from "../../src/arkade/lockupBuilder.js";
-import { config } from "../fixtures.js";
+import { config, operatorKey } from "../fixtures.js";
 import { buildRequest, unroll, senderTree, operatorTree } from "./lockupFixtures.js";
 import { parseLockupEnvelope } from "../../src/arkade/psbt.js";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 
 describe("joint funded graph", () => {
+    it.each([10n, 330n])(
+        "retains duplicate-output protection for canonical payout and change at fare %s",
+        (fare) => {
+            const req = buildRequest();
+            const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
+            req.params.operatorKey = cfg.operatorKey;
+            req.fare.units = fare;
+            req.funding.totalValue = req.params.topup + fare + fare;
+            req.funding.inputs[0].value = Number(req.funding.totalValue);
+            req.covenantAddress = new DustCovenantScript({
+                params: req.params,
+                serverKey: cfg.serverPubkey,
+                emulatorKey: cfg.emulatorPubkey,
+                vtxoMinAmount: cfg.vtxoMinAmount,
+            })
+                .address(cfg.addressHrp, cfg.serverPubkey)
+                .encode();
+            expect(() => buildLockupEnvelope(req, cfg, unroll)).toThrow(/script/);
+        },
+    );
+    it("rejects a quote payout that differs from runtime configuration", () => {
+        const req = buildRequest();
+        expect(() =>
+            buildLockupEnvelope(
+                req,
+                config({ operatorKey: operatorTree.tweakedPublicKey }),
+                unroll,
+            ),
+        ).toThrow(/operator payout/);
+    });
+    it("pays the operator's canonical wallet key without using that key as a funding signer", () => {
+        const req = buildRequest();
+        const payout = operatorTree.tweakedPublicKey;
+        req.params.operatorKey = payout;
+        const cfg = config({ operatorKey: payout, operatorSignerKey: operatorKey });
+        req.covenantAddress = new DustCovenantScript({
+            params: req.params,
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        const parsed = parseLockupEnvelope(buildLockupEnvelope(req, cfg, unroll), req, cfg, unroll);
+        expect(parsed.arkTx.getOutput(1).script).toEqual(
+            operatorTree.address(cfg.addressHrp, cfg.serverPubkey).subdustPkScript,
+        );
+        expect(
+            MultisigTapscript.decode(
+                scriptFromTapLeafScript(parsed.arkTx.getInput(1).tapLeafScript![0]),
+            ).params.pubkeys,
+        ).toEqual([cfg.serverPubkey, cfg.operatorSignerKey]);
+        expect(payout).not.toEqual(operatorKey);
+    });
     it.each([1n, 9n, 10n])("enforces minimum hosting for asset change at %s sats", (change) => {
         const req = buildRequest();
         const id = asset.AssetId.create("12".repeat(32), 0);

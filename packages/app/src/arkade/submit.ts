@@ -45,7 +45,7 @@ export interface ValidatedLockupSubmission {
     senderInputIndexes: number[];
     operatorInputIndexes: number[];
     senderKey: Uint8Array;
-    operatorKey: Uint8Array;
+    operatorSignerKey: Uint8Array;
     outpoint: Outpoint;
 }
 
@@ -388,7 +388,7 @@ export function validateLockupSubmission(
         senderInputIndexes: [...baseline.senderInputIndexes],
         operatorInputIndexes: [...baseline.operatorInputIndexes],
         senderKey: advance.senderKey,
-        operatorKey: advance.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
         outpoint: { txid: arkTx.id, vout: envelope.covenantOutputIndex },
     };
 }
@@ -423,7 +423,12 @@ export function createLockupSubmitter(deps: {
             verifyOnlyOwner(ownerArk, index, validated.senderKey, `sender input ${index}`);
         }
         for (const index of validated.operatorInputIndexes)
-            verifyOnlyOwner(ownerArk, index, validated.operatorKey, `operator input ${index}`);
+            verifyOnlyOwner(
+                ownerArk,
+                index,
+                validated.operatorSignerKey,
+                `operator input ${index}`,
+            );
         if (ownerCheckpoints.length !== validated.unsignedCheckpoints.length)
             throw new LockupShapeError("prepared checkpoint count mismatch");
         ownerCheckpoints.forEach((checkpoint, index) => {
@@ -437,7 +442,7 @@ export function createLockupSubmitter(deps: {
                 throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
             const owner = validated.senderInputIndexes.includes(index)
                 ? validated.senderKey
-                : validated.operatorKey;
+                : validated.operatorSignerKey;
             verifyOnlyOwner(checkpoint, 0, owner, `checkpoint ${index}`);
         });
         return { ownerArk, ownerCheckpoints };
@@ -477,13 +482,13 @@ export function createLockupSubmitter(deps: {
                 ownerArk,
                 finalArk,
                 index,
-                validated.operatorKey,
+                validated.operatorSignerKey,
                 `operator input ${index}`,
             );
             verifyExactParties(
                 finalArk,
                 index,
-                validated.operatorKey,
+                validated.operatorSignerKey,
                 deps.serverPubkey,
                 `Arkade input ${index}`,
             );
@@ -508,7 +513,7 @@ export function createLockupSubmitter(deps: {
             if (!owner) throw new LockupShapeError(`missing owner checkpoint ${local.id}`);
             const ownerKey = validated.senderInputIndexes.includes(index)
                 ? validated.senderKey
-                : validated.operatorKey;
+                : validated.operatorSignerKey;
             const serverSignatures = structuredClone(server.getInput(0).tapScriptSig);
             combineTapscriptSigs(owner, server);
             if (
@@ -556,7 +561,7 @@ export function createLockupSubmitter(deps: {
                         `sender input ${index}`,
                     );
                 for (const index of validated.operatorInputIndexes) {
-                    const signatures = signaturesFor(ownerArk, index, validated.operatorKey);
+                    const signatures = signaturesFor(ownerArk, index, validated.operatorSignerKey);
                     if (signatures.length !== 1)
                         throw new LockupShapeError(
                             `operator input ${index} was not signed by the operator`,
@@ -564,7 +569,7 @@ export function createLockupSubmitter(deps: {
                     verifySignatures(
                         ownerArk,
                         index,
-                        [validated.operatorKey],
+                        [validated.operatorSignerKey],
                         `operator input ${index}`,
                     );
                 }
@@ -592,7 +597,7 @@ export function createLockupSubmitter(deps: {
                         throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
                     const owner = validated.senderInputIndexes.includes(index)
                         ? validated.senderKey
-                        : validated.operatorKey;
+                        : validated.operatorSignerKey;
                     verifyOnlyOwner(checkpoint, 0, owner, `checkpoint ${index}`);
                 });
                 return {
@@ -651,7 +656,8 @@ export function createLockupSubmitter(deps: {
                         const signatures = signedProof.getInput(index).tapScriptSig;
                         if (
                             signatures?.length !== 1 ||
-                            signaturesFor(signedProof, index, validated.operatorKey).length !== 1 ||
+                            signaturesFor(signedProof, index, validated.operatorSignerKey)
+                                .length !== 1 ||
                             signatures[0]![1].length !== 65 ||
                             signatures[0]![1][64] !== INTENT_SIGHASH_ALL
                         )
@@ -661,7 +667,7 @@ export function createLockupSubmitter(deps: {
                         verifyTapscriptSignatures(
                             signedProof,
                             index,
-                            [hex.encode(validated.operatorKey)],
+                            [hex.encode(validated.operatorSignerKey)],
                             [],
                             [INTENT_SIGHASH_ALL],
                         );

@@ -21,7 +21,12 @@ import { base64, hex } from "@scure/base";
 import { createActorWallets, disposeActorWallets, expiryOf } from "../scripts/e2e-wallets.mjs";
 import { routeProviderFetch } from "../scripts/lib/harness.mjs";
 import { preEffectRequest, submitWithReadiness } from "./admission.js";
-import { assertScenarioBoundary, ownCleanup, unwindAll } from "../scripts/lib/scenario-cleanup.mjs";
+import {
+    assertScenarioBoundary,
+    ownCleanup,
+    unwindAll,
+    ownedPayoutOutpoints,
+} from "../scripts/lib/scenario-cleanup.mjs";
 
 export async function control(action: string, rule?: unknown) {
     const response = await fetch(required("TAXI_E2E_CONTROL_URL"), {
@@ -267,6 +272,28 @@ export async function openLive() {
                         ["quoted", "locking", "locked", "recovering"].includes(item.state),
                     ),
                 ).toEqual([]);
+                const payouts = ownedPayoutOutpoints(rows);
+                if (payouts.length)
+                    await poll(
+                        "owned payout receipts collected before scenario release",
+                        async () => {
+                            const result = await live.indexer.getVtxos({ outpoints: payouts });
+                            const status = await admin("status");
+                            return { coins: result.vtxos, proceeds: status.readiness.proceeds };
+                        },
+                        ({ coins, proceeds }) =>
+                            coins.length === payouts.length &&
+                            coins.every(
+                                (coin) =>
+                                    coin.script === `5120${info.operatorKey}` &&
+                                    (BigInt(coin.value) >= BigInt(info.dust) ||
+                                        (coin.isSpent &&
+                                            /^[a-f0-9]{64}$/.test(coin.settledBy ?? ""))),
+                            ) &&
+                            proceeds.state === "idle" &&
+                            proceeds.blocker === null,
+                        120_000,
+                    );
             } finally {
                 try {
                     await disposeActorWallets(actors);
@@ -301,6 +328,7 @@ export async function openLive() {
         [info.arkdUrl, arkdUrl],
         [info.emulatorUrl, emulatorUrl],
     ]);
+    await ready();
     return live;
 }
 export type Live = Awaited<ReturnType<typeof openLive>>;

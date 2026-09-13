@@ -8,6 +8,28 @@ import { preEffectRequest, submitWithReadiness } from "../../e2e/admission.js";
 
 const ready = { status: "ok", paused: false, blockers: [] };
 
+it.each(["runtime_checking", "runtime_stale"])(
+    "retries only the exact pre-effect runtime_unsafe %s refusal",
+    async (reason) => {
+        const service = await localService(() => [200, ready]);
+        let attempts = 0;
+        try {
+            await expect(
+                preEffectRequest(
+                    async () => {
+                        if (++attempts === 1) throw new TaxiError("runtime_unsafe", reason);
+                        return "one-effect";
+                    },
+                    { readyUrl: `${service.url}/ready`, expiresAt: Date.now() / 1000 + 5 },
+                ),
+            ).resolves.toBe("one-effect");
+            expect(attempts).toBe(2);
+        } finally {
+            await service.close();
+        }
+    },
+);
+
 async function localService(
     respond: (
         request: IncomingMessage,
@@ -34,7 +56,12 @@ async function localService(
     };
 }
 
-describe.each(["runtime_checking", "runtime_stale"])("live pre-effect admission: %s", (reason) => {
+describe.each([
+    "runtime_checking",
+    "runtime_stale",
+    "proceeds_collecting",
+    "proceeds_output_pending",
+])("live pre-effect admission: %s", (reason) => {
     const checking = () => new TaxiError("not_ready", reason);
     it("waits for real readiness after an exact typed refusal, then applies one effect", async () => {
         const events: string[] = [];
@@ -79,6 +106,10 @@ describe.each(["runtime_checking", "runtime_stale"])("live pre-effect admission:
         new TaxiError("not_ready", "server_identity_mismatch"),
         new TaxiError("not_ready", "runtime_checking "),
         new TaxiError("not_ready", "runtime_stale "),
+        new TaxiError("not_ready", "proceeds_fee_cap_exceeded"),
+        new TaxiError("not_ready", "proceeds_ambiguous_intent"),
+        new TaxiError("runtime_unsafe", "proceeds_collecting"),
+        new TaxiError("runtime_unsafe", "proceeds_output_pending"),
         new TaxiError("NETWORK_ERROR", reason),
         new TaxiError("HTTP_ERROR", reason),
         new TaxiError("ambiguous_submission", reason),

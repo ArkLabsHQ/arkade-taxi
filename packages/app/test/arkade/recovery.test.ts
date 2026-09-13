@@ -27,6 +27,7 @@ import {
     config,
     emulatorKey,
     fundingCoin,
+    operatorTree,
     NOW,
     senderTree,
     serverKey,
@@ -376,6 +377,21 @@ describe("recovery graph", () => {
 });
 
 describe("startup recovery invariant", () => {
+    it("fails closed on persisted quotes bound to a different operator payout after restart", () => {
+        const db = openDatabase(":memory:");
+        databases.push(db);
+        const advances = new AdvanceRepository(db);
+        const row = sourceAdvance();
+        advances.insert(row);
+        const persisted = advances.get(row.id)!;
+        expect(() => assertRecoveryStartupInvariants([persisted], config())).not.toThrow();
+        expect(() =>
+            assertRecoveryStartupInvariants(
+                [persisted],
+                config({ operatorKey: operatorTree.tweakedPublicKey }),
+            ),
+        ).toThrow(/persisted lockup graph/);
+    });
     it.each([
         [
             "actual Arkade input",

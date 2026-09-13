@@ -16,6 +16,7 @@ import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed } from "./claimFeed.js";
+import type { ProceedsStatus } from "./proceeds.js";
 
 export interface RouteDeps extends QuoteDeps {
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
@@ -25,6 +26,7 @@ export interface RouteDeps extends QuoteDeps {
      * degraded. */
     sweeperStaleAfterSeconds: number;
     startup?: () => StartupStatus;
+    proceeds?: () => ProceedsStatus;
 }
 
 export interface StartupStatus {
@@ -34,6 +36,7 @@ export interface StartupStatus {
 }
 
 export interface HealthResponse {
+    proceeds?: ProceedsStatus;
     runtime?: {
         checkedAt: number;
         chainHeight: string | null;
@@ -125,6 +128,7 @@ export function operationalSnapshot(
         | "reconciler"
         | "sweeperStaleAfterSeconds"
         | "startup"
+        | "proceeds"
     >,
     options: { ignoreManualPause?: boolean } = {},
 ): OperationalSnapshot {
@@ -135,7 +139,13 @@ export function operationalSnapshot(
     const reconciler = deps.reconciler.status();
     const paused = deps.policy.get().paused;
     const startup = deps.startup?.();
+    const proceeds = deps.proceeds?.();
     const blockers = [
+        ...(proceeds?.blocker
+            ? [safeCode(proceeds.blocker, "proceeds_blocked")]
+            : proceeds?.jobId
+              ? ["proceeds_collecting"]
+              : []),
         ...(!options.ignoreManualPause && paused ? ["manual_pause"] : []),
         ...(startup && !startup.complete
             ? [safeCode(startup.blocker ?? `startup_${startup.phase}`, "startup_blocked")]
@@ -179,6 +189,7 @@ export function operationalSnapshot(
     return {
         ready,
         body: {
+            ...(proceeds ? { proceeds } : {}),
             status: ready ? "ok" : "degraded",
             paused,
             now,

@@ -147,6 +147,23 @@ CREATE TABLE policy_audit (
 );
 
 CREATE INDEX policy_audit_changed_at ON policy_audit (changed_at);
+CREATE TABLE proceeds_jobs (
+    id TEXT PRIMARY KEY,
+    plan_json TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'settling', 'quarantined', 'complete')),
+    blocker TEXT,
+    commitment_txid TEXT,
+    lease_owner TEXT,
+    lease_until INTEGER,
+    created_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX proceeds_one_active ON proceeds_jobs ((1)) WHERE state != 'complete';
+CREATE TABLE proceeds_inputs (
+    outpoint_txid TEXT NOT NULL,
+    outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+    job_id TEXT NOT NULL REFERENCES proceeds_jobs(id),
+    PRIMARY KEY (outpoint_txid, outpoint_vout)
+);
 `;
 
 export const MIGRATIONS: readonly Migration[] = [{ id: 1, up: INITIAL_SCHEMA }];
@@ -170,6 +187,16 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             !db
                 .prepare(
                     "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'asset_units' AND type = 'INTEGER'",
+                )
+                .get() ||
+            !db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'lease_until' AND type = 'INTEGER'",
+                )
+                .get() ||
+            !db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('proceeds_inputs') WHERE name = 'job_id' AND type = 'TEXT'",
                 )
                 .get())
     )

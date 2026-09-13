@@ -17,7 +17,7 @@ import { fareToWire, quoteParamsToWire } from "@arkade-taxi/protocol";
 import { verifyQuote, signLockup } from "../../../client/src/index.js";
 import { args } from "../../../client/test/fixtures.js";
 import { buildRequest, unroll } from "./lockupFixtures.js";
-import { config, NOW, policy } from "../fixtures.js";
+import { config as baseConfig, operatorTree, NOW, policy } from "../fixtures.js";
 import { ProductionLockupBuilder } from "../../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../../src/arkade/psbt.js";
 import { productionLockupSubmitter } from "../../src/arkade/submit.js";
@@ -27,6 +27,7 @@ import {
 } from "../../src/arkade/recovery.js";
 
 const directories: string[] = [];
+const config = () => baseConfig({ operatorKey: operatorTree.tweakedPublicKey });
 afterEach(() => {
     for (const directory of directories.splice(0))
         rmSync(directory, { recursive: true, force: true });
@@ -36,6 +37,7 @@ it.each([false, true])(
     "persists and recovers omitted asset units through real signing and SQLite restart (asset fare=%s)",
     async (assetFare) => {
         const req = buildRequest();
+        req.params.operatorKey = config().operatorKey;
         const id = asset.AssetId.create("12".repeat(32), 7);
         req.params.assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: 7 };
         req.senderInputs[0]!.assetPacket = asset.Packet.create([

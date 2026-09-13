@@ -4,7 +4,23 @@ import {
     ownCleanup,
     runWithCleanup,
     unwindAll,
+    ownedPayoutOutpoints,
 } from "../lib/scenario-cleanup.mjs";
+
+it("waits for only the terminal scenario's exact fare and repayment receipts", () => {
+    const row = { arkTxid: "lockup", spentTxid: "claim", fare: { units: "1" } };
+    expect(ownedPayoutOutpoints([{ ...row, state: "recycled" }])).toEqual([
+        { txid: "lockup", vout: 1 },
+        { txid: "claim", vout: 0 },
+    ]);
+    expect(ownedPayoutOutpoints([{ ...row, state: "purchased" }])).toEqual([
+        { txid: "lockup", vout: 1 },
+    ]);
+    expect(ownedPayoutOutpoints([{ ...row, state: "recycled", fare: { units: "0" } }])).toEqual([
+        { txid: "claim", vout: 0 },
+    ]);
+    expect(ownedPayoutOutpoints([{ ...row, state: "quoted" }, { state: "expired" }])).toEqual([]);
+});
 
 it.each(["quoted", "locking", "locked", "recovering"])(
     "rejects a new scenario while a prior %s advance remains active",

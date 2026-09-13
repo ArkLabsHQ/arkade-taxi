@@ -146,12 +146,12 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
     const live = await openLive();
     try {
         await admin("policy", { locktimeMarginSeconds: 129600 });
+        const before = await walletBalance(live.actors.operator, live.fixture.asset.assetId);
         const locked = await lock(
             live,
             await quoteFor(live, "receiverSats", await sizedSender(live)),
         );
         const intent = await recoveryIntent(locked);
-        const before = await walletBalance(live.actors.operator, live.fixture.asset.assetId);
         const deadline = Number(locked.quote.params.locktime);
         const states: string[] = [];
         const observed = poll(
@@ -183,9 +183,14 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         expect(BigInt(health.runtime.chainTime)).toBeGreaterThanOrEqual(BigInt(deadline));
         expect(BigInt(health.runtime.chainTime)).toBeLessThan(BigInt(row.batchExpiry.value));
         expect((await admin("status")).exposure.outstandingSats).toBe("0");
-        expect(await walletBalance(live.actors.operator, live.fixture.asset.assetId)).toEqual(
-            before,
-        );
+        const expected = before;
+        expect(
+            await poll(
+                "spendable recovery repayment",
+                () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
+                (balance) => balance.sats === expected.sats && balance.units === expected.units,
+            ),
+        ).toEqual(expected);
     } finally {
         await live.close();
     }

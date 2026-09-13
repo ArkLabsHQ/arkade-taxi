@@ -63,6 +63,19 @@ export const ARKD_DELAYS = {
     ARKD_BOARDING_EXIT_DELAY: "7776000",
     ARKD_CHECKPOINT_EXIT_DELAY: "86400",
 };
+export const ARKD_FEES = {
+    ARK_OFFCHAIN_INPUT_FEE: "0.0",
+    ARK_ONCHAIN_INPUT_FEE: "0.0",
+    ARK_OFFCHAIN_OUTPUT_FEE: "0.0",
+    ARK_ONCHAIN_OUTPUT_FEE: "0.0",
+};
+export function assertZeroIntentFees(fees) {
+    const intent = fees?.intentFee;
+    for (const field of ["offchainInput", "onchainInput", "offchainOutput", "onchainOutput"])
+        if (intent?.[field] !== "0.0")
+            throw new Error(`zero intent fee fixture mismatch: ${field}`);
+    return intent;
+}
 const MIN_EXPIRY_HEADROOM_BLOCKS = "144";
 const MIN_EXPIRY_HEADROOM_SECONDS = "86400";
 const RECOVERY_BROADCAST_SECONDS = "43200";
@@ -787,6 +800,7 @@ async function main() {
             REGTEST_PROFILES: "emulator",
             AUTOMINE_INTERVAL: "0",
             ...ARKD_DELAYS,
+            ...ARKD_FEES,
             ARKD_PASSWORD: secrets[0],
             ARKD_WALLET_SIGNER_KEY: secrets[1],
             EMULATOR_SECRET_KEY: secrets[2],
@@ -889,6 +903,7 @@ async function main() {
             publicInfo(`${arkdUrl}/v1/info`, `arkade-regtest ${sha} arkd info`),
             publicInfo(`${emulatorUrl}/v1/info`, `arkade-regtest ${sha} emulator info`),
         ]);
+        const intentFees = assertZeroIntentFees(arkInfo.fees);
         const bootstrapEnv = {
             ...childEnv,
             TAXI_E2E_SECRET_FILE: secretFile,
@@ -1076,6 +1091,7 @@ async function main() {
                 profiles,
                 ports: redactSecrets(ports),
                 arkdDelays: configuredArkDelays,
+                intentFees,
             },
             images,
             fixtures,

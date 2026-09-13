@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type ArkInfo, type Wallet } from "@arkade-os/sdk";
+import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
@@ -9,6 +9,7 @@ import {
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
+import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
 import { arkInfo } from "./arkade/fixtures.js";
@@ -53,6 +54,8 @@ function setup() {
     let walletEntered = gate();
     let coins = [fundingCoin(), fundingCoin({ vout: 1, expiresAtHeight: 900001 })];
     const wallet = {
+        getAddress: async () =>
+            new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode(),
         getSpendableVtxos: async () => {
             walletEntered.release();
             await walletGate;
@@ -190,6 +193,50 @@ function setup() {
 }
 
 describe("quote and runtime refresh interleaving", () => {
+    it.each(["proceeds_collecting", "runtime_stale"])(
+        "preserves the exact pre-effect %s refusal during final inventory revalidation",
+        async (reason) => {
+            const h = setup();
+            let reads = 0;
+            let collecting = false;
+            const read = h.deps.inventory.getSpendableVtxos;
+            h.deps.inventory.getSpendableVtxos = async () => {
+                const coins = await read();
+                if (++reads === 2) {
+                    if (reason === "runtime_stale") h.setNow(NOW * 1000 + 1000);
+                    else collecting = true;
+                }
+                return coins;
+            };
+            await expect(
+                createQuote(h.deps, quoteBody(), () => {
+                    if (collecting) throw new ServiceError("not_ready", 503, reason);
+                }),
+            ).rejects.toMatchObject({
+                code: reason === "runtime_stale" ? "runtime_unsafe" : "not_ready",
+                message: reason,
+            });
+            expect(h.reservations.listReservedOutpoints()).toEqual([]);
+            expect(h.advances.byState("quoted")).toEqual([]);
+        },
+    );
+    it("rechecks proceeds readiness before reserving a quote built during collection", async () => {
+        const h = setup();
+        let collecting = false;
+        const build = h.builder.buildUnsigned.bind(h.builder);
+        h.deps.lockupBuilder.buildUnsigned = async (...args) => {
+            const result = await build(...args);
+            collecting = true;
+            return result;
+        };
+        await expect(
+            createQuote(h.deps, quoteBody(), () => {
+                if (collecting) throw new Error("proceeds_collecting");
+            }),
+        ).rejects.toThrow("proceeds_collecting");
+        expect(h.reservations.listReservedOutpoints()).toEqual([]);
+        expect(h.advances.byState("quoted")).toEqual([]);
+    });
     it("revalidates an expired readiness cache before admitting a quote", async () => {
         const h = setup();
         await h.lifecycle.start();

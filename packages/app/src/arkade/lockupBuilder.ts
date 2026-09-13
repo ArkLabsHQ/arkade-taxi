@@ -100,6 +100,8 @@ export function toArkInput(
 }
 
 export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
+    if (!isDeepStrictEqual(req.params.operatorKey, config.operatorKey))
+        throw new LockupShapeError("operator payout differs from runtime configuration");
     const operatorInputs = req.funding.inputs.map(operatorFundingInput);
     const inputs = [...req.senderInputs, ...operatorInputs];
     if (!req.senderInputs.length || !operatorInputs.length)
@@ -252,7 +254,7 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
         arkInputs: inputs.map((input, i) =>
             toArkInput(
                 input,
-                i < req.senderInputs.length ? req.params.senderKey : req.params.operatorKey,
+                i < req.senderInputs.length ? req.params.senderKey : config.operatorSignerKey,
                 config.serverPubkey,
             ),
         ),

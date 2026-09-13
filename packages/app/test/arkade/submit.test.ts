@@ -15,6 +15,7 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Advance } from "@arkade-taxi/core";
+import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
     openDatabase,
@@ -39,7 +40,7 @@ import {
     senderKey,
     serverKey,
 } from "../fixtures.js";
-import { buildRequest, unroll } from "./lockupFixtures.js";
+import { buildRequest, operatorTree, unroll } from "./lockupFixtures.js";
 
 const senderIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
 const operatorIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(3));
@@ -125,6 +126,52 @@ const provider = () => {
 };
 
 describe("persisted-fact submission validation", () => {
+    it("round-trips canonical payout facts while signing only with the separate operator identity", async () => {
+        const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
+        const request = buildRequest();
+        request.params.operatorKey = cfg.operatorKey;
+        request.covenantAddress = new DustCovenantScript({
+            params: request.params,
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        const encoded = buildLockupEnvelope(request, cfg, unroll);
+        const row = {
+            ...advance(),
+            operatorKey: cfg.operatorKey,
+            covenantAddress: request.covenantAddress,
+            unsignedLockupTx: encoded,
+            unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
+        };
+        const db = openDatabase(":memory:");
+        try {
+            const advances = new AdvanceRepository(db);
+            advances.insert(row);
+            const persisted = advances.get(row.id)!;
+            expect(persisted.operatorKey).toEqual(cfg.operatorKey);
+            const validated = validateLockupSubmission(
+                persisted,
+                await signedEnvelope(encoded),
+                cfg,
+            );
+            expect(validated.operatorSignerKey).toEqual(await operatorIdentity.xOnlyPublicKey());
+            expect(validated.operatorSignerKey).not.toEqual(persisted.operatorKey);
+            const external = provider();
+            const submitter = productionLockupSubmitter(cfg, operatorIdentity, external);
+            const prepared = await submitter.prepare(validated);
+            const signed = Transaction.fromPSBT(base64.decode(prepared.arkTx));
+            expect(signed.getInput(1).tapScriptSig!.map(([key]) => hex.encode(key.pubKey))).toEqual(
+                [hex.encode(cfg.operatorSignerKey)],
+            );
+            await submitter.submitPrepared(validated, prepared);
+            expect(external.submitTx).toHaveBeenCalledTimes(1);
+        } finally {
+            db.close();
+        }
+    });
     it("digests exactly the canonical bytes returned for persistence", async () => {
         const signed = await signedEnvelope();
         const value = JSON.parse(new TextDecoder().decode(base64.decode(signed)));

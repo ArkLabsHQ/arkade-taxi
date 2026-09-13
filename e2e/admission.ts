@@ -1,6 +1,13 @@
 import { signLockup, TaxiError, type TaxiClient, type VerifiedQuote } from "@arkade-taxi/client";
 import type { Identity } from "@arkade-os/sdk";
 
+const transientReadiness = [
+    "runtime_checking",
+    "runtime_stale",
+    "proceeds_collecting",
+    "proceeds_output_pending",
+];
+
 export interface AdmissionWindow {
     readyUrl: string;
     expiresAt: number;
@@ -30,8 +37,11 @@ export async function preEffectRequest<T>(
         } catch (error) {
             if (
                 !(error instanceof TaxiError) ||
-                error.code !== "not_ready" ||
-                (error.message !== "runtime_checking" && error.message !== "runtime_stale")
+                !(
+                    (error.code === "not_ready" && transientReadiness.includes(error.message)) ||
+                    (error.code === "runtime_unsafe" &&
+                        ["runtime_checking", "runtime_stale"].includes(error.message))
+                )
             )
                 throw error;
             if (index + 1 === limit)
@@ -52,15 +62,14 @@ export async function preEffectRequest<T>(
             )
                 break;
             const allowed = [
-                "runtime_checking",
-                "runtime_stale",
+                ...transientReadiness,
                 "chain_height_unavailable",
                 "chain_time_unavailable",
             ];
             if (
                 response.status !== 503 ||
                 body.status !== "degraded" ||
-                (body.reason !== "runtime_checking" && body.reason !== "runtime_stale") ||
+                !transientReadiness.includes(body.reason) ||
                 !Array.isArray(body.blockers) ||
                 !body.blockers.includes(body.reason) ||
                 body.blockers.some((code: unknown) => !allowed.includes(code as string))

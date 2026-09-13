@@ -1,4 +1,5 @@
-import { SingleKey } from "@arkade-os/sdk";
+import { DefaultVtxo, SingleKey } from "@arkade-os/sdk";
+import { createProviders, verifyProviders } from "./arkade/providers.js";
 import { hexToBytes } from "@arkade-taxi/protocol";
 import { z } from "zod";
 
@@ -20,6 +21,7 @@ export interface TaxiConfig {
     recoveryCriticalSeconds: bigint;
     reconcileIntervalMs: number;
     operatorMinReserveSats: bigint;
+    proceedsMaxFeeSats: bigint;
     /** The operator signs its own funding inputs at lockup. It is never a
      * covenant signer — no leaf carries its key in a multisig. */
     operatorPrivkey: Uint8Array;
@@ -31,10 +33,10 @@ export interface TaxiConfig {
     addressHrp: string;
 }
 
-/** `operatorKey` is derived asynchronously, so it cannot come out of the
- * synchronous `loadConfig`. */
+/** Public payout destination and private-wallet funding signer are distinct. */
 export interface RuntimeConfig extends TaxiConfig {
     operatorKey: Uint8Array;
+    operatorSignerKey: Uint8Array;
 }
 
 export interface ConfigIssue {
@@ -96,6 +98,11 @@ const SCHEMA = z
         TAXI_RECOVERY_CRITICAL_SECONDS: positiveSats.default("7200"),
         TAXI_RECONCILE_INTERVAL_MS: interval.default("30000"),
         TAXI_OPERATOR_MIN_RESERVE_SATS: positiveSats.default("10000"),
+        TAXI_PROCEEDS_MAX_FEE_SATS: z
+            .string()
+            .regex(DECIMAL, "must be a non-negative integer")
+            .transform(BigInt)
+            .default("0"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
         TAXI_SERVER_PUBKEY: hexKey,
         TAXI_EMULATOR_PUBKEY: hexKey,
@@ -170,6 +177,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         recoveryCriticalSeconds: v.TAXI_RECOVERY_CRITICAL_SECONDS,
         reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
+        proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
         serverPubkey: v.TAXI_SERVER_PUBKEY,
         emulatorPubkey: v.TAXI_EMULATOR_PUBKEY,
@@ -180,10 +188,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
     };
 }
 
-export async function resolveRuntimeConfig(cfg: TaxiConfig): Promise<RuntimeConfig> {
-    let operatorKey: Uint8Array;
+export async function resolveRuntimeConfig(
+    cfg: TaxiConfig,
+    providers: Parameters<typeof verifyProviders>[1] = createProviders(cfg),
+): Promise<RuntimeConfig> {
+    let operatorSignerKey: Uint8Array;
     try {
-        operatorKey = await SingleKey.fromPrivateKey(cfg.operatorPrivkey).xOnlyPublicKey();
+        operatorSignerKey = await SingleKey.fromPrivateKey(cfg.operatorPrivkey).xOnlyPublicKey();
     } catch {
         throw new ConfigError([
             {
@@ -192,5 +203,16 @@ export async function resolveRuntimeConfig(cfg: TaxiConfig): Promise<RuntimeConf
             },
         ]);
     }
-    return { ...cfg, operatorKey };
+    const verified = await verifyProviders(cfg, providers);
+    if (verified.blockers.length || !verified.info)
+        throw new Error(
+            `operator payout provider verification failed: ${verified.blockers.join(", ")}`,
+        );
+    const delay = verified.info.unilateralExitDelay;
+    const script = new DefaultVtxo.Script({
+        pubKey: operatorSignerKey,
+        serverPubKey: cfg.serverPubkey,
+        csvTimelock: { value: delay, type: delay < 512n ? "blocks" : "seconds" },
+    });
+    return { ...cfg, operatorKey: script.tweakedPublicKey, operatorSignerKey };
 }

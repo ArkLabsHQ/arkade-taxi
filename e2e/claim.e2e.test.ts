@@ -1,6 +1,13 @@
 import { expect } from "vitest";
 import { writeFileSync } from "node:fs";
-import { ArkAddress, Extension, Transaction, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
+import {
+    ArkAddress,
+    Extension,
+    Transaction,
+    VtxoScript,
+    asset,
+    selectCoinsWithAsset,
+} from "@arkade-os/sdk";
 import { TaxiClient } from "@arkade-taxi/client";
 import type { ClaimsSnapshotResponse, ReceiverClaimWire } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
@@ -102,10 +109,19 @@ async function claim(receiverName: string, withAsset: boolean, mode: "recycle" |
             sats: senderBefore.sats - 329n,
             units: senderBefore.units - (withAsset ? 100n : 0n),
         });
-        expect(await walletBalance(live.actors.operator, live.fixture.asset.assetId)).toEqual({
-            sats: operatorBefore.sats - 2n,
+        const expectedOperator = {
+            sats: operatorBefore.sats - (mode === "purchase" ? 1n : 0n),
             units: operatorBefore.units,
-        });
+        };
+        expect(
+            await poll(
+                "spendable operator proceeds",
+                () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
+                (balance) =>
+                    balance.sats === expectedOperator.sats &&
+                    balance.units === expectedOperator.units,
+            ),
+        ).toEqual(expectedOperator);
     } finally {
         await live.close();
     }
@@ -131,6 +147,9 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
     const bob = live.actors[mode === "recycle" ? "receiverSats" : "emptyReceiver"];
     const receiverAddress = await bob.wallet.getAddress();
     const destination = ArkAddress.decode(receiverAddress).pkScript;
+    const operatorAddress = ArkAddress.decode(await live.actors.operator.wallet.getAddress());
+    expect(hex.encode(operatorAddress.vtxoTaprootKey)).toBe(live.info.operatorKey);
+    expect(live.info.operatorKey).not.toBe(live.fixture.operator.pubkey);
     const receiverAddresses = [
         receiverAddress,
         await live.actors.receiverWithAsset.wallet.getAddress(),
@@ -387,17 +406,121 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             sats: aliceBefore.sats - 329n,
             units: 0n,
         });
-        expect(await walletBalance(live.actors.operator, minted.assetId)).toEqual({
-            sats: operatorBefore.sats - (mode === "purchase" ? 2n : 1n),
-            units: operatorBefore.units,
-        });
+        const expectedOperator = {
+            sats: operatorBefore.sats - (mode === "purchase" ? 1n : 0n),
+            units: operatorBefore.units + (mode === "purchase" ? 1_000_000n : 0n),
+        };
+        const operatorAfter = await poll(
+            "Taxi receives spendable repayment or exactly 1 USDT fare",
+            () => walletBalance(live.actors.operator, minted.assetId),
+            (balance) =>
+                balance.sats === expectedOperator.sats && balance.units === expectedOperator.units,
+        );
+        expect(operatorAfter).toEqual(expectedOperator);
+        const receiptPoint = {
+            txid: mode === "purchase" ? lockup.txid : txid,
+            vout: mode === "purchase" ? 1 : 0,
+        };
+        const receipt = (await live.indexer.getVtxos({ outpoints: [receiptPoint] })).vtxos.find(
+            (coin) => coin.txid === receiptPoint.txid && coin.vout === receiptPoint.vout,
+        );
+        expect(receipt).toBeDefined();
+        expect(receipt!.value).toBe(1);
+        expect(receipt!.script).toBe(`5120${live.info.operatorKey}`);
+        expect(receipt!.isSpent).toBe(true);
+        expect(receipt!.settledBy).toMatch(/^[0-9a-f]{64}$/);
+        expect(receipt!.assets ?? []).toEqual(
+            mode === "purchase" ? [{ assetId: minted.assetId, amount: 1_000_000n }] : [],
+        );
+        const collected = (
+            await live.actors.operator.wallet.getSpendableVtxos({ withRecoverable: false })
+        ).filter((coin) => coin.commitmentTxIds?.includes(receipt!.settledBy!));
+        expect(collected).toHaveLength(1);
+        expect(hex.encode(VtxoScript.decode(collected[0]!.tapTree).tweakedPublicKey)).toBe(
+            live.info.operatorKey,
+        );
+        expect(collected[0]!.assets ?? []).toEqual(
+            mode === "purchase" ? [{ assetId: minted.assetId, amount: 1_000_000n }] : [],
+        );
+        const collectionStatus = await poll(
+            "service completes its proceeds job",
+            () => admin("status"),
+            (status) =>
+                status.readiness?.proceeds?.state === "idle" &&
+                status.readiness.proceeds.blocker === null,
+        );
+        expect(collectionStatus.readiness.proceeds.maxFeeSats).toBe("0");
         const row = (await admin("advances")).advances.find(
             (item: any) => item.id === quote.transferId,
         );
         expect(row).toMatchObject({ state: finalState, spentTxid: txid });
+        await admin("policy", {
+            assetRules: [
+                {
+                    assetId: null,
+                    enabled: true,
+                    fares: [
+                        {
+                            id: "sats",
+                            currency: { kind: "sats" },
+                            pricing: { kind: "flat", units: "1" },
+                        },
+                    ],
+                    claim: "either",
+                    maxTopupSats: null,
+                },
+            ],
+        });
+        const second = await lock(
+            live,
+            await quoteFor(live, "receiverWithAsset", await sizedSender(live)),
+        );
+        const secondEvent = await eventFor(second.quote.transferId, "locked");
+        expect(secondEvent.receiverAddress).toBe(receiverAddresses[1]);
+        const secondTransfer = await inbox.verifyIncomingClaim(
+            secondEvent,
+            { receiverAddress: receiverAddresses[1]! },
+            {
+                serverKey: hex.decode(live.info.serverKey),
+                emulatorKey: hex.decode(live.info.emulatorKey),
+                operatorKey: hex.decode(live.info.operatorKey),
+                vtxoMinAmount: 1n,
+                hrp: "tark",
+            },
+            live.config,
+        );
+        const secondTxid = await inbox.purchase(secondTransfer, second.destination);
+        const secondFinal = await eventFor(second.quote.transferId, "purchased");
+        expect(secondFinal).toMatchObject({
+            receiverAddress: receiverAddresses[1],
+            claimable: false,
+            spentTxid: secondTxid,
+        });
+        await terminal(live, second, "purchased", secondTxid);
+        const secondOperatorAfter = await poll(
+            "second-address proceeds are collected before releasing the fixture",
+            () => walletBalance(live.actors.operator, minted.assetId),
+            (balance) =>
+                balance.sats === operatorAfter.sats - 1n && balance.units === operatorAfter.units,
+        );
+        expect(secondOperatorAfter).toEqual({
+            sats: operatorAfter.sats - 1n,
+            units: operatorAfter.units,
+        });
+        await poll(
+            "second-address service collection finishes",
+            () => admin("status"),
+            (status) =>
+                status.readiness?.proceeds?.state === "idle" &&
+                status.readiness.proceeds.blocker === null,
+        );
         expect((await admin("status")).exposure.outstandingSats).toBe("0");
         expect(await inbox.listClaims({ receiverAddresses })).toEqual({ claims: [] });
         expect(errors).toEqual([]);
+        expect(snapshots).toHaveLength(1);
+        expect(new Set(changes.map((claim) => claim.receiverAddress))).toEqual(
+            new Set(receiverAddresses),
+        );
         const states = changes
             .filter((claim) => claim.transferId === quote.transferId)
             .map((claim) => claim.state)
@@ -420,6 +543,15 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             spendTxid: txid,
             receiverUnits: bobAfter.units.toString(),
             receiverSats: bobAfter.sats.toString(),
+            operatorAddress: operatorAddress.encode(),
+            operatorSatsBefore: operatorBefore.sats.toString(),
+            operatorSatsAfter: operatorAfter.sats.toString(),
+            operatorUnitsBefore: operatorBefore.units.toString(),
+            operatorUnitsAfter: operatorAfter.units.toString(),
+            secondTransferId: second.quote.transferId,
+            secondSpendTxid: secondTxid,
+            collectionCommitmentTxid: receipt!.settledBy,
+            collectedOutpoint: { txid: collected[0]!.txid, vout: collected[0]!.vout },
         };
         assertArtifactSafe(evidence);
         writeFileSync(

@@ -7,7 +7,7 @@ import {
 } from "@arkade-os/sdk";
 import { buildLockupEnvelope } from "../../app/src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
-import { config, fundingCoin } from "../../app/test/fixtures.js";
+import { config, fundingCoin, operatorTree } from "../../app/test/fixtures.js";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import { bytesToHex, quoteParamsToWire, type FundingInputValue } from "@arkade-taxi/protocol";
 import type { InfoResponse, QuoteResponse } from "@arkade-taxi/protocol";
@@ -28,7 +28,7 @@ const xonly = (fill: number) =>
 
 export const receiverKey = await xonly(1);
 export const senderKey = await xonly(2);
-export const operatorKey = await xonly(3);
+export const operatorKey = operatorTree.tweakedPublicKey;
 export const serverKey = await xonly(4);
 export const emulatorKey = await xonly(5);
 export const otherKey = await xonly(6);
@@ -115,7 +115,7 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
         },
-        config(),
+        config({ operatorKey: p.operatorKey }),
         opts.serverUnrollScript ?? unroll,
     );
     const envelope = decodeLockupEnvelope(unsignedLockupTx);

@@ -12,7 +12,7 @@ import type {
     QuoteResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
-import { createRoutes, type RouteDeps } from "../src/routes.js";
+import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
@@ -496,6 +496,37 @@ describe("receiver claim routes", () => {
 });
 
 describe("runtime admission and readiness", () => {
+    it("blocks new quotes until an active collection output is verified", () => {
+        const d = deps();
+        d.proceeds = () => ({
+            running: true,
+            jobId: "collection",
+            state: "settling",
+            blocker: null,
+            maxFeeSats: "0",
+            authorizedFeeSats: "0",
+            commitmentTxid: null,
+        });
+        const result = operationalSnapshot(d);
+        expect(result.ready).toBe(false);
+        expect(result.body.blockers).toContain("proceeds_collecting");
+    });
+    it("exposes a fee-blocked proceeds collector without hiding its authorization", () => {
+        const d = deps();
+        d.proceeds = () => ({
+            running: false,
+            jobId: null,
+            state: "idle",
+            blocker: "proceeds_fee_cap_exceeded",
+            maxFeeSats: "0",
+            authorizedFeeSats: null,
+            commitmentTxid: null,
+        });
+        const result = operationalSnapshot(d);
+        expect(result.ready).toBe(false);
+        expect(result.body.blockers).toContain("proceeds_fee_cap_exceeded");
+        expect(result.body.proceeds).toEqual(d.proceeds());
+    });
     it.each([
         { blockers: [] },
         { blockers: ["runtime_checking"] },

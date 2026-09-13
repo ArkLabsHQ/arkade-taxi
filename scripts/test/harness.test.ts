@@ -53,8 +53,24 @@ import {
     taxiLogArgs,
 } from "../lib/harness.mjs";
 import { settleSelectedFunding } from "../e2e-settle.mjs";
-import { ARKD_DELAYS } from "../e2e-stack.mjs";
+import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
 import { expiryOf } from "../e2e-wallets.mjs";
+
+it("pins and verifies the zero-fee settlement fixture without raising Taxi fee authority", () => {
+    expect(Object.values(ARKD_FEES)).toEqual(["0.0", "0.0", "0.0", "0.0"]);
+    const fees = {
+        offchainInput: "0.0",
+        onchainInput: "0.0",
+        offchainOutput: "0.0",
+        onchainOutput: "0.0",
+    };
+    expect(assertZeroIntentFees({ intentFee: fees })).toEqual(fees);
+    for (const field of Object.keys(fees))
+        expect(() =>
+            assertZeroIntentFees({ intentFee: { ...fees, [field]: "amount * 0.01" } }),
+        ).toThrow(/zero.*fee/);
+    expect(() => assertZeroIntentFees({})).toThrow(/zero.*fee/);
+});
 
 it("survives transiently absent arkd ports and rebinds to the current admin endpoint", async () => {
     const readyServer = createServer((_request, response) => response.writeHead(200).end("ready"));

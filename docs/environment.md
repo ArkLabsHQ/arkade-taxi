@@ -10,7 +10,7 @@ Live fee rules, exposure caps and the pause switch are separate database policy,
 and every operator edit is audited.
 
 The consequence worth knowing before you go looking for a missing knob: **the
-caps and the fee schedule are not environment variables.** They live in the
+customer pricing caps and fare schedule are not environment variables.** They live in the
 `policy` row, and `DEFAULT_POLICY` in `packages/db/src/policy.ts` seeds
 `paused: true` with every cap at zero and an empty asset allowlist. A correctly
 configured service quotes nothing until an operator sets them. That is
@@ -18,21 +18,22 @@ deliberate — it refuses to guess a price.
 
 ## Variables
 
-| Variable                | Default    | Required | Shape                           |
-| ----------------------- | ---------- | -------- | ------------------------------- |
-| `TAXI_DB_PATH`          | `:memory:` | no       | path                            |
-| `TAXI_HTTP_PORT`        | `8080`     | no       | 1–65535                         |
-| `TAXI_ARKD_URL`         | —          | **yes**  | absolute URL                    |
-| `TAXI_INDEXER_URL`      | —          | **yes**  | absolute URL                    |
-| `TAXI_ESPLORA_URL`      | —          | **yes**  | absolute API URL                |
-| `TAXI_EMULATOR_URL`     | —          | **yes**  | absolute URL                    |
-| `TAXI_OPERATOR_PRIVKEY` | —          | **yes**  | 64 hex (32-byte private key)    |
-| `TAXI_SERVER_PUBKEY`    | —          | **yes**  | 64 hex (32-byte x-only)         |
-| `TAXI_EMULATOR_PUBKEY`  | —          | **yes**  | 64 hex (32-byte x-only)         |
-| `TAXI_DUST`             | —          | **yes**  | positive decimal sats           |
-| `TAXI_VTXO_MIN_AMOUNT`  | —          | **yes**  | positive decimal, ≤ `TAXI_DUST` |
-| `TAXI_LOG_LEVEL`        | `info`     | no       | `trace`…`fatal`                 |
-| `TAXI_ADDRESS_HRP`      | `ark`      | no       | bech32m prefix                  |
+| Variable                     | Default    | Required | Shape                           |
+| ---------------------------- | ---------- | -------- | ------------------------------- |
+| `TAXI_DB_PATH`               | `:memory:` | no       | path                            |
+| `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                         |
+| `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                    |
+| `TAXI_INDEXER_URL`           | —          | **yes**  | absolute URL                    |
+| `TAXI_ESPLORA_URL`           | —          | **yes**  | absolute API URL                |
+| `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                    |
+| `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key)    |
+| `TAXI_SERVER_PUBKEY`         | —          | **yes**  | 64 hex (32-byte x-only)         |
+| `TAXI_EMULATOR_PUBKEY`       | —          | **yes**  | 64 hex (32-byte x-only)         |
+| `TAXI_DUST`                  | —          | **yes**  | positive decimal sats           |
+| `TAXI_VTXO_MIN_AMOUNT`       | —          | **yes**  | positive decimal, ≤ `TAXI_DUST` |
+| `TAXI_LOG_LEVEL`             | `info`     | no       | `trace`…`fatal`                 |
+| `TAXI_ADDRESS_HRP`           | `ark`      | no       | bech32m prefix                  |
+| `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats       |
 
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
@@ -89,11 +90,13 @@ you cannot route around, because it is one.
 A 32-byte secp256k1 private key, 64 lowercase hex. The operator signs its own
 funding inputs at lockup with it and is never a covenant signer.
 
-Malformed, or not a valid key, and the service refuses to start. Valid but _not
-the key you meant_ is the dangerous case: the derived x-only public key goes
-into the pinned payout output of every covenant, so every repayment lands
-somewhere the operator cannot spend from. Nothing detects this until money has
-moved.
+Malformed or invalid keys stop startup. After verifying the provider identity,
+Taxi derives the SDK wallet's canonical Arkade output key from this signing
+key, the pinned server key and its exit delay. Quotes persist that output key;
+the raw x-only signing key is not the payout destination. Runtime checks the
+actual wallet address before reading inventory or admitting funds. A different
+valid key creates a different wallet, so back up the intended identity and check
+the funded wallet address before enabling admission.
 
 Supply it through the deployment's secret manager as `TAXI_OPERATOR_PRIVKEY`.
 The application has no `_FILE` setting: a secret-aware launcher must inject the
@@ -101,6 +104,20 @@ value into the process environment. Never bake it into an image, commit it,
 put it on a command line or include it in logs. Keep an encrypted, independently
 recoverable backup of the key separate from the database backup. See the
 [key rotation procedure](runbook.md#key-rotation).
+
+### `TAXI_PROCEEDS_MAX_FEE_SATS`
+
+Maximum fee authorized for one ordinary wallet settlement collecting Taxi's
+validated proceeds. Defaults to `0`. Subdust repayments and asset fares can be
+recoverable receipts rather than immediately spendable VTXOs; Taxi consolidates
+them with an unreserved ordinary operator coin while preserving every asset
+group and the configured funding reserve. It never settles covenant inputs here.
+
+If quoted fees exceed the cap, receipts remain recoverable and health/admin
+status reports `proceeds_fee_cap_exceeded`. Deliberately configure a higher cap
+and restart for a fee-charging deployment. Each created job persists its exact
+fee and authorization; changing the environment cannot widen an in-flight job.
+Ambiguous intents retain reservations for reconciliation, including after restart.
 
 ### `TAXI_SERVER_PUBKEY` and `TAXI_EMULATOR_PUBKEY`
 
