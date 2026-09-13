@@ -33,7 +33,15 @@ it.each([
     vi.stubEnv("TAXI_E2E_BASE_URL", "http://localhost:12345");
     vi.stubEnv("TAXI_E2E_PROJECT", "taxi-test");
     failures.artifact = failure === "artifact";
-    vi.stubGlobal("fetch", async () => {
+    vi.stubGlobal("fetch", async (url: string) => {
+        if (url.endsWith("/ready"))
+            return new Response(
+                JSON.stringify({
+                    status: "ok",
+                    blockers: [],
+                    sweeper: { lastTickAt: Math.floor(Date.now() / 1000) },
+                }),
+            );
         if (failure === "health") throw new Error("health unavailable");
         return new Response("{}");
     });

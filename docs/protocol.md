@@ -72,7 +72,44 @@ facts. The lifecycle is `quoted` → `locking` → `locked`, then an observed
 `recovered`. Unsubmitted quotes can become `expired`. A candidate transaction
 ID, HTTP success or stream notification is not a terminal-state proof.
 
-## No claim or refund endpoints
+## `GET /v1/claims`
+
+Read-only receiver discovery. Pass repeated URL-encoded `receiver` query keys,
+for example `/v1/claims?receiver=<address-a>&receiver=<address-b>`. A batch must
+contain 1–64 unique canonical Arkade addresses for Taxi's configured network and
+Arkade server key; duplicate addresses are deduplicated. Invalid batches return
+HTTP 400 with `invalid_receiver_batch`.
+
+The snapshot is `{ "claims": [...] }` containing active `locking`, `locked` and
+`recovering` transfers for those receivers. Each entry identifies the transfer,
+receiver, ledger state and update time. A validated locked transfer includes the
+public descriptor needed for independent claim verification. `locking` and
+`recovering` entries are not claimable. Discovery is not proof that an output is
+currently spendable.
+
+## `GET /v1/claims/events`
+
+A batched Server-Sent Events subscription uses the same repeated `receiver`
+query keys and validation. One connection covers the whole batch. The initial
+`claims-snapshot` event contains `{ "claims": [...] }` with active transfers;
+subsequent `claims-changed` events use the same shape and include changed active
+or terminal transfers. Terminal entries are not claimable. Clients should
+replace their active snapshot on connection or reconnect and apply changes by
+`transferId`; this is not a durable event replay or terminal-state proof.
+
+Both discovery endpoints are unauthenticated. Anyone who knows a receiver
+address can discover its Taxi transfer metadata, amounts and public claim
+descriptors; putting multiple addresses in one query can also correlate them
+in server, proxy or access logs. Treat receiver addresses and discovery URLs as
+privacy-sensitive. Discovery neither authenticates a receiver nor authorizes
+a payment or spend.
+
+The client must run `verifyIncomingClaim` with independently trusted provider
+pins and fresh chain/indexer evidence before calling its local verified
+`purchase` or `recycle` flow. HTTP data and SSE notifications cannot replace
+that verification or the caller's payment authorization.
+
+## No claim-spend or refund-submission endpoints
 
 Both are client-side by construction. Every leaf is
 `Multisig[server, ⊕script]` — the operator is a payout destination, never a

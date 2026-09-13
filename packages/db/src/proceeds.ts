@@ -13,6 +13,10 @@ export interface ProceedsJob {
     blocker: string | null;
     commitmentTxid: string | null;
 }
+export interface ProceedsSubmissionEvidence {
+    state: "unsubmitted" | "entered";
+    localIntents: string[];
+}
 type Row = Omit<ProceedsJob, "plan"> & { plan_json: string };
 const columns = "id, plan_json, state, blocker, commitment_txid AS commitmentTxid";
 const decode = (row: Row | undefined): ProceedsJob | undefined =>
@@ -67,6 +71,56 @@ export class ProceedsRepository {
                 .get(id, owner, now)
         )
             throw new Error("proceeds_lease_lost");
+    }
+    submissionEvidence(id: string): ProceedsSubmissionEvidence {
+        assertNativeAccess(this.db);
+        const row = this.db
+            .prepare<[string], { state: string }>(
+                "SELECT submission_state AS state FROM proceeds_jobs WHERE id = ?",
+            )
+            .get(id);
+        if (row?.state !== "unsubmitted" && row?.state !== "entered")
+            throw new Error("proceeds_submission_evidence_missing");
+        return {
+            state: row.state,
+            localIntents: this.db
+                .prepare<[string], { digest: string }>(
+                    "SELECT digest FROM proceeds_local_intents WHERE job_id = ? ORDER BY digest",
+                )
+                .all(id)
+                .map(({ digest }) => digest),
+        };
+    }
+    rememberLocalIntent(id: string, owner: string, now: number, digest: string): void {
+        assertNativeAccess(this.db);
+        this.db
+            .transaction(() => {
+                this.assertLease(id, owner, now);
+                if (this.submissionEvidence(id).state !== "unsubmitted")
+                    throw new Error("proceeds_submission_ambiguous");
+                this.db
+                    .prepare(
+                        "INSERT OR IGNORE INTO proceeds_local_intents (job_id, digest) VALUES (?, ?)",
+                    )
+                    .run(id, digest);
+            })
+            .immediate();
+    }
+    enterSubmission(id: string, owner: string, now: number, digest: string): void {
+        assertNativeAccess(this.db);
+        this.db
+            .transaction(() => {
+                this.assertLease(id, owner, now);
+                const evidence = this.submissionEvidence(id);
+                if (evidence.state !== "unsubmitted")
+                    throw new Error("proceeds_submission_ambiguous");
+                if (!evidence.localIntents.includes(digest))
+                    throw new Error("proceeds_intent_unbound");
+                this.db
+                    .prepare("UPDATE proceeds_jobs SET submission_state = 'entered' WHERE id = ?")
+                    .run(id);
+            })
+            .immediate();
     }
     create(
         id: string,

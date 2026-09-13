@@ -117,6 +117,7 @@ describe("migrations", () => {
             "policy_audit",
             "proceeds_inputs",
             "proceeds_jobs",
+            "proceeds_local_intents",
             "sqlite_sequence",
         ]);
         const columns = db
@@ -168,11 +169,23 @@ describe("migrations", () => {
     it("rejects old v1 without proceeds storage without changing its data", () => {
         const db = migrated();
         insertRaw(db);
-        db.exec("DROP TABLE proceeds_inputs; DROP TABLE proceeds_jobs");
+        db.exec(
+            "DROP TABLE proceeds_local_intents; DROP TABLE proceeds_inputs; DROP TABLE proceeds_jobs",
+        );
         db.pragma("user_version = 1");
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
+        db.close();
+    });
+    it("rejects old canonical v1 without Taxi-owned submission evidence without mutation", () => {
+        const db = migrated();
+        insertRaw(db);
+        db.exec("DROP TABLE proceeds_local_intents");
+        const before = db.serialize();
+        expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+        expect(db.serialize()).toEqual(before);
+        expect(userVersion(db)).toBe(1);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

@@ -15,11 +15,12 @@ import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
-import { ReceiverClaimFeed } from "./claimFeed.js";
+import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
 
 export interface RouteDeps extends QuoteDeps {
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
+    claimFeedLogger?: ClaimFeedLogger;
     sweeper: Pick<Sweeper, "status">;
     reconciler: Pick<LockupReconciler, "status">;
     /** Seconds since the last completed tick after which /health reports

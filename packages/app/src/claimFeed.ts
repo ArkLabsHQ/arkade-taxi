@@ -1,6 +1,14 @@
 import { TERMINAL_STATES, type Advance } from "@arkade-taxi/core";
 import { bytesToHex, type ClaimsChangedEvent, type ReceiverClaimWire } from "@arkade-taxi/protocol";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims } from "./claims.js";
+import { ServiceError } from "./errors.js";
+
+export interface ClaimFeedLogger {
+    error(
+        diagnostic: { stage: "sampling" | "projection"; errorCode: string },
+        message: string,
+    ): void;
+}
 
 export interface ClaimFeedListener {
     onChanged(event: ClaimsChangedEvent): void | Promise<void>;
@@ -34,7 +42,24 @@ export class ReceiverClaimFeed {
     private timer?: ReturnType<typeof setInterval>;
     private closed = false;
 
-    constructor(private readonly deps: Parameters<typeof listReceiverClaims>[0]) {}
+    constructor(
+        private readonly deps: Parameters<typeof listReceiverClaims>[0] & {
+            claimFeedLogger?: ClaimFeedLogger;
+        },
+    ) {}
+
+    private diagnose(stage: "sampling" | "projection", error: unknown): void {
+        const code = error instanceof Error && "code" in error ? error.code : undefined;
+        const errorCode =
+            typeof code === "string" && /^SQLITE_[A-Z_]{1,40}$/.test(code)
+                ? code
+                : error instanceof ServiceError && error.code === "internal_error"
+                  ? "internal_error"
+                  : "unexpected_error";
+        try {
+            this.deps.claimFeedLogger?.error({ stage, errorCode }, "receiver claim feed failed");
+        } catch {}
+    }
 
     subscribe(
         receiverKeys: readonly Uint8Array[],
@@ -84,7 +109,8 @@ export class ReceiverClaimFeed {
         let rows: Advance[];
         try {
             rows = this.deps.advances.byReceiverKeys([...keys.values()]);
-        } catch {
+        } catch (error) {
+            this.diagnose("sampling", error);
             subscriptions.forEach((subscription) => this.fail(subscription));
             return;
         }
@@ -109,7 +135,8 @@ export class ReceiverClaimFeed {
                         [...ACTIVE_CLAIM_STATES, ...TERMINAL_STATES],
                     ),
                 );
-            } catch {
+            } catch (error) {
+                this.diagnose("projection", error);
                 projected.set(key, null);
             }
         }

@@ -26,8 +26,9 @@ function locked(): Advance {
 function setup() {
     const advances = new MemoryAdvances();
     const reads = vi.spyOn(advances, "byReceiverKeys");
-    const feed = new ReceiverClaimFeed({ advances, config: config() });
-    return { advances, reads, feed };
+    const claimFeedLogger = { error: vi.fn() };
+    const feed = new ReceiverClaimFeed({ advances, config: config(), claimFeedLogger });
+    return { advances, reads, feed, claimFeedLogger };
 }
 
 const listener = () => ({ onChanged: vi.fn(), onError: vi.fn() });
@@ -40,6 +41,50 @@ afterEach(() => {
 });
 
 describe("ReceiverClaimFeed", () => {
+    it.each(["sampling", "projection"])(
+        "logs a safe %s diagnostic without claim material",
+        async (stage) => {
+            const { advances, reads, feed, claimFeedLogger } = setup();
+            const secret = "signed-psbt=private-claim-material";
+            if (stage === "sampling")
+                reads.mockImplementation(() => {
+                    throw Object.assign(new Error(secret), { code: "SQLITE_FULL" });
+                });
+            else advances.insert(advance({ state: "locked", unsignedLockupTx: secret }));
+            const failed = listener();
+            feed.subscribe([receiverKey], failed);
+            await vi.advanceTimersByTimeAsync(250);
+            expect(claimFeedLogger.error).toHaveBeenCalledExactlyOnceWith(
+                {
+                    stage,
+                    errorCode: stage === "sampling" ? "SQLITE_FULL" : "internal_error",
+                },
+                "receiver claim feed failed",
+            );
+            expect(JSON.stringify(claimFeedLogger.error.mock.calls)).not.toContain(
+                "private-claim-material",
+            );
+            expect(JSON.stringify(claimFeedLogger.error.mock.calls)).not.toContain(
+                bytesToHex(receiverKey),
+            );
+            expect(failed.onError).toHaveBeenCalledExactlyOnceWith(new Error("internal error"));
+            expect(failed.onChanged).not.toHaveBeenCalled();
+        },
+    );
+    it("still closes failed subscriptions if the operator logger throws", async () => {
+        const { reads, feed, claimFeedLogger } = setup();
+        reads.mockImplementation(() => {
+            throw new Error("private database detail");
+        });
+        claimFeedLogger.error.mockImplementation(() => {
+            throw new Error("logging unavailable");
+        });
+        const failed = listener();
+        feed.subscribe([receiverKey], failed);
+        await vi.advanceTimersByTimeAsync(250);
+        expect(claimFeedLogger.error).toHaveBeenCalledTimes(1);
+        expect(failed.onError).toHaveBeenCalledExactlyOnceWith(new Error("internal error"));
+    });
     it("closes every subscription and cannot restart after service shutdown", async () => {
         const { advances, reads, feed } = setup();
         advances.insert(advance({ state: "locking" }));

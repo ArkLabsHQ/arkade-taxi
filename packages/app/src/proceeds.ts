@@ -1,8 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
     ArkAddress,
     Estimator,
+    Intent,
     Transaction,
     VtxoScript,
     asset,
@@ -29,6 +30,10 @@ import { classifyObservedSpend } from "./watcher.js";
 import { normalizeExpiry, verifyProviders } from "./arkade/providers.js";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
+const intentDigest = (proof: string, message: string) =>
+    createHash("sha256")
+        .update(JSON.stringify([proof, message]))
+        .digest("hex");
 const outpoint = ({ txid, vout }: Outpoint): Outpoint => ({ txid, vout });
 const fail = (code: string): never => {
     throw new Error(code);
@@ -241,8 +246,11 @@ export function planProceeds(
 
 export function reconcileProceeds(
     coins: VirtualCoin[],
-    intents: Pick<ArkIntent, "validUntil">[],
+    intents: Partial<
+        Pick<ArkIntent, "validUntil" | "state" | "registerProof" | "registerProofMessage">
+    >[],
     now: number,
+    evidence: ReturnType<ProceedsRepository["submissionEvidence"]>,
 ):
     | { kind: "retry" | "pending" }
     | { kind: "quarantined"; blocker: string }
@@ -256,8 +264,21 @@ export function reconcileProceeds(
         return { kind: "verify", commitmentTxid: settled };
     if (!coins.length || coins.some((c) => c.isSpent || c.isUnrolled || c.spentBy || c.settledBy))
         return { kind: "quarantined", blocker: "proceeds_input_conflict" };
+    if (evidence.state !== "unsubmitted")
+        return { kind: "quarantined", blocker: "proceeds_submission_ambiguous" };
+    const unresolved = intents.filter(
+        (intent) =>
+            !(
+                intent.state === "cancelled" &&
+                typeof intent.registerProof === "string" &&
+                typeof intent.registerProofMessage === "string" &&
+                evidence.localIntents.includes(
+                    intentDigest(intent.registerProof, intent.registerProofMessage),
+                )
+            ),
+    );
     if (
-        intents.some(
+        unresolved.some(
             (i) =>
                 i.validUntil === undefined ||
                 !Number.isSafeInteger(i.validUntil) ||
@@ -265,7 +286,7 @@ export function reconcileProceeds(
         )
     )
         return { kind: "quarantined", blocker: "proceeds_ambiguous_intent" };
-    return { kind: intents.every((i) => i.validUntil! < now) ? "retry" : "pending" };
+    return { kind: unresolved.every((i) => i.validUntil! < now) ? "retry" : "pending" };
 }
 
 export interface ProceedsStatus {
@@ -456,7 +477,7 @@ export function createProceedsCollector(deps: Deps) {
         const intents = await runtime.storage.intentRepository.getIntents({
             containingInputs: plan.inputs,
         });
-        const outcome = reconcileProceeds(inputs, intents, now());
+        const outcome = reconcileProceeds(inputs, intents, now(), jobs.submissionEvidence(job.id));
         if (outcome.kind === "verify") {
             await confirmOutput(job.id, plan, outcome.commitmentTxid);
             return;
@@ -577,8 +598,14 @@ export function createProceedsCollector(deps: Deps) {
                     jobs.update(id, "settling", "proceeds_output_pending", commitment);
                     await confirmOutput(id, plan, commitment);
                 },
-                async () => {
+                async (intent) => {
+                    const digest = intentDigest(intent.proof, Intent.encodeMessage(intent.message));
+                    jobs.rememberLocalIntent(id, owner, now(), digest);
                     await guard(true);
+                    return () => {
+                        if (stopped) fail("proceeds_stopped");
+                        jobs.enterSubmission(id, owner, now(), digest);
+                    };
                 },
             );
         } finally {

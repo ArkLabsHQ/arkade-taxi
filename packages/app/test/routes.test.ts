@@ -105,6 +105,43 @@ describe("receiver claim routes", () => {
         expect(timers).toBe(0);
     });
 
+    it("wires the production application logger into background receiver sampling", async () => {
+        const db = openDatabase(":memory:");
+        const store = new AdvanceRepository(db);
+        const shutdown = new AbortController();
+        const logger = { error: vi.fn() };
+        const router = createApp({
+            ...deps(),
+            advances: store,
+            policy: new PolicyRepository(db),
+            sweeperIntervalMs: 1000,
+            sweeperRunning: () => true,
+            rescan: async () => {},
+            shutdownSignal: shutdown.signal,
+            claimFeedLogger: logger,
+        });
+        const response = await router.request(claimsUrl("/v1/claims/events"));
+        const reader = response.body!.getReader();
+        try {
+            expect(new TextDecoder().decode((await reader.read()).value)).toContain(
+                "claims-snapshot",
+            );
+            vi.spyOn(store, "byReceiverKeys").mockImplementation(() => {
+                throw Object.assign(new Error("private proof material"), { code: "SQLITE_FULL" });
+            });
+            await vi.advanceTimersByTimeAsync(250);
+            expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+                { stage: "sampling", errorCode: "SQLITE_FULL" },
+                "receiver claim feed failed",
+            );
+            expect(await reader.read()).toEqual({ done: true, value: undefined });
+        } finally {
+            shutdown.abort();
+            await reader.cancel();
+            db.close();
+        }
+    });
+
     it("drains a real HTTP receiver stream during service shutdown without client abort", async () => {
         vi.useRealTimers();
         vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });

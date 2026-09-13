@@ -41,7 +41,7 @@ export async function control(action: string, rule?: unknown) {
 export const health = async () =>
     fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then((r) => r.json());
 
-export async function ready() {
+export async function ready(sweepAtOrAfter?: number) {
     return poll(
         "production readiness",
         async () => {
@@ -52,7 +52,12 @@ export async function ready() {
                 return { status: 0, body: null };
             }
         },
-        (value) => value.status === 200 && value.body.blockers.length === 0,
+        (value) =>
+            value.status === 200 &&
+            value.body.blockers.length === 0 &&
+            (sweepAtOrAfter === undefined ||
+                (Number.isSafeInteger(value.body.sweeper?.lastTickAt) &&
+                    value.body.sweeper.lastTickAt >= sweepAtOrAfter)),
         120_000,
     );
 }
@@ -368,6 +373,7 @@ export async function quoteFor(
     withAsset = false,
     omitAssetUnits = false,
 ) {
+    const preparedAt = Math.floor(Date.now() / 1000);
     const senderInputs = [fundingOf(coin)];
     const receiver = live.actors[receiverName];
     const destination = ArkAddress.decode(await receiver.wallet.getAddress());
@@ -381,6 +387,7 @@ export async function quoteFor(
         ...(withAsset ? { assetId: live.assetId } : {}),
         ...(withAsset && !omitAssetUnits ? { assetUnits: 100n } : {}),
     };
+    await ready(preparedAt);
     const quote = await preEffectRequest(() => live.client.requestQuote(request), {
         readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
         expiresAt: Date.now() / 1000 + 10,

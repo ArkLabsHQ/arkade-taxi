@@ -40,10 +40,21 @@ The fee cap defaults to zero; `proceeds_fee_cap_exceeded` requires deliberately 
 `TAXI_PROCEEDS_MAX_FEE_SATS` for the deployment's settlement fees. Existing
 jobs retain their original authorization. An ambiguous settlement keeps its
 inputs reserved across restart until every input and its spendable output
-prove completion. SDK 0.4.72 intents have no default expiry; do not delete
-these reservations or resubmit manually. Reconcile the recorded SDK intent
-with the Arkade operator before any manual repair. Back up both `proceeds_*`
+prove completion. Taxi durably marks network entry independently of SDK intent
+storage. `proceeds_submission_ambiguous` never automatically resubmits, even
+when SDK records are empty, cancelled or expired. A known local guard refusal
+can resume when its blocker clears only if Taxi's exact intent digest and
+unsubmitted marker prove registration never began. Unknown cancelled intents
+remain quarantined; cancellation alone is not proof of non-submission.
+SDK 0.4.72 intents have no default expiry and SDK persistence can fail without
+stopping registration. Do not delete reservations or reset submission markers.
+Reconcile Taxi's evidence, SDK records and authoritative inputs with the Arkade
+operator before any manual repair. Back up both `proceeds_*`
 and `taxi_sdk_*` with the advance ledger, and drain collection before key rotation.
+
+Receiver feed sampling and projection failures log a stage and safe error code
+through the production logger. The stream still returns only a generic error;
+raw claims, receiver keys, proofs and exception payloads are not logged.
 
 ## Deployment
 

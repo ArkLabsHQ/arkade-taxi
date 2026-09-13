@@ -159,6 +159,7 @@ async function runServe(): Promise<void> {
         proceeds: () => proceeds.status(),
         accepting: () => accepting,
         shutdownSignal: shutdown.signal,
+        claimFeedLogger: log,
     });
 
     lifecycle = createServiceLifecycle({

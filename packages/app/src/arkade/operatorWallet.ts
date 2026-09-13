@@ -5,6 +5,7 @@ import {
     EsploraProvider,
     canSpendOffchain,
     type WalletConfig,
+    type ArkProvider,
 } from "@arkade-os/sdk";
 import type { Database } from "@arkade-taxi/db";
 import type { Outpoint } from "@arkade-taxi/core";
@@ -20,6 +21,10 @@ const admissionOnlyBlockers = new Set([
     "vtxo_expiry_unknown",
     "operator_reserve_low",
 ]);
+
+type SettlementGuard = (
+    intent: Parameters<ArkProvider["registerIntent"]>[0],
+) => Promise<() => void>;
 
 export interface OperatorRuntimeOptions {
     now?: () => number;
@@ -43,7 +48,7 @@ export function createOperatorRuntime(
     let activeAdmission: Promise<void> | undefined;
     let queuedRefresh: Promise<RuntimeSafety> | undefined;
     let settlement: Promise<void> | undefined;
-    let settlementGuard: (() => void | Promise<void>) | undefined;
+    let settlementGuard: SettlementGuard | undefined;
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -111,7 +116,8 @@ export function createOperatorRuntime(
                         ) => {
                             if (!settlementGuard)
                                 throw new Error("proceeds_submission_not_authorized");
-                            await settlementGuard();
+                            const enter = await settlementGuard(intent);
+                            enter();
                             return providers.arkProvider.registerIntent(intent);
                         },
                     }),
@@ -295,7 +301,7 @@ export function createOperatorRuntime(
         stop,
         async withSettlement<T>(
             work: (wallet: Wallet) => Promise<T>,
-            guard: () => void | Promise<void>,
+            guard: SettlementGuard,
         ): Promise<T> {
             if (settlement) throw new Error("proceeds_worker_active");
             await refresh();

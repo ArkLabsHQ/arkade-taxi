@@ -153,11 +153,17 @@ CREATE TABLE proceeds_jobs (
     state TEXT NOT NULL CHECK (state IN ('pending', 'settling', 'quarantined', 'complete')),
     blocker TEXT,
     commitment_txid TEXT,
+    submission_state TEXT NOT NULL DEFAULT 'unsubmitted' CHECK (submission_state IN ('unsubmitted', 'entered')),
     lease_owner TEXT,
     lease_until INTEGER,
     created_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX proceeds_one_active ON proceeds_jobs ((1)) WHERE state != 'complete';
+CREATE TABLE proceeds_local_intents (
+    job_id TEXT NOT NULL REFERENCES proceeds_jobs(id),
+    digest TEXT NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*'),
+    PRIMARY KEY (job_id, digest)
+);
 CREATE TABLE proceeds_inputs (
     outpoint_txid TEXT NOT NULL,
     outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
@@ -197,6 +203,16 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             !db
                 .prepare(
                     "SELECT 1 FROM pragma_table_info('proceeds_inputs') WHERE name = 'job_id' AND type = 'TEXT'",
+                )
+                .get() ||
+            !db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'submission_state' AND type = 'TEXT'",
+                )
+                .get() ||
+            !db
+                .prepare(
+                    "SELECT 1 FROM pragma_table_info('proceeds_local_intents') WHERE name = 'digest' AND type = 'TEXT'",
                 )
                 .get())
     )

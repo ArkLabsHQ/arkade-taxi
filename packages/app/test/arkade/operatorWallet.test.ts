@@ -152,11 +152,23 @@ describe("persistent operator runtime safety", () => {
             release = resolve;
         });
         let checking = false;
+        let yieldedAfterMarker = false;
+        const boundary = vi.fn(() => {
+            queueMicrotask(() => {
+                yieldedAfterMarker = true;
+            });
+        });
+        register.mockImplementation(async () => {
+            expect(boundary).toHaveBeenCalledTimes(1);
+            expect(yieldedAfterMarker).toBe(false);
+            return "intent";
+        });
         const work = s.runtime.withSettlement(
             async () => s.walletConfig.arkProvider!.registerIntent({} as never),
             async () => {
                 checking = true;
                 await gate;
+                return boundary;
             },
         );
         try {
@@ -167,6 +179,21 @@ describe("persistent operator runtime safety", () => {
             await work;
         }
         expect(register).toHaveBeenCalledTimes(1);
+    });
+    it("does not register when the synchronous durable boundary marker fails", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await expect(
+            s.runtime.withSettlement(
+                async () => s.walletConfig.arkProvider!.registerIntent({} as never),
+                async () => () => {
+                    throw new Error("SQLITE_FULL");
+                },
+            ),
+        ).rejects.toThrow("SQLITE_FULL");
+        expect(register).not.toHaveBeenCalled();
     });
     it("pins an active settlement wallet across provider refresh and drains before disposal", async () => {
         const s = setup();
@@ -181,7 +208,7 @@ describe("persistent operator runtime safety", () => {
                 entered = true;
                 await gate;
             },
-            () => {},
+            async () => () => {},
         );
         await vi.waitFor(() => expect(entered).toBe(true));
         s.setInfo(arkInfo({ digest: "changed" }));

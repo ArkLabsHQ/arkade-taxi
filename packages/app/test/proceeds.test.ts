@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArkAddress, Estimator } from "@arkade-os/sdk";
+import { ArkAddress, Estimator, Wallet, SingleKey } from "@arkade-os/sdk";
 import {
     openDatabase,
     ProceedsRepository,
@@ -33,9 +33,21 @@ const spare = fundingCoin({ value: 1000, vout: 1 });
 const address = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode();
 const clock = { height: 700000, timestamp: new Date("2026-09-12T00:00:00Z") };
 const makePlan = () => planProceeds([receipt], [carrier, spare], [], cfg, {}, address, clock, -1n);
+const localEvidence = { state: "unsubmitted" as const, localIntents: [] };
+const sdkIntent = {
+    proof: "test-proof",
+    message: {
+        type: "register" as const,
+        expire_at: 0,
+        valid_at: 0,
+        onchain_output_indexes: [],
+        cosigners_public_keys: [],
+    },
+};
 const databases: Database[] = [];
 const directories: string[] = [];
 afterEach(() => {
+    vi.restoreAllMocks();
     for (const db of databases.splice(0)) if (db.open) db.close();
     for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -60,8 +72,9 @@ function setup(
     );
     let outputs = inventory;
     let tip = { height: clock.height, time: Math.floor(clock.timestamp.getTime() / 1000) };
-    let submitGuard: (() => void | Promise<void>) | undefined;
+    let submitGuard: ((intent: typeof sdkIntent) => Promise<() => void>) | undefined;
     let beforeSubmit = () => {};
+    let beforeEntry = () => {};
     const info = arkInfo({ fees: { intentFee: {}, txFeeRate: "0" } });
     const settle = vi.fn(async (_params: unknown) => "cc".repeat(32));
     const wallet = {
@@ -76,7 +89,9 @@ function setup(
         },
         settle: async (params: unknown) => {
             beforeSubmit();
-            await submitGuard?.();
+            const enter = await submitGuard?.(sdkIntent);
+            beforeEntry();
+            enter?.();
             return settle(params);
         },
     };
@@ -122,6 +137,51 @@ function setup(
         },
         settle,
         info,
+        get db() {
+            return db;
+        },
+        useActualSdk(options: { failWrites?: boolean; reject?: () => void } = {}) {
+            const save = vi.fn(async (intent: any) => {
+                if (options.failWrites) throw new Error("SQLITE_FULL");
+                intents = [intent];
+            });
+            const register = vi.fn(async () => {
+                throw new Error("registration response lost");
+            });
+            const remove = vi.fn(async () => {
+                throw new Error("delete unavailable");
+            });
+            const sdk: any = Object.assign(Object.create(Wallet.prototype), {
+                getAddress: wallet.getAddress,
+                logUngatedInputs: () => {},
+                recipientAddressContext: () => ({
+                    hrp: "tark",
+                    signerSet: { active: bytesToHex(cfg.serverPubkey), deprecated: [] },
+                }),
+                identity: SingleKey.fromPrivateKey(cfg.operatorPrivkey),
+                makeRegisterIntentSignature: async () => sdkIntent,
+                makeDeleteIntentSignature: async () => ({
+                    proof: "delete-proof",
+                    message: { type: "delete", expire_at: 0 },
+                }),
+                getContractManager: async () => ({ assertAnnotatable: async () => {} }),
+                _addPendingSpends: () => {},
+                _removePendingSpends: () => {},
+                intentRepository: { getIntents: async () => intents, saveIntent: save },
+                arkProvider: {
+                    getEventStream: async function* () {},
+                    registerIntent: async (intent: typeof sdkIntent) => {
+                        options.reject?.();
+                        const enter = await submitGuard!(intent);
+                        enter?.();
+                        return register();
+                    },
+                    deleteIntent: remove,
+                },
+            });
+            wallet.settle = (params) => sdk._settleImpl(params);
+            return { save, register, remove };
+        },
         restartDatabase() {
             db.close();
             db = openDatabase(dbPath);
@@ -134,6 +194,9 @@ function setup(
         },
         beforeSubmit(work: () => void) {
             beforeSubmit = work;
+        },
+        beforeEntry(work: () => void) {
+            beforeEntry = work;
         },
         setNow(value: number) {
             now = value;
@@ -390,14 +453,20 @@ describe("proceeds restart reconciliation", () => {
             ).toThrow(/plan_invalid/);
     });
     it("retries only unspent inputs without a live intent", () => {
-        expect(reconcileProceeds([receipt, spare], [], 100)).toEqual({ kind: "retry" });
-        expect(reconcileProceeds([receipt, spare], [{ validUntil: 99 }], 100)).toEqual({
+        expect(reconcileProceeds([receipt, spare], [], 100, localEvidence)).toEqual({
             kind: "retry",
         });
-        expect(reconcileProceeds([receipt, spare], [{ validUntil: 101 }], 100)).toEqual({
+        expect(
+            reconcileProceeds([receipt, spare], [{ validUntil: 99 }], 100, localEvidence),
+        ).toEqual({
+            kind: "retry",
+        });
+        expect(
+            reconcileProceeds([receipt, spare], [{ validUntil: 101 }], 100, localEvidence),
+        ).toEqual({
             kind: "pending",
         });
-        expect(reconcileProceeds([receipt, spare], [{}], 100)).toEqual({
+        expect(reconcileProceeds([receipt, spare], [{}], 100, localEvidence)).toEqual({
             kind: "quarantined",
             blocker: "proceeds_ambiguous_intent",
         });
@@ -409,15 +478,140 @@ describe("proceeds restart reconciliation", () => {
                 [receipt, spare].map((c) => ({ ...c, isSpent: true, settledBy: id })),
                 [],
                 100,
+                localEvidence,
             ),
         ).toEqual({ kind: "verify", commitmentTxid: id });
         expect(
-            reconcileProceeds([{ ...receipt, isSpent: true, spentBy: id }, spare], [], 100),
+            reconcileProceeds(
+                [{ ...receipt, isSpent: true, spentBy: id }, spare],
+                [],
+                100,
+                localEvidence,
+            ),
         ).toEqual({ kind: "quarantined", blocker: "proceeds_input_conflict" });
     });
 });
 
 describe("durable proceeds collector", () => {
+    it("fences a lease takeover between asynchronous validation and synchronous network entry", async () => {
+        const s = setup();
+        s.beforeEntry(() => {
+            s.setNow(60200);
+            expect(s.jobs.claim("job", "replacement", 60200, 120200)).toBe(true);
+        });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(collector.status().blocker).toBe("proceeds_lease_lost");
+        expect(s.jobs.submissionEvidence("job").state).toBe("unsubmitted");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+    it("does not turn an expired SDK record into retry authority after Taxi entered submission", async () => {
+        const s = setup();
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+        s.setIntents([{ state: "cancelled", validUntil: 99 }]);
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+        expect(collector.status().blocker).toBe("proceeds_submission_ambiguous");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+    it("does not retry a cancelled record with an unrecognized proof after a known local refusal", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const s = setup();
+        const sdk = s.useActualSdk({ reject: () => s.setOutputs([receipt, spare]) });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(sdk.register).not.toHaveBeenCalled();
+        const records = await s.deps.runtime.storage.intentRepository.getIntents();
+        s.setIntents([{ ...records[0], registerProof: "unknown-proof" }]);
+        s.setOutputs([receipt, spare, carrier]);
+        await collector.tick();
+        expect(sdk.register).not.toHaveBeenCalled();
+        expect(collector.status().blocker).toBe("proceeds_ambiguous_intent");
+    });
+    it.each(["reserve", "maximum"])(
+        "resumes an SDK-cancelled, definitely unsubmitted %s refusal after restart",
+        async (reason) => {
+            vi.spyOn(console, "warn").mockImplementation(() => {});
+            const s = setup(makePlan(), [receipt, spare, carrier], true);
+            let reject = true;
+            const sdk = s.useActualSdk({
+                reject: () => {
+                    if (!reject) return;
+                    if (reason === "reserve") s.setOutputs([receipt, spare]);
+                    else s.info.vtxoMaxAmount = 1000n;
+                },
+            });
+            let collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            expect(collector.status().blocker).toBe(
+                reason === "reserve"
+                    ? "proceeds_reserve_unavailable"
+                    : "proceeds_output_limit_exceeded",
+            );
+            expect(sdk.register).not.toHaveBeenCalled();
+            expect(sdk.save).toHaveBeenCalledTimes(2);
+            const records = await s.deps.runtime.storage.intentRepository.getIntents();
+            expect(records).toHaveLength(1);
+            expect(records[0]).toMatchObject({ state: "cancelled" });
+            expect(records[0]!.validUntil).toBeUndefined();
+            collector.stop();
+            s.restartDatabase();
+            reject = false;
+            s.setOutputs([receipt, spare, carrier]);
+            s.info.vtxoMaxAmount = -1n;
+            s.setNow(365 * 86400000);
+            collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            expect(sdk.register).toHaveBeenCalledTimes(1);
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+            s.finish();
+            await collector.tick();
+            expect(s.jobs.active()).toBeUndefined();
+        },
+    );
+    it("never retries a network-entered SDK settlement whose failed writes left no intent records", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+        const s = setup(makePlan(), [receipt, spare, carrier], true);
+        const sdk = s.useActualSdk({ failWrites: true });
+        let collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(sdk.register).toHaveBeenCalledTimes(1);
+        expect(sdk.remove).toHaveBeenCalledTimes(1);
+        expect(sdk.save).toHaveBeenCalledTimes(2);
+        expect(errors).toHaveBeenCalledTimes(2);
+        expect(await s.deps.runtime.storage.intentRepository.getIntents()).toEqual([]);
+        collector.stop();
+        s.restartDatabase();
+        s.setNow(365 * 86400000);
+        collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(sdk.register).toHaveBeenCalledTimes(1);
+        expect(collector.status().blocker).toBe("proceeds_submission_ambiguous");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        s.finish();
+        await collector.tick();
+        expect(s.jobs.active()).toBeUndefined();
+    });
+    it("prevents registration if Taxi cannot durably write its boundary marker", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const s = setup();
+        const sdk = s.useActualSdk();
+        s.db.exec(
+            "CREATE TRIGGER deny_proceeds_entry BEFORE UPDATE OF submission_state ON proceeds_jobs BEGIN SELECT RAISE(ABORT, 'SQLITE_FULL'); END",
+        );
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(sdk.register).not.toHaveBeenCalled();
+        expect(sdk.save).toHaveBeenCalledTimes(2);
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        s.db.exec("DROP TRIGGER deny_proceeds_entry");
+        await collector.tick();
+        expect(sdk.register).toHaveBeenCalledTimes(1);
+    });
     it.each(["sponsor", "accumulated receipts"])(
         "does not call SDK settlement for a persisted %s plan exceeding the current maximum",
         async (kind) => {

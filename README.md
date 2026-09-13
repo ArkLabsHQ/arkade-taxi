@@ -136,7 +136,7 @@ pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
 ```
 
-All 17 functional/resilience scenarios and both integrity assertions must pass,
+All 19 functional/resilience scenarios and both integrity assertions must pass,
 with zero skips, using the built production image and packed client. The
 harness records the exact master SHA, source identity, image identities and
 SDK version in `e2e-artifacts/stack.json`; retain it with the results and logs.
