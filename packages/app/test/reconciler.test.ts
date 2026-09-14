@@ -454,4 +454,32 @@ describe("sponsored settlement", () => {
         expect(state.reservations.listForAdvance(state.quote.id)).toEqual([]);
         state.db.close();
     });
+
+    it("surfaces a persistently failing release as a blocker with the advance id", async () => {
+        const state = setupSponsored();
+        state.advances.recordLockupObserved(state.quote.id, state.outpoint, NOW + 2);
+        const reservations = {
+            recordLockupConflict: state.reservations.recordLockupConflict.bind(state.reservations),
+            listForAdvance: state.reservations.listForAdvance.bind(state.reservations),
+            releaseForAdvance: () => {
+                throw new Error("releaseUnavailable");
+            },
+        };
+        const reconciler = createLockupReconciler({
+            submission: { resume: async () => false },
+            advances: state.advances,
+            reservations,
+            policy: state.policy,
+            indexer: indexer(async () => ({ vtxos: [] })),
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+        await reconciler.tick();
+        expect(reconciler.status().blockers).toContain("sponsored_release_failed");
+        expect(reconciler.status().blockerDetails).toMatchObject([
+            { advanceId: state.quote.id, code: "sponsored_release_failed" },
+        ]);
+        expect(state.reservations.listForAdvance(state.quote.id)).toHaveLength(1);
+        state.db.close();
+    });
 });

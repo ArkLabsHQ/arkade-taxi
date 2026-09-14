@@ -968,7 +968,7 @@ describe("sponsored direct-send routes", () => {
         expect(body.transferId).toBe("adv-1");
         expect(body.receiverAddress).toBe(receiverAddress);
         expect(body.params.contribution).toBe("330");
-        expect(body.commitment.covenantOutputIndex).toBe(0);
+        expect(body.commitment.paymentOutputIndex).toBe(0);
     });
 
     it("returns 400 for a receiver address outside this service", async () => {

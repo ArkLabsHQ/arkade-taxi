@@ -544,14 +544,14 @@ export function validateSponsoredPayment(
     const commitment = record(context.quote.commitment, "quote.commitment");
     exactKeys(
         commitment,
-        ["covenantOutputIndex", "senderInputIndexes", "operatorInputIndexes", "unsignedTxId"],
+        ["paymentOutputIndex", "senderInputIndexes", "operatorInputIndexes", "unsignedTxId"],
         [],
         "quote.commitment",
     );
     exact(
         commitment,
         {
-            covenantOutputIndex: envelope.covenantOutputIndex,
+            paymentOutputIndex: envelope.covenantOutputIndex,
             senderInputIndexes: envelope.senderInputIndexes,
             operatorInputIndexes: envelope.operatorInputIndexes,
             unsignedTxId: envelope.unsignedTxId,

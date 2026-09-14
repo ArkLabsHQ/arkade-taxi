@@ -107,7 +107,7 @@ describe("verifySponsoredQuote", () => {
                 ...args,
                 quote: {
                     ...args.quote,
-                    commitment: { ...args.quote.commitment, covenantOutputIndex: 1 },
+                    commitment: { ...args.quote.commitment, paymentOutputIndex: 1 },
                 },
             }),
         ).toThrow();

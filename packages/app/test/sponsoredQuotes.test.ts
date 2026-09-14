@@ -155,7 +155,7 @@ describe("createSponsoredQuote", () => {
         });
         expect(quote.fare).toMatchObject({ currency: "asset", units: "1000000" });
         expect(quote.commitment).toMatchObject({
-            covenantOutputIndex: 0,
+            paymentOutputIndex: 0,
             senderInputIndexes: [0],
             operatorInputIndexes: [1],
         });

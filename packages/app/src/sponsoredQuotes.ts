@@ -1,8 +1,6 @@
 import {
     admit,
-    computeExposure,
     type Advance,
-    type AdvanceState,
     type FundingSnapshot,
     type Outpoint,
     validateFundingSnapshot,
@@ -275,11 +273,8 @@ async function createReservedSponsoredQuote(
         config,
     );
 
-    const exposure = computeExposure(
-        ["locking", "locked", "recovering"].flatMap((state) =>
-            deps.advances.byState(state as AdvanceState),
-        ),
-    );
+    const { outstandingSats, lockedCount } = deps.advances.exposureTotals();
+    const exposure = { outstandingSats, lockedCount, oldestUnsweptLocktime: null };
     const decision = admit(
         {
             receiverKey: req.receiverKey,
@@ -518,7 +513,7 @@ async function createReservedSponsoredQuote(
         expiresAt: advance.expiresAt,
         unsignedSponsoredTx: funding.unsignedLockupTx,
         commitment: {
-            covenantOutputIndex: 0,
+            paymentOutputIndex: 0,
             senderInputIndexes: envelope.senderInputIndexes,
             operatorInputIndexes: envelope.operatorInputIndexes,
             unsignedTxId: envelope.unsignedTxId,

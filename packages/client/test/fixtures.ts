@@ -267,7 +267,7 @@ export const sponsoredQuote = (
         expiresAt: NOW + 60,
         unsignedSponsoredTx,
         commitment: {
-            covenantOutputIndex: 0,
+            paymentOutputIndex: 0,
             senderInputIndexes: senderInputs.map((_, i) => i),
             operatorInputIndexes: [senderInputs.length],
             unsignedTxId: envelope.unsignedTxId,

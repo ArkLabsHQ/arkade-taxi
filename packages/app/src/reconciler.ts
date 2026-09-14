@@ -10,6 +10,7 @@ import { base64, hex } from "@scure/base";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import type { SubmissionResumer } from "./arkade/submit.js";
 import type { SpendWatcher, WatcherBlocker } from "./watcher.js";
+import { sanitizeOperationalError } from "./errors.js";
 
 export interface ReconcilerStatus {
     lastTickAt: number | null;
@@ -26,7 +27,7 @@ export interface LockupReconciler {
 }
 
 export interface LockupReconcilerDeps {
-    advances: Pick<AdvanceRepository, "byState" | "recordLockupObserved">;
+    advances: Pick<AdvanceRepository, "byState" | "recordLockupObserved" | "sponsoredLocked">;
     reservations: Pick<
         ReservationRepository,
         "recordLockupConflict" | "releaseForAdvance" | "listForAdvance"
@@ -86,6 +87,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
     const initial = deps.advances.byState("locking");
     let locking = initial.length;
     let blockers = blockingCodes(initial);
+    let releaseBlockers: WatcherBlocker[] = [];
     let pending: Promise<void> | undefined;
 
     const reconcile = async (advance: Advance): Promise<void> => {
@@ -168,18 +170,23 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                     // A crash between observation and release strands a
                     // delivered sponsored row with held reservations; both
                     // writes are local and the release is idempotent, so
-                    // re-release settled rows every tick until clean.
-                    for (const row of deps.advances.byState("locked")) {
-                        if (
-                            advanceKind(row) !== "sponsored" ||
-                            !row.outpoint ||
-                            deps.reservations.listForAdvance(row.id).length === 0
-                        )
-                            continue;
+                    // re-release settled rows every tick until clean. A row
+                    // that keeps failing surfaces as a blocker with its id.
+                    releaseBlockers = [];
+                    for (const row of deps.advances.sponsoredLocked()) {
+                        if (!row.outpoint) continue;
                         try {
+                            if (deps.reservations.listForAdvance(row.id).length === 0) continue;
                             deps.reservations.releaseForAdvance(row.id);
-                        } catch {
-                            continue;
+                        } catch (cause) {
+                            releaseBlockers.push({
+                                advanceId: row.id,
+                                code: "sponsored_release_failed",
+                                detail: sanitizeOperationalError(
+                                    cause,
+                                    "sponsored reservation release failed",
+                                ),
+                            });
                         }
                     }
                     await deps.watcher?.catchUp();
@@ -195,17 +202,23 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
         status: () => {
             const watcher = deps.watcher?.status();
             const blockerDetails = watcher?.blockers ?? [];
+            const details = [
+                ...blockerDetails.map((blocker) => ({ ...blocker })),
+                ...releaseBlockers.map((blocker) => ({ ...blocker })),
+            ];
             return {
                 lastTickAt,
                 locking,
-                blockers: [...new Set([...blockers, ...blockerDetails.map(({ code }) => code)])],
+                blockers: [...new Set([...blockers, ...details.map(({ code }) => code)])],
                 ...(watcher
                     ? {
                           lastWatcherScanAt: watcher.lastScanAt,
                           watching: watcher.watching,
-                          blockerDetails: blockerDetails.map((blocker) => ({ ...blocker })),
+                          blockerDetails: details,
                       }
-                    : {}),
+                    : releaseBlockers.length
+                      ? { blockerDetails: details }
+                      : {}),
             };
         },
     };

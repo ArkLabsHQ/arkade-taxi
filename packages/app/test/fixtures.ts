@@ -10,7 +10,7 @@ import {
 import type { RuntimeSafety } from "../src/arkade/types.js";
 import type { QuoteDeps } from "../src/quotes.js";
 import { LockupClaimError } from "@arkade-taxi/db";
-import type { Advance, Outpoint, Policy } from "@arkade-taxi/core";
+import { isExposed, type Advance, type Outpoint, type Policy } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 
@@ -309,6 +309,16 @@ export class MemoryAdvances {
     }
     byState(s: Advance["state"]): Advance[] {
         return [...this.rows.values()].filter((a) => a.state === s).map((a) => ({ ...a }));
+    }
+    exposureTotals(): { outstandingSats: bigint; lockedCount: number } {
+        let outstandingSats = 0n;
+        let lockedCount = 0;
+        for (const advance of this.rows.values())
+            if (isExposed(advance)) {
+                outstandingSats += advance.topup;
+                lockedCount++;
+            }
+        return { outstandingSats, lockedCount };
     }
     byReceiverKeys(keys: readonly Uint8Array[]): Advance[] {
         const wanted = new Set(keys.map(bytesToHex));

@@ -375,12 +375,11 @@ export function validateLockupSubmission(
         });
         if (
             covenant.address(config.addressHrp, config.serverPubkey).encode() !==
-                advance.covenantAddress ||
-            !sameBytes(
-                unsignedArk.getOutput(envelope.covenantOutputIndex).script!,
-                covenant.pkScript,
-            )
+            advance.covenantAddress
         )
+            throw new LockupShapeError("persisted covenant output mismatch");
+        const covenantScript = unsignedArk.getOutput(envelope.covenantOutputIndex).script;
+        if (!covenantScript || !sameBytes(covenantScript, covenant.pkScript))
             throw new LockupShapeError("persisted covenant output mismatch");
     }
 
@@ -451,9 +450,11 @@ function assertSponsoredPaymentOutput(
         receiver.encode() !== advance.covenantAddress ||
         receiver.hrp !== config.addressHrp ||
         !sameBytes(receiver.serverPubKey, config.serverPubkey) ||
-        !sameBytes(receiver.vtxoTaprootKey, advance.receiverKey) ||
-        !sameBytes(unsignedArk.getOutput(paymentOutputIndex).script!, receiver.pkScript)
+        !sameBytes(receiver.vtxoTaprootKey, advance.receiverKey)
     )
+        throw new LockupShapeError("persisted payment output mismatch");
+    const paymentScript = unsignedArk.getOutput(paymentOutputIndex).script;
+    if (!paymentScript || !sameBytes(paymentScript, receiver.pkScript))
         throw new LockupShapeError("persisted payment output mismatch");
 }
 

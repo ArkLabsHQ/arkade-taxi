@@ -10,11 +10,11 @@ import type {
     ClaimsChangedEvent,
     ClaimsSnapshotResponse,
     FareWire,
-    LockupCommitment,
     QuoteParams,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,
+    SponsoredCommitment,
     SponsoredQuoteParams,
     SponsoredQuoteResponse,
     TaggedLocktimeWire,
@@ -68,7 +68,7 @@ export interface DecodedSponsoredQuote {
     fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     expiresAt: number;
     unsignedSponsoredTx: string;
-    commitment: LockupCommitment;
+    commitment: SponsoredCommitment;
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -213,6 +213,31 @@ const sponsoredParams = (value: unknown, label: string): SponsoredQuoteParams =>
     if (wire.assetId !== undefined) assetId(wire.assetId, `${label}.assetId`);
     sponsoredParamsFromWire(wire as unknown as SponsoredQuoteParams, label);
     return wire as unknown as SponsoredQuoteParams;
+};
+
+const commitment = (value: unknown, label: string): SponsoredCommitment => {
+    const wire = exactRecord(
+        value,
+        ["paymentOutputIndex", "senderInputIndexes", "operatorInputIndexes", "unsignedTxId"],
+        [],
+        label,
+    );
+    uint(wire.paymentOutputIndex, `${label}.paymentOutputIndex`);
+    for (const key of ["senderInputIndexes", "operatorInputIndexes"] as const) {
+        const indexes = dataArray(wire[key], `${label}.${key}`);
+        const seen = new Set<number>();
+        for (const [index, entry] of indexes.entries()) {
+            uint(entry, `${label}.${key}[${index}]`);
+            if (seen.has(entry as number)) invalid(`${label}.${key} contains duplicates`);
+            seen.add(entry as number);
+        }
+    }
+    if (
+        typeof wire.unsignedTxId !== "string" ||
+        !/^[0-9a-f]{64}$/.test(wire.unsignedTxId as string)
+    )
+        invalid(`${label}.unsignedTxId must be a 64-character lowercase hex transaction id`);
+    return wire as unknown as SponsoredCommitment;
 };
 
 const taggedLocktime = (value: unknown, label: string): TaggedLocktimeWire => {
@@ -360,7 +385,7 @@ export function decodeSponsoredQuote(quote: SponsoredQuoteResponse): DecodedSpon
                 quote.unsignedSponsoredTx,
                 "sponsored quote.unsignedSponsoredTx",
             ),
-            commitment: quote.commitment as LockupCommitment,
+            commitment: commitment(quote.commitment, "sponsored quote.commitment"),
         };
     });
 }

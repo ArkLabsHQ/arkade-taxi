@@ -163,6 +163,17 @@ export interface LockupCommitment {
     unsignedTxId: string;
 }
 
+/** Joint-graph commitment for a sponsored direct send. Same shape as a
+ * lockup commitment, but index 0 is the direct payment to the receiver's
+ * own address — there is no covenant output, so the field is named for
+ * what it is. */
+export interface SponsoredCommitment {
+    paymentOutputIndex: number;
+    senderInputIndexes: number[];
+    operatorInputIndexes: number[];
+    unsignedTxId: string;
+}
+
 export interface LockupRequestBody {
     /** Base64 envelope with sender Ark inputs and owned checkpoints signed. */
     signedLockupTx: string;
@@ -200,8 +211,8 @@ export interface SponsoredQuoteRequestBody {
 }
 
 export interface SponsoredQuoteResponse {
-    /** `covenantOutputIndex` is the direct payment output to the receiver. */
-    commitment: LockupCommitment;
+    /** The direct payment output to the receiver. */
+    commitment: SponsoredCommitment;
     transferId: string;
     params: SponsoredQuoteParams;
     receiverAddress: string;

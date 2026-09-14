@@ -83,6 +83,7 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
         throw new LockupShapeError("payment dust differs from runtime configuration");
     if (req.params.contribution < config.vtxoMinAmount || req.params.contribution > req.params.dust)
         throw new LockupShapeError("operator contribution is outside the dust window");
+    if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
     const operatorInputs = req.funding.inputs.map(operatorFundingInput);
     const inputs = [...req.senderInputs, ...operatorInputs];
     if (!req.senderInputs.length || !operatorInputs.length)
@@ -112,7 +113,6 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
             : req.fare.currency === "sats"
               ? req.fare.units
               : config.vtxoMinAmount;
-    if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
     if (fareHosting > 0n)
         outputs.push({
             role: "operator-fare",
