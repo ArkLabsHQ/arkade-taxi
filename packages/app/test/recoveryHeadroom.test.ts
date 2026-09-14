@@ -22,7 +22,15 @@ import type { ServerDeps } from "../src/server.js";
 import { createRoutes } from "../src/routes.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
-import { config, emulatorKey, fundingCoin, NOW, policy, quoteBody } from "./fixtures.js";
+import {
+    config,
+    emulatorKey,
+    fundingCoin,
+    NOW,
+    policy,
+    providerEmulatorKey,
+    quoteBody,
+} from "./fixtures.js";
 
 const current = vi.hoisted(() => ({ value: undefined as Harness | undefined }));
 vi.mock("../src/config.js", async (original) => ({
@@ -252,7 +260,7 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
             emulatorProvider: {
                 getInfo: async () => {
                     if (h.failure === "emulator") throw new Error("emulator unavailable");
-                    return { signerPubkey: hex.encode(emulatorKey) };
+                    return { signerPubkey: hex.encode(providerEmulatorKey) };
                 },
             },
         },

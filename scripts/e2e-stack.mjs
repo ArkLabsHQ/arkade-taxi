@@ -131,7 +131,6 @@ const PORT_NAMES = [
 
 const redactText = (text, secrets) =>
     secrets.reduce((current, secret) => current.replaceAll(secret, "[REDACTED]"), text);
-const xOnlyKey = (key) => (/^0[23][0-9a-f]{64}$/i.exec(key) ? key.slice(2) : key);
 let activeInterruption;
 
 export function createInterruptionState(cleanupTimeoutMs = 30_000) {
@@ -706,12 +705,9 @@ async function main() {
     const secretFile = join(secretDir, "actors.json");
     const fixtureFile = join(root, "fixtures.json");
     const envFile = join(root, "regtest.env");
+    const esploraBridge = join(root, "esplora-bridge.mjs");
     const resultsFile = join(root, "results.json");
-    const secrets = [
-        randomBytes(32).toString("hex"),
-        randomBytes(32).toString("hex"),
-        randomBytes(32).toString("hex"),
-    ];
+    const secrets = [randomBytes(32).toString("hex"), randomBytes(32).toString("hex")];
     const knownSecrets = [...secrets];
     const runAndPublishResults = prepareResultPublication({
         source: resultsFile,
@@ -818,7 +814,6 @@ async function main() {
             ...ARKD_FEES,
             ARKD_PASSWORD: secrets[0],
             ARKD_WALLET_SIGNER_KEY: secrets[1],
-            EMULATOR_SECRET_KEY: secrets[2],
             ...ports,
         };
         writeEnv(envFile, values);
@@ -827,6 +822,7 @@ async function main() {
             TAXI_E2E_PORT_BINDINGS: JSON.stringify(portBindings),
             TAXI_E2E_PROJECT: project,
             TAXI_E2E_REGTEST_SHA: sha,
+            REGTEST_PROJECT: project,
             TAXI_E2E_COMPOSE_BASE: base,
             TAXI_E2E_COMPOSE_ARK: ark,
             ARKADE_REGTEST_ENV: envFile,
@@ -950,24 +946,36 @@ async function main() {
         const taxiEnv = join(secretDir, "taxi.env");
         failureProxy = await createFailureProxy({
             arkd: arkdUrl,
-            indexer: arkdUrl,
             emulator: emulatorUrl,
-            esplora: esploraUrl,
+            esplora: new URL(esploraUrl).origin,
         });
         const proxyOrigin = `http://host.docker.internal:${failureProxy.port}`;
+        writeFileSync(
+            esploraBridge,
+            `import { createServer, request as httpRequest } from "node:http";
+const target = ${JSON.stringify(`${proxyOrigin}/esplora`)};
+const server = createServer((request, response) => {
+    const upstream = httpRequest(target + request.url, {
+        method: request.method,
+        headers: request.headers,
+    }, (result) => {
+        response.writeHead(result.statusCode, result.headers);
+        result.pipe(response);
+    });
+    upstream.on("error", () => response.destroy());
+    request.pipe(upstream);
+});
+await new Promise((resolve) => server.listen(3000, "127.0.0.1", resolve));
+server.unref();
+await import("/app/dist/cli.js");
+`,
+        );
         writeEnv(taxiEnv, {
             TAXI_DB_PATH: "/data/taxi.db",
             TAXI_HTTP_PORT: "8080",
             TAXI_ARKD_URL: `${proxyOrigin}/arkd`,
-            TAXI_INDEXER_URL: `${proxyOrigin}/indexer`,
-            TAXI_ESPLORA_URL: `${proxyOrigin}/esplora`,
             TAXI_EMULATOR_URL: `${proxyOrigin}/emulator`,
             TAXI_OPERATOR_PRIVKEY: actorSecrets.operator,
-            TAXI_SERVER_PUBKEY: xOnlyKey(arkInfo.signerPubkey),
-            TAXI_EMULATOR_PUBKEY: xOnlyKey(emulatorInfo.signerPubkey),
-            TAXI_DUST: String(arkInfo.dust),
-            TAXI_VTXO_MIN_AMOUNT: String(arkInfo.vtxoMinAmount),
-            TAXI_ADDRESS_HRP: "tark",
             TAXI_OPERATOR_MIN_RESERVE_SATS: "10000",
             TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: MIN_EXPIRY_HEADROOM_BLOCKS,
             TAXI_MIN_EXPIRY_HEADROOM_SECONDS: MIN_EXPIRY_HEADROOM_SECONDS,
@@ -986,6 +994,7 @@ async function main() {
                 volume: taxiVolume,
                 port: 0,
                 image: taxiImage,
+                esploraBridge,
             }),
             { env: childEnv, print: false },
         );
@@ -1024,6 +1033,7 @@ async function main() {
                         volume: taxiVolume,
                         port: 0,
                         image: taxiImage,
+                        esploraBridge,
                     });
                     args[args.indexOf("-p") + 1] = `127.0.0.1:${port}:8080`;
                     await run("docker", args, { print: false });
@@ -1128,15 +1138,8 @@ async function main() {
             TAXI_E2E_CLIENT_ENTRY: packs.entry,
             TAXI_DB_PATH: ":memory:",
             TAXI_ARKD_URL: arkdUrl,
-            TAXI_INDEXER_URL: arkdUrl,
-            TAXI_ESPLORA_URL: esploraUrl,
             TAXI_EMULATOR_URL: emulatorUrl,
             TAXI_OPERATOR_PRIVKEY: actorSecrets.operator,
-            TAXI_SERVER_PUBKEY: xOnlyKey(arkInfo.signerPubkey),
-            TAXI_EMULATOR_PUBKEY: xOnlyKey(emulatorInfo.signerPubkey),
-            TAXI_DUST: String(arkInfo.dust),
-            TAXI_VTXO_MIN_AMOUNT: String(arkInfo.vtxoMinAmount),
-            TAXI_ADDRESS_HRP: "tark",
             TAXI_OPERATOR_MIN_RESERVE_SATS: "10000",
             TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: MIN_EXPIRY_HEADROOM_BLOCKS,
             TAXI_MIN_EXPIRY_HEADROOM_SECONDS: MIN_EXPIRY_HEADROOM_SECONDS,

@@ -18,30 +18,23 @@ deliberate — it refuses to guess a price.
 
 ## Variables
 
-| Variable                     | Default    | Required | Shape                           |
-| ---------------------------- | ---------- | -------- | ------------------------------- |
-| `TAXI_DB_PATH`               | `:memory:` | no       | path                            |
-| `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                         |
-| `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                    |
-| `TAXI_INDEXER_URL`           | —          | **yes**  | absolute URL                    |
-| `TAXI_ESPLORA_URL`           | —          | **yes**  | absolute API URL                |
-| `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                    |
-| `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key)    |
-| `TAXI_SERVER_PUBKEY`         | —          | **yes**  | 64 hex (32-byte x-only)         |
-| `TAXI_EMULATOR_PUBKEY`       | —          | **yes**  | 64 hex (32-byte x-only)         |
-| `TAXI_DUST`                  | —          | **yes**  | positive decimal sats           |
-| `TAXI_VTXO_MIN_AMOUNT`       | —          | **yes**  | positive decimal, ≤ `TAXI_DUST` |
-| `TAXI_LOG_LEVEL`             | `info`     | no       | `trace`…`fatal`                 |
-| `TAXI_ADDRESS_HRP`           | `ark`      | no       | bech32m prefix                  |
-| `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats       |
+| Variable                     | Default    | Required | Shape                        |
+| ---------------------------- | ---------- | -------- | ---------------------------- |
+| `TAXI_DB_PATH`               | `:memory:` | no       | path                         |
+| `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                      |
+| `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                 |
+| `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                 |
+| `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key) |
+| `TAXI_LOG_LEVEL`             | `info`     | no       | `trace`…`fatal`              |
+| `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats    |
 
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
 
-The persistent operator runtime also requires `TAXI_INDEXER_URL` and
-`TAXI_ESPLORA_URL` (absolute URLs). SDK 0.4.72 `ArkInfo` does not advertise either
-endpoint. Co-location of the indexer with arkd is a deployment choice, so Taxi
-does not guess it; point Esplora at its API prefix, such as `/api` for mempool.
+Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. It selects the SDK's
+Esplora endpoint from the network advertised by arkd. The same verified network
+selects the address HRP and emulator trust anchor; arkd supplies its signer,
+dust and minimum VTXO amount through `GET /v1/info`.
 
 Runtime budgets are positive decimal integers. Height budgets are
 `TAXI_MIN_EXPIRY_HEADROOM_BLOCKS=144`, `TAXI_RECOVERY_BROADCAST_BLOCKS=72`, and
@@ -75,9 +68,10 @@ that cannot reach it.
 
 Where the Arkade Service and the emulator live. Both absolute URLs.
 
-Pointing at the wrong instance is worse than pointing at nothing: the keys below
-must belong to _these_ endpoints. Naming one arkd while pinning another's key
-derives covenants that arkd will never sign.
+Pointing at the wrong instance is worse than pointing at nothing. Taxi pins the
+signer returned by arkd at startup, while the emulator identity must match the
+key pinned for arkd's advertised network by `@arkade-os/sdk`. Later refreshes
+fail closed if the signer, network, limits or capabilities drift.
 
 The emulator is on the critical path for the operator's **own** recovery, not
 only for claims. Every leaf, including the timelocked `recovery` one, is
@@ -119,14 +113,18 @@ and restart for a fee-charging deployment. Each created job persists its exact
 fee and authorization; changing the environment cannot widen an in-flight job.
 Ambiguous intents retain reservations for reconciliation, including after restart.
 
-### `TAXI_SERVER_PUBKEY` and `TAXI_EMULATOR_PUBKEY`
+### Provider identities and network parameters
 
-The Arkade Service key that appears in every leaf, and the emulator key each
-leaf's script is tweaked from. 32-byte x-only, 64 hex.
+Taxi derives the emulator key from `@arkade-os/sdk` using the network returned by
+arkd. There is deliberately no `TAXI_EMULATOR_PUBKEY`: the deployment must not
+replace a network trust anchor already pinned by the SDK. Taxi still fetches the
+emulator's `GET /v1/info` and refuses startup unless its `signerPubkey` matches
+the SDK key. Networks without an SDK-pinned emulator key cannot start Taxi.
 
-Both endpoints serve these on `GET /v1/info` as `signerPubkey`, **compressed** —
-66 hex with a leading `02`/`03`. Drop the parity byte; the config rejects the
-66-hex form with `must be 64 hex characters (32 bytes)`.
+arkd also serves the Arkade operator signer on `GET /v1/info`. Taxi normalizes
+that key, pins it in the resolved runtime configuration and uses it to derive
+the operator payout address. No duplicate server-key environment variable is
+accepted.
 
 Wrong here and the taproot address derives cleanly and is unspendable by anyone.
 The leaves name a server or an emulator that will not sign, so neither the
@@ -134,17 +132,10 @@ receiver's claim, nor the sender's refund, nor the operator's recovery can be
 satisfied. Funds sent to it are pinned. Verify these against the endpoints
 before the first lockup, not after.
 
-### `TAXI_DUST` and `TAXI_VTXO_MIN_AMOUNT`
-
-The dust unit the operator fronts, and the floor on any virtual output. Both
-must match what the Arkade Service actually enforces. `TAXI_VTXO_MIN_AMOUNT`
-must not exceed `TAXI_DUST`, and the config rejects the pair if it does.
-
-Set `TAXI_DUST` below arkd's dust and outputs are refused at submission. Set it
-above and the operator fronts more capital per payment than it needs, inflating
-exposure for nothing.
-
-`TAXI_VTXO_MIN_AMOUNT` matters more than its name suggests, because it is an
+The dust unit the operator fronts and the minimum virtual-output amount also
+come from the verified arkd info. Taxi refuses startup if either is non-positive
+or the minimum exceeds dust. The minimum matters more than its name suggests,
+because it is an
 input to the covenant scripts and therefore to the address:
 
 - `validateParams` rejects a `topup` below it.
@@ -153,8 +144,8 @@ input to the covenant scripts and therefore to the address:
   occupy an output on its own.
 
 That second one means the `refundSender` and `recovery` leaves are built from
-the _current configured_ value. It is not persisted per advance. **Do not change
-`TAXI_VTXO_MIN_AMOUNT` while advances are locked**: the sweeper would rebuild a
+the _current provider_ value. It is not persisted per advance. **Do not change
+arkd's minimum VTXO amount while advances are locked**: the sweeper would rebuild a
 different refund script, derive a different taptree, and be unable to satisfy the
 recovery leaf on covenants already committed to the old one. Drain to zero
 outstanding first. (The rebuild only differs where `topup > dust −
@@ -162,11 +153,11 @@ vtxoMinAmount`, which is every pure-asset payment, since those set
 `topup = dust`.)
 
 `dust` and the parties are persisted per advance, along with funding and signed
-graph facts. Runtime provider pins, the configured minimum amount and recovery
+graph facts. Runtime provider pins, the provider minimum amount and recovery
 budgets must nevertheless remain compatible with those graphs. Startup
 reconstructs and validates every active recovery and fails closed on a mismatch.
 Drain `quoted`, `locking`, `locked` and `recovering` work before changing these
-deployment parameters; do not work around a failed startup by deleting rows.
+provider parameters; do not work around a failed startup by deleting rows.
 
 ### `TAXI_LOG_LEVEL`
 
@@ -176,13 +167,5 @@ Raising it to `error` silences the sweeper's own warnings, and the sweeper is th
 one component you must not run blind. Lowering it to `trace` in production is
 noisy and widens what ends up in logs.
 
-### `TAXI_ADDRESS_HRP`
-
-The bech32m prefix on derived covenant addresses: `ark` on mainnet, `tark` on
-regtest, testnet, signet and mutinynet. The default is `ark`, so **every
-non-mainnet deployment must set it.**
-
-Get it wrong and nothing is unspendable — but no client will proceed. A wallet
-re-derives the address with its own network's prefix and compares; a mismatch
-raises `COVENANT_ADDRESS_MISMATCH` on every quote you issue. If integrators
-report that error universally and the keys check out, look here first.
+The SDK network definition supplies the bech32m prefix for derived covenant
+addresses. Clients still re-derive and compare the address before signing.

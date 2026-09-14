@@ -297,7 +297,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
         if (mode === "purchase") expectReceipt(unsigned, 1, 1n, live.info.operatorKey);
         expect(unsigned.getOutput(mode === "purchase" ? 2 : 1).amount).toBe(671n);
         await control("configure", {
-            target: "indexer",
+            target: "arkd",
             path: "/v1/indexer/vtxos",
             mode: "pause",
             query: { outpoints: `${unsigned.id}:0` },

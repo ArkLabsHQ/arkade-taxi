@@ -7,7 +7,15 @@ const fixture = () => ({
         Name: `/${project}-taxi`,
         Config: { Labels: { "dev.arkade-taxi.e2e-project": project }, Image: "sha256:taxi" },
         Image: "sha256:taxi",
-        Mounts: [{ Type: "volume", Name: `${project}-taxi-data`, Destination: "/data" }],
+        Mounts: [
+            { Type: "volume", Name: `${project}-taxi-data`, Destination: "/data" },
+            {
+                Type: "bind",
+                Source: "C:/temp/esplora-bridge.mjs",
+                Destination: "/app/e2e-esplora-bridge.mjs",
+                RW: false,
+            },
+        ],
         NetworkSettings: {
             Networks: { [`${project}_default`]: {} },
             Ports: { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "49123" }] },
@@ -24,7 +32,7 @@ it("preserves the inspected loopback port and named data volume for Taxi alone",
     });
 });
 
-it.each(["container", "volume", "image", "network", "mount", "binding"])(
+it.each(["container", "volume", "image", "network", "mount", "bridge", "binding"])(
     "refuses restart when the %s belongs outside the exact run",
     (field) => {
         const f = fixture();
@@ -35,6 +43,7 @@ it.each(["container", "volume", "image", "network", "mount", "binding"])(
             f.image.Config.Labels["dev.arkade-taxi.e2e-project"] = "arkade-regtest";
         if (field === "network") f.container.NetworkSettings.Networks = { arkade_regtest: {} };
         if (field === "mount") f.container.Mounts[0].Name = "arkade-regtest-data";
+        if (field === "bridge") f.container.Mounts[1].RW = true;
         if (field === "binding")
             f.container.NetworkSettings.Ports["8080/tcp"][0].HostIp = "0.0.0.0";
         expect(() => assertTaxiRestartOwnership(f.container, f.volume, f.image, project)).toThrow(

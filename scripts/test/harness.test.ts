@@ -351,6 +351,11 @@ describe("SDK runtime", () => {
         );
     });
 
+    it("uses arkade-regtest's SDK-pinned emulator identity", () => {
+        const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
+        expect(stack).not.toContain("EMULATOR_SECRET_KEY");
+    });
+
     it("enables EventSource for Vitest without discarding existing Node options", () => {
         expect(
             eventSourceNodeEnvironment({
@@ -796,6 +801,31 @@ export const PROFILE_DEPS = {
         }
     });
 
+    it("isolates current arkade-regtest project and container-name helpers", () => {
+        const sources = {
+            base: "services:\n  bitcoin:\n    ports:\n      - '${BITCOIN_RPC_PORT:-18443}:18443'\n",
+            ark: "services:\n  arkd:\n",
+            arkdSetup:
+                "const arkdUrl = () => `http://localhost:${env('ARKD_PORT', '7070')}`;\nconst arkdAdminUrl = () => `http://localhost:${env('ARKD_ADMIN_PORT', '7071')}`;\n",
+            compose:
+                "function baseArgs(profiles = []) { return ['compose', '-p', process.env.REGTEST_PROJECT || 'arkade-regtest', '-f', BASE, '-f', ARK]; }",
+            proc: "export function dockerExec(container, argv, opts = {}) { return docker(['exec', containerName(container), ...argv], opts); }",
+            regtest: [
+                "import { ROOT, composeUp, composeStop, composeDown } from './lib/compose.mjs';",
+                "async function startEmulator() {}",
+                "if (firstWave.code !== 0) fail('docker compose up failed');",
+                "if (appWave.code !== 0) fail('docker compose up failed');",
+                "if (active.has('ark')) await setupArkd();",
+                "const a = docker(['exec', containerName('arkd'), argv[0], ...passthrough]); const b = docker(['exec', containerName('bitcoin'), 'bitcoin-cli', '-regtest', '-rpcuser=admin1', '-rpcpassword=123', ...passthrough]);",
+            ].join("\n"),
+        };
+        const transformed = namespaceRegtestSources(sources, "taxi12-a1b2c3d4", [
+            ["BITCOIN_RPC_PORT", "bitcoin", 18443],
+        ]);
+        expect(transformed.proc).toContain("'compose', '-p', 'taxi12-a1b2c3d4'");
+        expect(transformed.regtest).not.toContain("docker(['exec'");
+    });
+
     it.each(["arkade-regtest", "taxi_12", "taxi12", "taxi12-TOOLOUD"])(
         "rejects a non-isolated project name: %s",
         (name) =>
@@ -985,11 +1015,21 @@ export const PROFILE_DEPS = {
             volume: `${project}-taxi-data`,
             port: 0,
             image: `arkade-taxi:e2e-a1b2c3d4`,
+            esploraBridge: "C:/temp/esplora-bridge.mjs",
         });
         expect(args).toContain(network);
         expect(args).toContain("--add-host");
         expect(args).toContain("host.docker.internal:host-gateway");
         expect(args).toContain("127.0.0.1::8080");
+        expect(args).toContain("C:/temp/esplora-bridge.mjs:/app/e2e-esplora-bridge.mjs:ro");
+        expect(args.slice(-6)).toEqual([
+            `arkade-taxi:e2e-a1b2c3d4`,
+            "node",
+            "--experimental-eventsource",
+            "--enable-source-maps",
+            "e2e-esplora-bridge.mjs",
+            "serve",
+        ]);
     });
 
     it("accepts only unique daemon-resolved nonzero host ports", () => {

@@ -9,7 +9,7 @@ import {
     ReservationRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { config, fundingCoin, operatorTree } from "./fixtures.js";
+import { config, fundingCoin, operatorTree, providerEmulatorKey } from "./fixtures.js";
 import {
     createProceedsCollector,
     assertProceedsPlan,
@@ -101,7 +101,7 @@ function setup(
         providers: {
             arkProvider: wallet.arkProvider,
             emulatorProvider: {
-                getInfo: async () => ({ signerPubkey: bytesToHex(cfg.emulatorPubkey) }),
+                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
             },
             indexerProvider: { getVtxos: async () => ({ vtxos: coins }) },
         },

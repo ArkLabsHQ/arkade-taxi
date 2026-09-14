@@ -105,10 +105,13 @@ inbound `X-Taxi-Operator`, replace it with the authenticated operator identity,
 and prevent direct access to the backend port. Taxi validates and audits this
 header but does not authenticate it. Request JSON cannot choose the actor.
 
-Pin the Arkade Service and emulator public keys independently of Taxi. Check
-the configured network, dust, minimum amount, indexer and Esplora API URLs.
-Taxi checks live provider identity and capabilities and closes admission on
-drift. Clients independently verify the same trust facts before signing.
+Pin the Arkade Service public key independently of Taxi. Taxi obtains the
+emulator trust anchor from the SDK entry for arkd's advertised network and
+checks the live emulator against it. Taxi resolves and pins arkd's signer,
+network, dust and minimum amount; it uses arkd's integrated indexer and the
+SDK network's Esplora URL and address HRP. Taxi closes admission on provider
+identity, parameter or capability drift. Clients independently verify the same
+trust facts before signing.
 
 ## Liveness, readiness and first admission
 
@@ -153,7 +156,7 @@ automatically pause new admission. Recovery continues while admission is paused
 or inventory is unsafe, provided recovery identities and chain clocks verify.
 
 At warning: pause, inspect the exact advance/outpoint and deadline domain, check
-Arkade Service/emulator/indexer/Esplora availability and pins, then rescan.
+Arkade Service/emulator availability and the inferred provider facts, then rescan.
 Inspect the durable submission/recovery phase, failure code, attempt count and
 next attempt. If retryable and no live lease exists, use the matching retry
 operation. At critical: retain the pause, prioritize restoring the existing
@@ -230,8 +233,8 @@ deployment with outstanding advances or discard the old payout key.
 
 Use the same drain procedure before changing provider keys, dust, minimum
 amount or recovery budgets. Startup validates active graphs against the current
-configuration and refuses incompatible recovery; bypassing that guard destroys
-the operational guarantee.
+provider state and configuration and refuses incompatible recovery; bypassing
+that guard destroys the operational guarantee.
 
 ## Upgrade and rollback
 

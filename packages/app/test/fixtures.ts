@@ -3,6 +3,8 @@ import {
     VtxoScript,
     MultisigTapscript,
     CSVMultisigTapscript,
+    defaultEmulatorPubkey,
+    networks,
     asset,
     type ExtendedVirtualCoin,
     type VirtualCoin,
@@ -11,7 +13,7 @@ import type { RuntimeSafety } from "../src/arkade/types.js";
 import type { QuoteDeps } from "../src/quotes.js";
 import { LockupClaimError } from "@arkade-taxi/db";
 import { isExposed, type Advance, type Outpoint, type Policy } from "@arkade-taxi/core";
-import { bytesToHex } from "@arkade-taxi/protocol";
+import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 
 // Real curve points: computeArkadeScriptPublicKey lifts the emulator key to do
@@ -25,6 +27,10 @@ export const operatorPrivkey = new Uint8Array(32).fill(3);
 export const operatorKey = await xonly(3);
 export const serverKey = await xonly(4);
 export const emulatorKey = await xonly(5);
+export const providerEmulatorKey = hexToBytes(
+    defaultEmulatorPubkey(networks.regtest).slice(2),
+    "emulator key",
+);
 export const senderTree = new VtxoScript([
     MultisigTapscript.encode({ pubkeys: [serverKey, senderKey] }).script,
 ]);
@@ -188,6 +194,7 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     proceedsMaxFeeSats: 0n,
     operatorPrivkey,
     operatorKey,
+    networkName: "regtest",
     serverPubkey: serverKey,
     operatorSignerKey: operatorKey,
     emulatorPubkey: emulatorKey,

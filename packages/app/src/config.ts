@@ -1,4 +1,4 @@
-import { DefaultVtxo, SingleKey } from "@arkade-os/sdk";
+import { DefaultVtxo, ESPLORA_URL, SingleKey } from "@arkade-os/sdk";
 import { createProviders, verifyProviders } from "./arkade/providers.js";
 import { hexToBytes } from "@arkade-taxi/protocol";
 import { z } from "zod";
@@ -11,7 +11,6 @@ export interface TaxiConfig {
     httpPort: number;
     arkdUrl: string;
     indexerUrl: string;
-    esploraUrl: string;
     emulatorUrl: string;
     minExpiryHeadroomBlocks: bigint;
     recoveryBroadcastBlocks: bigint;
@@ -25,18 +24,20 @@ export interface TaxiConfig {
     /** The operator signs its own funding inputs at lockup. It is never a
      * covenant signer — no leaf carries its key in a multisig. */
     operatorPrivkey: Uint8Array;
-    serverPubkey: Uint8Array;
-    emulatorPubkey: Uint8Array;
-    dust: bigint;
-    vtxoMinAmount: bigint;
     logLevel: LogLevel;
-    addressHrp: string;
 }
 
 /** Public payout destination and private-wallet funding signer are distinct. */
 export interface RuntimeConfig extends TaxiConfig {
     operatorKey: Uint8Array;
     operatorSignerKey: Uint8Array;
+    networkName: keyof typeof ESPLORA_URL;
+    esploraUrl: string;
+    serverPubkey: Uint8Array;
+    emulatorPubkey: Uint8Array;
+    dust: bigint;
+    vtxoMinAmount: bigint;
+    addressHrp: string;
 }
 
 export interface ConfigIssue {
@@ -87,8 +88,6 @@ const SCHEMA = z
         TAXI_DB_PATH: z.string().min(1, "must not be empty").default(":memory:"),
         TAXI_HTTP_PORT: port,
         TAXI_ARKD_URL: url,
-        TAXI_INDEXER_URL: url,
-        TAXI_ESPLORA_URL: url,
         TAXI_EMULATOR_URL: url,
         TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
         TAXI_RECOVERY_BROADCAST_BLOCKS: positiveSats.default("72"),
@@ -104,12 +103,7 @@ const SCHEMA = z
             .transform(BigInt)
             .default("0"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
-        TAXI_SERVER_PUBKEY: hexKey,
-        TAXI_EMULATOR_PUBKEY: hexKey,
-        TAXI_DUST: positiveSats,
-        TAXI_VTXO_MIN_AMOUNT: positiveSats,
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
-        TAXI_ADDRESS_HRP: z.string().min(1, "must not be empty").default("ark"),
     })
     .superRefine((v, ctx) => {
         if (v.TAXI_RECOVERY_CRITICAL_SECONDS >= v.TAXI_RECOVERY_BROADCAST_SECONDS) {
@@ -140,13 +134,6 @@ const SCHEMA = z
                 message: "must be less than TAXI_MIN_EXPIRY_HEADROOM_BLOCKS",
             });
         }
-        if (v.TAXI_VTXO_MIN_AMOUNT > v.TAXI_DUST) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ["TAXI_VTXO_MIN_AMOUNT"],
-                message: `must not exceed TAXI_DUST (${v.TAXI_DUST})`,
-            });
-        }
     });
 
 const REQUIRED = "must be set";
@@ -166,8 +153,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         dbPath: v.TAXI_DB_PATH,
         httpPort: v.TAXI_HTTP_PORT,
         arkdUrl: v.TAXI_ARKD_URL,
-        indexerUrl: v.TAXI_INDEXER_URL,
-        esploraUrl: v.TAXI_ESPLORA_URL,
+        indexerUrl: v.TAXI_ARKD_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,
         minExpiryHeadroomBlocks: v.TAXI_MIN_EXPIRY_HEADROOM_BLOCKS,
         recoveryBroadcastBlocks: v.TAXI_RECOVERY_BROADCAST_BLOCKS,
@@ -179,12 +165,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
-        serverPubkey: v.TAXI_SERVER_PUBKEY,
-        emulatorPubkey: v.TAXI_EMULATOR_PUBKEY,
-        dust: v.TAXI_DUST,
-        vtxoMinAmount: v.TAXI_VTXO_MIN_AMOUNT,
         logLevel: v.TAXI_LOG_LEVEL,
-        addressHrp: v.TAXI_ADDRESS_HRP,
     };
 }
 
@@ -204,15 +185,33 @@ export async function resolveRuntimeConfig(
         ]);
     }
     const verified = await verifyProviders(cfg, providers);
-    if (verified.blockers.length || !verified.info)
+    if (
+        verified.blockers.length ||
+        !verified.info ||
+        !verified.network ||
+        !verified.serverPubkey ||
+        !verified.emulatorPubkey
+    )
         throw new Error(
             `operator payout provider verification failed: ${verified.blockers.join(", ")}`,
         );
     const delay = verified.info.unilateralExitDelay;
+    const networkName = verified.info.network as keyof typeof ESPLORA_URL;
     const script = new DefaultVtxo.Script({
         pubKey: operatorSignerKey,
-        serverPubKey: cfg.serverPubkey,
+        serverPubKey: verified.serverPubkey,
         csvTimelock: { value: delay, type: delay < 512n ? "blocks" : "seconds" },
     });
-    return { ...cfg, operatorKey: script.tweakedPublicKey, operatorSignerKey };
+    return {
+        ...cfg,
+        networkName,
+        esploraUrl: ESPLORA_URL[networkName],
+        serverPubkey: verified.serverPubkey,
+        emulatorPubkey: verified.emulatorPubkey,
+        dust: verified.info.dust,
+        vtxoMinAmount: verified.info.vtxoMinAmount,
+        addressHrp: verified.network.hrp,
+        operatorKey: script.tweakedPublicKey,
+        operatorSignerKey,
+    };
 }

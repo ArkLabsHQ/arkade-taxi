@@ -1,22 +1,24 @@
 import { describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, resolveRuntimeConfig } from "../src/config.js";
+import { verifyProviders } from "../src/arkade/providers.js";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { ArkAddress, DefaultVtxo, SingleKey } from "@arkade-os/sdk";
-import { emulatorKey, operatorPrivkey, serverKey } from "./fixtures.js";
+import {
+    ArkAddress,
+    DefaultVtxo,
+    SingleKey,
+    defaultEmulatorPubkey,
+    ESPLORA_URL,
+    networks,
+} from "@arkade-os/sdk";
+import { operatorPrivkey, serverKey } from "./fixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 
 const HEX32 = "11".repeat(32);
 
 const env = (over: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
     TAXI_ARKD_URL: "https://arkd.example",
-    TAXI_INDEXER_URL: "https://indexer.example",
-    TAXI_ESPLORA_URL: "https://esplora.example/api",
     TAXI_EMULATOR_URL: "https://emulator.example",
     TAXI_OPERATOR_PRIVKEY: "03".repeat(32),
-    TAXI_SERVER_PUBKEY: HEX32,
-    TAXI_EMULATOR_PUBKEY: "22".repeat(32),
-    TAXI_DUST: "330",
-    TAXI_VTXO_MIN_AMOUNT: "10",
     ...over,
 });
 
@@ -29,8 +31,7 @@ describe("loadConfig", () => {
                 /TAXI_PROCEEDS_MAX_FEE_SATS/,
             );
     });
-    it("requires an explicit chain endpoint and orders time budgets independently", () => {
-        expect(() => loadConfig(env({ TAXI_ESPLORA_URL: undefined }))).toThrow(/TAXI_ESPLORA_URL/);
+    it("orders time budgets independently", () => {
         expect(() =>
             loadConfig(
                 env({
@@ -48,9 +49,8 @@ describe("loadConfig", () => {
             ),
         ).toThrow(/TAXI_RECOVERY_BROADCAST_SECONDS/);
     });
-    it("requires an explicit indexer endpoint rather than guessing its deployment", () => {
-        expect(() => loadConfig(env({ TAXI_INDEXER_URL: undefined }))).toThrow(/TAXI_INDEXER_URL/);
-        expect(loadConfig(env()).indexerUrl).toBe("https://indexer.example");
+    it("uses the Arkade endpoint for its integrated indexer", () => {
+        expect(loadConfig(env()).indexerUrl).toBe("https://arkd.example");
     });
 
     it("validates ordered recovery thresholds and exact reserve amounts", () => {
@@ -84,26 +84,34 @@ describe("loadConfig", () => {
         expect(cfg.logLevel).toBe("info");
     });
 
-    it("decodes amounts as bigint, never number", () => {
-        const cfg = loadConfig(env({ TAXI_DUST: "9007199254740993" }));
-        expect(cfg.dust).toBe(9_007_199_254_740_993n);
-        expect(cfg.vtxoMinAmount).toBe(10n);
+    it("decodes the operator private key to 32 bytes", () => {
+        const cfg = loadConfig(env());
+        expect(cfg.operatorPrivkey).toHaveLength(32);
     });
 
-    it("decodes hex keys to 32 bytes", () => {
-        const cfg = loadConfig(env());
-        expect(cfg.serverPubkey).toEqual(new Uint8Array(32).fill(0x11));
-        expect(cfg.emulatorPubkey).toHaveLength(32);
-        expect(cfg.operatorPrivkey).toHaveLength(32);
+    it("does not require an emulator key already pinned by the SDK", () => {
+        const cfg = loadConfig(env({ TAXI_EMULATOR_PUBKEY: undefined }));
+        expect("emulatorPubkey" in cfg).toBe(false);
+    });
+
+    it("does not require provider facts derived from arkd and the SDK", () => {
+        const cfg = loadConfig(
+            env({
+                TAXI_INDEXER_URL: undefined,
+                TAXI_ESPLORA_URL: undefined,
+                TAXI_SERVER_PUBKEY: undefined,
+                TAXI_DUST: undefined,
+                TAXI_VTXO_MIN_AMOUNT: undefined,
+                TAXI_ADDRESS_HRP: undefined,
+            }),
+        );
+        expect(cfg.indexerUrl).toBe(cfg.arkdUrl);
+        for (const field of ["esploraUrl", "serverPubkey", "dust", "vtxoMinAmount", "addressHrp"])
+            expect(field in cfg).toBe(false);
     });
 
     it("ignores unrelated environment variables", () => {
         expect(() => loadConfig(env({ PATH: "/usr/bin", HOME: "/root" }))).not.toThrow();
-    });
-
-    it("accepts uppercase hex", () => {
-        const cfg = loadConfig(env({ TAXI_SERVER_PUBKEY: "AB".repeat(32) }));
-        expect(bytesToHex(cfg.serverPubkey)).toBe("ab".repeat(32));
     });
 });
 
@@ -111,9 +119,7 @@ describe("aggregated validation", () => {
     it("reports every invalid var, not just the first", () => {
         const bad = env({
             TAXI_ARKD_URL: "not-a-url",
-            TAXI_DUST: "three-hundred",
             TAXI_HTTP_PORT: "99999",
-            TAXI_SERVER_PUBKEY: "abcd",
         });
 
         const err = (() => {
@@ -128,16 +134,12 @@ describe("aggregated validation", () => {
         expect(err).toBeInstanceOf(ConfigError);
         expect(err!.issues.map((i) => i.variable).sort()).toEqual([
             "TAXI_ARKD_URL",
-            "TAXI_DUST",
             "TAXI_HTTP_PORT",
-            "TAXI_SERVER_PUBKEY",
         ]);
     });
 
     it("names every offending var in the single thrown message", () => {
-        const bad = env({ TAXI_DUST: "x", TAXI_VTXO_MIN_AMOUNT: "y", TAXI_LOG_LEVEL: "chatty" });
-        expect(() => loadConfig(bad)).toThrow(/TAXI_DUST[\s\S]*TAXI_LOG_LEVEL/);
-        expect(() => loadConfig(bad)).toThrow(/TAXI_VTXO_MIN_AMOUNT/);
+        expect(() => loadConfig(env({ TAXI_LOG_LEVEL: "chatty" }))).toThrow(/TAXI_LOG_LEVEL/);
     });
 
     it("reports missing required vars together", () => {
@@ -150,52 +152,36 @@ describe("aggregated validation", () => {
             }
         })();
         expect(err!.issues.map((i) => i.variable)).toEqual(
-            expect.arrayContaining([
-                "TAXI_ARKD_URL",
-                "TAXI_EMULATOR_URL",
-                "TAXI_OPERATOR_PRIVKEY",
-                "TAXI_SERVER_PUBKEY",
-                "TAXI_EMULATOR_PUBKEY",
-                "TAXI_DUST",
-                "TAXI_VTXO_MIN_AMOUNT",
-            ]),
+            expect.arrayContaining(["TAXI_ARKD_URL", "TAXI_EMULATOR_URL", "TAXI_OPERATOR_PRIVKEY"]),
         );
     });
 
-    it("rejects a zero or negative amount", () => {
-        expect(() => loadConfig(env({ TAXI_DUST: "0" }))).toThrow(/TAXI_DUST/);
-        expect(() => loadConfig(env({ TAXI_VTXO_MIN_AMOUNT: "-1" }))).toThrow(
-            /TAXI_VTXO_MIN_AMOUNT/,
-        );
-    });
-
-    // A covenant whose window is empty admits nothing, and the failure would
-    // otherwise surface per quote rather than at boot.
-    it("rejects vtxoMinAmount above dust", () => {
-        expect(() => loadConfig(env({ TAXI_VTXO_MIN_AMOUNT: "331" }))).toThrow(
-            /TAXI_VTXO_MIN_AMOUNT/,
-        );
-    });
-
-    it("rejects a key that is not 32 bytes", () => {
-        expect(() => loadConfig(env({ TAXI_EMULATOR_PUBKEY: "22".repeat(31) }))).toThrow(
-            /TAXI_EMULATOR_PUBKEY/,
-        );
+    it("rejects invalid limits advertised by arkd", async () => {
+        const configured = loadConfig(env());
+        await expect(
+            resolveRuntimeConfig(configured, {
+                arkProvider: {
+                    getInfo: async () =>
+                        arkInfo({ dust: 330n, vtxoMinAmount: 331n, signerPubkey: HEX32 }),
+                },
+                emulatorProvider: {
+                    getInfo: async () => ({
+                        signerPubkey: defaultEmulatorPubkey(networks.regtest),
+                    }),
+                },
+            }),
+        ).rejects.toThrow(/provider_limits_invalid/);
     });
 });
 
 describe("resolveRuntimeConfig", () => {
-    const configured = () =>
-        loadConfig(
-            env({
-                TAXI_SERVER_PUBKEY: bytesToHex(serverKey),
-                TAXI_EMULATOR_PUBKEY: bytesToHex(emulatorKey),
-                TAXI_ADDRESS_HRP: "tark",
-            }),
-        );
+    const pinned = defaultEmulatorPubkey(networks.regtest);
+    const configured = () => loadConfig(env());
     const providers = (info = arkInfo()) => ({
-        arkProvider: { getInfo: async () => info },
-        emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+        arkProvider: {
+            getInfo: async () => ({ ...info, signerPubkey: bytesToHex(serverKey) }),
+        },
+        emulatorProvider: { getInfo: async () => ({ signerPubkey: pinned }) },
     });
 
     it.each([5n, 1024n])(
@@ -219,12 +205,29 @@ describe("resolveRuntimeConfig", () => {
         },
     );
 
-    it("does not derive a payout from an unverified provider identity", async () => {
-        await expect(
-            resolveRuntimeConfig(
-                configured(),
-                providers(arkInfo({ signerPubkey: bytesToHex(emulatorKey) })),
-            ),
-        ).rejects.toThrow(/server_identity_mismatch/);
+    it("pins the resolved server identity for later provider refreshes", async () => {
+        const cfg = await resolveRuntimeConfig(configured(), providers());
+        const result = await verifyProviders(cfg, {
+            arkProvider: {
+                getInfo: async () => arkInfo({ signerPubkey: "11".repeat(32) }),
+            },
+            emulatorProvider: { getInfo: async () => ({ signerPubkey: pinned }) },
+        });
+        expect(result.blockers).toContain("server_identity_mismatch");
+    });
+
+    it("derives the emulator key from the Arkade network pinned by the SDK", async () => {
+        const cfg = await resolveRuntimeConfig(configured(), {
+            arkProvider: { getInfo: async () => arkInfo() },
+            emulatorProvider: { getInfo: async () => ({ signerPubkey: pinned }) },
+        });
+        expect(cfg.networkName).toBe("regtest");
+        expect(cfg.indexerUrl).toBe(cfg.arkdUrl);
+        expect(cfg.esploraUrl).toBe(ESPLORA_URL.regtest);
+        expect(cfg.serverPubkey).toEqual(serverKey);
+        expect(cfg.dust).toBe(330n);
+        expect(cfg.vtxoMinAmount).toBe(10n);
+        expect(cfg.addressHrp).toBe(networks.regtest.hrp);
+        expect(bytesToHex(cfg.emulatorPubkey)).toBe(pinned.slice(2));
     });
 });

@@ -409,7 +409,9 @@ export function namespaceRegtestSources(sources, project, expectedPortBindings) 
     if (!Array.isArray(expectedPortBindings) || !expectedPortBindings.length)
         throw new Error("arkade-regtest published-port binding contract is missing");
     const composeNeedle = "'compose',";
-    const composeReplacement = `'compose', '-p', '${project}',`;
+    const composeReplacement = sources.compose.includes("process.env.REGTEST_PROJECT")
+        ? composeNeedle
+        : `'compose', '-p', '${project}',`;
     if (!sources.compose.includes(composeNeedle))
         throw new Error("arkade-regtest compose interface changed: compose argv was not found");
     const execNeedles = [
@@ -655,13 +657,23 @@ export function assertVolumeDeletionCandidates(candidates, expected) {
     return candidates;
 }
 
-export function buildTaxiRunArgs({ container, project, network, envFile, volume, port, image }) {
+export function buildTaxiRunArgs({
+    container,
+    project,
+    network,
+    envFile,
+    volume,
+    port,
+    image,
+    esploraBridge,
+}) {
     isolatedProject(project);
     if (network !== `${project}_default`)
         throw new Error("Taxi requires the project default network");
     if (!container.startsWith(`${project}-`) || !volume.startsWith(`${project}-`))
         throw new Error("Taxi container and volume must be run-scoped");
     if (port !== 0) throw new Error("Taxi host port must be daemon-assigned");
+    if (!esploraBridge) throw new Error("Taxi requires an isolated regtest Esplora bridge");
     return [
         "run",
         "-d",
@@ -677,9 +689,16 @@ export function buildTaxiRunArgs({ container, project, network, envFile, volume,
         envFile,
         "-v",
         `${volume}:/data`,
+        "-v",
+        `${esploraBridge}:/app/e2e-esplora-bridge.mjs:ro`,
         "-p",
         "127.0.0.1::8080",
         image,
+        "node",
+        "--experimental-eventsource",
+        "--enable-source-maps",
+        "e2e-esplora-bridge.mjs",
+        "serve",
     ];
 }
 

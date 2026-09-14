@@ -17,6 +17,7 @@ import { arkInfo } from "./arkade/fixtures.js";
 import {
     config,
     emulatorKey,
+    providerEmulatorKey,
     fundingCoin,
     MemoryAdvances,
     NOW,
@@ -81,7 +82,9 @@ function setup() {
                     return info;
                 },
             },
-            emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+            emulatorProvider: {
+                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+            },
         },
         walletFactory: async () => wallet,
         reservedOutpoints: () => reservations.listReservedOutpoints(),

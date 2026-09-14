@@ -4,15 +4,17 @@ import {
     RestEmulatorProvider,
     assertValidServerUnrollScript,
     defaultCheckpointExitDelayPolicy,
+    defaultEmulatorPubkey,
     networks,
     type ArkProvider,
     type EmulatorProvider,
     type ArkInfo,
     type CSVMultisigTapscript,
+    type Network,
     type NetworkName,
 } from "@arkade-os/sdk";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
-import type { TaxiConfig } from "../config.js";
+import type { RuntimeConfig, TaxiConfig } from "../config.js";
 import type { ExpiryDeadline } from "@arkade-taxi/core";
 
 export function normalizeExpiry(coin: {
@@ -43,13 +45,22 @@ export function createProviders(config: TaxiConfig) {
 
 export interface VerifiedProviders {
     info?: ArkInfo;
+    network?: Network;
+    serverPubkey?: Uint8Array;
+    emulatorPubkey?: Uint8Array;
     serverUnrollScript?: CSVMultisigTapscript.Type;
     providerIdentityOk: boolean;
     blockers: string[];
 }
 
 export async function verifyProviders(
-    config: TaxiConfig,
+    config: TaxiConfig &
+        Partial<
+            Pick<
+                RuntimeConfig,
+                "networkName" | "serverPubkey" | "dust" | "vtxoMinAmount" | "addressHrp"
+            >
+        >,
     providers: {
         arkProvider: Pick<ArkProvider, "getInfo">;
         emulatorProvider: Pick<EmulatorProvider, "getInfo">;
@@ -60,28 +71,68 @@ export async function verifyProviders(
         providers.emulatorProvider.getInfo(),
     ]);
     const result: VerifiedProviders = { providerIdentityOk: true, blockers: [] };
-    for (const [response, expected, name] of [
-        [ark, config.serverPubkey, "server"],
-        [emulator, config.emulatorPubkey, "emulator"],
-    ] as const) {
-        try {
-            if (response.status === "rejected") throw new Error();
-            if (normalizeSigner(response.value.signerPubkey) !== bytesToHex(expected)) {
-                result.blockers.push(`${name}_identity_mismatch`);
-                result.providerIdentityOk = false;
-            }
-        } catch {
-            result.blockers.push(`${name}_unavailable`);
+    try {
+        if (ark.status === "rejected") throw new Error();
+        result.serverPubkey = hexToBytes(normalizeSigner(ark.value.signerPubkey), "server key");
+        if (
+            config.serverPubkey &&
+            normalizeSigner(ark.value.signerPubkey) !== bytesToHex(config.serverPubkey)
+        ) {
+            result.blockers.push("server_identity_mismatch");
             result.providerIdentityOk = false;
         }
+    } catch {
+        result.blockers.push("server_unavailable");
+        result.providerIdentityOk = false;
     }
     if (ark.status === "rejected") return result;
     result.info = ark.value;
     const network = Object.hasOwn(networks, ark.value.network)
         ? networks[ark.value.network as NetworkName]
         : undefined;
+    result.network = network;
     if (!network) result.blockers.push("network_unknown");
-    else if (network.hrp !== config.addressHrp) result.blockers.push("network_mismatch");
+    else {
+        if (
+            (config.networkName && network.name !== config.networkName) ||
+            (config.addressHrp && network.hrp !== config.addressHrp)
+        )
+            result.blockers.push("network_mismatch");
+        try {
+            result.emulatorPubkey = hexToBytes(
+                normalizeSigner(defaultEmulatorPubkey(network)),
+                "emulator key",
+            );
+        } catch {
+            result.blockers.push("emulator_key_unavailable");
+            result.providerIdentityOk = false;
+        }
+        if (result.emulatorPubkey) {
+            try {
+                if (emulator.status === "rejected") throw new Error();
+                if (
+                    normalizeSigner(emulator.value.signerPubkey) !==
+                    bytesToHex(result.emulatorPubkey)
+                ) {
+                    result.blockers.push("emulator_identity_mismatch");
+                    result.providerIdentityOk = false;
+                }
+            } catch {
+                result.blockers.push("emulator_unavailable");
+                result.providerIdentityOk = false;
+            }
+        }
+    }
+    if (config.dust !== undefined && ark.value.dust !== config.dust)
+        result.blockers.push("dust_mismatch");
+    if (config.vtxoMinAmount !== undefined && ark.value.vtxoMinAmount !== config.vtxoMinAmount)
+        result.blockers.push("vtxo_min_amount_mismatch");
+    if (
+        ark.value.dust <= 0n ||
+        ark.value.vtxoMinAmount <= 0n ||
+        ark.value.vtxoMinAmount > ark.value.dust
+    )
+        result.blockers.push("provider_limits_invalid");
     try {
         if (!network) throw new Error();
         result.serverUnrollScript = assertValidServerUnrollScript(ark.value.checkpointTapscript, {

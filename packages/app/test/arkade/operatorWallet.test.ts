@@ -11,7 +11,7 @@ import {
     type ContractManager,
 } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { config, emulatorKey, operatorKey, serverKey } from "../fixtures.js";
+import { config, emulatorKey, operatorKey, providerEmulatorKey, serverKey } from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
 import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
 import { resolveRuntimeConfig } from "../../src/config.js";
@@ -75,7 +75,9 @@ function setup() {
                     return info;
                 },
             },
-            emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+            emulatorProvider: {
+                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+            },
         },
         walletFactory: async (_cfg: WalletConfig) => {
             walletConfig = _cfg;
@@ -282,7 +284,9 @@ describe("persistent operator runtime safety", () => {
         let coin: ExtendedVirtualCoin;
         const providers = {
             arkProvider: { getInfo: async () => info },
-            emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+            emulatorProvider: {
+                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+            },
         };
         const resolved = await resolveRuntimeConfig(config({ addressHrp: "tark" }), providers);
         const runtime = createOperatorRuntime(resolved, db, {

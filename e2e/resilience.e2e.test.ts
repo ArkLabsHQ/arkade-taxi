@@ -132,7 +132,7 @@ liveScenario("restart-submitted-reconciliation", async () => {
         identity: live.actors.sender.identity,
     });
     await control("configure", {
-        target: "indexer",
+        target: "arkd",
         path: "/v1/indexer/vtxos",
         mode: "pause",
         query: { outpoints: `${lockupTxid(offered)}:0` },
@@ -143,7 +143,7 @@ liveScenario("restart-submitted-reconciliation", async () => {
         "paused covenant observation",
         async () =>
             (await control("events")).events.filter(
-                (event: any) => event.target === "indexer" && event.action === "paused",
+                (event: any) => event.target === "arkd" && event.action === "paused",
             ),
         (events) => events.length > 0,
     );

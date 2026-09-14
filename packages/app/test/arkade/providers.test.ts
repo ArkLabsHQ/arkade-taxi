@@ -3,10 +3,13 @@ import { bytesToHex } from "@arkade-taxi/protocol";
 import { config, emulatorKey } from "../fixtures.js";
 import { verifyProviders } from "../../src/arkade/providers.js";
 import { arkInfo } from "./fixtures.js";
+import { defaultEmulatorPubkey, networks } from "@arkade-os/sdk";
+
+const pinnedEmulatorKey = defaultEmulatorPubkey(networks.regtest);
 
 const providers = (info = arkInfo()) => ({
     arkProvider: { getInfo: async () => info },
-    emulatorProvider: { getInfo: async () => ({ signerPubkey: bytesToHex(emulatorKey) }) },
+    emulatorProvider: { getInfo: async () => ({ signerPubkey: pinnedEmulatorKey }) },
 });
 
 describe("provider verification", () => {
@@ -20,6 +23,7 @@ describe("provider verification", () => {
     it.each([
         [{ signerPubkey: "11".repeat(32) }, "server_identity_mismatch"],
         [{ network: "bitcoin" }, "network_mismatch"],
+        [{ network: "testnet" }, "emulator_key_unavailable"],
         [{ network: "unknown" }, "network_unknown"],
         [{ checkpointTapscript: "" }, "server_unroll_invalid"],
         [{ forfeitPubkey: "02" + bytesToHex(emulatorKey) }, "server_unroll_invalid"],
@@ -40,5 +44,22 @@ describe("provider verification", () => {
         expect(result.providerIdentityOk).toBe(false);
         expect(result.blockers).toEqual(["emulator_unavailable"]);
         expect(JSON.stringify(result.blockers)).not.toContain("secret payload");
+    });
+
+    it("rejects an emulator identity that differs from the SDK network pin", async () => {
+        const deps = providers();
+        deps.emulatorProvider.getInfo = async () => ({ signerPubkey: "11".repeat(32) });
+        const result = await verifyProviders(config({ addressHrp: "tark" }), deps);
+        expect(result.providerIdentityOk).toBe(false);
+        expect(result.blockers).toContain("emulator_identity_mismatch");
+    });
+
+    it("uses the MutinyNet emulator key pinned by the SDK", async () => {
+        const pinned = defaultEmulatorPubkey(networks.mutinynet);
+        const deps = providers(arkInfo({ network: "mutinynet" }));
+        deps.emulatorProvider.getInfo = async () => ({ signerPubkey: pinned });
+        const result = await verifyProviders(config({ addressHrp: "tark" }), deps);
+        expect(bytesToHex(result.emulatorPubkey!)).toBe(pinned.slice(2));
+        expect(result.blockers).not.toContain("emulator_identity_mismatch");
     });
 });
