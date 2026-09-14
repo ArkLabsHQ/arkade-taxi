@@ -18,8 +18,13 @@ export function ownedPayoutOutpoints(rows) {
 }
 
 export function assertScenarioBoundary(rows) {
-    const active = rows.find((row) =>
-        ["quoted", "locking", "locked", "recovering"].includes(row.state),
+    // A sponsored direct send settles at `locked`: the payment outpoint was
+    // observed and there is no claim, refund, or recovery to unwind, so a
+    // locked sponsored row is a settled scenario, not a leaked one.
+    const active = rows.find(
+        (row) =>
+            ["quoted", "locking", "locked", "recovering"].includes(row.state) &&
+            !(row.kind === "sponsored" && row.state === "locked"),
     );
     if (active)
         throw new Error(`prior scenario still owns active advance ${active.id} (${active.state})`);

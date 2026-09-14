@@ -138,6 +138,9 @@ liveScenario("sponsored-direct-send", async () => {
             },
         );
         expect(lockup.outpoint.vout).toBe(0);
+        // Witness data does not affect the txid, so the accepted joint
+        // transaction is the quoted one: payment at 0, fare at 1, change at 2.
+        expect(lockup.outpoint.txid).toBe(unsigned.id);
         const settled = await poll(
             "sponsored payment observation",
             () => live.client.sponsoredStatus(quote.transferId),
@@ -158,18 +161,19 @@ liveScenario("sponsored-direct-send", async () => {
             sats: aliceBefore.sats - 329n,
             units: 0n,
         });
+        // The 1 USDT fare output is subdust-hosted, so like a covenant
+        // purchase fare it never enters the operator wallet balance: the
+        // operator's wallet effect is exactly the fronted contribution and
+        // the fare hosting. The fare itself is proven by the accepted joint
+        // transaction asserted above (output 1: 1 sat + 1M USDT to Taxi).
         expect(
             await poll(
-                "operator fare receipt",
+                "operator financial effect",
                 () => walletBalance(live.actors.operator, minted.assetId),
-                (balance) =>
-                    balance.sats === operatorBefore.sats - 1n &&
-                    balance.units === operatorBefore.units + 1_000_000n,
+                (value) =>
+                    value.sats === operatorBefore.sats - 2n && value.units === operatorBefore.units,
             ),
-        ).toEqual({
-            sats: operatorBefore.sats - 1n,
-            units: operatorBefore.units + 1_000_000n,
-        });
+        ).toEqual({ sats: operatorBefore.sats - 2n, units: operatorBefore.units });
     } finally {
         await live.close();
     }
