@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Advance, Outpoint } from "@arkade-taxi/core";
+import { advanceKind, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type { AdvanceRepository } from "@arkade-taxi/db";
 import {
     DustCovenantScript,
@@ -10,6 +10,7 @@ import { fundingInputFromWire, fundingInputToWire } from "@arkade-taxi/protocol"
 import {
     Transaction,
     Intent,
+    ArkAddress,
     CSVMultisigTapscript,
     VtxoScript,
     assertAllowedSighashTypes,
@@ -33,6 +34,11 @@ import {
     type LockupEnvelope,
 } from "./psbt.js";
 import { buildLockupEnvelope } from "./lockupBuilder.js";
+import {
+    buildSponsoredEnvelope,
+    sponsoredGraphId,
+    type SponsoredBuildRequest,
+} from "./sponsoredBuilder.js";
 import type { LockupBuildRequest } from "../quotes.js";
 
 export interface ValidatedLockupSubmission {
@@ -284,9 +290,34 @@ function assertPersistedGraph(
         fare: advance.fare,
     };
     const unroll = CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript));
-    const rebuilt = decodeLockupEnvelope(buildLockupEnvelope(request, config, unroll));
+    const rebuilt =
+        advanceKind(advance) === "sponsored"
+            ? decodeLockupEnvelope(
+                  buildSponsoredEnvelope(sponsoredRequest(advance, request), config, unroll),
+              )
+            : decodeLockupEnvelope(buildLockupEnvelope(request, config, unroll));
     if (!isDeepStrictEqual(rebuilt, envelope))
         throw new LockupShapeError("persisted unsigned graph differs from persisted advance facts");
+}
+
+function sponsoredRequest(advance: Advance, request: LockupBuildRequest): SponsoredBuildRequest {
+    return {
+        advanceId: request.advanceId,
+        senderInputs: request.senderInputs,
+        senderSats: request.senderSats,
+        ...(request.assetUnits === undefined ? {} : { assetUnits: request.assetUnits }),
+        funding: request.funding,
+        params: {
+            receiverKey: advance.receiverKey,
+            senderKey: advance.senderKey,
+            operatorKey: advance.operatorKey,
+            dust: advance.dust,
+            contribution: advance.topup,
+            ...(advance.assetId ? { assetId: advance.assetId } : {}),
+        },
+        receiverAddress: advance.covenantAddress,
+        fare: advance.fare,
+    };
 }
 
 export function validatePersistedLockupGraph(
@@ -319,28 +350,39 @@ export function validateLockupSubmission(
     const unsignedCheckpoints = baseline.checkpoints.map((checkpoint) =>
         Transaction.fromPSBT(decodeBase64(checkpoint)),
     );
-    if (unsignedGraphId(unsignedArk, unsignedCheckpoints) !== advance.unsignedLockupId)
+    const unsignedId =
+        advanceKind(advance) === "sponsored"
+            ? sponsoredGraphId(unsignedArk, unsignedCheckpoints)
+            : unsignedGraphId(unsignedArk, unsignedCheckpoints);
+    if (unsignedId !== advance.unsignedLockupId)
         throw new LockupShapeError("persisted unsigned transaction graph mismatch");
-    const covenant = new DustCovenantScript({
-        serverKey: config.serverPubkey,
-        emulatorKey: config.emulatorPubkey,
-        vtxoMinAmount: config.vtxoMinAmount,
-        params: {
-            receiverKey: advance.receiverKey,
-            senderKey: advance.senderKey,
-            operatorKey: advance.operatorKey,
-            dust: advance.dust,
-            topup: advance.topup,
-            locktime: advance.locktime,
-            ...(advance.assetId ? { assetId: advance.assetId } : {}),
-        },
-    });
-    if (
-        covenant.address(config.addressHrp, config.serverPubkey).encode() !==
-            advance.covenantAddress ||
-        !sameBytes(unsignedArk.getOutput(envelope.covenantOutputIndex).script!, covenant.pkScript)
-    )
-        throw new LockupShapeError("persisted covenant output mismatch");
+    if (advanceKind(advance) === "sponsored") {
+        assertSponsoredPaymentOutput(advance, unsignedArk, envelope.covenantOutputIndex, config);
+    } else {
+        const covenant = new DustCovenantScript({
+            serverKey: config.serverPubkey,
+            emulatorKey: config.emulatorPubkey,
+            vtxoMinAmount: config.vtxoMinAmount,
+            params: {
+                receiverKey: advance.receiverKey,
+                senderKey: advance.senderKey,
+                operatorKey: advance.operatorKey,
+                dust: advance.dust,
+                topup: advance.topup,
+                locktime: advance.locktime,
+                ...(advance.assetId ? { assetId: advance.assetId } : {}),
+            },
+        });
+        if (
+            covenant.address(config.addressHrp, config.serverPubkey).encode() !==
+                advance.covenantAddress ||
+            !sameBytes(
+                unsignedArk.getOutput(envelope.covenantOutputIndex).script!,
+                covenant.pkScript,
+            )
+        )
+            throw new LockupShapeError("persisted covenant output mismatch");
+    }
 
     const arkTx = Transaction.fromPSBT(decodeBase64(envelope.arkTx));
     assertCanonical(arkTx, "signed Arkade transaction");
@@ -391,6 +433,28 @@ export function validateLockupSubmission(
         operatorSignerKey: config.operatorSignerKey,
         outpoint: { txid: arkTx.id, vout: envelope.covenantOutputIndex },
     };
+}
+
+function assertSponsoredPaymentOutput(
+    advance: Advance,
+    unsignedArk: Transaction,
+    paymentOutputIndex: number,
+    config: RuntimeConfig,
+): void {
+    let receiver: ArkAddress;
+    try {
+        receiver = ArkAddress.decode(advance.covenantAddress);
+    } catch {
+        throw new LockupShapeError("persisted receiver address is invalid");
+    }
+    if (
+        receiver.encode() !== advance.covenantAddress ||
+        receiver.hrp !== config.addressHrp ||
+        !sameBytes(receiver.serverPubKey, config.serverPubkey) ||
+        !sameBytes(receiver.vtxoTaprootKey, advance.receiverKey) ||
+        !sameBytes(unsignedArk.getOutput(paymentOutputIndex).script!, receiver.pkScript)
+    )
+        throw new LockupShapeError("persisted payment output mismatch");
 }
 
 type SubmissionProvider = Pick<ArkProvider, "submitTx" | "finalizeTx"> &

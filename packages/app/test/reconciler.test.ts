@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Transaction, type IndexerProvider, type VirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import {
     AdvanceRepository,
@@ -13,10 +14,21 @@ import {
 } from "@arkade-taxi/db";
 import type { Advance } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
+import {
+    buildSponsoredEnvelope,
+    type SponsoredBuildRequest,
+} from "../src/arkade/sponsoredBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { createLockupReconciler } from "../src/reconciler.js";
-import { config, fundingCoin, NOW, policy as basePolicy } from "./fixtures.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
+import {
+    config,
+    fundingCoin,
+    NOW,
+    policy as basePolicy,
+    receiverKey,
+    senderKey,
+} from "./fixtures.js";
+import { buildRequest, senderTree, unroll } from "./arkade/lockupFixtures.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -274,6 +286,172 @@ describe("locking reconciliation", () => {
         expect(state.reservations.listForAdvance(state.quote.id)).toEqual([operator]);
         expect(state.policy.get().paused).toBe(true);
         expect(reconciler.status().blockers).toEqual(["reserved_input_conflict"]);
+        state.db.close();
+    });
+});
+
+describe("sponsored settlement", () => {
+    const sponsoredRequest = (): SponsoredBuildRequest => {
+        const cfg = config();
+        return {
+            advanceId: "sponsored-1",
+            senderInputs: [
+                {
+                    txid: "ab".repeat(32),
+                    vout: 2,
+                    value: 100n,
+                    tapTree: senderTree.encode(),
+                    spendLeaf: senderTree.scripts[0],
+                    expiry: { kind: "height", value: 910_000n },
+                },
+            ],
+            senderSats: 100n,
+            funding: {
+                inputs: [fundingCoin()],
+                totalValue: 20_000n,
+                batchExpiry: { kind: "height", value: 900_000n },
+            },
+            params: {
+                receiverKey,
+                senderKey,
+                operatorKey: cfg.operatorKey,
+                dust: 330n,
+                contribution: 230n,
+            },
+            receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
+            fare: { currency: "sats", units: 10n },
+        };
+    };
+
+    const setupSponsored = () => {
+        const db = openDatabase(":memory:");
+        const advances = new AdvanceRepository(db);
+        const policy = new PolicyRepository(db);
+        policy.update(basePolicy(), "test");
+        const reservations = new ReservationRepository(db);
+        const request = sponsoredRequest();
+        const unsignedSponsoredTx = buildSponsoredEnvelope(request, config(), unroll);
+        const envelope = decodeLockupEnvelope(unsignedSponsoredTx);
+        const quote: Advance = {
+            id: request.advanceId,
+            kind: "sponsored",
+            state: "quoted",
+            receiverKey: request.params.receiverKey,
+            senderKey: request.params.senderKey,
+            operatorKey: request.params.operatorKey,
+            dust: request.params.dust,
+            topup: request.params.contribution,
+            locktime: 0n,
+            batchExpiry: request.funding.batchExpiry,
+            operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
+            unsignedLockupTx: unsignedSponsoredTx,
+            unsignedLockupId: envelope.unsignedTxId,
+            covenantAddress: request.receiverAddress,
+            fare: request.fare,
+            createdAt: NOW,
+            updatedAt: NOW,
+            expiresAt: NOW + 60,
+        };
+        reservations.reserveQuote({
+            advance: quote,
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            recoveryExecutionBudget: { kind: quote.batchExpiry.kind, value: 0n },
+        });
+        reservations.claimLockup(
+            quote.id,
+            quote.unsignedLockupId,
+            "cc".repeat(32),
+            "signed-envelope",
+            () => NOW + 1,
+        );
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        return {
+            db,
+            advances,
+            policy,
+            reservations,
+            quote,
+            outpoint: { txid: tx.id, vout: 0 },
+            script: hex.encode(tx.getOutput(0).script!),
+        };
+    };
+
+    const sponsoredReconciler = (
+        state: ReturnType<typeof setupSponsored>,
+        read: IndexerProvider["getVtxos"],
+    ) =>
+        createLockupReconciler({
+            submission: { resume: async () => false },
+            advances: state.advances,
+            reservations: state.reservations,
+            policy: state.policy,
+            indexer: indexer(read),
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+
+    it("settles an observed payment outpoint and releases its reservation", async () => {
+        const state = setupSponsored();
+        const reconciler = sponsoredReconciler(state, async (filter) => ({
+            vtxos:
+                filter?.outpoints?.[0]?.txid === state.outpoint.txid
+                    ? [observedCoin(state.outpoint.txid, state.script)]
+                    : [],
+        }));
+        await reconciler.tick();
+        expect(state.advances.get(state.quote.id)).toMatchObject({
+            state: "locked",
+            outpoint: state.outpoint,
+        });
+        expect(state.reservations.listForAdvance(state.quote.id)).toEqual([]);
+        state.db.close();
+    });
+
+    it("settles even when the receiver already spent onwards", async () => {
+        const state = setupSponsored();
+        const reconciler = sponsoredReconciler(state, async () => ({
+            vtxos: [
+                observedCoin(state.outpoint.txid, state.script, {
+                    isSpent: true,
+                    spentBy: "cc".repeat(32),
+                    arkTxId: "dd".repeat(32),
+                }),
+            ],
+        }));
+        await reconciler.tick();
+        expect(state.advances.get(state.quote.id)?.state).toBe("locked");
+        expect(state.reservations.listForAdvance(state.quote.id)).toEqual([]);
+        state.db.close();
+    });
+
+    it("settles from operator inputs spent by the joint transaction", async () => {
+        const state = setupSponsored();
+        const operator = state.quote.operatorInputs[0]!;
+        const reconciler = sponsoredReconciler(state, async (filter) => {
+            if (filter?.outpoints?.[0]?.txid === state.outpoint.txid) return { vtxos: [] };
+            return {
+                vtxos: [
+                    observedCoin(operator.txid, fundingCoin().script, {
+                        isSpent: true,
+                        spentBy: state.outpoint.txid,
+                        arkTxId: state.outpoint.txid,
+                    }),
+                ],
+            };
+        });
+        await reconciler.tick();
+        expect(state.advances.get(state.quote.id)?.state).toBe("locked");
+        expect(state.reservations.listForAdvance(state.quote.id)).toEqual([]);
+        state.db.close();
+    });
+
+    it("re-releases a settled row whose reservation survived a crash", async () => {
+        const state = setupSponsored();
+        const reconciler = sponsoredReconciler(state, async () => ({ vtxos: [] }));
+        state.advances.recordLockupObserved(state.quote.id, state.outpoint, NOW + 2);
+        expect(state.reservations.listForAdvance(state.quote.id)).toHaveLength(1);
+        await reconciler.tick();
+        expect(state.reservations.listForAdvance(state.quote.id)).toEqual([]);
         state.db.close();
     });
 });

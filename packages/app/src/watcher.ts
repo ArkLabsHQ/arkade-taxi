@@ -6,6 +6,7 @@ import {
     refundTopup,
 } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
+import { advanceKind } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import {
     CSVMultisigTapscript,
@@ -703,10 +704,14 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     let streamTask: Promise<void> | undefined;
     const recoverable = new Set<string>();
 
-    const rows = () => [
-        ...activeStates.flatMap((state) => deps.advances.byState(state)),
-        ...terminalStates.flatMap((state) => deps.advances.byState(state)),
-    ];
+    const rows = () =>
+        [
+            ...activeStates.flatMap((state) => deps.advances.byState(state)),
+            ...terminalStates.flatMap((state) => deps.advances.byState(state)),
+            // Sponsored direct sends are covenant-spend evidence this watcher
+            // cannot classify; the reconciler settles them on exact-outpoint
+            // observation instead.
+        ].filter((advance) => advanceKind(advance) === "covenant");
     const persistedBlockers = (): WatcherBlocker[] =>
         rows()
             .filter((advance) =>

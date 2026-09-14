@@ -7,6 +7,7 @@ import { PolicyRepository } from "./policy.js";
 const COLUMNS = [
     "id",
     "state",
+    "kind",
     "receiver_key",
     "sender_key",
     "operator_key",
@@ -80,6 +81,7 @@ type AdvanceParams = Record<(typeof COLUMNS)[number], string | number | bigint |
 interface AdvanceRow {
     id: string;
     state: AdvanceState;
+    kind: "covenant" | "sponsored" | null;
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
@@ -191,6 +193,7 @@ function toParams(a: Advance): AdvanceParams {
     return {
         id: a.id,
         state: a.state,
+        kind: a.kind ?? "covenant",
         receiver_key: a.receiverKey,
         sender_key: a.senderKey,
         operator_key: a.operatorKey,
@@ -308,6 +311,7 @@ function fromRow(r: AdvanceRow): Advance {
     const a: Advance = {
         id: r.id,
         state: r.state,
+        ...(r.kind === "sponsored" ? { kind: "sponsored" as const } : {}),
         receiverKey: bytes(r.receiver_key),
         senderKey: bytes(r.sender_key),
         operatorKey: bytes(r.operator_key),
@@ -433,7 +437,7 @@ export class AdvanceRepository {
             "SELECT * FROM advances WHERE outpoint_txid = ? AND outpoint_vout = ?",
         );
         this.#sweepable = read(
-            `SELECT * FROM advances WHERE state = 'locked' AND
+            `SELECT * FROM advances WHERE state = 'locked' AND kind = 'covenant' AND
              recovery_locktime_kind = batch_expiry_kind AND
              ((recovery_locktime_kind = 'height' AND locktime <= ?) OR
               (recovery_locktime_kind = 'time' AND locktime <= ?))
@@ -457,7 +461,7 @@ export class AdvanceRepository {
             updated_at = max(updated_at, ?) WHERE id = ?`);
         this.#claimRecovery =
             read(`UPDATE advances SET state = 'recovering', recovery_submitted_at = ?,
-            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' RETURNING *`);
+            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' AND kind = 'covenant' RETURNING *`);
     }
 
     insert(a: Advance): void {

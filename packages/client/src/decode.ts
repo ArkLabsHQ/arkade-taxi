@@ -10,10 +10,13 @@ import type {
     ClaimsChangedEvent,
     ClaimsSnapshotResponse,
     FareWire,
+    LockupCommitment,
     QuoteParams,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,
+    SponsoredQuoteParams,
+    SponsoredQuoteResponse,
     TaggedLocktimeWire,
 } from "@arkade-taxi/protocol";
 import {
@@ -22,11 +25,13 @@ import {
     hexToBytes,
     quoteParamsFromWire,
     satsFromWire,
+    sponsoredParamsFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
     type InfoResponse,
     type LockupResponse,
     type QuoteResponse,
+    type SponsoredParamsValue,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { ClientErrorCode, TaxiError } from "./errors.js";
@@ -54,6 +59,16 @@ export interface DecodedQuote {
     fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     expiresAt: number;
     unsignedLockupTx: string;
+}
+
+export interface DecodedSponsoredQuote {
+    transferId: string;
+    params: SponsoredParamsValue;
+    receiverAddress: string;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    expiresAt: number;
+    unsignedSponsoredTx: string;
+    commitment: LockupCommitment;
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -185,6 +200,21 @@ const fare = (value: unknown, label: string): FareWire => {
     return wire as unknown as FareWire;
 };
 
+const sponsoredParams = (value: unknown, label: string): SponsoredQuoteParams => {
+    const wire = exactRecord(
+        value,
+        ["receiverKey", "senderKey", "operatorKey", "dust", "contribution"],
+        ["assetId"],
+        label,
+    );
+    bytes32(wire.receiverKey, `${label}.receiverKey`);
+    bytes32(wire.senderKey, `${label}.senderKey`);
+    bytes32(wire.operatorKey, `${label}.operatorKey`);
+    if (wire.assetId !== undefined) assetId(wire.assetId, `${label}.assetId`);
+    sponsoredParamsFromWire(wire as unknown as SponsoredQuoteParams, label);
+    return wire as unknown as SponsoredQuoteParams;
+};
+
 const taggedLocktime = (value: unknown, label: string): TaggedLocktimeWire => {
     const wire = exactRecord(value, ["kind", "value"], [], label);
     if (wire.kind !== "height" && wire.kind !== "time")
@@ -307,6 +337,30 @@ export function decodeQuote(quote: QuoteResponse): DecodedQuote {
             fare: fareFromWire(quote.fare, "quote.fare"),
             expiresAt: uint(quote.expiresAt, "quote.expiresAt"),
             unsignedLockupTx: str(quote.unsignedLockupTx, "quote.unsignedLockupTx"),
+        };
+    });
+}
+
+export function decodeSponsoredQuote(quote: SponsoredQuoteResponse): DecodedSponsoredQuote {
+    return wrap("sponsored quote", () => {
+        if (quote === null || typeof quote !== "object")
+            invalid("sponsored quote must be an object");
+        if (quote.commitment === null || typeof quote.commitment !== "object")
+            invalid("sponsored quote.commitment must be an object");
+        return {
+            transferId: str(quote.transferId, "sponsored quote.transferId"),
+            params: sponsoredParamsFromWire(
+                sponsoredParams(quote.params, "sponsored quote.params"),
+                "sponsored quote.params",
+            ),
+            receiverAddress: str(quote.receiverAddress, "sponsored quote.receiverAddress"),
+            fare: fareFromWire(quote.fare, "sponsored quote.fare"),
+            expiresAt: uint(quote.expiresAt, "sponsored quote.expiresAt"),
+            unsignedSponsoredTx: str(
+                quote.unsignedSponsoredTx,
+                "sponsored quote.unsignedSponsoredTx",
+            ),
+            commitment: quote.commitment as LockupCommitment,
         };
     });
 }

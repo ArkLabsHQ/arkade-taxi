@@ -1,5 +1,6 @@
 import type { Database } from "better-sqlite3";
 import {
+    advanceKind,
     isTerminal,
     ruleFor,
     validateFundingSnapshot,
@@ -102,21 +103,27 @@ export class ReservationRepository {
                 if (advance.state !== "quoted")
                     throw new Error("reservation: advance must be quoted");
                 validateFundingSnapshot(advance);
-                const recovery = advance.recoveryLocktime;
-                const policyMargin = BigInt(
-                    advance.batchExpiry.kind === "height"
-                        ? policy.locktimeMarginBlocks
-                        : policy.locktimeMarginSeconds,
-                );
-                if (
-                    !recovery ||
-                    recovery.kind !== advance.batchExpiry.kind ||
-                    recoveryExecutionBudget?.kind !== recovery.kind ||
-                    recoveryExecutionBudget.value < 0n ||
-                    policyMargin <= recoveryExecutionBudget.value ||
-                    recovery.value + recoveryExecutionBudget.value >= advance.batchExpiry.value
-                )
-                    throw new RecoveryBudgetConflictError(advance.id);
+                // A sponsored direct send has no covenant leaf to recover: no
+                // locktime is derived and no recovery budget is scheduled. The
+                // policy gate, asset allowlist and per-payment cap below apply
+                // to both kinds.
+                if (advanceKind(advance) === "covenant") {
+                    const recovery = advance.recoveryLocktime;
+                    const policyMargin = BigInt(
+                        advance.batchExpiry.kind === "height"
+                            ? policy.locktimeMarginBlocks
+                            : policy.locktimeMarginSeconds,
+                    );
+                    if (
+                        !recovery ||
+                        recovery.kind !== advance.batchExpiry.kind ||
+                        recoveryExecutionBudget?.kind !== recovery.kind ||
+                        recoveryExecutionBudget.value < 0n ||
+                        policyMargin <= recoveryExecutionBudget.value ||
+                        recovery.value + recoveryExecutionBudget.value >= advance.batchExpiry.value
+                    )
+                        throw new RecoveryBudgetConflictError(advance.id);
+                }
                 if (policy.paused) throw new Error("reservation: paused");
                 const rule = ruleFor(policy.assetRules, advance.assetId);
                 if (!rule?.enabled) throw new Error("reservation: asset not served");
@@ -128,19 +135,22 @@ export class ReservationRepository {
                     throw new Error("reservation: topup exceeds per-payment limit");
                 }
                 if (
+                    advanceKind(advance) === "covenant" &&
                     advance.batchExpiry.value - advance.locktime <
-                    BigInt(
-                        advance.batchExpiry.kind === "height"
-                            ? policy.locktimeMarginBlocks
-                            : policy.locktimeMarginSeconds,
-                    )
+                        BigInt(
+                            advance.batchExpiry.kind === "height"
+                                ? policy.locktimeMarginBlocks
+                                : policy.locktimeMarginSeconds,
+                        )
                 ) {
                     throw new Error("reservation: insufficient batch expiry margin");
                 }
+                // A sponsored advance settles at `locked`, so only `locking`
+                // sponsored rows tie up capital; see `isExposed` in core.
                 const exposure = this.#db
                     .prepare<[], { total: bigint; count: bigint }>(
                         `SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances
-                 WHERE state IN ('locking', 'locked', 'recovering')`,
+                 WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering'))`,
                     )
                     .safeIntegers(true)
                     .get()!;
@@ -220,7 +230,8 @@ export class ReservationRepository {
                 const policy = this.#policy.get();
                 const exposure = this.#db
                     .prepare<[], { total: bigint; count: bigint }>(
-                        "SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances WHERE state IN ('locking', 'locked', 'recovering')",
+                        `SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances
+                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering'))`,
                     )
                     .safeIntegers(true)
                     .get()!;
@@ -292,12 +303,23 @@ export class ReservationRepository {
             .transaction(() => {
                 const advance = this.#advances.get(advanceId);
                 if (!advance) throw new Error(`reservation: advance ${advanceId} not found`);
-                if (!isTerminal(advance.state))
-                    throw new Error(`reservation: cannot release ${advance.state}`);
+                // A sponsored advance is delivered once its payment outpoint is
+                // observed (`locked` with an outpoint): there is no later spend
+                // for the operator to wait for. Unsubmitted sponsored quotes
+                // expire like covenant ones.
                 if (advance.state === "expired") {
                     if (advance.updatedAt < advance.expiresAt)
                         throw new Error("reservation: cannot release unexpired quote");
-                } else if (!advance.spentTxid || advance.lastObservedAt === undefined) {
+                } else if (advanceKind(advance) === "sponsored") {
+                    if (advance.state !== "locked" || !advance.outpoint)
+                        throw new Error(`reservation: cannot release ${advance.state}`);
+                } else if (!isTerminal(advance.state))
+                    throw new Error(`reservation: cannot release ${advance.state}`);
+                if (
+                    advance.state !== "expired" &&
+                    advanceKind(advance) !== "sponsored" &&
+                    (!advance.spentTxid || advance.lastObservedAt === undefined)
+                ) {
                     throw new Error("reservation: release requires observed terminal spend");
                 }
                 this.#db

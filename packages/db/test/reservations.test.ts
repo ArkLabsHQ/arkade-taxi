@@ -725,3 +725,52 @@ describe("durable reservations", () => {
         },
     );
 });
+
+describe("sponsored reservations", () => {
+    const sponsored = (overrides: Partial<Advance> = {}): Advance => {
+        const advance = quote({ id: "sponsored-1", ...overrides });
+        advance.kind = "sponsored";
+        advance.locktime = 0n;
+        delete advance.recoveryLocktime;
+        return advance;
+    };
+    const reserveSponsored = (advance = sponsored()) =>
+        reservations.reserveQuote({
+            advance,
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            recoveryExecutionBudget: { kind: advance.batchExpiry.kind, value: 1n },
+        });
+
+    it("reserves without recovery facts and round-trips the kind", () => {
+        reserveSponsored();
+        expect(advances.get("sponsored-1")).toMatchObject({ kind: "sponsored", state: "quoted" });
+        expect(reservations.listForAdvance("sponsored-1")).toEqual([input()]);
+    });
+    it("still enforces the policy gate, allowlist and per-payment cap", () => {
+        policy.update({ paused: true }, "test");
+        expect(() => reserveSponsored()).toThrow(/paused/);
+    });
+    it("excludes delivered sponsored advances from exposure caps", () => {
+        advances.insert(sponsored({ id: "delivered", state: "locked", topup: 800n }));
+        reserveSponsored();
+        expect(advances.get("sponsored-1")?.state).toBe("quoted");
+    });
+    it("counts locking sponsored advances toward exposure caps", () => {
+        advances.insert(sponsored({ id: "pending", state: "locking", topup: 800n }));
+        expect(() => reserveSponsored()).toThrow(/outstanding/);
+    });
+    it("releases a locking sponsored advance only after its payment outpoint is observed", () => {
+        reserveSponsored();
+        reservations.claimLockup(
+            "sponsored-1",
+            "bb".repeat(32),
+            "cc".repeat(32),
+            "envelope",
+            () => 2,
+        );
+        expect(() => reservations.releaseForAdvance("sponsored-1")).toThrow(/release/);
+        advances.recordLockupObserved("sponsored-1", { txid: "dd".repeat(32), vout: 0 }, 3);
+        reservations.releaseForAdvance("sponsored-1");
+        expect(reservations.listForAdvance("sponsored-1")).toEqual([]);
+    });
+});

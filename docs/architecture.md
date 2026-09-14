@@ -10,6 +10,15 @@
 | Arkade Service (arkd)   | server key         | signs every leaf                                            |
 | Emulator                | emulator key       | signs a leaf iff its Arkade Script is satisfied             |
 
+A sponsored direct send keeps these roles but drops the covenant: the joint
+transaction pays the receiver's own address, so the receiver does nothing and
+the operator collects its fare in the same transaction instead of being
+repaid later. Sponsored advances share the `advances` table (`kind:
+'sponsored'`, `locked` terminal) and the quote reservation, leased
+submission, and observation machinery; the sweeper, watcher, and claim feed
+only serve covenant rows, and exposure counts only in-flight sponsored
+contributions.
+
 A wallet integrating this needs connectivity to **arkd and the emulator**, not
 only to the operator. `GET /v1/info` returns both endpoints and both keys,
 because a client cannot re-derive the covenant address without them.

@@ -1,4 +1,5 @@
 import {
+    ArkAddress,
     asset,
     CSVMultisigTapscript,
     MultisigTapscript,
@@ -6,12 +7,20 @@ import {
     VtxoScript,
 } from "@arkade-os/sdk";
 import { buildLockupEnvelope } from "../../app/src/arkade/lockupBuilder.js";
+import { buildSponsoredEnvelope } from "../../app/src/arkade/sponsoredBuilder.js";
 import { decodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
 import { config, fundingCoin, operatorTree } from "../../app/test/fixtures.js";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
-import { bytesToHex, quoteParamsToWire, type FundingInputValue } from "@arkade-taxi/protocol";
-import type { InfoResponse, QuoteResponse } from "@arkade-taxi/protocol";
+import {
+    bytesToHex,
+    quoteParamsToWire,
+    sponsoredParamsToWire,
+    type FundingInputValue,
+    type SponsoredParamsValue,
+} from "@arkade-taxi/protocol";
+import type { InfoResponse, QuoteResponse, SponsoredQuoteResponse } from "@arkade-taxi/protocol";
 import type { VerifyQuoteArgs } from "../src/verify.js";
+import type { VerifySponsoredQuoteArgs } from "../src/sponsored.js";
 
 type FareSpec =
     | { currency: "sats"; units: bigint }
@@ -189,6 +198,136 @@ export const assetArgs = (): VerifyQuoteArgs => {
         ...a,
         quote: quote(p, { senderInputs, senderSats: 700n, assetUnits }),
         expect: { ...a.expect, assetId },
+        senderInputs,
+        senderSats: 700n,
+        assetUnits,
+    };
+};
+
+export const sponsoredAddress = (): string => new ArkAddress(serverKey, receiverKey, HRP).encode();
+
+export const sponsoredParams = (): SponsoredParamsValue => ({
+    receiverKey,
+    senderKey,
+    operatorKey,
+    dust: 330n,
+    contribution: 330n,
+});
+
+interface SponsoredQuoteFixtureOptions {
+    senderInputs?: FundingInputValue[];
+    senderSats?: bigint;
+    assetUnits?: bigint;
+    fare?: FareSpec;
+    assetId?: { txid: Uint8Array; groupIndex: number };
+}
+
+export const sponsoredQuote = (
+    p = sponsoredParams(),
+    opts: SponsoredQuoteFixtureOptions = {},
+): SponsoredQuoteResponse => {
+    const senderInputs = opts.senderInputs ?? fundingInputs();
+    const senderSats =
+        opts.senderSats ?? senderInputs.reduce((sum, input) => sum + input.value, 0n);
+    const fare = opts.fare ?? { currency: "sats", units: 10n };
+    const unsignedSponsoredTx = buildSponsoredEnvelope(
+        {
+            senderInputs,
+            senderSats,
+            funding: {
+                inputs: [fundingCoin()],
+                totalValue: 20_000n,
+                batchExpiry: { kind: "height", value: 900_000n },
+            },
+            params: { ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) },
+            receiverAddress: sponsoredAddress(),
+            advanceId: "tr_01",
+            fare,
+            ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
+        },
+        config({ operatorKey: p.operatorKey }),
+        unroll,
+    );
+    const envelope = decodeLockupEnvelope(unsignedSponsoredTx);
+    return {
+        transferId: "tr_01",
+        params: sponsoredParamsToWire({ ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) }),
+        receiverAddress: sponsoredAddress(),
+        fare:
+            fare.currency === "asset"
+                ? {
+                      currency: "asset",
+                      units: fare.units.toString(),
+                      assetId: {
+                          txid: bytesToHex(fare.assetId.txid),
+                          groupIndex: fare.assetId.groupIndex,
+                      },
+                  }
+                : { currency: "sats", units: fare.units.toString() },
+        expiresAt: NOW + 60,
+        unsignedSponsoredTx,
+        commitment: {
+            covenantOutputIndex: 0,
+            senderInputIndexes: senderInputs.map((_, i) => i),
+            operatorInputIndexes: [senderInputs.length],
+            unsignedTxId: envelope.unsignedTxId,
+        },
+    };
+};
+
+export const sponsoredArgs = (): VerifySponsoredQuoteArgs => ({
+    quote: sponsoredQuote(),
+    info: info(),
+    expect: {
+        receiverAddress: sponsoredAddress(),
+        senderKey,
+        maxContributionSats: 330n,
+        maxFare: { currency: "sats" as const, units: 10n },
+    },
+    trustedServerKey: serverKey,
+    vtxoMinAmount: VTXO_MIN,
+    hrp: HRP,
+    now: NOW,
+    senderInputs: fundingInputs(),
+    senderSats: 10n,
+    trustedServerUnrollScript: unroll.script,
+});
+
+export const sponsoredAssetArgs = (): VerifySponsoredQuoteArgs => {
+    const id = asset.AssetId.create("12".repeat(32), 7);
+    const assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: id.groupIndex };
+    const assetUnits = 200_000_000n;
+    const fareUnits = 1_000_000n;
+    const senderInputs = fundingInputs();
+    senderInputs[0] = {
+        ...senderInputs[0],
+        value: 700n,
+        assetPacket: asset.Packet.create([
+            asset.AssetGroup.create(
+                id,
+                null,
+                [],
+                [asset.AssetOutput.create(senderInputs[0].vout, assetUnits + fareUnits)],
+                [],
+            ),
+        ]).serialize(),
+    };
+    const a = sponsoredArgs();
+    const fare = { currency: "asset" as const, assetId, units: fareUnits };
+    return {
+        ...a,
+        quote: sponsoredQuote(sponsoredParams(), {
+            senderInputs,
+            senderSats: 700n,
+            assetUnits,
+            assetId,
+            fare,
+        }),
+        expect: {
+            ...a.expect,
+            assetId,
+            maxFare: { currency: "asset" as const, assetId, units: fareUnits },
+        },
         senderInputs,
         senderSats: 700n,
         assetUnits,

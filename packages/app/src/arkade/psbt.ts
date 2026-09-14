@@ -8,6 +8,7 @@ import {
     VtxoTaprootTree,
     setArkPsbtField,
     P2A,
+    type ArkTxInput,
     type CSVMultisigTapscript,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
@@ -15,6 +16,7 @@ import {
     fundingInputFromWire,
     fundingInputToWire,
     satsFromWire,
+    type FundingInputValue,
     type FundingInputWire,
     type LockupCommitment,
 } from "@arkade-taxi/protocol";
@@ -164,13 +166,60 @@ export function parseLockupEnvelope(
     config: RuntimeConfig,
     unroll: CSVMultisigTapscript.Type,
 ) {
-    const wire = decodeLockupEnvelope(encoded);
     const plan = lockupPlan(req, config);
+    return parseJointEnvelope(
+        encoded,
+        {
+            senderInputs: req.senderInputs,
+            operatorKey: req.params.operatorKey,
+            plan,
+            paymentOutputIndex: 0,
+            paymentIndexLabel: "covenant index",
+            unsignedId: unsignedGraphId,
+            skipScriptCheck: (role) => role === "covenant",
+            verifyPaymentOutput: () => {},
+        },
+        config,
+        unroll,
+    );
+}
+
+/** The joint-graph facts both the covenant and the sponsored direct-send
+ * builders produce. One parser verifies both envelopes; only the plan that
+ * built the expected graph differs. */
+export interface JointPlan {
+    inputs: FundingInputValue[];
+    operatorInputs: FundingInputValue[];
+    outputs: { amount: bigint; script: Uint8Array }[];
+    valueOutputs: { role: string; amount: bigint; script: Uint8Array }[];
+    arkInputs: ArkTxInput[];
+    assetUnits?: bigint;
+}
+
+export interface JointParseRequest {
+    senderInputs: FundingInputValue[];
+    operatorKey: Uint8Array;
+    plan: JointPlan;
+    paymentOutputIndex: number;
+    paymentIndexLabel: string;
+    unsignedId: (tx: Transaction, checkpoints: Transaction[]) => string;
+    skipScriptCheck: (role: string) => boolean;
+    verifyPaymentOutput: (tx: Transaction) => void;
+}
+
+export function parseJointEnvelope(
+    encoded: string,
+    req: JointParseRequest,
+    config: RuntimeConfig,
+    unroll: CSVMultisigTapscript.Type,
+) {
+    const wire = decodeLockupEnvelope(encoded);
+    const plan = req.plan;
     const same = (actual: unknown, expected: unknown, label: string) => {
         if (!isDeepStrictEqual(actual, expected))
             throw new LockupShapeError(`lockup ${label} mismatch`);
     };
-    same(wire.covenantOutputIndex, 0, "covenant index");
+    same(wire.covenantOutputIndex, req.paymentOutputIndex, req.paymentIndexLabel);
     same(
         wire.senderInputIndexes,
         req.senderInputs.map((_, i) => i),
@@ -217,10 +266,10 @@ export function parseLockupEnvelope(
             throw new LockupShapeError(`lockup output ${i} is below the Arkade Service minimum`);
     }
     for (const [i, output] of plan.valueOutputs.entries()) {
-        if (output.role === "covenant") continue;
+        if (req.skipScriptCheck(output.role)) continue;
         const key =
             output.role === "operator-fare"
-                ? req.params.operatorKey
+                ? req.operatorKey
                 : VtxoScript.decode(
                       output.role === "sender-change"
                           ? req.senderInputs[0].tapTree
@@ -271,6 +320,7 @@ export function parseLockupEnvelope(
         hex.encode(expectedArk.toPSBT()),
         "Arkade transaction and metadata",
     );
-    same(unsignedGraphId(arkTx, checkpoints), wire.unsignedTxId, "unsigned transaction hash");
+    req.verifyPaymentOutput(arkTx);
+    same(req.unsignedId(arkTx, checkpoints), wire.unsignedTxId, "unsigned transaction hash");
     return { ...wire, arkTx, checkpoints };
 }

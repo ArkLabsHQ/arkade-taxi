@@ -1,4 +1,4 @@
-import type { Advance, Outpoint } from "@arkade-taxi/core";
+import { advanceKind, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository, ReservationRepository } from "@arkade-taxi/db";
 import {
     Transaction,
@@ -27,7 +27,10 @@ export interface LockupReconciler {
 
 export interface LockupReconcilerDeps {
     advances: Pick<AdvanceRepository, "byState" | "recordLockupObserved">;
-    reservations: Pick<ReservationRepository, "recordLockupConflict">;
+    reservations: Pick<
+        ReservationRepository,
+        "recordLockupConflict" | "releaseForAdvance" | "listForAdvance"
+    >;
     policy: Pick<PolicyRepository, "get">;
     indexer: Pick<IndexerProvider, "getVtxos">;
     submission: Pick<SubmissionResumer, "resume">;
@@ -87,6 +90,14 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
 
     const reconcile = async (advance: Advance): Promise<void> => {
         let expected: ReturnType<typeof expectedLockup>;
+        // A sponsored advance settles when its payment outpoint is observed:
+        // exact txid plus exact payment script proves the joint transaction
+        // was accepted, even if the receiver already spent onwards.
+        const sponsored = advanceKind(advance) === "sponsored";
+        const settleSponsored = (): void => {
+            deps.advances.recordLockupObserved(advance.id, expected.outpoint, deps.now());
+            deps.reservations.releaseForAdvance(advance.id);
+        };
         try {
             await deps.submission.resume(advance.id);
             expected = expectedLockup(advance);
@@ -95,11 +106,17 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
             if (coin) {
                 if (
                     coin.script === expected.script &&
-                    canSpendOffchain(coin, deps.clock()) &&
-                    !coin.isSpent &&
-                    !coin.spentBy
-                )
-                    deps.advances.recordLockupObserved(advance.id, expected.outpoint, deps.now());
+                    (sponsored ||
+                        (canSpendOffchain(coin, deps.clock()) && !coin.isSpent && !coin.spentBy))
+                ) {
+                    if (sponsored) settleSponsored();
+                    else
+                        deps.advances.recordLockupObserved(
+                            advance.id,
+                            expected.outpoint,
+                            deps.now(),
+                        );
+                }
                 return;
             }
             if (response.vtxos.length !== 0) return;
@@ -111,6 +128,19 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 inputs.vtxos.some((input) => !requested.has(key(input)))
             )
                 return;
+            if (
+                sponsored &&
+                inputs.vtxos.length === requested.size &&
+                inputs.vtxos.every(
+                    (input) =>
+                        (input.isSpent || !!input.spentBy) &&
+                        safeTxid(input.arkTxId) &&
+                        input.arkTxId === expected.outpoint.txid,
+                )
+            ) {
+                settleSponsored();
+                return;
+            }
             const conflict = inputs.vtxos.find(
                 (input) =>
                     (input.isSpent || !!input.spentBy) &&
@@ -135,6 +165,23 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 pending = (async () => {
                     const rows = deps.advances.byState("locking");
                     for (const advance of rows) await reconcile(advance);
+                    // A crash between observation and release strands a
+                    // delivered sponsored row with held reservations; both
+                    // writes are local and the release is idempotent, so
+                    // re-release settled rows every tick until clean.
+                    for (const row of deps.advances.byState("locked")) {
+                        if (
+                            advanceKind(row) !== "sponsored" ||
+                            !row.outpoint ||
+                            deps.reservations.listForAdvance(row.id).length === 0
+                        )
+                            continue;
+                        try {
+                            deps.reservations.releaseForAdvance(row.id);
+                        } catch {
+                            continue;
+                        }
+                    }
                     await deps.watcher?.catchUp();
                     const remaining = deps.advances.byState("locking");
                     locking = remaining.length;

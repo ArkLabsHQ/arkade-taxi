@@ -37,6 +37,11 @@ export const serverUnroll = CSVMultisigTapscript.encode({
 });
 const senderCoins = new Map<string, VirtualCoin>();
 
+/** Registers a sender coin the fixture indexer serves to `verifySenderFunding`. */
+export const registerSenderCoin = (txid: string, vout: number, coin: VirtualCoin): void => {
+    senderCoins.set(`${txid}:${vout}`, coin);
+};
+
 export const NOW = 1_757_000_000;
 export const DUST = 330n;
 export const VTXO_MIN = 10n;

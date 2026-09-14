@@ -18,6 +18,9 @@ export {
     quoteParamsToWire,
     satsFromWire,
     satsToWire,
+    sponsoredParamsFromWire,
+    sponsoredParamsToWire,
+    type SponsoredParamsValue,
     fareToWire,
     fareFromWire,
     type AssetIdValue,
@@ -168,6 +171,49 @@ export interface LockupRequestBody {
 export interface LockupResponse {
     txid: string;
     outpoint: { txid: string; vout: number };
+}
+
+/** A direct-payment quote: the operator fronts `contribution` sats of the
+ * receiver's dust carrier and collects the fare in the same joint
+ * transaction. No covenant, no claim, no recovery — the receiver's wallet
+ * observes an ordinary incoming VTXO. */
+export interface SponsoredQuoteParams {
+    receiverKey: string;
+    senderKey: string;
+    operatorKey: string;
+    dust: string;
+    contribution: string;
+    assetId?: AssetIdWire;
+}
+
+export interface SponsoredQuoteRequestBody {
+    senderInputs: FundingInputWire[];
+    /** Bob's full canonical Arkade address; the payment output pays it directly. */
+    receiverAddress: string;
+    senderKey: string;
+    assetId?: AssetIdWire;
+    senderSats: string;
+    /** Units of the asset being moved; a proportional fare prices against it. */
+    assetUnits?: string;
+    /** Which offered fare the client accepts. Omitted takes the operator's first. */
+    fareId?: string;
+}
+
+export interface SponsoredQuoteResponse {
+    /** `covenantOutputIndex` is the direct payment output to the receiver. */
+    commitment: LockupCommitment;
+    transferId: string;
+    params: SponsoredQuoteParams;
+    receiverAddress: string;
+    fare: FareWire;
+    /**
+     * Quote expiry, **unix SECONDS** — not milliseconds. Same fail-open
+     * warning as `QuoteResponse.expiresAt`: reject at or after this instant.
+     */
+    expiresAt: number;
+    /** Base64 JSON envelope with the same shape as a lockup envelope, built
+     * under the `arkade-taxi-sponsored-v1` graph id. */
+    unsignedSponsoredTx: string;
 }
 
 export type ReceiverClaimState =

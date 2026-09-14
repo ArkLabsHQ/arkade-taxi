@@ -11,6 +11,7 @@ import {
 import { ErrorCode, sanitizeOperationalError, ServiceError, toErrorResponse } from "./errors.js";
 import { assetRuleToWire } from "./rulesWire.js";
 import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
+import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
@@ -19,6 +20,7 @@ import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
 
 export interface RouteDeps extends QuoteDeps {
+    sponsoredBuilder: SponsoredLockupBuilder;
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
     claimFeedLogger?: ClaimFeedLogger;
     sweeper: Pick<Sweeper, "status">;
@@ -361,6 +363,30 @@ export function createRoutes(deps: RouteDeps): Hono {
     });
 
     app.get("/v1/transfers/:id", (c) => handle(c, () => getTransfer(deps, c.req.param("id"))));
+
+    app.post("/v1/sponsored-transfers", (c) =>
+        handle(c, async () => {
+            return createSponsoredQuote(deps, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
+            );
+        }),
+    );
+
+    app.post("/v1/sponsored-transfers/:id/lockup", async (c) => {
+        try {
+            assertFinancialMutationReady(deps);
+            const id = c.req.param("id");
+            const body = await submitLockup(deps, id, signedTxOf(await readJson(c)));
+            return c.json(body, deps.advances.get(id)?.state === "locked" ? 200 : 202);
+        } catch (e) {
+            const err = ServiceError.from(e);
+            return c.json(toErrorResponse(err), err.status);
+        }
+    });
+
+    app.get("/v1/sponsored-transfers/:id", (c) =>
+        handle(c, () => getTransfer(deps, c.req.param("id"))),
+    );
 
     app.get("/v1/claims", (c) =>
         handle(c, () => ({

@@ -12,6 +12,8 @@ import {
     type QuoteRequestBody,
     type QuoteResponse,
     type ReceiverClaimWire,
+    type SponsoredQuoteRequestBody,
+    type SponsoredQuoteResponse,
     type TransferStatusResponse,
     type FundingInputValue,
     fundingInputToWire,
@@ -22,6 +24,7 @@ import {
     decodeInfo,
     decodeLockup,
     decodeQuote,
+    decodeSponsoredQuote,
     decodeStatus,
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
@@ -47,6 +50,14 @@ import {
     type VerifiedQuote,
     type VerifyQuoteArgs,
 } from "./verify.js";
+import {
+    assertSignedSponsoredPayment,
+    signSponsoredPayment,
+    verifySponsoredQuote,
+    type SponsoredQuoteExpectation,
+    type VerifiedSponsoredQuote,
+    type VerifySponsoredQuoteArgs,
+} from "./sponsored.js";
 
 export interface TaxiClientOptions {
     baseUrl: string;
@@ -95,6 +106,29 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     assetId?: AssetIdValue;
     fareId?: string;
     expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId">;
+}
+
+export interface SponsoredQuoteRequest {
+    senderInputs: FundingInputValue[];
+    receiverAddress: string;
+    senderKey: Uint8Array;
+    assetId?: AssetIdValue;
+    assetUnits?: bigint;
+    fareId?: string;
+    /** Exact sum of the selected sender input values. */
+    senderSats: bigint;
+}
+
+export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
+    VerifySponsoredQuoteArgs,
+    "quote" | "info" | "senderInputs" | "senderSats" | "expect"
+> {
+    receiverAddress: string;
+    senderKey: Uint8Array;
+    selectedVtxos: readonly ExtendedVirtualCoin[];
+    assetId?: AssetIdValue;
+    fareId?: string;
+    expect: Omit<SponsoredQuoteExpectation, "receiverAddress" | "senderKey" | "assetId">;
 }
 
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
@@ -199,6 +233,90 @@ export class TaxiClient {
         identity: Identity,
     ): Promise<LockupResponse> {
         return this.submitLockup(verified, await signLockup({ verified, identity }));
+    }
+
+    async requestSponsoredQuote(req: SponsoredQuoteRequest): Promise<SponsoredQuoteResponse> {
+        const wire: SponsoredQuoteRequestBody = {
+            receiverAddress: req.receiverAddress,
+            senderKey: bytesToHex(req.senderKey),
+            senderSats: satsToWire(req.senderSats),
+            senderInputs: req.senderInputs.map(fundingInputToWire),
+        };
+        if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
+        if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
+        if (req.fareId !== undefined) wire.fareId = req.fareId;
+        const body = (await this.request(
+            "POST",
+            "/v1/sponsored-transfers",
+            wire,
+        )) as SponsoredQuoteResponse;
+        decodeSponsoredQuote(body);
+        return body;
+    }
+
+    async requestVerifiedSponsoredQuote(
+        args: RequestVerifiedSponsoredQuoteArgs,
+    ): Promise<{ verified: VerifiedSponsoredQuote; senderInputs: FundingInputValue[] }> {
+        const { selectedVtxos, ...options } = args;
+        const request = immutablePlainCopy(options, "verified sponsored quote request");
+        const receiver = ArkAddress.decode(request.receiverAddress);
+        if (
+            receiver.encode() !== request.receiverAddress ||
+            receiver.hrp !== request.hrp ||
+            bytesToHex(receiver.serverPubKey) !== bytesToHex(request.trustedServerKey)
+        )
+            throw new Error(
+                "taxi: receiver address must be canonical and match the trusted network and server",
+            );
+        const senderInputs = fundingInputsFromVtxos(selectedVtxos);
+        const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
+        const info = await this.info();
+        const quote = await this.requestSponsoredQuote({
+            ...request,
+            senderInputs,
+            senderSats,
+        });
+        const verified = verifySponsoredQuote({
+            ...request,
+            quote,
+            info,
+            senderInputs,
+            senderSats,
+            expect: {
+                ...request.expect,
+                receiverAddress: request.receiverAddress,
+                senderKey: request.senderKey,
+                assetId: request.assetId,
+            },
+        });
+        return { verified, senderInputs };
+    }
+
+    /** Takes a `VerifiedSponsoredQuote`: only `verifySponsoredQuote` produces
+     * one, so an unverified payment cannot be submitted. */
+    async submitSponsoredLockup(
+        verified: VerifiedSponsoredQuote,
+        signedSponsoredTx: string,
+    ): Promise<LockupResponse> {
+        const transferId = assertSignedSponsoredPayment(verified, signedSponsoredTx);
+        const path = `/v1/sponsored-transfers/${encodeURIComponent(transferId)}/lockup`;
+        const wire: LockupRequestBody = { signedLockupTx: signedSponsoredTx };
+        return decodeLockup((await this.request("POST", path, wire)) as LockupResponse);
+    }
+
+    async prepareAndSubmitSponsoredLockup(
+        verified: VerifiedSponsoredQuote,
+        identity: Identity,
+    ): Promise<LockupResponse> {
+        return this.submitSponsoredLockup(
+            verified,
+            await signSponsoredPayment({ verified, identity }),
+        );
+    }
+
+    async sponsoredStatus(transferId: string): Promise<TransferStatusResponse> {
+        const path = `/v1/sponsored-transfers/${encodeURIComponent(transferId)}`;
+        return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {
