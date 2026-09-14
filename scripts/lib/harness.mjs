@@ -139,6 +139,7 @@ const EVENT_SOURCE_NODE_FLAG = "--experimental-eventsource";
 const TASK12_TESTS = [
     "e2e/provider-contract.e2e.test.ts",
     "e2e/claim.e2e.test.ts",
+    "e2e/sponsored.e2e.test.ts",
     "e2e/exposure.e2e.test.ts",
     "e2e/verify-quote.e2e.test.ts",
     "e2e/refund-recovery.e2e.test.ts",
