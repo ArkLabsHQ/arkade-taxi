@@ -389,6 +389,11 @@ async function createReservedSponsoredQuote(
         );
 
     const now = deps.now();
+    // No recovery leaf exists, so locktime carries no consensus meaning.
+    // The advances CHECK couples batch_expiry_kind to locktime
+    // ((kind = 'time') = (locktime >= 500000000)), so persist a sentinel
+    // that satisfies it per domain: 0n for height, 500000000n for time.
+    const locktime = expiry.kind === "time" ? 500_000_000n : 0n;
     const advance: Advance = {
         id,
         kind: "sponsored",
@@ -398,7 +403,7 @@ async function createReservedSponsoredQuote(
         operatorKey: params.operatorKey,
         dust: params.dust,
         topup: params.contribution,
-        locktime: 0n,
+        locktime,
         ...funding,
         batchExpiry: expiry,
         covenantAddress: req.receiverAddress,

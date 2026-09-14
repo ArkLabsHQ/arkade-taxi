@@ -240,4 +240,68 @@ describe("createSponsoredQuote", () => {
         );
         expect(claims).toEqual([]);
     });
+
+    it("persists a CHECK-satisfying locktime sentinel for time expiries", async () => {
+        const EXPIRY_TIME = NOW + 200_000;
+        const timeCoin = (over: Record<string, unknown> = {}) =>
+            fundingCoin({
+                expiresAtHeight: undefined,
+                expiresAt: new Date(EXPIRY_TIME * 1000),
+                ...over,
+            });
+        const d = {
+            ...deps(),
+            inventory: {
+                getSpendableVtxos: async () => [timeCoin(), timeCoin({ vout: 1 })],
+                getLockedVtxoOutpoints: async () => [],
+            },
+        };
+        const txid = "ab".repeat(32);
+        const vout = 2;
+        const body = sponsoredBody();
+        // sponsoredBody registers the height coin as a side effect; replace
+        // it with the time-expiry coin this request claims.
+        registerSenderCoin(
+            txid,
+            vout,
+            timeCoin({
+                txid,
+                vout,
+                value: 1000,
+                script: bytesToHex(senderTree.pkScript),
+                assets: [
+                    {
+                        assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
+                        amount: 201_000_000n,
+                    },
+                ],
+            }),
+        );
+        const quote = await createSponsoredQuote(d, {
+            ...body,
+            senderInputs: [
+                {
+                    txid,
+                    vout,
+                    value: "1000",
+                    tapTree: bytesToHex(senderTree.encode()),
+                    spendLeaf: bytesToHex(senderTree.scripts[0]),
+                    expiry: { kind: "time", value: String(EXPIRY_TIME) },
+                    assetPacket: asset.Packet.create([
+                        asset.AssetGroup.create(
+                            asset.AssetId.create(USDT_DISPLAY, 0),
+                            null,
+                            [],
+                            [asset.AssetOutput.create(vout, 201_000_000n)],
+                            [],
+                        ),
+                    ]).toString(),
+                },
+            ],
+        });
+        expect(advances.get(quote.transferId)).toMatchObject({
+            kind: "sponsored",
+            locktime: 500_000_000n,
+        });
+    });
 });

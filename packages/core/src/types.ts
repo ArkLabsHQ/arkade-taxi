@@ -103,7 +103,9 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     assetId?: AssetIdRef;
     assetUnits?: bigint;
     /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime.
-     * Sponsored advances carry no locktime and persist 0. */
+     * Sponsored advances carry no locktime; the persisted value is a domain
+     * sentinel satisfying the batch-expiry CHECK (0n for height expiries,
+     * 500000000n for time expiries). */
     locktime: bigint;
 
     /** Derived from the params; the client verifies against its own derivation.

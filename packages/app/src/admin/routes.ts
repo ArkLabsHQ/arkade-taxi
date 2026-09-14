@@ -435,6 +435,10 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         let outstandingSats = 0n;
         for (const row of active) {
             outstandingSats += row.topup;
+            // Sponsored advances have no recovery deadline; their locktime is
+            // a CHECK-satisfying sentinel, so exclude them from the oldest
+            // unswept computation.
+            if (row.kind === "sponsored") continue;
             const deadline = row.recoveryLocktime ?? {
                 kind: row.batchExpiry.kind,
                 value: row.locktime,
