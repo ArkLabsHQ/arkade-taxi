@@ -64,6 +64,25 @@ the exact outpoint is not yet observed spendable and the transfer remains
 Transfer status can include `submissionPhase`, `failureCode`, and
 `failureDetail` when operator action is required.
 
+## Sponsored direct sends
+
+`POST /v1/sponsored-transfers` quotes a joint payment without a covenant.
+The request carries the sender funding evidence plus Bob's full `receiverAddress`;
+the response carries `params` with the operator's `contribution` (the dust
+shortfall it fronts, playing the role of `topup`), the fare, `expiresAt`, an
+`unsignedSponsoredTx` envelope with the same shape as a lockup envelope but
+graphed under `arkade-taxi-sponsored-v1`, and a `commitment` whose output
+index 0 is the direct payment to the receiver.
+
+`POST /v1/sponsored-transfers/:id/lockup` takes the envelope signed at the
+sender's inputs, verified and persisted exactly like a lockup; the same leased
+worker co-signs the operator's inputs and submits. `GET
+/v1/sponsored-transfers/:id` reports status. `locked` is terminal here: the
+payment outpoint was observed with the receiver's exact script, so there is
+nothing to claim, refund, or recover, and the receiver never appears in
+`/v1/claims`. Unsubmitted quotes expire and release their reservations like
+covenant ones.
+
 ## `GET /v1/transfers/:id`
 
 Current ledger state and retained submission, recovery, failure and observation

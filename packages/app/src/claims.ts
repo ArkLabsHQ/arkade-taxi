@@ -1,4 +1,5 @@
 import { ArkAddress } from "@arkade-os/sdk";
+import { advanceKind, type Advance } from "@arkade-taxi/core";
 import type { AdvanceRepository } from "@arkade-taxi/db";
 import {
     fareToWire,
@@ -58,9 +59,15 @@ export function listReceiverClaims(
     states: readonly ReceiverClaimState[] = ACTIVE_CLAIM_STATES,
 ): ReceiverClaimWire[] {
     const selected = new Set<string>(states);
+    // Sponsored direct sends pay the receiver's own address: there is no
+    // claim to discover, so they never enter the claim feed.
+    const visible = (advance: Advance): boolean =>
+        advanceKind(advance) === "covenant" &&
+        advance.state !== "quoted" &&
+        selected.has(advance.state);
     return deps.advances
         .byReceiverKeys(receivers.receiverKeys)
-        .filter((advance) => advance.state !== "quoted" && selected.has(advance.state))
+        .filter(visible)
         .sort((a, b) => a.updatedAt - b.updatedAt || a.id.localeCompare(b.id))
         .map((advance): ReceiverClaimWire => {
             const result: ReceiverClaimWire = {

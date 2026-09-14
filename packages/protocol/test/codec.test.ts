@@ -8,8 +8,10 @@ import {
     quoteParamsToWire,
     satsFromWire,
     satsToWire,
+    sponsoredParamsFromWire,
+    sponsoredParamsToWire,
 } from "../src/codec.js";
-import type { AssetIdWire, QuoteParams } from "../src/index.js";
+import type { AssetIdWire, QuoteParams, SponsoredQuoteParams } from "../src/index.js";
 import { covenantSpendInputFromWire, covenantSpendInputToWire } from "../src/codec.js";
 
 const bytes = (...b: number[]) => new Uint8Array(b);
@@ -173,6 +175,41 @@ describe("quoteParamsFromWire", () => {
     it("round-trips the asset variant", () => {
         const w = { ...wire(), assetId: { txid: hex32("11"), groupIndex: 7 } };
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+    });
+});
+
+describe("sponsoredParamsFromWire", () => {
+    const wire = (): SponsoredQuoteParams => ({
+        receiverKey: hex32("01"),
+        senderKey: hex32("02"),
+        operatorKey: hex32("03"),
+        dust: "330",
+        contribution: "10",
+    });
+
+    it("decodes every field to its domain type", () => {
+        const p = sponsoredParamsFromWire(wire());
+        expect(p.receiverKey).toEqual(new Uint8Array(32).fill(1));
+        expect(p.senderKey).toEqual(new Uint8Array(32).fill(2));
+        expect(p.operatorKey).toEqual(new Uint8Array(32).fill(3));
+        expect(p.dust).toBe(330n);
+        expect(p.contribution).toBe(10n);
+        expect(p.assetId).toBeUndefined();
+    });
+
+    it("round-trips through sponsoredParamsToWire, preserving huge values exactly", () => {
+        const w = {
+            ...wire(),
+            contribution: "9007199254740993",
+            assetId: { txid: hex32("11"), groupIndex: 7 },
+        };
+        expect(sponsoredParamsToWire(sponsoredParamsFromWire(w))).toEqual(w);
+    });
+
+    it("rejects a bad contribution, naming the field", () => {
+        expect(() => sponsoredParamsFromWire({ ...wire(), contribution: "-1" })).toThrow(
+            /params\.contribution/,
+        );
     });
 });
 import * as fundingCodec from "../src/codec.js";

@@ -1,3 +1,4 @@
+import { isExposed } from "./ledger.js";
 import type { Advance, Exposure } from "./types.js";
 
 const isLocked = (a: Advance) => a.state === "locked";
@@ -9,7 +10,7 @@ export function computeExposure(advances: readonly Advance[]): Exposure {
     const locktimeKinds = new Set<Advance["batchExpiry"]["kind"]>();
 
     for (const a of advances) {
-        if (a.state !== "locking" && a.state !== "locked" && a.state !== "recovering") continue;
+        if (!isExposed(a)) continue;
         outstandingSats += a.topup;
         lockedCount++;
         if (!isLocked(a)) continue;

@@ -925,3 +925,40 @@ describe("update", () => {
         expect(() => repo.update(advance({ id: "ghost" }))).toThrow(/ghost/);
     });
 });
+
+describe("exposureTotals", () => {
+    const sponsored = (id: string, state: "locking" | "locked", topup: bigint): Advance => {
+        const row = advance({ id, state, topup, kind: "sponsored", locktime: 0n });
+        delete row.recoveryLocktime;
+        return row;
+    };
+
+    it("counts in-flight capital with settled sponsored advances excluded", () => {
+        repo.insert(advance({ id: "covenant-locking", state: "locking", topup: 100n }));
+        repo.insert(advance({ id: "covenant-locked", state: "locked", topup: 200n }));
+        repo.insert(advance({ id: "covenant-quoted", state: "quoted", topup: 400n }));
+        repo.insert(sponsored("sponsored-locking", "locking", 50n));
+        repo.insert(sponsored("sponsored-locked", "locked", 70n));
+        expect(repo.exposureTotals()).toEqual({ outstandingSats: 350n, lockedCount: 3 });
+    });
+});
+
+describe("sponsored locktime sentinel", () => {
+    const sponsoredTime = (id: string, locktime: bigint): Advance => {
+        const row = advance({
+            id,
+            state: "quoted",
+            kind: "sponsored",
+            locktime,
+            batchExpiry: { kind: "time", value: 1_789_547_979n },
+        });
+        delete row.recoveryLocktime;
+        return row;
+    };
+
+    it("rejects locktime 0 for time expiries and accepts the domain sentinel", () => {
+        expect(() => repo.insert(sponsoredTime("sp-zero", 0n))).toThrow(/CHECK constraint failed/);
+        expect(() => repo.insert(sponsoredTime("sp-sentinel", 500_000_000n))).not.toThrow();
+        expect(repo.get("sp-sentinel")?.locktime).toBe(500_000_000n);
+    });
+});

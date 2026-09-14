@@ -33,6 +33,17 @@ input large enough to repay the top-up and keep his merged output above dust.
 The examples assume this USDT asset has six decimals. Use your verified asset
 ID and metadata: the name “USDT” alone does not identify an asset.
 
+## Sponsored direct send: authorize 201 USDT, Bob does nothing
+
+No covenant is involved. Alice presents her asset funding, Taxi adds the
+funding input that carries the payment to Bob's own address (plus change),
+and Alice signs: `requestVerifiedSponsoredQuote` then
+`prepareAndSubmitSponsoredLockup`. The joint transaction pays Bob 200 USDT
+directly and Taxi 1 USDT immediately, so Bob's wallet observes an ordinary
+incoming VTXO with no claim to recycle or purchase. `locked` is terminal:
+there is no locktime, recovery, or refund leaf. See
+[wire protocol](protocol.md#sponsored-direct-sends).
+
 ## Alice: select, verify, submit
 
 Install `@arkade-taxi/client` and `@arkade-os/sdk@0.4.72`. Call this function

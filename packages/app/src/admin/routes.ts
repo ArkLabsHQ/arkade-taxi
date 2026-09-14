@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
 import {
+    isExposed,
     validateFareOption,
     type Advance,
     type AdvanceState,
@@ -158,6 +159,7 @@ interface AssetIdWire {
 interface AdvanceWire {
     id: string;
     state: AdvanceState;
+    kind: "covenant" | "sponsored";
     receiverKey: string;
     senderKey: string;
     operatorKey: string;
@@ -190,6 +192,7 @@ function toAdvanceWire(a: Advance, now: number): AdvanceWire {
     const out: AdvanceWire = {
         id: a.id,
         state: a.state,
+        kind: a.kind ?? "covenant",
         receiverKey: bytesToHex(a.receiverKey),
         senderKey: bytesToHex(a.senderKey),
         operatorKey: bytesToHex(a.operatorKey),
@@ -426,12 +429,16 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         const byState = ADVANCE_STATES.map((s) => [s, deps.advances.byState(s)] as const);
         const counts = Object.fromEntries(byState.map(([s, rows]) => [s, rows.length]));
         const active = byState.flatMap(([, rows]) =>
-            rows.filter((row) => ACTIVE_EXPOSURE_STATES.has(row.state)),
+            rows.filter((row) => ACTIVE_EXPOSURE_STATES.has(row.state) && isExposed(row)),
         );
         const oldest = { height: null as bigint | null, time: null as bigint | null };
         let outstandingSats = 0n;
         for (const row of active) {
             outstandingSats += row.topup;
+            // Sponsored advances have no recovery deadline; their locktime is
+            // a CHECK-satisfying sentinel, so exclude them from the oldest
+            // unswept computation.
+            if (row.kind === "sponsored") continue;
             const deadline = row.recoveryLocktime ?? {
                 kind: row.batchExpiry.kind,
                 value: row.locktime,

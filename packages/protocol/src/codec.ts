@@ -6,7 +6,13 @@
  * which of six keys was wrong.
  */
 
-import type { FareWire, AssetIdWire, QuoteParams, CovenantSpendInputWire } from "./index.js";
+import type {
+    FareWire,
+    AssetIdWire,
+    QuoteParams,
+    CovenantSpendInputWire,
+    SponsoredQuoteParams,
+} from "./index.js";
 import type { FundingInputWire } from "./index.js";
 
 export interface FundingInputValue {
@@ -297,6 +303,45 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         dust: satsToWire(p.dust),
         topup: satsToWire(p.topup),
         locktime: satsToWire(p.locktime),
+    };
+    if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    return out;
+}
+
+/** Joint-send terms without a covenant: the operator fronts `contribution`
+ * sats of the receiver's dust carrier instead of a recoverable topup. */
+export interface SponsoredParamsValue {
+    receiverKey: Uint8Array;
+    senderKey: Uint8Array;
+    operatorKey: Uint8Array;
+    dust: bigint;
+    contribution: bigint;
+    assetId?: AssetIdValue;
+}
+
+export function sponsoredParamsFromWire(
+    p: SponsoredQuoteParams,
+    label = "params",
+): SponsoredParamsValue {
+    if (p === null || typeof p !== "object") fail(label, `expected an object, got ${typeof p}`);
+    const out: SponsoredParamsValue = {
+        receiverKey: hexToBytes(p.receiverKey, `${label}.receiverKey`),
+        senderKey: hexToBytes(p.senderKey, `${label}.senderKey`),
+        operatorKey: hexToBytes(p.operatorKey, `${label}.operatorKey`),
+        dust: satsFromWire(p.dust, `${label}.dust`),
+        contribution: satsFromWire(p.contribution, `${label}.contribution`),
+    };
+    if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    return out;
+}
+
+export function sponsoredParamsToWire(p: SponsoredParamsValue): SponsoredQuoteParams {
+    const out: SponsoredQuoteParams = {
+        receiverKey: bytesToHex(p.receiverKey),
+        senderKey: bytesToHex(p.senderKey),
+        operatorKey: bytesToHex(p.operatorKey),
+        dust: satsToWire(p.dust),
+        contribution: satsToWire(p.contribution),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     return out;

@@ -42,6 +42,7 @@ export const VerificationErrorCode = {
     Locktime: "LOCKTIME_BELOW_MIN",
     InvalidParams: "INVALID_COVENANT_PARAMS",
     Address: "COVENANT_ADDRESS_MISMATCH",
+    PaymentOutput: "PAYMENT_OUTPUT_MISMATCH",
     Expired: "QUOTE_EXPIRED",
     Malformed: "MALFORMED_QUOTE",
     MalformedInfo: "MALFORMED_INFO",

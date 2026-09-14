@@ -1,4 +1,4 @@
-import type { Advance, ExpiryDeadline } from "@arkade-taxi/core";
+import { advanceKind, type Advance, type ExpiryDeadline } from "@arkade-taxi/core";
 import type { RuntimeConfig } from "./config.js";
 import type { AdvanceStore } from "./quotes.js";
 import { RecoveryArtifactError, type RecoverySubmission } from "./arkade/recovery.js";
@@ -264,8 +264,14 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
     return {
         async tick(currentHeight, medianTime = null) {
-            const locked = deps.advances.byState("locked");
-            const recovering = deps.advances.byState("recovering");
+            // Sponsored direct sends settle at `locked` and have no recovery
+            // leaf; the reconciler observes and releases them instead.
+            const locked = deps.advances
+                .byState("locked")
+                .filter((advance) => advanceKind(advance) === "covenant");
+            const recovering = deps.advances
+                .byState("recovering")
+                .filter((advance) => advanceKind(advance) === "covenant");
             const active = [...locked, ...recovering];
             const byId = new Map(active.map((advance) => [advance.id, advance]));
             lockedCount = locked.length;

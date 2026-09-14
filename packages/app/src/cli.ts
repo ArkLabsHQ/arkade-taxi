@@ -13,10 +13,12 @@ import {
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
 import { sanitizeOperationalError, ServiceError } from "./errors.js";
 import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
+import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
 import { createSweeper } from "./sweeper.js";
 import { createApp } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
 import { SingleKey } from "@arkade-os/sdk";
+import { advanceKind } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
 import { createLockupReconciler } from "./reconciler.js";
 import { createSpendWatcher } from "./watcher.js";
@@ -35,9 +37,9 @@ async function runServe(): Promise<void> {
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
     assertRecoveryStartupInvariants(
-        ["locking", "locked", "recovering"].flatMap((state) =>
-            advances.byState(state as "locking" | "locked" | "recovering"),
-        ),
+        ["locking", "locked", "recovering"]
+            .flatMap((state) => advances.byState(state as "locking" | "locked" | "recovering"))
+            .filter((advance) => advanceKind(advance) === "covenant"),
         config,
     );
     const runtime = createOperatorRuntime(config, db, {
@@ -146,6 +148,7 @@ async function runServe(): Promise<void> {
             getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
         },
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),
+        sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),
         lockupSubmitter,
         getServerUnroll: runtime.getServerUnroll,
         senderInventory: runtime.providers.indexerProvider,

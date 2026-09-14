@@ -172,7 +172,17 @@ CREATE TABLE proceeds_inputs (
 );
 `;
 
-export const MIGRATIONS: readonly Migration[] = [{ id: 1, up: INITIAL_SCHEMA }];
+export const MIGRATIONS: readonly Migration[] = [
+    { id: 1, up: INITIAL_SCHEMA },
+    {
+        id: 2,
+        // Sponsored direct sends reuse the advances table: `locked` is their
+        // terminal state, so no state CHECK changes. Existing rows default to
+        // the covenant flow they were written by.
+        up: `ALTER TABLE advances ADD COLUMN kind TEXT NOT NULL DEFAULT 'covenant'
+            CHECK (kind IN ('covenant', 'sponsored'))`,
+    },
+];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
     const ordered = [...migrations].sort((a, b) => a.id - b.id);
@@ -186,35 +196,45 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
     }
 
     const current = Number(db.pragma("user_version", { simple: true }));
+    const maxKnown = Math.max(...ordered.map((m) => m.id));
+    const hasCanonicalV1 =
+        current > 0 &&
+        db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'asset_units' AND type = 'INTEGER'",
+            )
+            .get() &&
+        db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'lease_until' AND type = 'INTEGER'",
+            )
+            .get() &&
+        db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('proceeds_inputs') WHERE name = 'job_id' AND type = 'TEXT'",
+            )
+            .get() &&
+        db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'submission_state' AND type = 'TEXT'",
+            )
+            .get() &&
+        db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('proceeds_local_intents') WHERE name = 'digest' AND type = 'TEXT'",
+            )
+            .get();
+    const hasKind =
+        hasCanonicalV1 &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'kind' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
-        (current !== 1 ||
-            !db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'asset_units' AND type = 'INTEGER'",
-                )
-                .get() ||
-            !db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'lease_until' AND type = 'INTEGER'",
-                )
-                .get() ||
-            !db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('proceeds_inputs') WHERE name = 'job_id' AND type = 'TEXT'",
-                )
-                .get() ||
-            !db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'submission_state' AND type = 'TEXT'",
-                )
-                .get() ||
-            !db
-                .prepare(
-                    "SELECT 1 FROM pragma_table_info('proceeds_local_intents') WHERE name = 'digest' AND type = 'TEXT'",
-                )
-                .get())
+        (current > maxKnown || (current === 1 && !hasCanonicalV1) || (current === 2 && !hasKind))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

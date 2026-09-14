@@ -44,7 +44,9 @@ const sameScript = (a: Uint8Array, b: Uint8Array) =>
  * signs for the wrong amount. It surfaces as an invalid checkpoint signature,
  * which points nowhere near the cause.
  */
-export function assertDistinctScripts(outputs: readonly LockupOutput[]): void {
+export function assertDistinctScripts(
+    outputs: readonly { role: string; script: Uint8Array }[],
+): void {
     for (let i = 0; i < outputs.length; i++) {
         for (let j = i + 1; j < outputs.length; j++) {
             const a = outputs[i];

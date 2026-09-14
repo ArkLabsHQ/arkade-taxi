@@ -24,6 +24,10 @@ export const SCENARIOS = [
         id: "receiver-sse-asset-fare-purchase",
         title: "receiver SSE discovery purchases 200 USDT after a 1 USDT fare",
     },
+    {
+        id: "sponsored-direct-send",
+        title: "sponsored direct send pays 200 USDT with a 1 USDT fare and no claim",
+    },
     { id: "sender-refund-before-locktime", title: "sender-signed refund before locktime" },
     {
         id: "premature-recovery-rejected",
@@ -71,7 +75,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 19;
+export const EXPECTED_TOTAL = 20;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

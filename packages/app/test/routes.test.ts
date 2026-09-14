@@ -10,10 +10,12 @@ import type {
     InfoResponse,
     LockupResponse,
     QuoteResponse,
+    SponsoredQuoteResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
+import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createApp } from "../src/server.js";
@@ -24,13 +26,16 @@ import {
     config,
     emulatorKey,
     EXPIRY_HEIGHT,
+    fundingCoin,
     MemoryAdvances,
     NOW,
     operatorKey,
     policy as basePolicy,
     quoteBody,
     receiverKey,
+    registerSenderCoin,
     senderKey,
+    senderTree,
     serverKey,
     quoteInfrastructure,
     serverUnroll,
@@ -42,6 +47,7 @@ const STALE_AFTER = 120;
 
 let advances: MemoryAdvances;
 let lockupBuilder: FakeLockupBuilder;
+let sponsoredBuilder: FakeSponsoredLockupBuilder;
 let sweeperStatus: SweeperStatus;
 let reconcilerStatus: ReconcilerStatus;
 let clock: number;
@@ -84,6 +90,7 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
     randomId: () => `adv-${++ids}`,
     lockupBuilder,
     lockupSubmitter: lockupBuilder,
+    sponsoredBuilder,
     sweeper: { status: () => sweeperStatus },
     reconciler: { status: () => reconcilerStatus },
     sweeperStaleAfterSeconds: STALE_AFTER,
@@ -729,6 +736,7 @@ const post = (path: string, body: unknown, over: Partial<Policy> = {}) =>
 beforeEach(() => {
     advances = new MemoryAdvances();
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
+    sponsoredBuilder = new FakeSponsoredLockupBuilder(config(), serverUnroll);
     sweeperStatus = okSweeper();
     reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
     clock = NOW;
@@ -917,6 +925,90 @@ describe("GET /v1/transfers/:id", () => {
         });
         expect(JSON.stringify(body)).not.toMatch(/never-reveal|short-access-value/);
         expect(body.failureDetail).toContain("[redacted]");
+    });
+});
+
+describe("sponsored direct-send routes", () => {
+    const sponsoredBody = (over: Record<string, unknown> = {}) => {
+        const txid = "ab".repeat(32);
+        const vout = 2;
+        registerSenderCoin(
+            txid,
+            vout,
+            fundingCoin({
+                txid,
+                vout,
+                value: 0,
+                script: bytesToHex(senderTree.pkScript),
+                expiresAtHeight: 910000,
+            }),
+        );
+        return {
+            receiverAddress,
+            senderKey: bytesToHex(senderKey),
+            senderSats: "0",
+            senderInputs: [
+                {
+                    txid,
+                    vout,
+                    value: "0",
+                    tapTree: bytesToHex(senderTree.encode()),
+                    spendLeaf: bytesToHex(senderTree.scripts[0]),
+                    expiry: { kind: "height", value: "910000" },
+                },
+            ],
+            ...over,
+        };
+    };
+
+    it("quotes a direct payment on POST /v1/sponsored-transfers", async () => {
+        const res = await post("/v1/sponsored-transfers", sponsoredBody());
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as SponsoredQuoteResponse;
+        expect(body.transferId).toBe("adv-1");
+        expect(body.receiverAddress).toBe(receiverAddress);
+        expect(body.params.contribution).toBe("330");
+        expect(body.commitment.paymentOutputIndex).toBe(0);
+    });
+
+    it("returns 400 for a receiver address outside this service", async () => {
+        const res = await post(
+            "/v1/sponsored-transfers",
+            sponsoredBody({ receiverAddress: "ark1qwrong" }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as ErrorResponse).code).toBe("invalid_request");
+    });
+
+    it("locks and reports a sponsored transfer", async () => {
+        const d = deps();
+        d.lockupSubmitter = sponsoredBuilder;
+        const sponsored = createRoutes(d);
+        const quoted = await sponsored.request("/v1/sponsored-transfers", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(sponsoredBody()),
+        });
+        expect(quoted.status).toBe(200);
+        const quote = (await quoted.json()) as SponsoredQuoteResponse;
+        const lockup = await sponsored.request(
+            `/v1/sponsored-transfers/${quote.transferId}/lockup`,
+            {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ signedLockupTx: "psbt" }),
+            },
+        );
+        expect(lockup.status).toBe(202);
+        const status = await sponsored.request(`/v1/sponsored-transfers/${quote.transferId}`);
+        expect(status.status).toBe(200);
+        expect(((await status.json()) as TransferStatusResponse).state).toBe("locking");
+    });
+
+    it("returns 404 for an unknown sponsored transfer", async () => {
+        const res = await app().request("/v1/sponsored-transfers/nope");
+        expect(res.status).toBe(404);
+        expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
     });
 });
 

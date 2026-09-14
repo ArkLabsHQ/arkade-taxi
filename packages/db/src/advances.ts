@@ -7,6 +7,7 @@ import { PolicyRepository } from "./policy.js";
 const COLUMNS = [
     "id",
     "state",
+    "kind",
     "receiver_key",
     "sender_key",
     "operator_key",
@@ -80,6 +81,7 @@ type AdvanceParams = Record<(typeof COLUMNS)[number], string | number | bigint |
 interface AdvanceRow {
     id: string;
     state: AdvanceState;
+    kind: "covenant" | "sponsored" | null;
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
@@ -191,6 +193,7 @@ function toParams(a: Advance): AdvanceParams {
     return {
         id: a.id,
         state: a.state,
+        kind: a.kind ?? "covenant",
         receiver_key: a.receiverKey,
         sender_key: a.senderKey,
         operator_key: a.operatorKey,
@@ -308,6 +311,7 @@ function fromRow(r: AdvanceRow): Advance {
     const a: Advance = {
         id: r.id,
         state: r.state,
+        ...(r.kind === "sponsored" ? { kind: "sponsored" as const } : {}),
         receiverKey: bytes(r.receiver_key),
         senderKey: bytes(r.sender_key),
         operatorKey: bytes(r.operator_key),
@@ -409,11 +413,13 @@ export class AdvanceRepository {
     readonly #byState: Statement<[AdvanceState], AdvanceRow>;
     readonly #byReceiverKeys = new Map<number, Statement<Buffer[], AdvanceRow>>();
     readonly #byOutpoint: Statement<[string, number], AdvanceRow>;
+    readonly #sponsoredLocked: Statement<[], AdvanceRow>;
     readonly #sweepable: Statement<[bigint, bigint | null], AdvanceRow>;
     readonly #sumTopup: Statement<[AdvanceState], { total: bigint | null }>;
     readonly #lockupSubmission: Statement<[string, number, string]>;
     readonly #lockupFailure: Statement<[string, string, number, string]>;
     readonly #lockupObserved: Statement<[string, string, number, number, number, string]>;
+    readonly #exposureTotals: Statement<[], { total: bigint; count: bigint }>;
     readonly #recoverySubmission: Statement<[string, number, string]>;
     readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
 
@@ -432,8 +438,11 @@ export class AdvanceRepository {
         this.#byOutpoint = read(
             "SELECT * FROM advances WHERE outpoint_txid = ? AND outpoint_vout = ?",
         );
+        this.#sponsoredLocked = read(
+            "SELECT * FROM advances WHERE state = 'locked' AND kind = 'sponsored'",
+        );
         this.#sweepable = read(
-            `SELECT * FROM advances WHERE state = 'locked' AND
+            `SELECT * FROM advances WHERE state = 'locked' AND kind = 'covenant' AND
              recovery_locktime_kind = batch_expiry_kind AND
              ((recovery_locktime_kind = 'height' AND locktime <= ?) OR
               (recovery_locktime_kind = 'time' AND locktime <= ?))
@@ -452,12 +461,18 @@ export class AdvanceRepository {
             db.prepare(`UPDATE advances SET state = 'locked', ark_txid = coalesce(ark_txid, ?),
             outpoint_txid = ?, outpoint_vout = ?, last_observed_at = ?, updated_at = max(updated_at, ?),
             failure_code = NULL, failure_detail = NULL WHERE id = ? AND state = 'locking'`);
+        // Mirrors `isExposed` in core without materializing rows: a sponsored
+        // advance settles at `locked`, so only `locking` sponsored rows count.
+        this.#exposureTotals = read(
+            `SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances
+             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering'))`,
+        );
         this.#recoverySubmission =
             db.prepare(`UPDATE advances SET recovery_txid = coalesce(recovery_txid, ?),
             updated_at = max(updated_at, ?) WHERE id = ?`);
         this.#claimRecovery =
             read(`UPDATE advances SET state = 'recovering', recovery_submitted_at = ?,
-            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' RETURNING *`);
+            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' AND kind = 'covenant' RETURNING *`);
     }
 
     insert(a: Advance): void {
@@ -507,6 +522,19 @@ export class AdvanceRepository {
         assertNativeAccess(this.#db);
         const row = this.#byOutpoint.get(o.txid, o.vout);
         return row && fromRow(row);
+    }
+
+    exposureTotals(): { outstandingSats: bigint; lockedCount: number } {
+        assertNativeAccess(this.#db);
+        const row = this.#exposureTotals.get();
+        return { outstandingSats: row?.total ?? 0n, lockedCount: Number(row?.count ?? 0n) };
+    }
+
+    /** Settled direct sends, for reservation cleanup. Covenant rows are
+     * excluded: their reservations release on terminal-spend observation. */
+    sponsoredLocked(): Advance[] {
+        assertNativeAccess(this.#db);
+        return this.#sponsoredLocked.all().map(fromRow);
     }
 
     update(a: Advance): void {

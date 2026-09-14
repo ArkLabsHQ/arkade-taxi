@@ -1,6 +1,8 @@
 export * from "./types.js";
 export {
+    advanceKind,
     canTransition,
+    isExposed,
     isExpired,
     isTerminal,
     transition,

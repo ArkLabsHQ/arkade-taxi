@@ -374,6 +374,7 @@ describe("package manager process boundary", () => {
     const task12Tests = [
         "e2e/provider-contract.e2e.test.ts",
         "e2e/claim.e2e.test.ts",
+        "e2e/sponsored.e2e.test.ts",
         "e2e/exposure.e2e.test.ts",
         "e2e/verify-quote.e2e.test.ts",
         "e2e/refund-recovery.e2e.test.ts",
@@ -687,6 +688,22 @@ describe("isolated regtest sources", () => {
         );
     });
 
+    it("discovers the emulator closure from the extracted profiles module", () => {
+        const cli = `import { fail } from './log.mjs';
+
+export const PROFILE_DEPS = {
+  base: [],
+  ark: ['base'],
+  emulator: ['ark'],
+  'intent-solver': ['ark', 'emulator', 'lightning', 'nostr'],
+};`;
+        expect(discoverProfileClosure(cli, "emulator", "b3f83b2")).toEqual([
+            "base",
+            "ark",
+            "emulator",
+        ]);
+    });
+
     it("discovers selected published-port bindings from the checked-out Compose files", () => {
         const source = `services:
   bitcoin:
@@ -789,6 +806,34 @@ describe("isolated regtest sources", () => {
                 ),
             ).toThrow("unique project name"),
     );
+
+    it("namespaces the containerName exec shapes of current regtest master", () => {
+        const sources = {
+            base: "name: arkade-regtest\nservices:\n  bitcoin:\n    container_name: ${REGTEST_CONTAINER_PREFIX:-}bitcoin\n    ports:\n      - '${BITCOIN_RPC_PORT:-18443}:18443'\n",
+            ark: "name: arkade-regtest\nservices:\n  arkd:\n    container_name: ${REGTEST_CONTAINER_PREFIX:-}arkd\n",
+            arkdSetup:
+                "const arkdUrl = () => `http://localhost:${env('ARKD_PORT', '7070')}`;\nconst arkdAdminUrl = () => `http://localhost:${env('ARKD_ADMIN_PORT', '7071')}`;\n",
+            compose:
+                "function baseArgs(profiles = []) { return ['compose', '-p', process.env.REGTEST_PROJECT || 'arkade-regtest', '-f', BASE]; }",
+            proc: "export function dockerExec(container, argv, opts = {}) { return docker(['exec', containerName(container), ...argv], opts); }",
+            regtest: [
+                "import { ROOT, composeUp, composeStop, composeDown } from './lib/compose.mjs';",
+                "async function startEmulator() {}",
+                "if (firstWave.code !== 0) fail('docker compose up failed');",
+                "if (appWave.code !== 0) fail('docker compose up failed');",
+                "if (active.has('ark')) await setupArkd();",
+                "const a = docker(['exec', containerName('arkd'), argv[0], ...passthrough]);",
+                "const b = docker(['exec', containerName('bitcoin'), 'bitcoin-cli', '-regtest', ...passthrough]);",
+            ].join("\n"),
+        };
+        const expectedBindings = [["BITCOIN_RPC_PORT", "bitcoin", 18443]];
+        const transformed = namespaceRegtestSources(sources, "taxi12-a1b2c3d4", expectedBindings);
+        expect(transformed.proc).toContain("'compose', '-p', 'taxi12-a1b2c3d4'");
+        expect(transformed.regtest).not.toContain("docker(['exec'");
+        expect(transformed.regtest).not.toContain("containerName('arkd')");
+        expect(transformed.regtest).toContain("dockerExec('arkd', [argv[0], ...passthrough])");
+        expect(transformed.regtest).toContain("dockerExec('bitcoin', [");
+    });
 
     it("fails a wave immediately when a required daemon binding cannot be resolved", () => {
         const bindings = [

@@ -1,4 +1,4 @@
-import type { Advance, Outpoint } from "@arkade-taxi/core";
+import { advanceKind, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository, ReservationRepository } from "@arkade-taxi/db";
 import {
     Transaction,
@@ -10,6 +10,7 @@ import { base64, hex } from "@scure/base";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import type { SubmissionResumer } from "./arkade/submit.js";
 import type { SpendWatcher, WatcherBlocker } from "./watcher.js";
+import { sanitizeOperationalError } from "./errors.js";
 
 export interface ReconcilerStatus {
     lastTickAt: number | null;
@@ -26,8 +27,11 @@ export interface LockupReconciler {
 }
 
 export interface LockupReconcilerDeps {
-    advances: Pick<AdvanceRepository, "byState" | "recordLockupObserved">;
-    reservations: Pick<ReservationRepository, "recordLockupConflict">;
+    advances: Pick<AdvanceRepository, "byState" | "recordLockupObserved" | "sponsoredLocked">;
+    reservations: Pick<
+        ReservationRepository,
+        "recordLockupConflict" | "releaseForAdvance" | "listForAdvance"
+    >;
     policy: Pick<PolicyRepository, "get">;
     indexer: Pick<IndexerProvider, "getVtxos">;
     submission: Pick<SubmissionResumer, "resume">;
@@ -83,10 +87,19 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
     const initial = deps.advances.byState("locking");
     let locking = initial.length;
     let blockers = blockingCodes(initial);
+    let releaseBlockers: WatcherBlocker[] = [];
     let pending: Promise<void> | undefined;
 
     const reconcile = async (advance: Advance): Promise<void> => {
         let expected: ReturnType<typeof expectedLockup>;
+        // A sponsored advance settles when its payment outpoint is observed:
+        // exact txid plus exact payment script proves the joint transaction
+        // was accepted, even if the receiver already spent onwards.
+        const sponsored = advanceKind(advance) === "sponsored";
+        const settleSponsored = (): void => {
+            deps.advances.recordLockupObserved(advance.id, expected.outpoint, deps.now());
+            deps.reservations.releaseForAdvance(advance.id);
+        };
         try {
             await deps.submission.resume(advance.id);
             expected = expectedLockup(advance);
@@ -95,11 +108,17 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
             if (coin) {
                 if (
                     coin.script === expected.script &&
-                    canSpendOffchain(coin, deps.clock()) &&
-                    !coin.isSpent &&
-                    !coin.spentBy
-                )
-                    deps.advances.recordLockupObserved(advance.id, expected.outpoint, deps.now());
+                    (sponsored ||
+                        (canSpendOffchain(coin, deps.clock()) && !coin.isSpent && !coin.spentBy))
+                ) {
+                    if (sponsored) settleSponsored();
+                    else
+                        deps.advances.recordLockupObserved(
+                            advance.id,
+                            expected.outpoint,
+                            deps.now(),
+                        );
+                }
                 return;
             }
             if (response.vtxos.length !== 0) return;
@@ -111,6 +130,19 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 inputs.vtxos.some((input) => !requested.has(key(input)))
             )
                 return;
+            if (
+                sponsored &&
+                inputs.vtxos.length === requested.size &&
+                inputs.vtxos.every(
+                    (input) =>
+                        (input.isSpent || !!input.spentBy) &&
+                        safeTxid(input.arkTxId) &&
+                        input.arkTxId === expected.outpoint.txid,
+                )
+            ) {
+                settleSponsored();
+                return;
+            }
             const conflict = inputs.vtxos.find(
                 (input) =>
                     (input.isSpent || !!input.spentBy) &&
@@ -135,6 +167,28 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 pending = (async () => {
                     const rows = deps.advances.byState("locking");
                     for (const advance of rows) await reconcile(advance);
+                    // A crash between observation and release strands a
+                    // delivered sponsored row with held reservations; both
+                    // writes are local and the release is idempotent, so
+                    // re-release settled rows every tick until clean. A row
+                    // that keeps failing surfaces as a blocker with its id.
+                    releaseBlockers = [];
+                    for (const row of deps.advances.sponsoredLocked()) {
+                        if (!row.outpoint) continue;
+                        try {
+                            if (deps.reservations.listForAdvance(row.id).length === 0) continue;
+                            deps.reservations.releaseForAdvance(row.id);
+                        } catch (cause) {
+                            releaseBlockers.push({
+                                advanceId: row.id,
+                                code: "sponsored_release_failed",
+                                detail: sanitizeOperationalError(
+                                    cause,
+                                    "sponsored reservation release failed",
+                                ),
+                            });
+                        }
+                    }
                     await deps.watcher?.catchUp();
                     const remaining = deps.advances.byState("locking");
                     locking = remaining.length;
@@ -148,17 +202,23 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
         status: () => {
             const watcher = deps.watcher?.status();
             const blockerDetails = watcher?.blockers ?? [];
+            const details = [
+                ...blockerDetails.map((blocker) => ({ ...blocker })),
+                ...releaseBlockers.map((blocker) => ({ ...blocker })),
+            ];
             return {
                 lastTickAt,
                 locking,
-                blockers: [...new Set([...blockers, ...blockerDetails.map(({ code }) => code)])],
+                blockers: [...new Set([...blockers, ...details.map(({ code }) => code)])],
                 ...(watcher
                     ? {
                           lastWatcherScanAt: watcher.lastScanAt,
                           watching: watcher.watching,
-                          blockerDetails: blockerDetails.map((blocker) => ({ ...blocker })),
+                          blockerDetails: details,
                       }
-                    : {}),
+                    : releaseBlockers.length
+                      ? { blockerDetails: details }
+                      : {}),
             };
         },
     };

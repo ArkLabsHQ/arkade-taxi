@@ -12,6 +12,7 @@ import { createServiceLifecycle } from "../src/lifecycle.js";
 import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
+import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import {
     config,
@@ -142,6 +143,7 @@ function setup() {
     const router = (over: Partial<RouteDeps> = {}) =>
         createRoutes({
             ...deps,
+            sponsoredBuilder: new FakeSponsoredLockupBuilder(cfg, serverUnroll),
             startup: lifecycle.status,
             reconciler: {
                 status: () => ({ lastTickAt: Math.floor(now / 1_000), locking: 0, blockers: [] }),

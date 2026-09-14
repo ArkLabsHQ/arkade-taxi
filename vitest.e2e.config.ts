@@ -7,6 +7,7 @@ class LiveSequencer extends BaseSequencer {
         const order = [
             "provider-contract",
             "claim",
+            "sponsored",
             "exposure",
             "verify-quote",
             "refund-recovery",

@@ -84,6 +84,17 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     id: string;
     state: AdvanceState;
 
+    /**
+     * `covenant` is the joint-funded covenant VTXO the receiver claims with
+     * `recycle` or `purchase`. `sponsored` is a joint-funded direct payment:
+     * the operator fronts the dust carrier of an output paying the receiver's
+     * own address, so no claim, recovery or refund leaf exists. A sponsored
+     * advance reaches `locked` when its payment outpoint is observed and never
+     * leaves it. Optional so persisted and in-memory covenant advances keep
+     * their shape; absent means `covenant`.
+     */
+    kind?: "covenant" | "sponsored";
+
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
@@ -91,10 +102,15 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     topup: bigint;
     assetId?: AssetIdRef;
     assetUnits?: bigint;
-    /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime. */
+    /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime.
+     * Sponsored advances carry no locktime; the persisted value is a domain
+     * sentinel satisfying the batch-expiry CHECK (0n for height expiries,
+     * 500000000n for time expiries). */
     locktime: bigint;
 
-    /** Derived from the params; the client verifies against its own derivation. */
+    /** Derived from the params; the client verifies against its own derivation.
+     * A sponsored advance stores the receiver's own Arkade address here: the
+     * payment output pays it directly instead of a covenant. */
     covenantAddress: string;
 
     /**

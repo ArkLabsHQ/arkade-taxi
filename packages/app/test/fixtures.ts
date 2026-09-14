@@ -10,7 +10,7 @@ import {
 import type { RuntimeSafety } from "../src/arkade/types.js";
 import type { QuoteDeps } from "../src/quotes.js";
 import { LockupClaimError } from "@arkade-taxi/db";
-import type { Advance, Outpoint, Policy } from "@arkade-taxi/core";
+import { isExposed, type Advance, type Outpoint, type Policy } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 
@@ -36,6 +36,11 @@ export const serverUnroll = CSVMultisigTapscript.encode({
     timelock: { type: "blocks", value: 144n },
 });
 const senderCoins = new Map<string, VirtualCoin>();
+
+/** Registers a sender coin the fixture indexer serves to `verifySenderFunding`. */
+export const registerSenderCoin = (txid: string, vout: number, coin: VirtualCoin): void => {
+    senderCoins.set(`${txid}:${vout}`, coin);
+};
 
 export const NOW = 1_757_000_000;
 export const DUST = 330n;
@@ -304,6 +309,16 @@ export class MemoryAdvances {
     }
     byState(s: Advance["state"]): Advance[] {
         return [...this.rows.values()].filter((a) => a.state === s).map((a) => ({ ...a }));
+    }
+    exposureTotals(): { outstandingSats: bigint; lockedCount: number } {
+        let outstandingSats = 0n;
+        let lockedCount = 0;
+        for (const advance of this.rows.values())
+            if (isExposed(advance)) {
+                outstandingSats += advance.topup;
+                lockedCount++;
+            }
+        return { outstandingSats, lockedCount };
     }
     byReceiverKeys(keys: readonly Uint8Array[]): Advance[] {
         const wanted = new Set(keys.map(bytesToHex));

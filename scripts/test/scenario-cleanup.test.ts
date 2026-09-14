@@ -40,6 +40,15 @@ it("allows a new scenario only after all prior advances are terminal", () => {
     ).not.toThrow();
 });
 
+it("treats a locked sponsored advance as settled with nothing to unwind", () => {
+    expect(() =>
+        assertScenarioBoundary([{ id: "sponsored", kind: "sponsored", state: "locked" }]),
+    ).not.toThrow();
+    expect(() =>
+        assertScenarioBoundary([{ id: "sponsored", kind: "sponsored", state: "locking" }]),
+    ).toThrow(/sponsored/);
+});
+
 it("attempts every owned advance even when the first refund fails", async () => {
     const attempts: string[] = [];
     const failure = new Error("first refund failed");

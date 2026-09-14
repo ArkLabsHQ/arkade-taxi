@@ -1,5 +1,18 @@
 import { TERMINAL_STATES, type Advance, type AdvanceState } from "./types.js";
 
+/** Absent `kind` is a covenant advance: the only shape persisted before
+ * sponsored direct sends existed. */
+export const advanceKind = (a: Pick<Advance, "kind">): "covenant" | "sponsored" =>
+    a.kind ?? "covenant";
+
+/** Capital at risk. A sponsored advance settles when its payment outpoint is
+ * observed (`locked`), so only a `locking` sponsored advance ties up capital;
+ * covenant advances stay exposed until a terminal spend is observed. */
+export const isExposed = (a: Pick<Advance, "kind" | "state">): boolean =>
+    advanceKind(a) === "sponsored"
+        ? a.state === "locking"
+        : a.state === "locking" || a.state === "locked" || a.state === "recovering";
+
 /** Keyed by every AdvanceState so adding one to types.ts fails the build here
  * rather than silently arriving with no outbound edges. */
 const EDGES: Record<AdvanceState, readonly AdvanceState[]> = {
@@ -28,16 +41,24 @@ export function transition(a: Advance, to: AdvanceState, at: number): Advance {
 
 export function validateFundingSnapshot(a: Advance): void {
     const expiry = a.batchExpiry;
-    const recovery = a.recoveryLocktime;
     if (
         !expiry ||
-        !recovery ||
         typeof expiry.value !== "bigint" ||
+        (expiry.kind !== "height" && expiry.kind !== "time")
+    ) {
+        throw new Error(`advance ${a.id}: batch expiry must be a tagged deadline`);
+    }
+    if (advanceKind(a) === "sponsored") {
+        validateJointSnapshot(a);
+        return;
+    }
+    const recovery = a.recoveryLocktime;
+    if (
+        !recovery ||
         typeof recovery.value !== "bigint" ||
         recovery.value !== a.locktime ||
         recovery.kind !== expiry.kind ||
         expiry.value <= recovery.value ||
-        (expiry.kind !== "height" && expiry.kind !== "time") ||
         (recovery.kind === "height" && recovery.value >= 500_000_000n) ||
         (recovery.kind === "time" && recovery.value < 500_000_000n)
     ) {
@@ -45,6 +66,10 @@ export function validateFundingSnapshot(a: Advance): void {
             `advance ${a.id}: tagged recovery locktime must match and be strictly before batch expiry`,
         );
     }
+    validateJointSnapshot(a);
+}
+
+function validateJointSnapshot(a: Advance): void {
     if (
         typeof a.unsignedLockupTx !== "string" ||
         a.unsignedLockupTx.length === 0 ||

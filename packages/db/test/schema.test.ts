@@ -96,20 +96,20 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(1);
-            expect(reopened.prepare("SELECT id, topup, asset_units FROM advances").all()).toEqual([
-                { id: "a1", topup: 300n, asset_units: null },
-            ]);
+            expect(userVersion(reopened)).toBe(2);
+            expect(
+                reopened.prepare("SELECT id, topup, asset_units, kind FROM advances").all(),
+            ).toEqual([{ id: "a1", topup: 300n, asset_units: null, kind: "covenant" }]);
         } finally {
             reopened.close();
         }
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(1);
+        expect(userVersion(db)).toBe(2);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -127,7 +127,7 @@ describe("migrations", () => {
             .sort();
         expect(columns).toEqual(
             `
-            id state receiver_key sender_key operator_key dust topup asset_txid asset_group_index
+            id state kind receiver_key sender_key operator_key dust topup asset_txid asset_group_index
             asset_units locktime covenant_address fare_currency fare_units fare_asset_txid
             fare_asset_group_index outpoint_txid outpoint_vout spent_txid created_at updated_at expires_at
             batch_expiry_kind batch_expiry_value operator_inputs_json unsigned_lockup_tx unsigned_lockup_id
@@ -166,6 +166,22 @@ describe("migrations", () => {
                 .find(({ name }) => name === "advances_outpoint")?.unique,
         ).toBe(1n);
     });
+    it("migrates v1 covenant rows to kind covenant and accepts sponsored rows", () => {
+        const db = fresh();
+        applyMigrations(db, [MIGRATIONS[0]!]);
+        expect(userVersion(db)).toBe(1);
+        insertRaw(db);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(2);
+        expect(
+            db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
+        ).toEqual({ kind: "covenant" });
+        expect(() => insertRaw(db, { id: "a2", kind: "sponsored" })).not.toThrow();
+        expect(() => insertRaw(db, { id: "a3", kind: "escrow" })).toThrow(
+            /CHECK constraint failed/,
+        );
+        db.close();
+    });
     it("rejects old v1 without proceeds storage without changing its data", () => {
         const db = migrated();
         insertRaw(db);
@@ -185,7 +201,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(1);
+        expect(userVersion(db)).toBe(2);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

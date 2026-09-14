@@ -4,6 +4,8 @@ export {
     type EventSourceLike,
     type QuoteRequest,
     type RequestVerifiedQuoteArgs,
+    type RequestVerifiedSponsoredQuoteArgs,
+    type SponsoredQuoteRequest,
     type SubscribeClaimsArgs,
     type TaxiClientOptions,
 } from "./client.js";
@@ -23,6 +25,19 @@ export {
     type VerifyQuoteArgs,
 } from "./verify.js";
 export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup.js";
+export {
+    assertSignedSponsoredPayment,
+    signSponsoredPayment,
+    validateSponsoredPayment,
+    verifySponsoredQuote,
+    type ActiveSponsoredCapabilityState,
+    type SignSponsoredPaymentArgs,
+    type SponsoredQuoteExpectation,
+    type SponsoredValidationContext,
+    type ValidatedSponsoredPayment,
+    type VerifiedSponsoredQuote,
+    type VerifySponsoredQuoteArgs,
+} from "./sponsored.js";
 export {
     purchase,
     recycle,
@@ -44,7 +59,9 @@ export {
     decodeClaimsSnapshot,
     decodeLockup,
     decodeQuote,
+    decodeSponsoredQuote,
     decodeStatus,
     type DecodedInfo,
     type DecodedQuote,
+    type DecodedSponsoredQuote,
 } from "./decode.js";
