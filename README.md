@@ -100,6 +100,23 @@ mechanism is outside Taxi's scope. Provider identity/version checks cannot
 certify this assumption: the complete live covenant-spend suite is a deployment
 gate. See [architecture](docs/architecture.md) for the exact boundary.
 
+## Payment URIs (BIP321)
+
+Taxi requests ride on the wallet's existing BIP21 encoding
+(`arkade-os/wallet` `src/lib/bip21.ts`: `encodeBip21Asset`), plus one `taxi`
+param for the operator. `assetid` is the 68-hex asset id; when present `amount`
+is decimal asset units, otherwise BTC.
+
+```
+bitcoin:?ark=<ark1...>&assetid=<68-hex>&amount=<units>&taxi=<url-encoded-operator>
+```
+
+BTC sub-dust taxi omits `assetid` (`amount` is BTC as usual). Query keys are
+case-insensitive. The address path stays empty and `taxi` is
+mandatory-to-understand: a wallet without taxi support has nothing to pay and
+must abort, never fall back to a plain `ark` send. Server/emulator trust still
+comes from pinned wallet config, never from the URI.
+
 ## Development
 
 ```bash
