@@ -411,17 +411,41 @@ export function namespaceRegtestSources(sources, project, expectedPortBindings) 
     const composeReplacement = `'compose', '-p', '${project}',`;
     if (!sources.compose.includes(composeNeedle))
         throw new Error("arkade-regtest compose interface changed: compose argv was not found");
-    const execNeedle = "return docker(['exec', container, ...argv], opts);";
+    const execNeedles = [
+        "return docker(['exec', container, ...argv], opts);",
+        "return docker(['exec', containerName(container), ...argv], opts);",
+    ];
+    const execNeedle = execNeedles.find((needle) => sources.proc.includes(needle));
     const execReplacement =
         `return docker(['compose', '-p', '${project}', '-f', process.env.TAXI_E2E_COMPOSE_BASE, ` +
         "'-f', process.env.TAXI_E2E_COMPOSE_ARK, 'exec', '-T', container, ...argv], opts);";
-    if (!sources.proc.includes(execNeedle))
+    if (!execNeedle)
         throw new Error(
             "arkade-regtest exec interface changed: dockerExec implementation was not found",
         );
-    const arkExec = "docker(['exec', 'arkd', ...argv])";
-    const bitcoinExec = "docker(['exec', 'bitcoin',";
-    if (!sources.regtest.includes(arkExec) || !sources.regtest.includes(bitcoinExec))
+    const arkExecForms = [
+        {
+            needle: "docker(['exec', 'arkd', ...argv])",
+            replacement: "dockerExec('arkd', argv)",
+        },
+        {
+            needle: "docker(['exec', containerName('arkd'), argv[0], ...passthrough])",
+            replacement: "dockerExec('arkd', [argv[0], ...passthrough])",
+        },
+    ];
+    const bitcoinExecForms = [
+        {
+            needle: "docker(['exec', 'bitcoin',",
+            replacement: "dockerExec('bitcoin', [",
+        },
+        {
+            needle: "docker(['exec', containerName('bitcoin'),",
+            replacement: "dockerExec('bitcoin', [",
+        },
+    ];
+    const arkExec = arkExecForms.find((form) => sources.regtest.includes(form.needle));
+    const bitcoinExec = bitcoinExecForms.find((form) => sources.regtest.includes(form.needle));
+    if (!arkExec || !bitcoinExec)
         throw new Error("arkade-regtest CLI interface changed: direct service exec was not found");
     const composeImport =
         "import { ROOT, composeUp, composeStop, composeDown } from './lib/compose.mjs';";
@@ -548,8 +572,8 @@ async function waitForCurrentArkdAdmin(profiles) {
                 setupArkd,
                 `if (active.has('ark')) {\n    await waitForCurrentArkdAdmin(waveProfiles);\n    await setupArkd();\n  }`,
             )
-            .replace(arkExec, "dockerExec('arkd', argv)")
-            .replace(bitcoinExec, "dockerExec('bitcoin', [")
+            .replace(arkExec.needle, arkExec.replacement)
+            .replace(bitcoinExec.needle, bitcoinExec.replacement)
             .replaceAll("http://localhost:${", "http://127.0.0.1:${"),
         arkdSetup: sources.arkdSetup
             .replace(arkdUrl, arkdUrl.replace("localhost", "127.0.0.1"))

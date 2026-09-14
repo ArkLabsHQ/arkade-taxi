@@ -757,8 +757,20 @@ async function main() {
             await run("git", ["-C", source, "status", "--porcelain"], { print: false })
         ).stdout;
         if (sourceStatus) throw new Error(`fresh arkade-regtest ${sha} clone is dirty`);
-        const cliSource = readFileSync(join(source, "regtest.mjs"), "utf8");
-        const profiles = discoverProfileClosure(cliSource, "emulator", sha);
+        // PROFILE_DEPS lives in lib/profiles.mjs on current master and used to
+        // be inline in regtest.mjs; read whichever copy declares it.
+        const profileSources = ["lib/profiles.mjs", "regtest.mjs"]
+            .map((candidate) => {
+                try {
+                    return readFileSync(join(source, candidate), "utf8");
+                } catch {
+                    return undefined;
+                }
+            })
+            .filter((text) => text !== undefined && text.includes("PROFILE_DEPS"));
+        if (!profileSources.length)
+            throw new Error(`arkade-regtest ${sha} CLI changed: PROFILE_DEPS was not discovered`);
+        const profiles = discoverProfileClosure(profileSources.join("\n"), "emulator", sha);
         if (JSON.stringify(profiles) !== JSON.stringify(["base", "ark", "emulator"]))
             throw new Error(
                 `arkade-regtest ${sha} emulator profile closure changed: ${profiles.join(",")}`,
@@ -798,6 +810,9 @@ async function main() {
         const ports = Object.fromEntries(PORT_NAMES.map((name) => [name, 0]));
         const values = {
             REGTEST_PROFILES: "emulator",
+            // Current regtest sets its own compose project from this; keep it
+            // identical to the harness-injected `-p` so both agree.
+            REGTEST_PROJECT: project,
             AUTOMINE_INTERVAL: "0",
             ...ARKD_DELAYS,
             ...ARKD_FEES,
