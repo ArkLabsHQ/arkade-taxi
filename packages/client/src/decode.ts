@@ -26,12 +26,18 @@ import {
     quoteParamsFromWire,
     satsFromWire,
     sponsoredParamsFromWire,
+    SWAP_FILL_TEMPLATE,
+    swapFillGraphFromWire,
+    swapFillStatusFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
     type InfoResponse,
     type LockupResponse,
     type QuoteResponse,
     type SponsoredParamsValue,
+    type SwapFillGraph,
+    type SwapFillQuoteResponse,
+    type SwapFillStatusResponse,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { ClientErrorCode, TaxiError } from "./errors.js";
@@ -69,6 +75,15 @@ export interface DecodedSponsoredQuote {
     expiresAt: number;
     unsignedSponsoredTx: string;
     commitment: SponsoredCommitment;
+}
+
+export interface DecodedSwapFillQuote {
+    fillId: string;
+    operationId: string;
+    expiresAt: number;
+    contributionSats: bigint;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    graph: SwapFillGraph;
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -427,4 +442,33 @@ export function decodeClaimsSnapshot(value: unknown): ClaimsSnapshotResponse {
 
 export function decodeClaimsChanged(value: unknown): ClaimsChangedEvent {
     return decodeClaimsSnapshot(value);
+}
+
+export function decodeSwapFillQuote(quote: SwapFillQuoteResponse): DecodedSwapFillQuote {
+    return wrap("swap-fill quote", () => {
+        if (quote === null || typeof quote !== "object")
+            invalid("swap-fill quote must be an object");
+        if (quote.template !== SWAP_FILL_TEMPLATE)
+            invalid("swap-fill quote.template must be taxi-fill/1");
+        return {
+            fillId: str(quote.fillId, "swap-fill quote.fillId"),
+            operationId: str(quote.operationId, "swap-fill quote.operationId"),
+            expiresAt: uint(quote.expiresAt, "swap-fill quote.expiresAt"),
+            contributionSats: satsFromWire(
+                quote.contributionSats,
+                "swap-fill quote.contributionSats",
+            ),
+            fare: fareFromWire(quote.fare, "swap-fill quote.fare"),
+            graph: swapFillGraphFromWire(quote.graph),
+        };
+    });
+}
+
+export function decodeSwapFillStatus(value: unknown): SwapFillStatusResponse {
+    return wrap("swap-fill status", () => {
+        const decoded = swapFillStatusFromWire(value);
+        if (decoded.fillId === "" || decoded.operationId === "")
+            invalid("swap-fill status ids must be non-empty");
+        return decoded;
+    });
 }

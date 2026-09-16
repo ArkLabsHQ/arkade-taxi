@@ -33,6 +33,35 @@ export {
     type CovenantSpendInputValue,
 } from "./codec.js";
 
+export {
+    SWAP_FILL_TEMPLATE,
+    fareToWire as swapFillFareToWire,
+    swapFillGraphFromWire,
+    swapFillGraphToWire,
+    swapFillQuoteRequestFromWire,
+    swapFillStatusFromWire,
+    swapFillSubmitRequestFromWire,
+    type SwapFillGraph,
+    type SwapFillGraphAsset,
+    type SwapFillGraphAssetWire,
+    type SwapFillGraphInput,
+    type SwapFillGraphInputWire,
+    type SwapFillGraphOutput,
+    type SwapFillGraphOutputWire,
+    type SwapFillGraphWire,
+    type SwapFillInputOwner,
+    type SwapFillOutputRole,
+    type SwapFillQuoteRequest,
+    type SwapFillQuoteRequestBody,
+    type SwapFillQuoteResponse,
+    type SwapFillSolverAssetWire,
+    type SwapFillSolverInput,
+    type SwapFillSolverInputWire,
+    type SwapFillState,
+    type SwapFillStatusResponse,
+    type SwapFillSubmitRequestBody,
+} from "./swapFill.js";
+
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */
     txid: string;

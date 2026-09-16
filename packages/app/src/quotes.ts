@@ -41,6 +41,7 @@ import {
     ReservationConflictError,
     LockupClaimError,
     type ReservationRepository,
+    type SwapFillRepository,
     type PolicySnapshot,
 } from "@arkade-taxi/db";
 import {
@@ -48,6 +49,7 @@ import {
     selectOperatorFunding,
     type FundingSelection,
 } from "./arkade/inventory.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors.js";
 import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit.js";
 
@@ -157,6 +159,9 @@ export interface QuoteDeps {
         ReservationRepository,
         "reserveQuote" | "listReservedOutpoints" | "expireQuotes" | "claimLockup"
     >;
+    /** Swap-fill reservations also tie up Taxi coins; unioned into funding
+     * selection so an advance never double-spends a fill's coin. */
+    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
         getLockedVtxoOutpoints(): Promise<Outpoint[]>;
@@ -337,7 +342,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     const reserved = deps.reservations.listReservedOutpoints();
     const selectionOptions = {
         spendable,
-        reserved: [...reserved, ...intentLocks],
+        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...intentLocks],
         requiredSats:
             decision.topup +
             (decision.fare.units === 0n
@@ -487,7 +492,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...reserved, ...currentLocks],
+        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...currentLocks],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });

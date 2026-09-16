@@ -96,7 +96,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(2);
+            expect(userVersion(reopened)).toBe(4);
             expect(
                 reopened.prepare("SELECT id, topup, asset_units, kind FROM advances").all(),
             ).toEqual([{ id: "a1", topup: 300n, asset_units: null, kind: "covenant" }]);
@@ -106,10 +106,10 @@ describe("migrations", () => {
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(2);
+        expect(userVersion(db)).toBe(4);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -119,6 +119,8 @@ describe("migrations", () => {
             "proceeds_jobs",
             "proceeds_local_intents",
             "sqlite_sequence",
+            "swap_fill_reservations",
+            "swap_fills",
         ]);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(advances)")
@@ -172,7 +174,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(2);
+        expect(userVersion(db)).toBe(4);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -180,6 +182,37 @@ describe("migrations", () => {
         expect(() => insertRaw(db, { id: "a3", kind: "escrow" })).toThrow(
             /CHECK constraint failed/,
         );
+        db.close();
+    });
+    it("migrates a v2 database forward preserving advances rows", () => {
+        const db = fresh();
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 2),
+        );
+        expect(userVersion(db)).toBe(2);
+        insertRaw(db);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(4);
+        expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
+            { id: "a1", kind: "covenant" },
+        ]);
+        db.close();
+    });
+    it("migrates a v3 database to v4 with a sponsor script column on swap fills", () => {
+        const db = fresh();
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 3),
+        );
+        expect(userVersion(db)).toBe(3);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(4);
+        const columns = db
+            .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
+            .all()
+            .map(({ name }) => name);
+        expect(columns).toContain("sponsor_script");
         db.close();
     });
     it("rejects old v1 without proceeds storage without changing its data", () => {
@@ -201,7 +234,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(2);
+        expect(userVersion(db)).toBe(4);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

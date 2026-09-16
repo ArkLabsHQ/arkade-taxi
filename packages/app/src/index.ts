@@ -64,12 +64,43 @@ export {
     type TickResult,
 } from "./sweeper.js";
 export { createRoutes, type HealthResponse, type RouteDeps } from "./routes.js";
+export { unionReservedOutpoints, type ReservedOutpointSource } from "./arkade/reservedOutpoints.js";
+export {
+    createSwapFillQuote,
+    createSwapOfferCodec,
+    getSwapFill,
+    ProductionSwapFillGraphBuilder,
+    type DecodedOfferTerms,
+    type OfferCodec,
+    type SwapFillGraphBuilder,
+    type SwapFillQuoteDeps,
+    type SwapFillStore,
+} from "./swapFillQuotes.js";
+export {
+    SWAP_FILL_SUBMIT_LEASE_OWNER,
+    assertSolverAuthorised,
+    assertSolverGraphMatchesTrusted,
+    productionSwapFillJointOps,
+    submitSwapFill,
+    type SolverAuthArgs,
+    type SolverAuthFn,
+    type SwapFillJointOps,
+    type SwapFillSubmitDeps,
+    type SwapFillSubmitStore,
+} from "./swapFillSubmit.js";
 export {
     createLockupReconciler,
     type LockupReconciler,
     type LockupReconcilerDeps,
     type ReconcilerStatus,
 } from "./reconciler.js";
+export {
+    createSwapFillReconciler,
+    type SwapFillReconciler,
+    type SwapFillReconcilerDeps,
+    type SwapFillReconcilerStatus,
+    type SwapFillReconcilerStore,
+} from "./swapFillReconciler.js";
 export {
     classifyObservedSpend,
     createSpendWatcher,
