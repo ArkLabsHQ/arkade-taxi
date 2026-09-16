@@ -134,6 +134,9 @@ export interface SponsoredQuoteRequest {
     fareId?: string;
     /** Exact sum of the selected sender input values. */
     senderSats: bigint;
+    /** An extra extension packet the payment must carry — an offer's, when
+     * funding one. Checked against the quote's echo during verification. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
@@ -262,6 +265,11 @@ export class TaxiClient {
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.extraPacket !== undefined)
+            wire.extraPacket = {
+                type: req.extraPacket.type,
+                payload: bytesToHex(req.extraPacket.payload),
+            };
         const body = (await this.request(
             "POST",
             "/v1/sponsored-transfers",

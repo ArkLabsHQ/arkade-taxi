@@ -69,8 +69,30 @@ describe("verifySponsoredQuote", () => {
         // packet can only ride inside the asset extension that already exists.
         const offerPacket = { type: 0x03, payload: new Uint8Array([1, 2, 3]) };
         const args = withExtraPacket(offerPacket);
-        const verified = verifySponsoredQuote(args);
+        const verified = verifySponsoredQuote({
+            ...args,
+            expect: { ...args.expect, extraPacket: offerPacket },
+        });
         expect(verified.params.extraPacket).toEqual(offerPacket);
+    });
+
+    // The dangerous case: operator echoes AND builds the same wrong packet, so
+    // the rebuild is self-consistent. Only the sender's own expectation catches
+    // it — otherwise it funds someone else's offer.
+    it("rejects a consistently-swapped packet the sender never asked for", () => {
+        const mine = { type: 0x03, payload: new Uint8Array([1, 2, 3]) };
+        const theirs = { type: 0x03, payload: new Uint8Array([9, 9, 9]) };
+        const built = withExtraPacket(theirs);
+        expect(() =>
+            verifySponsoredQuote({ ...built, expect: { ...built.expect, extraPacket: mine } }),
+        ).toThrow(expect.objectContaining({ code: VerificationErrorCode.Malformed }));
+    });
+
+    it("rejects a payment carrying a packet when the sender declared none", () => {
+        const built = withExtraPacket({ type: 0x03, payload: new Uint8Array([1, 2, 3]) });
+        expect(() => verifySponsoredQuote(built)).toThrow(
+            expect.objectContaining({ code: VerificationErrorCode.Malformed }),
+        );
     });
 
     it("rejects a transaction carrying a packet the sender did not declare", () => {
