@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
     ArkAddress,
+    CSVMultisigTapscript,
+    MultisigTapscript,
+    VtxoScript,
     asset,
+    buildOffchainTx,
     Extension,
     SingleKey,
     Transaction,
     type ExtendedVirtualCoin,
     type Identity,
 } from "@arkade-os/sdk";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import type { SwapFill } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
@@ -774,5 +779,94 @@ describe("assertSolverAuthorised", () => {
         expect(() =>
             assertSolverAuthorised({ solver: graph, trusted: graph, solverKeys: [PINNED_HEX] }),
         ).toThrow(/signs sponsor input 1/);
+    });
+});
+
+/**
+ * The accept path needs signatures that actually verify, so `authGraph`'s
+ * zero-filled entries cannot reach it — every case above stops at a shape or
+ * key check. Without this, `assertSolverAuthorised` could reject everything and
+ * the suite would still pass.
+ */
+describe("assertSolverAuthorised accepts a properly signed solver graph", () => {
+    const SOLVER_SEED = new Uint8Array(32).fill(21);
+    const SERVER_SEED = new Uint8Array(32).fill(22);
+    const solverX = schnorr.getPublicKey(SOLVER_SEED);
+    const serverX = schnorr.getPublicKey(SERVER_SEED);
+    const solverHex = hex.encode(solverX);
+
+    const tree = new VtxoScript([MultisigTapscript.encode({ pubkeys: [solverX, serverX] }).script]);
+    const unroll = CSVMultisigTapscript.encode({
+        timelock: { type: "blocks", value: BigInt(10) },
+        pubkeys: [serverX],
+    });
+    const coin = (txid: string) => ({
+        txid,
+        vout: 0,
+        value: 5_000,
+        tapLeafScript: tree.leaves[0],
+        tapTree: tree.encode(),
+    });
+
+    /** Two inputs — covenant at 0, solver at 1 — with real checkpoints. */
+    const build = () =>
+        buildOffchainTx(
+            [coin("aa".repeat(32)), coin("bb".repeat(32))],
+            [{ script: new Uint8Array([0x51, 0x20, ...solverX]), amount: BigInt(9_000) }],
+            unroll,
+        );
+
+    const graphOf = async (seed: Uint8Array | null) => {
+        const { arkTx, checkpoints } = build();
+        const signer = seed ? SingleKey.fromPrivateKey(seed) : undefined;
+        const ark = signer ? await signer.sign(arkTx.clone(), [1]) : arkTx;
+        const cps = await Promise.all(
+            checkpoints.map(async (cp, i) =>
+                signer && i === 1 ? await signer.sign(cp.clone(), [0]) : cp,
+            ),
+        );
+        return {
+            arkTx: base64.encode(ark.toPSBT()),
+            checkpoints: cps.map((c) => base64.encode(c.toPSBT())),
+            graphId: "cd".repeat(32),
+            inputOwners: [null, "solver"] as JointGraph["inputOwners"],
+        };
+    };
+
+    it("accepts a graph the pinned solver key really signed", async () => {
+        const signed = await graphOf(SOLVER_SEED);
+        const trusted = await graphOf(null);
+        expect(() =>
+            assertSolverAuthorised({ solver: signed, trusted, solverKeys: [solverHex] }),
+        ).not.toThrow();
+    });
+
+    // Pinned key, right leaf, wrong bytes: the only case that reaches
+    // verifyTapscriptSignatures instead of stopping at a shape or key check.
+    it("rejects a pinned signature whose bytes do not verify", async () => {
+        const signed = await graphOf(SOLVER_SEED);
+        const tx = Transaction.fromPSBT(base64.decode(signed.arkTx));
+        const [[meta, sig]] = tx.getInput(1).tapScriptSig!;
+        const bad = new Uint8Array(sig);
+        bad[10] ^= 0xff;
+        // Clear first: updateInput merges, so writing alone keeps the good one.
+        tx.updateInput(1, { tapScriptSig: undefined });
+        tx.updateInput(1, { tapScriptSig: [[meta, bad]] });
+        const tampered = { ...signed, arkTx: base64.encode(tx.toPSBT()) };
+        const trusted = await graphOf(null);
+        expect(() =>
+            assertSolverAuthorised({ solver: tampered, trusted, solverKeys: [solverHex] }),
+        ).toThrow(/invalid solver signature/);
+    });
+
+    it("rejects a solver input carrying no signature at all", async () => {
+        const unsigned = await graphOf(null);
+        expect(() =>
+            assertSolverAuthorised({
+                solver: unsigned,
+                trusted: unsigned,
+                solverKeys: [solverHex],
+            }),
+        ).toThrow(/no pinned solver signature/);
     });
 });
