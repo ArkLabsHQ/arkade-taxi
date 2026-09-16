@@ -317,6 +317,7 @@ export interface SponsoredParamsValue {
     dust: bigint;
     contribution: bigint;
     assetId?: AssetIdValue;
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export function sponsoredParamsFromWire(
@@ -332,6 +333,16 @@ export function sponsoredParamsFromWire(
         contribution: satsFromWire(p.contribution, `${label}.contribution`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    if (p.extraPacket !== undefined) {
+        const e = p.extraPacket;
+        if (e === null || typeof e !== "object") fail(`${label}.extraPacket`, "expected an object");
+        if (!Number.isInteger(e.type) || e.type < 0 || e.type > 255)
+            fail(`${label}.extraPacket.type`, "expected a one-byte tag");
+        out.extraPacket = {
+            type: e.type,
+            payload: hexToBytes(e.payload, `${label}.extraPacket.payload`),
+        };
+    }
     return out;
 }
 
@@ -344,6 +355,8 @@ export function sponsoredParamsToWire(p: SponsoredParamsValue): SponsoredQuotePa
         contribution: satsToWire(p.contribution),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    if (p.extraPacket !== undefined)
+        out.extraPacket = { type: p.extraPacket.type, payload: bytesToHex(p.extraPacket.payload) };
     return out;
 }
 

@@ -4,6 +4,7 @@ import {
     asset,
     ArkAddress,
     Extension,
+    UnknownPacket,
     buildOffchainTx,
     VtxoScript,
     type CSVMultisigTapscript,
@@ -30,6 +31,8 @@ export interface SponsoredParams {
     dust: bigint;
     contribution: bigint;
     assetId?: AssetIdRef;
+    /** Sender-declared extra extension packet; see SponsoredQuoteParams. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface SponsoredBuildRequest {
@@ -205,7 +208,17 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
             );
         });
     const transactionOutputs = outputs.map(({ amount, script }) => ({ amount, script }));
-    if (groups.length) transactionOutputs.push(Extension.create([Packet.create(groups)]).txOut());
+    // Mirrors the sender's rebuild in client/src/sponsored.ts: the packet it
+    // declared rides after the asset groups. Any other order or contents and the
+    // sender's byte comparison refuses the transaction.
+    const extraPacket = req.params.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extraPacket !== undefined
+            ? [new UnknownPacket(extraPacket.type, extraPacket.payload)]
+            : []),
+    ];
+    if (packets.length) transactionOutputs.push(Extension.create(packets).txOut());
     if (transactionOutputs.filter((output) => output.script[0] === 0x6a).length > 2)
         throw new LockupShapeError(
             "the public SDK supports at most two OP_RETURN outputs; this payment requires more",

@@ -220,6 +220,7 @@ interface SponsoredQuoteFixtureOptions {
     assetUnits?: bigint;
     fare?: FareSpec;
     assetId?: { txid: Uint8Array; groupIndex: number };
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export const sponsoredQuote = (
@@ -239,7 +240,11 @@ export const sponsoredQuote = (
                 totalValue: 20_000n,
                 batchExpiry: { kind: "height", value: 900_000n },
             },
-            params: { ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) },
+            params: {
+                ...p,
+                ...(opts.assetId ? { assetId: opts.assetId } : {}),
+                ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
+            },
             receiverAddress: sponsoredAddress(),
             advanceId: "tr_01",
             fare,
@@ -251,7 +256,11 @@ export const sponsoredQuote = (
     const envelope = decodeLockupEnvelope(unsignedSponsoredTx);
     return {
         transferId: "tr_01",
-        params: sponsoredParamsToWire({ ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) }),
+        params: sponsoredParamsToWire({
+            ...p,
+            ...(opts.assetId ? { assetId: opts.assetId } : {}),
+            ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
+        }),
         receiverAddress: sponsoredAddress(),
         fare:
             fare.currency === "asset"
@@ -331,6 +340,27 @@ export const sponsoredAssetArgs = (): VerifySponsoredQuoteArgs => {
         senderInputs,
         senderSats: 700n,
         assetUnits,
+    };
+};
+
+/** The asset-sender fixture with an extra packet declared — the only shape that
+ * has an extension for one to ride in. */
+export const withExtraPacket = (extraPacket: {
+    type: number;
+    payload: Uint8Array;
+}): VerifySponsoredQuoteArgs => {
+    const a = sponsoredAssetArgs();
+    const assetId = a.expect.assetId!;
+    return {
+        ...a,
+        quote: sponsoredQuote(sponsoredParams(), {
+            senderInputs: a.senderInputs,
+            senderSats: a.senderSats,
+            assetUnits: a.assetUnits!,
+            assetId,
+            fare: { currency: "asset" as const, assetId, units: a.expect.maxFare.units },
+            extraPacket,
+        }),
     };
 };
 

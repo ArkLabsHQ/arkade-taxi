@@ -13,7 +13,11 @@ import {
 } from "@arkade-os/sdk";
 import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
 import { encodeOffer, fillOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
-import { OFFER_FILL_TEMPLATE, buildOfferFillPlan, verifyOfferFillPlan } from "../../src/joint/offerFillPlan.js";
+import {
+    OFFER_FILL_TEMPLATE,
+    buildOfferFillPlan,
+    verifyOfferFillPlan,
+} from "../../src/joint/offerFillPlan.js";
 
 /**
  * `fill.test.ts` mocks `ArkadeContract`, so the real builder is never

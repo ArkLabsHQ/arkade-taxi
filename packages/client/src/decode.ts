@@ -219,7 +219,7 @@ const sponsoredParams = (value: unknown, label: string): SponsoredQuoteParams =>
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "contribution"],
-        ["assetId"],
+        ["assetId", "extraPacket"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);

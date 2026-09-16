@@ -1139,8 +1139,9 @@ describe("submitJointFill", () => {
             pins,
             ownerKeys,
         });
-        const [[data]] = Transaction.fromPSBT(base64.decode(outcome.signedArkTx)).getInput(0)
-            .tapScriptSig!;
+        const [[data]] = Transaction.fromPSBT(base64.decode(outcome.signedArkTx)).getInput(
+            0,
+        ).tapScriptSig!;
         expect(hex.encode(data.pubKey)).toBe(tweakedHex);
     });
 

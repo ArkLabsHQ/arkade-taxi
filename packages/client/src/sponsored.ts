@@ -9,6 +9,7 @@
 import {
     ArkAddress,
     Extension,
+    UnknownPacket,
     MultisigTapscript,
     P2A,
     Transaction,
@@ -488,7 +489,15 @@ export function validateSponsoredPayment(
                 [],
             );
         });
-    if (groups.length) outputs.push(Extension.create([Packet.create(groups)]).txOut());
+    // The sender's own declared packet rides alongside the asset groups. It comes
+    // from params, so the rebuild below only matches a transaction carrying the
+    // packet the SENDER asked for — the operator cannot substitute one.
+    const extra = context.params.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extra !== undefined ? [new UnknownPacket(extra.type, extra.payload)] : []),
+    ];
+    if (packets.length) outputs.push(Extension.create(packets).txOut());
 
     const checkpoints = envelope.checkpoints.map((checkpoint, index) =>
         attempt(`checkpoint ${index}`, () =>

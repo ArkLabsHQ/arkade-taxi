@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ArkAddress, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
 import { VerificationErrorCode } from "../src/errors.js";
@@ -21,7 +21,9 @@ import {
     sponsoredAddress,
     sponsoredArgs,
     sponsoredAssetArgs,
+    sponsoredParams,
     sponsoredQuote,
+    withExtraPacket,
 } from "./fixtures.js";
 
 const coin = (): ExtendedVirtualCoin => ({
@@ -57,6 +59,33 @@ describe("verifySponsoredQuote", () => {
         expect(verified.params.contribution).toBe(330n);
         expect(verified.receiverAddress).toBe(sponsoredAddress());
         expect(verified.senderInputIndexes).toEqual([0]);
+    });
+
+    // Funding an offer means the payment must carry the offer's packet beside the
+    // asset groups. The sender declares it; the rebuild is what enforces it.
+    it("accepts a payment carrying the packet the sender declared", () => {
+        // Asset-sender only, and that is a protocol limit rather than a choice:
+        // both OP_RETURN slots the SDK allows are already spent, so the offer
+        // packet can only ride inside the asset extension that already exists.
+        const offerPacket = { type: 0x03, payload: new Uint8Array([1, 2, 3]) };
+        const args = withExtraPacket(offerPacket);
+        const verified = verifySponsoredQuote(args);
+        expect(verified.params.extraPacket).toEqual(offerPacket);
+    });
+
+    it("rejects a transaction carrying a packet the sender did not declare", () => {
+        const declared = { type: 0x03, payload: new Uint8Array([1, 2, 3]) };
+        const substituted = { type: 0x03, payload: new Uint8Array([9, 9, 9]) };
+        // Operator builds with `substituted` but echoes the sender's `declared`.
+        const built = withExtraPacket(substituted);
+        const lying = {
+            ...built.quote,
+            params: {
+                ...built.quote.params,
+                extraPacket: { type: declared.type, payload: bytesToHex(declared.payload) },
+            },
+        };
+        expect(() => verifySponsoredQuote({ ...built, quote: lying })).toThrow();
     });
 
     it("rejects a payment address the caller did not authorize", () => {
