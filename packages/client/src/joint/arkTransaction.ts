@@ -109,7 +109,16 @@ export function setTapScriptSigEntries(
     });
 }
 
-/** Reject non-64-byte, unexpected-key, or unexpected-leaf entries, then verify every signature. */
+/**
+ * Reject non-64-byte, unexpected-key, or unexpected-leaf entries, then verify
+ * every signature.
+ *
+ * @remarks
+ * Omitting `requiredPubKeys` requires EVERY allowed key to have signed, so
+ * checking one party's half of a two-party graph must pass it explicitly --
+ * `requiredPubKeys: []` verifies the signatures present without demanding any
+ * particular signer.
+ */
 export function assertDefaultTapScriptSigs(
     tx: Transaction,
     inputIndex: number,
