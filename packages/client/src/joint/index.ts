@@ -36,3 +36,8 @@ export {
     type FillSponsor,
     type FillSponsorFare,
 } from "./offerFillPlan.js";
+export {
+    signSwapFillAsSolver,
+    solverInputIndices,
+    type SolverIdentitySource,
+} from "./solverFill.js";

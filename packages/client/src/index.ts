@@ -122,4 +122,7 @@ export {
     setTapScriptSigEntries,
     tapLeavesOfInput,
     assertDefaultTapScriptSigs,
+    signSwapFillAsSolver,
+    solverInputIndices,
+    type SolverIdentitySource,
 } from "./joint/index.js";
