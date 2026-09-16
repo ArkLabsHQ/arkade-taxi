@@ -23,10 +23,12 @@ export const OFFER_FILL_OWNERS: readonly (FillInputOwner | null)[] = [null, "sol
 
 /** Sponsor fare output: an asset amount on a sats host, paid from the joint inputs. */
 export interface FillSponsorFare {
-    assetId: string;
-    amount: bigint | number;
+    /** With `amount`, charges in an asset. Omit both to charge in `sats` alone. */
+    assetId?: string;
+    amount?: bigint | number;
     script: Uint8Array;
-    /** Sats hosting the output. Defaults to the fill's asset carrier. */
+    /** Sats hosting the output; the fare itself when no asset is named.
+     * Defaults to the fill's asset carrier, which a sats fare must override. */
     sats?: bigint | number;
 }
 
@@ -102,8 +104,9 @@ function normalizeSponsor(sponsor: FillSponsor, assetCarrierSats: bigint): Spons
         fare:
             sponsor.fare !== undefined
                 ? {
-                      assetId: sponsor.fare.assetId,
-                      amount: sponsor.fare.amount,
+                      ...(sponsor.fare.assetId !== undefined
+                          ? { assetId: sponsor.fare.assetId, amount: sponsor.fare.amount }
+                          : {}),
                       script: sponsor.fare.script,
                       sats: sponsor.fare.sats ?? assetCarrierSats,
                   }

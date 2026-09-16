@@ -186,7 +186,7 @@ describe("createSwapFillQuote", () => {
         expect(swapFills.rows.size).toBe(1);
     });
 
-    it("takes no fare when maxFare is sats-only, since the builder prices asset fares", async () => {
+    it("charges a sats fare when maxFare names no asset", async () => {
         const d = deps();
         indexerCoins.set(
             key(SOLVER_COIN),
@@ -198,12 +198,17 @@ describe("createSwapFillQuote", () => {
                 solverInputs: [
                     { txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: String(SOLVER_VALUE) },
                 ],
-                maxFare: { currency: "sats", units: "50" },
+                maxFare: { currency: "sats", units: "1000" },
             }),
         );
-        expect(builder.built[0]!.sponsor!.fare).toBeUndefined();
-        expect(quote.fare).toEqual({ currency: "sats", units: "0" });
-        expect(quote.graph.outputs.some((o) => o.role === "sponsor-fare")).toBe(false);
+        // Sats fares used to be unpriceable: the builder required an assetId, so
+        // the fill took none and disclosed zero.
+        expect(builder.built[0]!.sponsor!.fare).toEqual({
+            script: expect.any(Uint8Array),
+            sats: 1000n,
+        });
+        expect(quote.fare).toEqual({ currency: "sats", units: "1000" });
+        expect(quote.graph.outputs.some((o) => o.role === "sponsor-fare")).toBe(true);
     });
 
     it("conflicts when the same operation id carries different terms", async () => {

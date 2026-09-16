@@ -2,11 +2,7 @@ import { hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
 import { tapLeafHash } from "@scure/btc-signer/payment.js";
 import { equalBytes } from "@scure/btc-signer/utils.js";
-import {
-    Transaction,
-    assertAllowedSighashTypes,
-    verifyTapscriptSignatures,
-} from "@arkade-os/sdk";
+import { Transaction, assertAllowedSighashTypes, verifyTapscriptSignatures } from "@arkade-os/sdk";
 /** One `tapScriptSig` entry: who signed, on which leaf, with what bytes. */
 export interface TapScriptSigEntry {
     readonly pubKeyHex: string;
@@ -156,4 +152,3 @@ export function assertDefaultTapScriptSigs(
         opts.leafHash,
     );
 }
-

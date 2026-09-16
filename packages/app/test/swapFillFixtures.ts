@@ -1,9 +1,5 @@
 import { base64, hex } from "@scure/base";
-import {
-    asset,
-    Extension,
-    Transaction,
-} from "@arkade-os/sdk";
+import { asset, Extension, Transaction } from "@arkade-os/sdk";
 import {
     SwapFillClaimError,
     type SwapFill,
@@ -14,11 +10,7 @@ import type { SwapFillBuildRequest } from "../src/arkade/swapFillBuilder.js";
 import { taxiAssetIdToSwapId } from "../src/arkade/swapFillBuilder.js";
 import type { DecodedOfferTerms, SwapFillStore } from "../src/swapFillQuotes.js";
 import { config, receiverKey } from "./fixtures.js";
-import {
-    digestJointGraph,
-    OFFER_FILL_TEMPLATE,
-    type JointGraph,
-} from "@arkade-taxi/client";
+import { digestJointGraph, OFFER_FILL_TEMPLATE, type JointGraph } from "@arkade-taxi/client";
 
 // Any valid curve point; the fake builds transactions but never signs them.
 export const FAKE_MAKER_SCRIPT = `5120${hex.encode(receiverKey)}`;
@@ -318,12 +310,14 @@ export class FakeSwapFillGraphBuilder {
             }
         });
         const groups: asset.AssetGroup[] = [];
-        if (req.sponsor!.fare) {
+        // A sats fare pays an output but names no asset, so it opens no group.
+        if (req.sponsor!.fare?.assetId !== undefined) {
+            const fareAmount = req.sponsor!.fare.amount!;
             const fareId = taxiAssetIdToSwapId(req.sponsor!.fare.assetId);
             const entry = held.get(fareId);
             held.delete(fareId);
-            const outs = [{ vout: fareVout, amount: req.sponsor!.fare.amount }];
-            const remainder = (entry?.total ?? 0n) - req.sponsor!.fare.amount;
+            const outs = [{ vout: fareVout, amount: fareAmount }];
+            const remainder = (entry?.total ?? 0n) - fareAmount;
             if (remainder > 0n) outs.push({ vout: solverVout, amount: remainder });
             groups.push(
                 asset.AssetGroup.create(

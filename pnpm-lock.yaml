@@ -162,7 +162,7 @@ packages:
     engines: {node: '>=18'}
 
   '@arkade-os/swap@file:.reference/vendor/arkade-os-swap-0.0.18.tgz':
-    resolution: {integrity: sha512-IAiREyXrwsDLXh9KUXVgoXqdhXclo84kFr29I+sR/4iavp1jGGwMUK+wNoc/GTPOeljzkH2PvFOjPUix0AOF2A==, tarball: file:.reference/vendor/arkade-os-swap-0.0.18.tgz}
+    resolution: {integrity: sha512-4w8uHHJc2QtuImjJFg2RmuWUbxoQvuFYHh6cA5WCPr/IVsvOS+pJztB+P6lU6XMf7/ufqkA/twlxI3vP8muYwg==, tarball: file:.reference/vendor/arkade-os-swap-0.0.18.tgz}
     version: 0.0.18
     peerDependencies:
       nostr-tools: ^2.12.0

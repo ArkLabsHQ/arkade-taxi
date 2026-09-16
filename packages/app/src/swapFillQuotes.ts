@@ -44,10 +44,7 @@ import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js"
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import type { AdvanceStore, QuoteDeps } from "./quotes.js";
-import {
-    verifyOfferFillPlan,
-    type JointGraph,
-} from "@arkade-taxi/client";
+import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
 
 export interface SwapFillStore extends Pick<
     SwapFillRepository,
@@ -205,7 +202,10 @@ function fillToResponse(fill: SwapFill, scripts: SwapFillWireScripts): SwapFillQ
         template: SWAP_FILL_TEMPLATE,
         contributionSats: satsToWire(fill.contributionSats),
         fare: fareToWire(fill.fare),
-        graph: toWireGraph(storedGraphToJoint(fill.graph), scripts),
+        graph: toWireGraph(storedGraphToJoint(fill.graph), {
+            ...scripts,
+            expectSatsFare: fill.fare.currency === "sats" && fill.fare.units > 0n,
+        }),
     };
 }
 
@@ -407,11 +407,12 @@ async function createAdmittedSwapFillQuote(
                 503,
                 `sponsor input ${i} carries assets; Taxi sponsor inputs are bitcoin-only`,
             );
-    // The builder prices fares in asset units only; a sats maxFare authorizes
-    // no fare output, so the fill takes none and discloses zero.
+    // Charged in the asset when the solver authorised one, otherwise in sats.
     const sponsorFare =
-        req.maxFare.currency === "asset" && req.maxFare.units > 0n
-            ? { assetId: req.maxFare.assetId, amount: req.maxFare.units, script: taxiScript }
+        req.maxFare.units > 0n
+            ? req.maxFare.currency === "asset"
+                ? { assetId: req.maxFare.assetId, amount: req.maxFare.units, script: taxiScript }
+                : { script: taxiScript, sats: req.maxFare.units }
             : undefined;
     let graph: JointGraph;
     try {
@@ -439,6 +440,7 @@ async function createAdmittedSwapFillQuote(
         receiverScript: offer.makerProceedsScript,
         solverScript: req.solverProceedsScript,
         sponsorScript: taxiScript,
+        expectSatsFare: req.maxFare.currency === "sats" && req.maxFare.units > 0n,
     });
     const domain = swapFillGraphFromWire(wire);
     assertTrustedGraph({
@@ -790,7 +792,11 @@ function assertTrustedGraph(args: {
                 "fare asset is not carried by the fill inputs",
             );
     } else if (fareSeen && fareSeen.units > 0n) mismatch("fill carries an unpriced fare");
-    if (changeSum !== change) mismatch("taxi change differs from the reservation");
+    // A sats fare pays the taxi script carrying no assets, exactly as change
+    // does, so the two are indistinguishable per-output. What is checkable is
+    // the total: Taxi receives its change plus the fare it quoted, no more.
+    const satsFare = req.maxFare.currency === "sats" ? req.maxFare.units : 0n;
+    if (changeSum !== change + satsFare) mismatch("taxi change differs from the reservation");
 }
 
 const fareOf = (domain: ReturnType<typeof swapFillGraphFromWire>): SwapFill["fare"] => {

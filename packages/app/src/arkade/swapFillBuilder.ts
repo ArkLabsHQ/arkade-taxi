@@ -1,11 +1,5 @@
-import {
-    asset,
-    type ExtendedVirtualCoin,
-    type IWallet,
-} from "@arkade-os/sdk";
-import {
-    type FillFunding,
-} from "@arkade-os/swap";
+import { asset, type ExtendedVirtualCoin, type IWallet } from "@arkade-os/sdk";
+import { type FillFunding } from "@arkade-os/swap";
 import {
     bytesToHex,
     hexToBytes,
@@ -35,8 +29,9 @@ export class SwapFillBuilderError extends Error {
 }
 
 export interface SwapFillSponsorFare {
-    assetId: AssetIdValue;
-    amount: bigint;
+    /** With `amount`, charges in an asset. Omit both to charge in `sats` alone. */
+    assetId?: AssetIdValue;
+    amount?: bigint;
     script: Uint8Array;
     sats?: bigint;
 }
@@ -150,14 +145,23 @@ const mapSponsor = (sponsor: SwapFillSponsorRequest): FillSponsor => {
         changeScript: sponsor.changeScript,
     };
     if (sponsor.fare) {
-        if (typeof sponsor.fare.amount !== "bigint" || sponsor.fare.amount <= 0n)
+        const { assetId, amount, sats } = sponsor.fare;
+        if ((assetId === undefined) !== (amount === undefined))
+            throw new SwapFillBuilderError(
+                "sponsor.fare needs assetId and amount together, or neither for a sats fare",
+            );
+        if (amount !== undefined && (typeof amount !== "bigint" || amount <= 0n))
             throw new SwapFillBuilderError("sponsor.fare.amount must be positive");
+        // A sats fare IS its sats, so it cannot fall back to the carrier default.
+        if (assetId === undefined && (typeof sats !== "bigint" || sats <= 0n))
+            throw new SwapFillBuilderError("a sats fare needs a positive sponsor.fare.sats");
         script(sponsor.fare.script, "sponsor.fare.script");
         out.fare = {
-            assetId: taxiAssetIdToSwapId(sponsor.fare.assetId),
-            amount: sponsor.fare.amount,
+            ...(assetId !== undefined
+                ? { assetId: taxiAssetIdToSwapId(assetId), amount: amount! }
+                : {}),
             script: sponsor.fare.script,
-            ...(sponsor.fare.sats !== undefined ? { sats: sponsor.fare.sats } : {}),
+            ...(sats !== undefined ? { sats } : {}),
         };
     }
     return out;
@@ -263,6 +267,12 @@ export interface SwapFillWireScripts {
     receiverScript: Uint8Array;
     solverScript: Uint8Array;
     sponsorScript: Uint8Array;
+    /**
+     * Set when the fare is priced in sats. Such a fare pays the sponsor script
+     * carrying no assets, exactly as change does, so nothing about the output
+     * tells them apart — the assembly order does: fare first, then change.
+     */
+    expectSatsFare?: boolean;
 }
 
 const sameScript = (a: Uint8Array, b: Uint8Array): boolean =>
@@ -297,6 +307,7 @@ export function jointGraphToWire(
         throw new SwapFillBuilderError("graph inputOwners and checkpoints must agree");
     if (!sameScript(outputs[0]!.script, scripts.receiverScript))
         throw new SwapFillBuilderError("graph output 0 does not pay the maker");
+    let satsFarePending = scripts.expectSatsFare === true;
     return {
         arkTx: wireBase64(graph.arkTx, "graph.arkTx"),
         checkpoints: graph.checkpoints.map((c, i) => wireBase64(c, `graph.checkpoints[${i}]`)),
@@ -313,11 +324,17 @@ export function jointGraphToWire(
             };
         }),
         outputs: outputs.map((output, i) => {
+            const satsFareHere =
+                satsFarePending &&
+                i !== 0 &&
+                !output.assets.length &&
+                sameScript(output.script, scripts.sponsorScript);
+            if (satsFareHere) satsFarePending = false;
             const role =
                 i === 0
                     ? "receiver"
                     : sameScript(output.script, scripts.sponsorScript)
-                      ? output.assets.length
+                      ? output.assets.length || satsFareHere
                           ? "sponsor-fare"
                           : "sponsor-change"
                       : sameScript(output.script, scripts.solverScript)

@@ -6,9 +6,7 @@ import {
     type ExtendedVirtualCoin,
     type IWallet,
 } from "@arkade-os/sdk";
-import type {
-    FillFunding,
-} from "@arkade-os/swap";
+import type { FillFunding } from "@arkade-os/swap";
 import { base64, hex } from "@scure/base";
 import {
     buildSwapFillGraph,
@@ -23,10 +21,7 @@ import { sealGraph } from "../swapFillFixtures.js";
 import { operatorKey, receiverKey } from "../fixtures.js";
 import type { SwapFillGraphWire } from "@arkade-taxi/protocol";
 import { fundingCoin } from "../fixtures.js";
-import {
-    type BuildOfferFillPlanOpts,
-    type JointGraph,
-} from "@arkade-taxi/client";
+import { type BuildOfferFillPlanOpts, type JointGraph } from "@arkade-taxi/client";
 
 const USDT = asset.AssetId.create("1234".repeat(16), 0);
 const USDT_SWAP_ID = USDT.toString();
