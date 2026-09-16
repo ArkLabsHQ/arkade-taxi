@@ -173,6 +173,16 @@ export class ReservationRepository {
                             .get(input.txid, input.vout)
                     )
                         throw new ReservationConflictError();
+                    // Cross-flow fence: a swap fill may hold this coin; the
+                    // selection-layer union cannot close the SELECT/INSERT race.
+                    if (
+                        this.#db
+                            .prepare(
+                                "SELECT 1 FROM swap_fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new ReservationConflictError();
                 }
                 this.#advances.insert(advance);
                 const insert = this.#db.prepare(

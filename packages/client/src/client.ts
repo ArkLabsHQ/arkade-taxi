@@ -26,6 +26,8 @@ import {
     decodeQuote,
     decodeSponsoredQuote,
     decodeStatus,
+    decodeSwapFillQuote,
+    decodeSwapFillStatus,
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
@@ -58,6 +60,21 @@ import {
     type VerifiedSponsoredQuote,
     type VerifySponsoredQuoteArgs,
 } from "./sponsored.js";
+import {
+    assertSubmittableSwapFill,
+    encodeSwapFillQuoteBody,
+    SWAP_FILL_AMBIGUOUS_CODE,
+    SwapFillSubmitAmbiguousError,
+    verifySwapFillQuote,
+    type RequestSwapFillQuoteArgs,
+    type RequestVerifiedSwapFillQuoteArgs,
+    type VerifiedSwapFillQuote,
+} from "./swapFill.js";
+import type {
+    SwapFillGraphWire,
+    SwapFillQuoteResponse,
+    SwapFillStatusResponse,
+} from "@arkade-taxi/protocol";
 
 export interface TaxiClientOptions {
     baseUrl: string;
@@ -317,6 +334,65 @@ export class TaxiClient {
     async sponsoredStatus(transferId: string): Promise<TransferStatusResponse> {
         const path = `/v1/sponsored-transfers/${encodeURIComponent(transferId)}`;
         return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
+    }
+
+    async requestSwapFillQuote(req: RequestSwapFillQuoteArgs): Promise<SwapFillQuoteResponse> {
+        const body = (await this.request(
+            "POST",
+            "/v1/swap-fills",
+            encodeSwapFillQuoteBody(req),
+        )) as SwapFillQuoteResponse;
+        decodeSwapFillQuote(body);
+        return body;
+    }
+
+    async requestVerifiedSwapFillQuote(
+        args: RequestVerifiedSwapFillQuoteArgs,
+    ): Promise<{ verified: VerifiedSwapFillQuote }> {
+        const request = immutablePlainCopy(args, "verified swap-fill quote request");
+        const { now, ...body } = request;
+        const quote = await this.requestSwapFillQuote(body);
+        const verified = verifySwapFillQuote({
+            quote,
+            expect: {
+                operationId: body.operationId,
+                solverProceedsScript: body.solverProceedsScript,
+                solverInputs: body.solverInputs.map(({ txid, vout }) => ({ txid, vout })),
+                contributionSats: body.contributionSats,
+                maxFare: body.maxFare,
+                ...(body.fundingTxid !== undefined ? { fundingTxid: body.fundingTxid } : {}),
+                ...(body.fundingVout !== undefined ? { fundingVout: body.fundingVout } : {}),
+            },
+            ...(now !== undefined ? { now } : {}),
+        });
+        return { verified };
+    }
+
+    /** Takes a `VerifiedSwapFillQuote`: only `verifySwapFillQuote` produces
+     * one, so an unverified fill cannot be submitted. Makes exactly one
+     * attempt and never retries: an ambiguous outcome throws
+     * `SwapFillSubmitAmbiguousError`, every earlier failure a plain
+     * `TaxiError` carrying the server's code. */
+    async submitSwapFill(
+        verified: VerifiedSwapFillQuote,
+        solverGraph: SwapFillGraphWire,
+    ): Promise<SwapFillStatusResponse> {
+        const fillId = assertSubmittableSwapFill(verified, solverGraph);
+        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}/submit`;
+        let body: unknown;
+        try {
+            body = await this.request("POST", path, { solverGraph });
+        } catch (error) {
+            if (error instanceof TaxiError && error.code === SWAP_FILL_AMBIGUOUS_CODE)
+                throw new SwapFillSubmitAmbiguousError(fillId, error);
+            throw error;
+        }
+        return decodeSwapFillStatus(body);
+    }
+
+    async swapFillStatus(fillId: string): Promise<SwapFillStatusResponse> {
+        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}`;
+        return decodeSwapFillStatus((await this.request("GET", path)) as SwapFillStatusResponse);
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {

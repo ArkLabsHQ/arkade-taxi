@@ -32,8 +32,9 @@ import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { LockupShapeError } from "./lockup.js";
 import { verifySenderFunding } from "./arkade/senderFunding.js";
-import { ReservationConflictError } from "@arkade-taxi/db";
+import { ReservationConflictError, type SwapFillRepository } from "@arkade-taxi/db";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import { validateLockupSubmission } from "./arkade/submit.js";
 import type { QuoteDeps } from "./quotes.js";
@@ -307,7 +308,7 @@ async function createReservedSponsoredQuote(
     const reserved = deps.reservations.listReservedOutpoints();
     const selectionOptions = {
         spendable,
-        reserved: [...reserved, ...intentLocks],
+        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...intentLocks],
         requiredSats:
             decision.topup +
             (decision.fare.units === 0n
@@ -446,7 +447,7 @@ async function createReservedSponsoredQuote(
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...reserved, ...currentLocks],
+        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...currentLocks],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });

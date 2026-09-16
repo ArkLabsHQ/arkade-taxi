@@ -22,9 +22,11 @@ import type {
     ProceedsRepository,
     ProceedsPlan,
     ReservationRepository,
+    SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
 import type { createOperatorRuntime } from "./arkade/operatorWallet.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
 import { classifyObservedSpend } from "./watcher.js";
 import { normalizeExpiry, verifyProviders } from "./arkade/providers.js";
@@ -303,6 +305,7 @@ interface Deps {
     runtime: ReturnType<typeof createOperatorRuntime>;
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
+    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
 }
@@ -394,6 +397,7 @@ export async function discoverProceeds(
 
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
+    const taxiLocksOf = () => unionReservedOutpoints(reservations, deps.swapFills);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
@@ -439,7 +443,7 @@ export function createProceedsCollector(deps: Deps) {
                 blocker = null;
                 return;
             }
-            const taxiLocks = reservations.listReservedOutpoints();
+            const taxiLocks = taxiLocksOf();
             const locks = [
                 ...taxiLocks,
                 ...(await runtime.storage.intentRepository.getLockedVtxoOutpoints()),
@@ -558,11 +562,7 @@ export function createProceedsCollector(deps: Deps) {
                         if (sponsor && !canSpendOffchain(sponsor, clock))
                             fail("proceeds_input_unavailable");
                         const locked = new Set(
-                            [
-                                ...reservations.listReservedOutpoints(),
-                                ...sdkLocks,
-                                ...plan.inputs,
-                            ].map(key),
+                            [...taxiLocksOf(), ...sdkLocks, ...plan.inputs].map(key),
                         );
                         const reserve = coins.reduce(
                             (sum, c) =>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress } from "@arkade-os/sdk";
+import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import { AdvanceRepository, openDatabase, PolicyRepository } from "@arkade-taxi/db";
@@ -11,11 +11,14 @@ import type {
     LockupResponse,
     QuoteResponse,
     SponsoredQuoteResponse,
+    SwapFillQuoteResponse,
+    SwapFillStatusResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
+import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createApp } from "../src/server.js";
@@ -41,13 +44,54 @@ import {
     serverUnroll,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
+import {
+    FAKE_MAKER_SCRIPT,
+    FakeSwapFillGraphBuilder,
+    fakeOfferTerms,
+    MemorySwapFills,
+} from "./swapFillFixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;
 
+const submitJointStub = (): SwapFillJointOps => ({
+    verifyPlan: () => true,
+    signForTaxi: async (args) => args.partial,
+    prepare: (args) => ({
+        arkTx: args.partial.arkTx,
+        checkpointTxs: [...args.partial.checkpoints],
+        txid: "dd".repeat(32),
+    }),
+    covenantKey: () => "cc".repeat(32),
+    submit: async (args) => {
+        const response = await args.provider.submitTx(args.prepared.arkTx, [
+            ...args.prepared.checkpointTxs,
+        ]);
+        return {
+            txid: args.prepared.txid,
+            signedArkTx: response.signedArkTx,
+            signedCheckpointTxs: [...response.signedCheckpointTxs],
+        };
+    },
+});
+
+const submitEmulatorStub = () => ({
+    submitTx: async (arkTx: string, checkpoints: string[]) => ({
+        signedArkTx: arkTx,
+        signedCheckpointTxs: [...checkpoints],
+    }),
+});
+
+const submitIdentityStub = {
+    xOnlyPublicKey: async () => operatorKey,
+    sign: async (tx: unknown) => tx,
+} as unknown as import("@arkade-os/sdk").Identity;
+
 let advances: MemoryAdvances;
 let lockupBuilder: FakeLockupBuilder;
 let sponsoredBuilder: FakeSponsoredLockupBuilder;
+let swapFills: MemorySwapFills;
+let swapFillBuilder: FakeSwapFillGraphBuilder;
 let sweeperStatus: SweeperStatus;
 let reconcilerStatus: ReconcilerStatus;
 let clock: number;
@@ -91,6 +135,20 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
     lockupBuilder,
     lockupSubmitter: lockupBuilder,
     sponsoredBuilder,
+    swapFills,
+    swapFillBuilder,
+    swapFillSubmit: {
+        swapFills,
+        taxiIdentity: () => submitIdentityStub,
+        emulator: submitEmulatorStub(),
+        config: config(),
+        now: () => clock,
+        randomId: () => `lease-${++ids}`,
+        leaseSeconds: 60,
+        joint: submitJointStub(),
+        assertSolverAuthorised: () => {},
+    },
+    offerCodec: { decodeOffer: () => fakeOfferTerms() },
     sweeper: { status: () => sweeperStatus },
     reconciler: { status: () => reconcilerStatus },
     sweeperStaleAfterSeconds: STALE_AFTER,
@@ -737,6 +795,8 @@ beforeEach(() => {
     advances = new MemoryAdvances();
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     sponsoredBuilder = new FakeSponsoredLockupBuilder(config(), serverUnroll);
+    swapFills = new MemorySwapFills();
+    swapFillBuilder = new FakeSwapFillGraphBuilder(FAKE_MAKER_SCRIPT, 5000n);
     sweeperStatus = okSweeper();
     reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
     clock = NOW;
@@ -1012,6 +1072,140 @@ describe("sponsored direct-send routes", () => {
     });
 });
 
+describe("swap-fill routes", () => {
+    const USDT_DISPLAY = "1234".repeat(16);
+    const USDT_INTERNAL = Buffer.from(USDT_DISPLAY, "hex").reverse().toString("hex");
+    const swapBody = (over: Record<string, unknown> = {}) => {
+        registerSenderCoin(
+            "dd".repeat(32),
+            3,
+            fundingCoin({ txid: "dd".repeat(32), vout: 3, value: 10000, script: "ac".repeat(34) }),
+        );
+        registerSenderCoin(
+            "ee".repeat(32),
+            1,
+            fundingCoin({
+                txid: "ee".repeat(32),
+                vout: 1,
+                value: 6000,
+                assets: [
+                    {
+                        assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
+                        amount: 100n,
+                    },
+                ],
+            }),
+        );
+        return {
+            operationId: "op-1",
+            offerHex: "ab12",
+            solverInputs: [
+                {
+                    txid: "ee".repeat(32),
+                    vout: 1,
+                    value: "6000",
+                    assets: [
+                        {
+                            assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+                            amount: "100",
+                        },
+                    ],
+                },
+            ],
+            solverProceedsScript: "51",
+            solverKeys: ["ab".repeat(32)],
+            contributionSats: "330",
+            maxFare: {
+                currency: "asset",
+                assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+                units: "5",
+            },
+            fundingTxid: "dd".repeat(32),
+            fundingVout: 3,
+            ...over,
+        };
+    };
+
+    it("quotes a sponsored fill on POST /v1/swap-fills and replays the operation id", async () => {
+        const first = await post("/v1/swap-fills", swapBody());
+        expect(first.status).toBe(200);
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        expect(quote.operationId).toBe("op-1");
+        expect(quote.template).toBe("taxi-fill/1");
+        expect(quote.graph.inputs).toEqual([
+            { owner: "offer-covenant", txid: "dd".repeat(32), vout: 3 },
+            { owner: "solver", txid: "ee".repeat(32), vout: 1 },
+            { owner: "sponsor", txid: "bb".repeat(32), vout: 0 },
+        ]);
+        const replay = await post("/v1/swap-fills", swapBody());
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toEqual(quote);
+        const conflict = await post("/v1/swap-fills", swapBody({ contributionSats: "331" }));
+        expect(conflict.status).toBe(409);
+        const status = await app().request(`/v1/swap-fills/${quote.fillId}`);
+        expect(status.status).toBe(200);
+        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
+    });
+
+    it("returns 404 for an unknown swap fill", async () => {
+        const res = await app().request("/v1/swap-fills/nope");
+        expect(res.status).toBe(404);
+        expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
+    });
+
+    it("submits a quoted fill with 202 and fences a replay", async () => {
+        const first = await post("/v1/swap-fills", swapBody());
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const submit = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: quote.graph,
+        });
+        expect(submit.status).toBe(202);
+        const status = (await submit.json()) as SwapFillStatusResponse;
+        expect(status).toMatchObject({
+            fillId: quote.fillId,
+            operationId: "op-1",
+            state: "submitting",
+        });
+        expect(typeof status.txid).toBe("string");
+        const replay = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: quote.graph,
+        });
+        expect(replay.status).toBe(409);
+        expect(((await replay.json()) as ErrorResponse).code).toBe("invalid_state");
+    });
+
+    it("returns 404 for an unknown fill submit and 400 for a malformed solver graph", async () => {
+        const quoted = (await (
+            await post("/v1/swap-fills", swapBody())
+        ).json()) as SwapFillQuoteResponse;
+        const missing = await post("/v1/swap-fills/nope/submit", {
+            solverGraph: quoted.graph,
+        });
+        expect(missing.status).toBe(404);
+        const first = await post("/v1/swap-fills", swapBody({ operationId: "op-2" }));
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const malformed = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: { template: "taxi-fill/9" },
+        });
+        expect(malformed.status).toBe(400);
+    });
+
+    it("returns 409 when the solver graph differs from the quoted fill", async () => {
+        const first = await post("/v1/swap-fills", swapBody());
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const diverted = structuredClone(quote.graph);
+        const change = diverted.outputs.find((o) => o.role === "sponsor-change")!;
+        change.script = "dd".repeat(34);
+        const rejected = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: diverted,
+        });
+        expect(rejected.status).toBe(409);
+        expect(((await rejected.json()) as ErrorResponse).code).toBe("swap_fill_graph_conflict");
+        const status = await app().request(`/v1/swap-fills/${quote.fillId}`);
+        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
+    });
+});
+
 describe("GET /health", () => {
     it("is 200 while the sweeper is ticking", async () => {
         const res = await app().request("/health");
@@ -1162,6 +1356,47 @@ describe("GET /ready", () => {
             status: "degraded",
             reconciler: { locking: 1, blockers: ["reserved_input_conflict"] },
             reason: "reserved_input_conflict",
+        });
+    });
+
+    it("merges swap-fill reconciler blockers into readiness and health", async () => {
+        const router = createRoutes({
+            ...deps(),
+            swapFillReconciler: {
+                status: () => ({
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["swap_fill_unexpected_spend"],
+                }),
+            },
+        });
+        const res = await router.request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reconciler: {
+                swapFills: {
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["swap_fill_unexpected_spend"],
+                },
+            },
+            reason: "swap_fill_unexpected_spend",
+        });
+    });
+
+    it("is 503 before the swap-fill reconciler has completed catch-up", async () => {
+        const router = createRoutes({
+            ...deps(),
+            swapFillReconciler: {
+                status: () => ({ lastTickAt: null, submitting: 1, blockers: [] }),
+            },
+        });
+        const res = await router.request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reason: "the swap-fill reconciler has not completed a tick",
         });
     });
 

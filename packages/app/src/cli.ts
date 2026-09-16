@@ -9,11 +9,13 @@ import {
     PolicyRepository,
     ReservationRepository,
     ProceedsRepository,
+    SwapFillRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
 import { sanitizeOperationalError, ServiceError } from "./errors.js";
 import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
 import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
+import { createSwapOfferCodec, ProductionSwapFillGraphBuilder } from "./swapFillQuotes.js";
 import { createSweeper } from "./sweeper.js";
 import { createApp } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
@@ -21,10 +23,12 @@ import { SingleKey } from "@arkade-os/sdk";
 import { advanceKind } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
 import { createLockupReconciler } from "./reconciler.js";
+import { createSwapFillReconciler } from "./swapFillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
 import { createProceedsCollector } from "./proceeds.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 
 const seconds = () => Math.floor(Date.now() / 1000);
 
@@ -36,6 +40,7 @@ async function runServe(): Promise<void> {
     const advances = new AdvanceRepository(db);
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
+    const swapFills = new SwapFillRepository(db);
     assertRecoveryStartupInvariants(
         ["locking", "locked", "recovering"]
             .flatMap((state) => advances.byState(state as "locking" | "locked" | "recovering"))
@@ -43,13 +48,14 @@ async function runServe(): Promise<void> {
         config,
     );
     const runtime = createOperatorRuntime(config, db, {
-        reservedOutpoints: () => reservations.listReservedOutpoints(),
+        reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills),
     });
     const proceeds = createProceedsCollector({
         config,
         runtime,
         advances,
         reservations,
+        swapFills,
         jobs: new ProceedsRepository(db),
     });
     const lockupSubmitter = productionLockupSubmitter(
@@ -120,6 +126,11 @@ async function runServe(): Promise<void> {
             return { height, timestamp: new Date(timestamp * 1000) };
         },
     });
+    const swapFillReconciler = createSwapFillReconciler({
+        swapFills,
+        indexer: runtime.providers.indexerProvider,
+        now: seconds,
+    });
 
     let lifecycle: ReturnType<typeof createServiceLifecycle>;
     let running = false;
@@ -149,11 +160,38 @@ async function runServe(): Promise<void> {
         },
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),
         sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),
+        swapFills,
+        swapFillBuilder: new ProductionSwapFillGraphBuilder(() => {
+            const wallet = runtime.wallet;
+            if (!wallet)
+                throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+            return wallet;
+        }, config.arkdUrl),
+        swapFillSubmit: {
+            swapFills,
+            taxiIdentity: () => {
+                const wallet = runtime.wallet;
+                if (!wallet)
+                    throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+                return wallet.identity;
+            },
+            emulator: runtime.providers.emulatorProvider,
+            config,
+            now: seconds,
+            randomId: () => randomUUID(),
+            leaseSeconds: Math.max(30, intervalSeconds * 2),
+        },
+        offerCodec: createSwapOfferCodec(config.serverPubkey),
+        providerLimits: async () => {
+            const info = await runtime.providers.arkProvider.getInfo();
+            return { vtxoMaxAmount: info.vtxoMaxAmount };
+        },
         lockupSubmitter,
         getServerUnroll: runtime.getServerUnroll,
         senderInventory: runtime.providers.indexerProvider,
         sweeper,
         reconciler,
+        swapFillReconciler,
         sweeperStaleAfterSeconds: intervalSeconds * 3,
         sweeperIntervalMs: config.reconcileIntervalMs,
         sweeperRunning: () => running,
@@ -185,10 +223,17 @@ async function runServe(): Promise<void> {
         },
         reconcile: async () => {
             await reconciler.tick();
-            return reconciler.status();
+            await swapFillReconciler.tick();
+            return {
+                blockers: [
+                    ...reconciler.status().blockers,
+                    ...swapFillReconciler.status().blockers,
+                ],
+            };
         },
         firstRecoveryTick: async () => {
             reservations.expireQuotes(seconds());
+            swapFills.expireQuotes(seconds());
             const safety = await runtime.assertRecovery();
             const result = await sweeper.tick(safety.chainHeight, safety.chainTime);
             if (result.considered > 0)

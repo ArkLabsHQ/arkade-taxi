@@ -182,6 +182,71 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE advances ADD COLUMN kind TEXT NOT NULL DEFAULT 'covenant'
             CHECK (kind IN ('covenant', 'sponsored'))`,
     },
+    {
+        id: 3,
+        // Sponsored swap fills live in their own tables: new states, new
+        // reservation scope, no edits to the advances schema or its rows.
+        up: `CREATE TABLE swap_fills (
+            id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'submitting', 'settled', 'expired', 'cancelled')),
+            offer_hex TEXT NOT NULL,
+            offer_txid TEXT,
+            offer_vout INTEGER,
+            swap_address TEXT,
+            solver_inputs_json TEXT NOT NULL,
+            solver_proceeds_script TEXT NOT NULL,
+            solver_keys_json TEXT NOT NULL,
+            taxi_inputs_json TEXT NOT NULL,
+            contribution_sats INTEGER NOT NULL CHECK (contribution_sats > 0),
+            fare_currency TEXT NOT NULL CHECK (fare_currency IN ('sats', 'asset')),
+            fare_units INTEGER NOT NULL CHECK (fare_units >= 0),
+            fare_asset_txid BLOB,
+            fare_asset_group_index INTEGER,
+            max_fare_json TEXT NOT NULL,
+            graph_json TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            solver_graph_json TEXT,
+            prepared_ark_tx TEXT,
+            prepared_checkpoints_json TEXT,
+            submit_invoked INTEGER NOT NULL DEFAULT 0 CHECK (submit_invoked IN (0, 1)),
+            txid TEXT,
+            outpoint_txid TEXT,
+            outpoint_vout INTEGER,
+            spent_txid TEXT,
+            failure_code TEXT,
+            failure_detail TEXT,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_until INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            CHECK ((offer_txid IS NULL) = (offer_vout IS NULL)),
+            CHECK ((fare_currency = 'asset') = (fare_asset_txid IS NOT NULL)),
+            CHECK ((fare_asset_txid IS NULL) = (fare_asset_group_index IS NULL)),
+            CHECK ((outpoint_txid IS NULL) = (outpoint_vout IS NULL))
+        );
+        CREATE UNIQUE INDEX swap_fills_operation ON swap_fills (operation_id);
+        CREATE INDEX swap_fills_state ON swap_fills (state, expires_at);
+        CREATE TABLE swap_fill_reservations (
+            outpoint_txid TEXT NOT NULL,
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            fill_id TEXT NOT NULL REFERENCES swap_fills(id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX swap_fill_reservations_fill ON swap_fill_reservations (fill_id);`,
+    },
+    {
+        id: 4,
+        // The settlement proof identifies sponsor outputs by script, so the
+        // sponsor script is stored beside the solver proceeds script. Rows
+        // predate deployment, so no backfill beyond the empty default.
+        up: `ALTER TABLE swap_fills ADD COLUMN sponsor_script TEXT NOT NULL DEFAULT ''`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -231,10 +296,33 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'kind' AND type = 'TEXT'",
             )
             .get();
+    const hasSwapFills =
+        hasKind &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'graph_id' AND type = 'TEXT'",
+            )
+            .get() &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fill_reservations') WHERE name = 'fill_id' AND type = 'TEXT'",
+            )
+            .get();
+    const hasSponsorScript =
+        hasSwapFills &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'sponsor_script' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
-        (current > maxKnown || (current === 1 && !hasCanonicalV1) || (current === 2 && !hasKind))
+        (current > maxKnown ||
+            (current === 1 && !hasCanonicalV1) ||
+            (current === 2 && !hasKind) ||
+            (current === 3 && !hasSwapFills) ||
+            (current === 4 && !hasSponsorScript))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",
