@@ -115,4 +115,11 @@ export {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
+    unsignedPsbtBytes,
+    assertUnsignedPsbt,
+    assertSameUnsignedTx,
+    tapScriptSigEntries,
+    setTapScriptSigEntries,
+    tapLeavesOfInput,
+    assertDefaultTapScriptSigs,
 } from "./joint/index.js";

@@ -6,19 +6,21 @@ import {
     Transaction,
     arkade,
     assertAllowedSighashTypes,
-    assertSameUnsignedTx,
-    assertUnsignedPsbt,
     isBatchSignable,
     matchServerCheckpoints,
-    setTapScriptSigEntries,
-    tapLeavesOfInput,
-    tapScriptSigEntries,
     toXOnly,
     verifyTapscriptSignatures,
     type EmulatorProvider,
     type Identity,
-    type TapScriptSigEntry,
 } from "@arkade-os/sdk";
+import {
+    assertSameUnsignedTx,
+    assertUnsignedPsbt,
+    setTapScriptSigEntries,
+    tapLeavesOfInput,
+    tapScriptSigEntries,
+    type TapScriptSigEntry,
+} from "./arkTransaction.js";
 import { deepFreeze, verifyJointGraph, type JointGraph } from "./jointGraph.js";
 
 const computeArkadeScriptPublicKey = arkade.computeArkadeScriptPublicKey;

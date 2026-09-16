@@ -18,11 +18,11 @@ import {
     asset,
     getArkPsbtFields,
     setArkPsbtField,
-    tapLeavesOfInput,
     type BatchSignableIdentity,
     type Identity,
     type IWallet,
 } from "@arkade-os/sdk";
+import { tapLeavesOfInput } from "../../src/joint/arkTransaction.js";
 import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
 import {

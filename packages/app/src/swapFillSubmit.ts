@@ -1,6 +1,5 @@
 import {
     Transaction,
-    unsignedPsbtBytes,
     verifyTapscriptSignatures,
     type EmulatorProvider,
     type Identity,
@@ -41,6 +40,7 @@ import {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
+    unsignedPsbtBytes,
 } from "@arkade-taxi/client";
 
 export const SWAP_FILL_SUBMIT_LEASE_OWNER = "swap-fill-submit";

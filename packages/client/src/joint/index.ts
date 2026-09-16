@@ -1,4 +1,15 @@
 export {
+    assertDefaultTapScriptSigs,
+    assertSameUnsignedTx,
+    assertUnsignedPsbt,
+    setTapScriptSigEntries,
+    tapLeavesOfInput,
+    tapScriptSigEntries,
+    unsignedPsbtBytes,
+    type TapLeafRef,
+    type TapScriptSigEntry,
+} from "./arkTransaction.js";
+export {
     deepFreeze,
     digestJointGraph,
     verifyJointGraph,
