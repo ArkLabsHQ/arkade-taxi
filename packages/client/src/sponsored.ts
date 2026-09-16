@@ -9,6 +9,7 @@
 import {
     ArkAddress,
     Extension,
+    UnknownPacket,
     MultisigTapscript,
     P2A,
     Transaction,
@@ -59,6 +60,8 @@ export type VerifiedSponsoredQuote = {
 export interface SponsoredQuoteExpectation {
     receiverAddress: string;
     senderKey: Uint8Array;
+    /** The packet the payment must carry, when funding an offer. */
+    extraPacket?: { type: number; payload: Uint8Array };
     assetId?: { txid: Uint8Array; groupIndex: number };
     maxContributionSats: bigint;
     maxFare: {
@@ -488,7 +491,15 @@ export function validateSponsoredPayment(
                 [],
             );
         });
-    if (groups.length) outputs.push(Extension.create([Packet.create(groups)]).txOut());
+    // The sender's own declared packet rides alongside the asset groups. It comes
+    // from params, so the rebuild below only matches a transaction carrying the
+    // packet the SENDER asked for — the operator cannot substitute one.
+    const extra = context.params.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extra !== undefined ? [new UnknownPacket(extra.type, extra.payload)] : []),
+    ];
+    if (packets.length) outputs.push(Extension.create(packets).txOut());
 
     const checkpoints = envelope.checkpoints.map((checkpoint, index) =>
         attempt(`checkpoint ${index}`, () =>
@@ -589,6 +600,18 @@ export function verifySponsoredQuote(args: VerifySponsoredQuoteArgs): VerifiedSp
     }
     if (!sameAsset(params.assetId, expect.assetId)) {
         reject(VerificationErrorCode.AssetId, "quote moves an asset you did not ask to pay");
+    }
+    // Without this the rebuild is self-consistent but wrong: it would take the
+    // packet from the quote and match a transaction built with it, so the
+    // operator could swap in another offer and the sender would fund that.
+    if (
+        (params.extraPacket === undefined) !== (expect.extraPacket === undefined) ||
+        (params.extraPacket !== undefined &&
+            expect.extraPacket !== undefined &&
+            (params.extraPacket.type !== expect.extraPacket.type ||
+                !sameBytes(params.extraPacket.payload, expect.extraPacket.payload)))
+    ) {
+        reject(VerificationErrorCode.Malformed, "quote carries a packet you did not declare");
     }
     if (!sameBytes(params.operatorKey, info.operatorKey)) {
         reject(

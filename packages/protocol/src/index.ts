@@ -224,6 +224,15 @@ export interface SponsoredQuoteParams {
     dust: string;
     contribution: string;
     assetId?: AssetIdWire;
+    /**
+     * An extra extension packet the payment must carry, declared by the SENDER.
+     * Funding an offer needs its packet (type 0x03) beside the asset groups, and
+     * the sender is the party that made the offer. Echoed in the quote so the
+     * sender's own verification rebuild includes it — which is what stops the
+     * operator substituting a different one. Opaque here: the payload is
+     * preserved byte-for-byte, never parsed.
+     */
+    extraPacket?: { type: number; payload: string };
 }
 
 export interface SponsoredQuoteRequestBody {
@@ -237,6 +246,12 @@ export interface SponsoredQuoteRequestBody {
     assetUnits?: string;
     /** Which offered fare the client accepts. Omitted takes the operator's first. */
     fareId?: string;
+    /**
+     * An extra extension packet the payment must carry, e.g. an offer's packet
+     * when funding one. Echoed back in the quote's params so the sender's
+     * verification rebuild includes it.
+     */
+    extraPacket?: { type: number; payload: string };
 }
 
 export interface SponsoredQuoteResponse {

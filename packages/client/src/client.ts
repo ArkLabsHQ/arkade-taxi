@@ -134,6 +134,9 @@ export interface SponsoredQuoteRequest {
     fareId?: string;
     /** Exact sum of the selected sender input values. */
     senderSats: bigint;
+    /** An extra extension packet the payment must carry — an offer's, when
+     * funding one. Checked against the quote's echo during verification. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
@@ -145,7 +148,13 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     selectedVtxos: readonly ExtendedVirtualCoin[];
     assetId?: AssetIdValue;
     fareId?: string;
-    expect: Omit<SponsoredQuoteExpectation, "receiverAddress" | "senderKey" | "assetId">;
+    /** An offer's `extension` funds that offer. Declared once: the expectation
+     * below is derived from it, so the request and the check cannot diverge. */
+    extraPacket?: { type: number; payload: Uint8Array };
+    expect: Omit<
+        SponsoredQuoteExpectation,
+        "receiverAddress" | "senderKey" | "assetId" | "extraPacket"
+    >;
 }
 
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
@@ -262,6 +271,11 @@ export class TaxiClient {
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.extraPacket !== undefined)
+            wire.extraPacket = {
+                type: req.extraPacket.type,
+                payload: bytesToHex(req.extraPacket.payload),
+            };
         const body = (await this.request(
             "POST",
             "/v1/sponsored-transfers",
@@ -304,6 +318,7 @@ export class TaxiClient {
                 receiverAddress: request.receiverAddress,
                 senderKey: request.senderKey,
                 assetId: request.assetId,
+                extraPacket: request.extraPacket,
             },
         });
         return { verified, senderInputs };
