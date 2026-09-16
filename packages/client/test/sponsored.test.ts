@@ -183,6 +183,21 @@ describe("signSponsoredPayment", () => {
 });
 
 describe("TaxiClient sponsored transfers", () => {
+    // Funding an offer means sending the offer's own extension as the packet.
+    it("sends the declared packet on the sponsored quote request", async () => {
+        const offerExtension = { type: 0x03, payload: new Uint8Array([0xab, 0xcd]) };
+        const { taxi, fetch } = client(() => jsonResponse(200, sponsoredQuote()));
+        await taxi.requestSponsoredQuote({
+            receiverAddress: sponsoredAddress(),
+            senderKey,
+            senderSats: 1_000n,
+            senderInputs: sponsoredArgs().senderInputs,
+            extraPacket: offerExtension,
+        });
+        const sent = JSON.parse(String(fetch.calls.at(-1)?.init.body));
+        expect(sent.extraPacket).toEqual({ type: 0x03, payload: "abcd" });
+    });
+
     it("requests, signs and submits through the sponsored endpoints", async () => {
         const quote = sponsoredQuote();
         const { taxi, fetch } = client((url) => {

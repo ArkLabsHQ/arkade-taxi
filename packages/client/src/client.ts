@@ -148,7 +148,13 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     selectedVtxos: readonly ExtendedVirtualCoin[];
     assetId?: AssetIdValue;
     fareId?: string;
-    expect: Omit<SponsoredQuoteExpectation, "receiverAddress" | "senderKey" | "assetId">;
+    /** An offer's `extension` funds that offer. Declared once: the expectation
+     * below is derived from it, so the request and the check cannot diverge. */
+    extraPacket?: { type: number; payload: Uint8Array };
+    expect: Omit<
+        SponsoredQuoteExpectation,
+        "receiverAddress" | "senderKey" | "assetId" | "extraPacket"
+    >;
 }
 
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
@@ -312,6 +318,7 @@ export class TaxiClient {
                 receiverAddress: request.receiverAddress,
                 senderKey: request.senderKey,
                 assetId: request.assetId,
+                extraPacket: request.extraPacket,
             },
         });
         return { verified, senderInputs };
