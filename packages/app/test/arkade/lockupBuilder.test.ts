@@ -380,7 +380,7 @@ describe("sender-paid sats fare", () => {
     interface Over {
         senderSats?: bigint;
         fare?: bigint;
-        payer?: "sender";
+        legacy?: true;
         asset?: boolean;
     }
 
@@ -390,7 +390,7 @@ describe("sender-paid sats fare", () => {
         req.senderInputs[0].value = req.senderSats;
         req.params.topup = 330n;
         req.fare.units = over.fare ?? 10n;
-        if (!("payer" in over) || over.payer) req.satsFarePayer = "sender";
+        if (!over.legacy) req.satsFarePayer = "sender";
         if (over.asset) {
             req.senderInputs[0].assetPacket = asset.Packet.create([
                 asset.AssetGroup.create(
@@ -442,7 +442,7 @@ describe("sender-paid sats fare", () => {
     });
 
     it("collects nothing without the discriminator, as every funded graph did", () => {
-        const req = request({ payer: undefined });
+        const req = request({ legacy: true });
         expect(layout(req)).toEqual([
             ["covenant", 330n],
             ["operator-fare", 10n],
@@ -461,7 +461,7 @@ describe("sender-paid sats fare", () => {
             ["operator-change", 670n],
         ]);
         expect(netOperatorSats(req)).toBe(10n);
-        expect(layout(request({ senderSats: 700n, asset: true, payer: undefined }))).toEqual([
+        expect(layout(request({ senderSats: 700n, asset: true, legacy: true }))).toEqual([
             ["covenant", 330n],
             ["operator-fare", 10n],
             ["sender-change", 700n],
@@ -503,7 +503,7 @@ describe("sender-paid sats fare", () => {
         expect(parseLockupEnvelope(encoded, req, cfg, unroll).unsignedTxId).toBe(wire.unsignedTxId);
         expect(Transaction.fromPSBT(base64.decode(wire.arkTx)).getOutput(2).amount).toBe(690n);
         const legacy = buildLockupEnvelope(
-            request({ senderSats: 700n, asset: true, payer: undefined }),
+            request({ senderSats: 700n, asset: true, legacy: true }),
             cfg,
             unroll,
         );
