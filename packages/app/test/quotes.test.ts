@@ -286,7 +286,12 @@ describe("createQuote", () => {
 
     it("bills a new asset lockup to the sender and lends only the loan", async () => {
         const d = deps({ policy: satsFareRule(ASSET, 10n) });
-        await createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }));
+        const res = await createQuote(
+            d,
+            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }),
+        );
+        expect(res.fare.units).toBe("10");
+        expect(advances.get(res.transferId)!.fare).toEqual({ currency: "sats", units: 10n });
         const built = lockupBuilder.built[0]!;
         expect(built.satsFarePayer).toBe("sender");
         const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
