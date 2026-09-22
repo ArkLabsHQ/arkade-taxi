@@ -301,6 +301,16 @@ async function createReservedSponsoredQuote(
         config.vtxoMinAmount,
     );
     if (!decision.ok) throw admissionError(decision.reason);
+    const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
+    // The receiver is paid the whole dust carrier whatever the sender brings, so
+    // the fare can only come out of sender change — never out of the payment,
+    // and never out of the sponsorship the operator is giving away.
+    if (senderPaysFare && req.senderSats + decision.topup - config.dust < decision.fare.units)
+        throw new ServiceError(
+            "fare_unavailable",
+            409,
+            "sender funding does not cover the payment carrier and this fare",
+        );
 
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
@@ -321,7 +331,7 @@ async function createReservedSponsoredQuote(
         reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
-            (decision.fare.units === 0n
+            (senderPaysFare || decision.fare.units === 0n
                 ? 0n
                 : decision.fare.currency === "sats"
                   ? decision.fare.units
@@ -358,6 +368,7 @@ async function createReservedSponsoredQuote(
         params,
         receiverAddress: req.receiverAddress,
         fare: decision.fare,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         senderSats: req.senderSats,
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),

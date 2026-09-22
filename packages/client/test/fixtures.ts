@@ -238,6 +238,7 @@ interface SponsoredQuoteFixtureOptions {
     senderSats?: bigint;
     assetUnits?: bigint;
     fare?: FareSpec;
+    satsFarePayer?: "sender";
     assetId?: { txid: Uint8Array; groupIndex: number };
     extraPacket?: { type: number; payload: Uint8Array };
 }
@@ -268,6 +269,7 @@ export const sponsoredQuote = (
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
+            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         unroll,
@@ -359,6 +361,25 @@ export const sponsoredAssetArgs = (): VerifySponsoredQuoteArgs => {
         senderInputs,
         senderSats: 700n,
         assetUnits,
+    };
+};
+
+/** The asset-sender fixture paying a sats fare, which a sponsored quote bills to
+ * the sender unless it is reconstructing a funded legacy graph. */
+export const satsFareSponsoredArgs = (opts: { legacy?: true } = {}): VerifySponsoredQuoteArgs => {
+    const a = sponsoredAssetArgs();
+    const fare = { currency: "sats" as const, units: 10n };
+    return {
+        ...a,
+        quote: sponsoredQuote(sponsoredParams(), {
+            senderInputs: a.senderInputs,
+            senderSats: a.senderSats,
+            assetUnits: a.assetUnits!,
+            assetId: a.expect.assetId!,
+            fare,
+            ...(opts.legacy ? {} : { satsFarePayer: "sender" as const }),
+        }),
+        expect: { ...a.expect, maxFare: fare },
     };
 };
 

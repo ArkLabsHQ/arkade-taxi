@@ -5,6 +5,7 @@ import {
     buildSponsoredEnvelope,
     parseSponsoredEnvelope,
     sponsoredGraphId,
+    sponsoredPlan,
     type SponsoredBuildRequest,
 } from "../../src/arkade/sponsoredBuilder.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt.js";
@@ -205,5 +206,134 @@ describe("sponsored joint graph", () => {
                 unroll,
             ),
         ).toThrow(/checkpoint count/);
+    });
+});
+
+describe("sponsored sender-paid sats fare", () => {
+    const cfg = config();
+
+    interface Over {
+        senderSats?: bigint;
+        contribution?: bigint;
+        fare?: bigint;
+        legacy?: true;
+        bitcoin?: true;
+    }
+
+    const satsFare = (over: Over = {}): SponsoredBuildRequest => {
+        const senderSats = over.senderSats ?? 700n;
+        const req = request({ senderSats });
+        req.senderInputs[0].value = senderSats;
+        if (over.bitcoin) {
+            delete req.senderInputs[0].assetPacket;
+            delete req.params.assetId;
+            delete req.assetUnits;
+        }
+        req.params.contribution = over.contribution ?? DUST;
+        req.fare = { currency: "sats", units: over.fare ?? 10n };
+        if (!over.legacy) req.satsFarePayer = "sender";
+        return req;
+    };
+
+    const layout = (req: SponsoredBuildRequest): [string, bigint][] =>
+        sponsoredPlan(req, cfg).valueOutputs.map((o) => [o.role, o.amount]);
+
+    /** What Taxi keeps once the sponsorship it chose to give is set aside: the
+     * fare and its own change, against the inventory it committed. */
+    const netFareSats = (req: SponsoredBuildRequest): bigint =>
+        sponsoredPlan(req, cfg)
+            .valueOutputs.filter((o) => o.role !== "payment" && o.role !== "sender-change")
+            .reduce((sum, o) => sum + o.amount, 0n) +
+        req.params.contribution -
+        req.funding.totalValue;
+
+    it("takes the fare from the sender, so the service is actually paid", () => {
+        const req = satsFare();
+        expect(netFareSats(req)).toBe(10n);
+        expect(layout(req)).toEqual([
+            ["payment", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 690n],
+            ["operator-change", 19_670n],
+        ]);
+    });
+
+    it("collects nothing without the discriminator, as every funded graph did", () => {
+        const req = satsFare({ legacy: true });
+        expect(layout(req)).toEqual([
+            ["payment", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 700n],
+            ["operator-change", 19_660n],
+        ]);
+        expect(netFareSats(req)).toBe(0n);
+    });
+
+    it("charges the same way when the payment carries no asset", () => {
+        const req = satsFare({ bitcoin: true, contribution: VTXO_MIN });
+        expect(layout(req)).toEqual([
+            ["payment", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 370n],
+            ["operator-change", 19_990n],
+        ]);
+        expect(netFareSats(req)).toBe(10n);
+        expect(netFareSats(satsFare({ bitcoin: true, contribution: VTXO_MIN, legacy: true }))).toBe(
+            0n,
+        );
+    });
+
+    it.each([10n, 50n, 100n])("never nets a %s sat fare out of the sponsorship", (fare) => {
+        const req = satsFare({ fare });
+        const amounts = new Map(layout(req));
+        expect(amounts.get("payment")).toBe(req.params.dust);
+        expect(amounts.get("operator-change")).toBe(
+            req.funding.totalValue - req.params.contribution,
+        );
+        expect(amounts.get("sender-change")).toBe(req.senderSats - fare);
+        expect(netFareSats(req)).toBe(fare);
+    });
+
+    it("refuses a sender whose change cannot cover the fare", () => {
+        const req = satsFare({ bitcoin: true, senderSats: 5n, contribution: 325n });
+        expect(() => sponsoredPlan(req, cfg)).toThrow(/sender funding/);
+    });
+
+    it("drops the sender change output when the fare consumes all of it", () => {
+        const req = satsFare({ bitcoin: true, senderSats: 10n });
+        expect(layout(req)).toEqual([
+            ["payment", 330n],
+            ["operator-fare", 10n],
+            ["operator-change", 19_670n],
+        ]);
+        expect(netFareSats(req)).toBe(10n);
+    });
+
+    it.each(["zero", "asset"])("refuses a payer naming a %s fare", (kind) => {
+        const req = satsFare();
+        if (kind === "zero") req.fare = { currency: "sats", units: 0n };
+        else req.fare = { currency: "asset", assetId: usdtInternal, units: 5n };
+        expect(() => sponsoredPlan(req, cfg)).toThrow(/positive sats fare/);
+    });
+
+    it("refuses an unrecognised payer rather than falling back to the legacy layout", () => {
+        const req = satsFare();
+        (req as { satsFarePayer?: string }).satsFarePayer = "operator";
+        expect(() => sponsoredPlan(req, cfg)).toThrow(/sats fare payer/);
+    });
+
+    it("carries the discriminator through the envelope it signs", () => {
+        const req = satsFare();
+        const encoded = buildSponsoredEnvelope(req, cfg, unroll);
+        const wire = JSON.parse(Buffer.from(base64.decode(encoded)).toString());
+        expect(wire.satsFarePayer).toBe("sender");
+        expect(parseSponsoredEnvelope(encoded, req, cfg, unroll).unsignedTxId).toBe(
+            wire.unsignedTxId,
+        );
+        expect(Transaction.fromPSBT(base64.decode(wire.arkTx)).getOutput(2).amount).toBe(690n);
+        const legacy = buildSponsoredEnvelope(satsFare({ legacy: true }), cfg, unroll);
+        expect(
+            JSON.parse(Buffer.from(base64.decode(legacy)).toString()).satsFarePayer,
+        ).toBeUndefined();
     });
 });

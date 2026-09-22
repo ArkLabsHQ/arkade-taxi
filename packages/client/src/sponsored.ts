@@ -318,8 +318,6 @@ export function validateSponsoredPayment(
     context: SponsoredValidationContext,
 ): ValidatedSponsoredPayment {
     const envelope = decodeLockupEnvelope(context.quote.unsignedSponsoredTx);
-    if (envelope.satsFarePayer !== undefined)
-        reject(VerificationErrorCode.Malformed, "a sponsored payment has no sats fare payer");
     const senderInputs = envelope.senderInputs.map((input, index) =>
         decodeInput(input, `senderInputs[${index}]`),
     );
@@ -392,9 +390,19 @@ export function validateSponsoredPayment(
                 context.hrp,
             ),
         });
-    const senderChange = context.senderSats + context.params.contribution - context.params.dust;
+    if (
+        envelope.satsFarePayer !== undefined &&
+        (context.fare.currency !== "sats" || context.fare.units <= 0n)
+    )
+        reject(VerificationErrorCode.Malformed, "satsFarePayer needs a positive sats fare");
+    // Absent, the fare leaves operator change and returns to the operator. The
+    // caller authorised this fare either way, so both layouts are within it.
+    const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
+    const operatorFare = fareHosting - senderFare;
+    const senderChange =
+        context.senderSats + context.params.contribution - context.params.dust - senderFare;
     const operatorTotal = operatorInputs.reduce((sum, input) => sum + input.value, 0n);
-    const operatorChange = operatorTotal - context.params.contribution - fareHosting;
+    const operatorChange = operatorTotal - context.params.contribution - operatorFare;
     if (senderChange < 0n || operatorChange < 0n)
         reject(VerificationErrorCode.Malformed, "joint funding is insufficient");
 

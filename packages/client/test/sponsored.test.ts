@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ArkAddress, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
+import { sponsoredGraphId } from "../../app/src/arkade/sponsoredBuilder.js";
 import { TaxiClient } from "../src/client.js";
 import { VerificationErrorCode } from "../src/errors.js";
 import {
@@ -14,6 +17,7 @@ import {
     otherKey,
     recordingFetch,
     receiverKey,
+    satsFareSponsoredArgs,
     senderIdentity,
     senderKey,
     senderTree,
@@ -238,5 +242,82 @@ describe("TaxiClient sponsored transfers", () => {
 
     it("accepts the receiver key the address commits to", () => {
         expect(ArkAddress.decode(sponsoredAddress()).vtxoTaprootKey).toEqual(receiverKey);
+    });
+});
+
+describe("sponsored sender-paid sats fare", () => {
+    const rewrite = (
+        encoded: string,
+        mutate: (wire: ReturnType<typeof decodeLockupEnvelope>) => void,
+        recomputeHash = false,
+    ): string => {
+        const wire = decodeLockupEnvelope(encoded);
+        mutate(wire);
+        if (recomputeHash)
+            wire.unsignedTxId = sponsoredGraphId(
+                Transaction.fromPSBT(base64.decode(wire.arkTx)),
+                wire.checkpoints.map((c) => Transaction.fromPSBT(base64.decode(c))),
+            );
+        return encodeLockupEnvelope(wire);
+    };
+
+    const amounts = (encoded: string): bigint[] => {
+        const tx = Transaction.fromPSBT(base64.decode(decodeLockupEnvelope(encoded).arkTx));
+        return [0, 1, 2, 3].map((index) => tx.getOutput(index).amount!);
+    };
+
+    it("accepts the layout that bills the fare to the sender", () => {
+        const a = satsFareSponsoredArgs();
+        const verified = verifySponsoredQuote(a);
+        expect(verified.envelope.satsFarePayer).toBe("sender");
+        expect(amounts(a.quote.unsignedSponsoredTx)).toEqual([330n, 10n, 690n, 19_670n]);
+        expect(amounts(satsFareSponsoredArgs({ legacy: true }).quote.unsignedSponsoredTx)).toEqual([
+            330n,
+            10n,
+            700n,
+            19_660n,
+        ]);
+    });
+
+    it("accepts a funded legacy sponsored graph unchanged", () => {
+        const a = satsFareSponsoredArgs({ legacy: true });
+        expect(verifySponsoredQuote(a).envelope.satsFarePayer).toBeUndefined();
+    });
+
+    it("keeps the discriminator across signing", async () => {
+        const verified = verifySponsoredQuote(satsFareSponsoredArgs());
+        const encoded = await signSponsoredPayment({ verified, identity: senderIdentity });
+        expect(decodeLockupEnvelope(encoded).satsFarePayer).toBe("sender");
+    });
+
+    it("refuses a sender-paid claim stapled onto a legacy layout", () => {
+        const a = satsFareSponsoredArgs({ legacy: true });
+        a.quote.unsignedSponsoredTx = rewrite(
+            a.quote.unsignedSponsoredTx,
+            (wire) => {
+                wire.satsFarePayer = "sender";
+            },
+            true,
+        );
+        a.quote.commitment.unsignedTxId = decodeLockupEnvelope(
+            a.quote.unsignedSponsoredTx,
+        ).unsignedTxId;
+        expect(() => verifySponsoredQuote(a)).toThrow(/Arkade transaction/);
+    });
+
+    it("refuses an unrecognised fare payer", () => {
+        const a = satsFareSponsoredArgs();
+        a.quote.unsignedSponsoredTx = rewrite(a.quote.unsignedSponsoredTx, (wire) => {
+            (wire as { satsFarePayer?: string }).satsFarePayer = "operator";
+        });
+        expect(() => verifySponsoredQuote(a)).toThrow(/satsFarePayer/);
+    });
+
+    it("refuses a fare payer named against an asset fare", () => {
+        const a = sponsoredAssetArgs();
+        a.quote.unsignedSponsoredTx = rewrite(a.quote.unsignedSponsoredTx, (wire) => {
+            wire.satsFarePayer = "sender";
+        });
+        expect(() => verifySponsoredQuote(a)).toThrow(/positive sats fare/);
     });
 });

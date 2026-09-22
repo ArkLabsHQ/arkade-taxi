@@ -320,6 +320,7 @@ function sponsoredRequest(advance: Advance, request: LockupBuildRequest): Sponso
         },
         receiverAddress: advance.covenantAddress,
         fare: advance.fare,
+        ...(request.satsFarePayer === undefined ? {} : { satsFarePayer: request.satsFarePayer }),
     };
 }
 
