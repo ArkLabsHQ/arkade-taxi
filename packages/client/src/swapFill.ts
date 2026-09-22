@@ -49,6 +49,9 @@ export interface SwapFillQuoteExpectation {
     };
     fundingTxid?: string;
     fundingVout?: number;
+    /** Wall-clock ceiling, unix seconds, the caller authorised on the
+     * request. A returned deadline past it is refused whatever the quote says. */
+    validUntil?: number;
 }
 
 export interface VerifySwapFillQuoteArgs {
@@ -79,6 +82,7 @@ export interface RequestSwapFillQuoteArgs {
     fundingTxid?: string;
     fundingVout?: number;
     swapAddress?: string;
+    validUntil?: number;
 }
 
 export interface RequestVerifiedSwapFillQuoteArgs extends RequestSwapFillQuoteArgs {
@@ -214,6 +218,7 @@ export function encodeSwapFillQuoteBody(args: RequestSwapFillQuoteArgs): SwapFil
         ...(args.fundingTxid !== undefined ? { fundingTxid: args.fundingTxid } : {}),
         ...(args.fundingVout !== undefined ? { fundingVout: args.fundingVout } : {}),
         ...(args.swapAddress !== undefined ? { swapAddress: args.swapAddress } : {}),
+        ...(args.validUntil !== undefined ? { validUntil: args.validUntil } : {}),
     };
     return body;
 }
@@ -252,6 +257,11 @@ export function verifySwapFillQuote(args: VerifySwapFillQuoteArgs): VerifiedSwap
     const now = args.now ?? Math.floor(Date.now() / 1000);
     if (now >= decoded.expiresAt)
         reject(VerificationErrorCode.Expired, `quote expired at ${decoded.expiresAt}, now ${now}`);
+    if (expect.validUntil !== undefined && decoded.expiresAt > expect.validUntil)
+        reject(
+            VerificationErrorCode.Expired,
+            `quote runs to ${decoded.expiresAt}, past your authorised ceiling ${expect.validUntil}`,
+        );
 
     const graph = decoded.graph;
     const expectedSolver = new Set(expect.solverInputs.map((i) => `${i.txid}:${i.vout}`));

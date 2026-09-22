@@ -105,6 +105,9 @@ export interface SwapFillQuoteRequestBody {
     fundingTxid?: string;
     fundingVout?: number;
     swapAddress?: string;
+    /** Caller's own wall-clock ceiling, **unix SECONDS**. Never a batch
+     * height or time expiry: those live in a different domain. */
+    validUntil?: number;
 }
 
 export interface SwapFillQuoteRequest {
@@ -121,6 +124,7 @@ export interface SwapFillQuoteRequest {
     fundingTxid?: string;
     fundingVout?: number;
     swapAddress?: string;
+    validUntil?: number;
 }
 
 export interface SwapFillQuoteResponse {
@@ -181,6 +185,12 @@ const vout = (value: unknown, label: string): number => {
         value > 0xffffffff
     )
         fail(label, "invalid vout");
+    return value as number;
+};
+
+const unixSeconds = (value: unknown, label: string): number => {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+        fail(label, "must be a positive safe integer of unix seconds");
     return value as number;
 };
 
@@ -343,6 +353,7 @@ export function swapFillQuoteRequestFromWire(body: unknown): SwapFillQuoteReques
     if ((b.fundingTxid === undefined) !== (b.fundingVout === undefined))
         fail("fundingOutpoint", "fundingTxid and fundingVout are required together");
     if (b.swapAddress !== undefined) out.swapAddress = nonEmpty(b.swapAddress, "swapAddress");
+    if (b.validUntil !== undefined) out.validUntil = unixSeconds(b.validUntil, "validUntil");
     return out;
 }
 

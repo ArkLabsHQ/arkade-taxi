@@ -60,7 +60,7 @@ function insertRaw(db: Database, overrides: Record<string, unknown> = {}): void 
 }
 
 describe("migrations", () => {
-    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
+    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])(
         "rejects development schema v%s without modifying its schema or data",
         (version) => {
             const db = fresh();
@@ -96,7 +96,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(8);
+            expect(userVersion(reopened)).toBe(9);
             expect(
                 reopened
                     .prepare(
@@ -119,10 +119,10 @@ describe("migrations", () => {
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -189,7 +189,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -223,7 +223,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
@@ -237,7 +237,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
@@ -254,7 +254,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -273,7 +273,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -281,6 +281,31 @@ describe("migrations", () => {
                 )
                 .get(),
         ).toEqual({ recovery_recipient: null });
+        db.close();
+    });
+    it("migrates a v8 database forward adding a nullable swap-fill deadline ceiling", () => {
+        const db = fresh();
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 8),
+        );
+        expect(userVersion(db)).toBe(8);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(9);
+        expect(
+            db
+                .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
+                .all()
+                .find(({ name }) => name === "valid_until"),
+        ).toMatchObject({ notnull: 0n });
+        db.close();
+    });
+    it("rejects a v9 stamp without the swap-fill deadline column", () => {
+        const db = migrated();
+        db.exec("ALTER TABLE swap_fills DROP COLUMN valid_until");
+        const before = db.serialize();
+        expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+        expect(db.serialize()).toEqual(before);
         db.close();
     });
     it("rejects old v1 without proceeds storage without changing its data", () => {
@@ -302,7 +327,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(8);
+        expect(userVersion(db)).toBe(9);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

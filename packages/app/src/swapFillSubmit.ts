@@ -477,6 +477,22 @@ export async function submitSwapFill(
             failSigning(deps, id, leaseToken, now, "swap_fill_bound_unsafe", 409, cause);
         }
     }
+    // Signing and preparation above are awaited, so the clock read at entry is
+    // stale here. Nothing awaits between this read and the first provider call,
+    // and refusing records no invocation: the fill is known not to be submitted.
+    const atSubmit = deps.now();
+    if (claimed.expiresAt <= atSubmit) {
+        const message = `swap fill ${id} quote expired before submission (not submitted)`;
+        deps.swapFills.recordSigningFailure(
+            id,
+            leaseToken,
+            ErrorCode.QuoteExpired,
+            message,
+            atSubmit,
+        );
+        deps.swapFills.expireQuotes(atSubmit);
+        throw new ServiceError(ErrorCode.QuoteExpired, 409, message);
+    }
     if (!deps.swapFills.recordSubmitInvoked(id, leaseToken, now))
         throw new ServiceError(
             ErrorCode.InvalidState,

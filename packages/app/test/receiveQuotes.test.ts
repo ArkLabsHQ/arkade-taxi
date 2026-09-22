@@ -25,6 +25,7 @@ import {
     senderKey,
     serverKey,
 } from "./fixtures.js";
+import { createBoundJointFill } from "./jointFillFixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
@@ -350,5 +351,24 @@ describe("getReceiveQuote", () => {
         const read = getReceiveQuote(d, created.quoteId);
         expect(read).toEqual({ ...created, state: "expired" });
         expect(read.expiresAt).toBe(created.expiresAt);
+    });
+
+    it("exposes the bound fill id once a quote is bound, and omits it before", async () => {
+        const d = deps();
+        const created = await createReceiveQuote(d, body());
+        expect(created.boundFillId).toBeUndefined();
+        expect("boundFillId" in getReceiveQuote(d, created.quoteId)).toBe(false);
+
+        const world = await createBoundJointFill();
+        try {
+            const read = getReceiveQuote(
+                { receiveQuotes: world.receiveQuotes, now: () => NOW },
+                "receive-1",
+            );
+            expect(read.state).toBe("bound");
+            expect(read.boundFillId).toBe(world.fill.id);
+        } finally {
+            world.close();
+        }
     });
 });

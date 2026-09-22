@@ -508,6 +508,7 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
         },
         createdAt: quote.createdAt,
         expiresAt: quote.expiresAt,
+        ...(quote.boundFillId === undefined ? {} : { boundFillId: quote.boundFillId }),
     };
 }
 

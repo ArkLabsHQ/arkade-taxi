@@ -100,6 +100,7 @@ export interface DecodedReceiveQuote {
     recoveryLocktime: { kind: "height" | "time"; value: bigint };
     createdAt: number;
     expiresAt: number;
+    boundFillId?: string;
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -451,12 +452,18 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "createdAt",
                 "expiresAt",
             ],
-            [],
+            ["boundFillId"],
             "receive quote",
         );
         if (quote.state !== "quoted" && quote.state !== "bound" && quote.state !== "expired")
             invalid("receive quote.state is invalid");
         const state = quote.state as "quoted" | "bound" | "expired";
+        let boundFillId: string | undefined;
+        if (quote.boundFillId !== undefined) {
+            boundFillId = str(quote.boundFillId, "receive quote.boundFillId");
+            if (!boundFillId.length || boundFillId.length > 128)
+                invalid("receive quote.boundFillId is not a bounded identifier");
+        }
         const makerPublicKey = str(quote.makerPublicKey, "receive quote.makerPublicKey");
         if (!/^[0-9a-f]{64}$/.test(makerPublicKey))
             invalid("receive quote.makerPublicKey must be lowercase x-only hex");
@@ -484,6 +491,7 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             recoveryLocktime: deadline("recoveryLocktime"),
             createdAt: uint(quote.createdAt, "receive quote.createdAt"),
             expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
+            ...(boundFillId === undefined ? {} : { boundFillId }),
         };
     });
 }

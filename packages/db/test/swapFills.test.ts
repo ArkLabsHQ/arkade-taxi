@@ -86,10 +86,10 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
 
 describe("swap-fill migration", () => {
     it("adds swap-fill storage as a new migration without touching prior ones", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
         const db = fresh();
         applyMigrations(db);
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(8);
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(9);
         expect(
             db
                 .prepare("SELECT name FROM pragma_table_info('swap_fills') WHERE name = ?")
@@ -138,6 +138,23 @@ describe("SwapFillRepository", () => {
         const repo = new SwapFillRepository(db);
         repo.insert(fill());
         expect(() => repo.insert(fill({ id: "fill-2" }))).toThrow(/UNIQUE|unique/i);
+        db.close();
+    });
+
+    it("round-trips the caller deadline ceiling and leaves a legacy fill without one", () => {
+        const db = fresh();
+        applyMigrations(db);
+        const repo = new SwapFillRepository(db);
+        const legacy = fill({
+            id: "fill-2",
+            operationId: "op-2",
+            taxiInputs: [{ txid: "cc".repeat(32), vout: 1 }],
+        });
+        repo.insert(fill({ validUntil: NOW + 30 }));
+        repo.insert(legacy);
+        expect(repo.get("fill-1")?.validUntil).toBe(NOW + 30);
+        expect(repo.get("fill-2")).toEqual(legacy);
+        expect("validUntil" in repo.get("fill-2")!).toBe(false);
         db.close();
     });
 

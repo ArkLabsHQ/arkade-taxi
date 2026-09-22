@@ -191,6 +191,14 @@ describe("TaxiClient receive quotes", () => {
         expect((await taxi.getReceiveQuote("receive-1")).state).toBe("expired");
     });
 
+    it("reads a bound quote's fill id back without treating it as authority", async () => {
+        const bound = quote({ state: "bound", boundFillId: "fill-1" });
+        const fetch = recordingFetch(() => jsonResponse(200, bound));
+        const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        expect(await taxi.getReceiveQuote("receive-1")).toEqual(bound);
+        expect(() => verifyReceiveQuote({ ...args(), quote: bound })).toThrow(/bound, not usable/);
+    });
+
     it("refuses an invalid maker before any HTTP request", async () => {
         const fetch = vi.fn();
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });

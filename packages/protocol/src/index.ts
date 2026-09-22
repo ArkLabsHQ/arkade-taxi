@@ -314,6 +314,9 @@ export interface ReceiveQuoteResponse {
     recoveryLocktime: TaggedLocktimeWire;
     createdAt: number;
     expiresAt: number;
+    /** Read-only: the fill this quote is bound to, present only while `bound`.
+     * Recovers a lost quote-creation response; it authorises nothing. */
+    boundFillId?: string;
 }
 
 export interface ReceiverClaimDescriptorWire {

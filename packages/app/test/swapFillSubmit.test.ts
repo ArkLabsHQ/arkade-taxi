@@ -87,6 +87,7 @@ let leases: number;
 let joint: FakeJointOps;
 let emulator: FakeEmulator;
 let taxiIdentity: FakeTaxiIdentity;
+let clock: number;
 let authCalls: { solver: JointGraph; trusted: JointGraph; solverKeys: string[] }[];
 let authFailure: Error | null;
 
@@ -153,6 +154,7 @@ class FakeJointOps implements SwapFillJointOps {
     submitOwnerKeys: unknown;
     covenantArgs: { expected: JointGraph; emulatorXOnly: string } | undefined;
     failAt: { op: "sign" | "prepare" | "covenant" | "submit"; error: Error } | null = null;
+    onSign: (() => void) | null = null;
     preparedTxid = "dd".repeat(32);
     submittedTxid = "ee".repeat(32);
     covenant = "cc".repeat(32);
@@ -167,6 +169,7 @@ class FakeJointOps implements SwapFillJointOps {
     }): Promise<JointGraph> {
         this.calls.push("sign");
         this.signArgs = args;
+        this.onSign?.();
         if (this.failAt?.op === "sign") throw this.failAt.error;
         return args.partial;
     }
@@ -221,11 +224,13 @@ class FakeEmulator {
     readonly calls: { arkTx: string; checkpoints: string[]; preparedAtCall: string | undefined }[] =
         [];
     fail: Error | null = null;
+    onCall: (() => void) | null = null;
     constructor(private readonly store: MemorySwapFills) {}
     async submitTx(
         arkTx: string,
         checkpoints: string[],
     ): Promise<{ signedArkTx: string; signedCheckpointTxs: string[] }> {
+        this.onCall?.();
         const preparedAtCall = [...this.store.rows.values()][0]?.preparedArkTx;
         this.calls.push({ arkTx, checkpoints, preparedAtCall });
         if (this.fail) throw this.fail;
@@ -249,7 +254,7 @@ const deps = (over: Partial<SwapFillSubmitDeps> = {}): SwapFillSubmitDeps => ({
     taxiIdentity: () => taxiIdentity as unknown as Identity,
     emulator,
     config: config(),
-    now: () => NOW,
+    now: () => clock,
     randomId: () => `lease-${++leases}`,
     leaseSeconds: 60,
     joint,
@@ -347,6 +352,7 @@ beforeEach(() => {
     joint = new FakeJointOps();
     emulator = new FakeEmulator(swapFills);
     taxiIdentity = new FakeTaxiIdentity();
+    clock = NOW;
     authCalls = [];
     authFailure = null;
 });
@@ -610,6 +616,71 @@ describe("submitSwapFill", () => {
     });
 });
 
+describe("submitSwapFill deadline gate", () => {
+    it("refuses at a deadline the clock reaches during signing, before any provider call", async () => {
+        const q = await quote();
+        joint.onSign = () => {
+            clock = q.expiresAt;
+        };
+        const rejected = await caught(() => submitQuoted(swapFills.get(q.fillId)!, q.graph));
+        expect(rejected.status).toBe(409);
+        expect(rejected.code).toBe("quote_expired");
+        expect(rejected.message).toContain("(not submitted)");
+        expect(joint.calls).toEqual(["verify", "sign", "prepare", "covenant"]);
+        expect(emulator.calls).toHaveLength(0);
+        expect(swapFills.events).not.toContain("recordSubmitInvoked");
+        expect(swapFills.get(q.fillId)).toMatchObject({
+            state: "expired",
+            submitInvoked: false,
+            failureCode: "quote_expired",
+        });
+        expect(swapFills.listReservedOutpoints()).toEqual([]);
+    });
+
+    it("submits with a second of the deadline left", async () => {
+        const q = await quote();
+        joint.onSign = () => {
+            clock = q.expiresAt - 1;
+        };
+        const result = await submitQuoted(swapFills.get(q.fillId)!, q.graph);
+        expect(result.state).toBe("submitting");
+        expect(emulator.calls).toHaveLength(1);
+        expect(swapFills.get(q.fillId)!.submitInvoked).toBe(true);
+    });
+
+    it("finishes settlement for a deadline that passes after the provider was invoked", async () => {
+        const q = await quote();
+        emulator.onCall = () => {
+            clock = q.expiresAt + 3600;
+        };
+        const result = await submitQuoted(swapFills.get(q.fillId)!, q.graph);
+        expect(result).toMatchObject({ state: "submitting", txid: joint.preparedTxid });
+        expect(emulator.calls).toHaveLength(1);
+        expect(swapFills.get(q.fillId)).toMatchObject({
+            state: "submitting",
+            submitInvoked: true,
+        });
+        expect(swapFills.listReservedOutpoints()).toEqual([TAXI_0]);
+    });
+
+    it("keeps an ambiguous outcome reserved once the deadline has passed", async () => {
+        const q = await quote();
+        emulator.fail = new Error("connection reset");
+        emulator.onCall = () => {
+            clock = q.expiresAt + 3600;
+        };
+        const rejected = await caught(() => submitQuoted(swapFills.get(q.fillId)!, q.graph));
+        expect(rejected.code).toBe("swap_fill_submission_ambiguous");
+        expect(swapFills.events).toContain("recordAmbiguous");
+        expect(swapFills.get(q.fillId)).toMatchObject({
+            state: "submitting",
+            submitInvoked: true,
+            failureCode: "swap_fill_submission_ambiguous",
+        });
+        expect(swapFills.listReservedOutpoints()).toEqual([TAXI_0]);
+    });
+});
+
 describe("submitSwapFill bound freshness gate", () => {
     let world: BoundJointFill;
     let freshAt: string[][];
@@ -681,6 +752,23 @@ describe("submitSwapFill bound freshness gate", () => {
         expect(stored.state).toBe("quoted");
         expect(stored.submitInvoked).toBe(false);
         expect(stored.preparedArkTx).toBeDefined();
+    });
+
+    it("releases the bound receive quote when the deadline lapses before the provider", async () => {
+        joint.onSign = () => {
+            clock = world.fill.expiresAt;
+        };
+        const rejected = await caught(() => submitBound());
+        expect(rejected.code).toBe("quote_expired");
+        expect(rejected.message).toContain("(not submitted)");
+        expect(emulator.calls).toHaveLength(0);
+        expect(world.swapFills.get(world.fill.id)).toMatchObject({
+            state: "expired",
+            submitInvoked: false,
+        });
+        expect(world.receiveQuotes.get("receive-1")!.state).toBe("expired");
+        expect(world.advances.get("receive-1")!.state).toBe("expired");
+        expect(world.swapFills.listReservedOutpoints()).toEqual([]);
     });
 
     it("refuses a bound fill when no freshness verifier is wired", async () => {

@@ -484,6 +484,7 @@ export class TaxiClient {
                 maxFare: body.maxFare,
                 ...(body.fundingTxid !== undefined ? { fundingTxid: body.fundingTxid } : {}),
                 ...(body.fundingVout !== undefined ? { fundingVout: body.fundingVout } : {}),
+                ...(body.validUntil !== undefined ? { validUntil: body.validUntil } : {}),
             },
             ...(now !== undefined ? { now } : {}),
         });

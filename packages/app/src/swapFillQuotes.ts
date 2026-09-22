@@ -158,6 +158,12 @@ export interface SwapFillQuoteDeps {
 
 const key = (o: Outpoint): string => `${o.txid}:${o.vout}`;
 
+/** The caller's wall clock, not an input batch expiry: the two never mix. */
+const assertDeadlineLive = (validUntil: number | undefined, now: number): void => {
+    if (validUntil !== undefined && validUntil <= now)
+        throw new ServiceError("swap_fill_deadline_expired", 409, "caller deadline has passed");
+};
+
 const termsOf = (t: {
     receiveQuoteId?: string;
     offerHex: string;
@@ -169,6 +175,7 @@ const termsOf = (t: {
     fundingTxid?: string;
     fundingVout?: number;
     swapAddress?: string;
+    validUntil?: number;
 }): string =>
     JSON.stringify({
         receiveQuoteId: t.receiveQuoteId ?? null,
@@ -204,6 +211,7 @@ const termsOf = (t: {
         fundingTxid: t.fundingTxid ?? null,
         fundingVout: t.fundingVout ?? null,
         swapAddress: t.swapAddress ?? null,
+        validUntil: t.validUntil ?? null,
     });
 
 const storedTermsOf = (fill: SwapFill): string =>
@@ -218,6 +226,7 @@ const storedTermsOf = (fill: SwapFill): string =>
         ...(fill.offerTxid !== undefined ? { fundingTxid: fill.offerTxid } : {}),
         ...(fill.offerVout !== undefined ? { fundingVout: fill.offerVout } : {}),
         ...(fill.swapAddress !== undefined ? { swapAddress: fill.swapAddress } : {}),
+        ...(fill.validUntil !== undefined ? { validUntil: fill.validUntil } : {}),
     });
 
 function fillToResponse(fill: SwapFill, scripts: SwapFillWireScripts): SwapFillQuoteResponse {
@@ -300,6 +309,7 @@ async function createAdmittedSwapFillQuote(
             sponsorScript: existing.sponsorScript,
         });
     }
+    assertDeadlineLive(req.validUntil, now);
     let receiveQuote: ReceiveQuote | undefined;
     if (req.contributionSats > 0n && deps.receiveQuotes) {
         if (!req.receiveQuoteId)
@@ -622,6 +632,13 @@ async function createAdmittedSwapFillQuote(
     if (deps.policy.getSnapshot().revision !== revision)
         throw new ServiceError("policy_changed", 409, "policy changed during construction");
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+    // Building the graph took awaits; the caller's window may have closed since.
+    assertDeadlineLive(req.validUntil, deps.now());
+    const quotedExpiry = receiveQuote ? receiveQuote.expiresAt : now + policy.quoteTtlSeconds;
+    const expiresAt =
+        req.validUntil !== undefined && req.validUntil < quotedExpiry
+            ? req.validUntil
+            : quotedExpiry;
     const fill: SwapFill = {
         id: deps.randomId(),
         ...(receiveQuote ? { receiveQuoteId: receiveQuote.id } : {}),
@@ -645,7 +662,8 @@ async function createAdmittedSwapFillQuote(
         attempts: 0,
         createdAt: now,
         updatedAt: now,
-        expiresAt: receiveQuote ? receiveQuote.expiresAt : now + policy.quoteTtlSeconds,
+        expiresAt,
+        ...(req.validUntil !== undefined ? { validUntil: req.validUntil } : {}),
     };
     try {
         if (receiveQuote) {
@@ -744,7 +762,7 @@ async function createAdmittedSwapFillQuote(
                 fare: receiveQuote.fare,
                 createdAt: now,
                 updatedAt: now,
-                expiresAt: receiveQuote.expiresAt,
+                expiresAt: fill.expiresAt,
                 batchExpiry,
                 recoveryLocktime: receiveQuote.recoveryLocktime,
                 operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),

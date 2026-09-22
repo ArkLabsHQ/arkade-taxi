@@ -308,6 +308,13 @@ export const MIGRATIONS: readonly Migration[] = [
         CREATE UNIQUE INDEX swap_fills_receive_quote ON swap_fills (receive_quote_id)
             WHERE receive_quote_id IS NOT NULL;`,
     },
+    {
+        id: 9,
+        // Additive and nullable: NULL is a fill quoted without a caller
+        // deadline, which is the legacy operator-TTL-only behaviour.
+        up: `ALTER TABLE swap_fills ADD COLUMN valid_until INTEGER
+            CHECK (valid_until IS NULL OR valid_until > 0)`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -409,6 +416,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'receive_quote_id' AND type = 'TEXT'",
             )
             .get();
+    const hasSwapFillDeadline =
+        hasReceiveQuoteLink &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'valid_until' AND type = 'INTEGER'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -420,7 +434,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 5 && !hasClaimMode) ||
             (current === 6 && !hasRecoveryRecipient) ||
             (current === 7 && !hasReceiveQuotes) ||
-            (current === 8 && !hasReceiveQuoteLink))
+            (current === 8 && !hasReceiveQuoteLink) ||
+            (current === 9 && !hasSwapFillDeadline))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

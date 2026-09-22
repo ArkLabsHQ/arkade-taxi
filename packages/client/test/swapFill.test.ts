@@ -135,6 +135,43 @@ describe("verifySwapFillQuote", () => {
         ).toThrow(/expired/);
     });
 
+    it("rejects a deadline later than the ceiling the caller authorised", () => {
+        expect(() =>
+            verifySwapFillQuote({
+                quote: quote({ expiresAt: NOW + 61 }),
+                expect: expectTerms({ validUntil: NOW + 60 }),
+                now: NOW,
+            }),
+        ).toThrow(/ceiling/);
+    });
+
+    it("accepts a deadline exactly at the ceiling and still rejects one already expired", () => {
+        expect(
+            verifySwapFillQuote({
+                quote: quote({ expiresAt: NOW + 60 }),
+                expect: expectTerms({ validUntil: NOW + 60 }),
+                now: NOW,
+            }).expiresAt,
+        ).toBe(NOW + 60);
+        expect(() =>
+            verifySwapFillQuote({
+                quote: quote({ expiresAt: NOW }),
+                expect: expectTerms({ validUntil: NOW + 60 }),
+                now: NOW,
+            }),
+        ).toThrow(/expired/);
+    });
+
+    it("leaves a quote without an authorised ceiling on today's expiry rule alone", () => {
+        expect(
+            verifySwapFillQuote({
+                quote: quote({ expiresAt: NOW + 6000 }),
+                expect: expectTerms(),
+                now: NOW,
+            }).expiresAt,
+        ).toBe(NOW + 6000);
+    });
+
     it("rejects a graph missing the solver proceeds output", () => {
         const g = graph({
             outputs: [
@@ -387,6 +424,27 @@ describe("TaxiClient swap-fill endpoints", () => {
             fundingTxid: DEP.txid,
             fundingVout: DEP.vout,
         });
+    });
+
+    it("POSTs the caller deadline ceiling and holds the server to it, not to its echo", async () => {
+        const fetch = recordingFetch(() => jsonResponse(200, quote({ expiresAt: NOW + 61 })));
+        const taxi = new TaxiClient({ baseUrl: BASE, fetch });
+        const request = {
+            operationId: "op-1",
+            offerHex: "ab12",
+            solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
+            solverProceedsScript: PROCEEDS,
+            solverKeys: ["ab".repeat(32)],
+            contributionSats: 330n,
+            maxFare: { currency: "sats" as const, units: 10n },
+            fundingTxid: DEP.txid,
+            fundingVout: DEP.vout,
+            validUntil: NOW + 60,
+        };
+        await expect(taxi.requestVerifiedSwapFillQuote({ ...request, now: NOW })).rejects.toThrow(
+            /ceiling/,
+        );
+        expect(JSON.parse(String(fetch.calls[0]!.init.body)).validUntil).toBe(NOW + 60);
     });
 
     it("refuses to submit a diverted graph without touching the network", async () => {

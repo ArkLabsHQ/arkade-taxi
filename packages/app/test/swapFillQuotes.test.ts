@@ -35,6 +35,7 @@ import {
     fakeOfferTerms,
     MemorySwapFills,
 } from "./swapFillFixtures.js";
+import { createBoundJointFill } from "./jointFillFixtures.js";
 import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
 import { readFundingSource } from "../src/arkade/fundingSource.js";
 
@@ -415,6 +416,88 @@ describe("createSwapFillQuote", () => {
         expect(conflict.status).toBe(409);
         expect(conflict.code).toBe("operation_conflict");
         expect(swapFills.rows.size).toBe(1);
+    });
+
+    it("mints the fill deadline on the caller ceiling when it is under the operator TTL", async () => {
+        const quote = await createSwapFillQuote(deps(), body({ validUntil: NOW + 25 }));
+        expect(quote.expiresAt).toBe(NOW + 25);
+        expect(swapFills.get(quote.fillId)!.validUntil).toBe(NOW + 25);
+    });
+
+    it("keeps the operator TTL when the caller ceiling is later", async () => {
+        const late = await createSwapFillQuote(deps(), body({ validUntil: NOW + 6000 }));
+        expect(late.expiresAt).toBe(NOW + 60);
+        expect(swapFills.get(late.fillId)!.validUntil).toBe(NOW + 6000);
+    });
+
+    it("leaves a request without a ceiling on the operator TTL alone", async () => {
+        const legacy = await createSwapFillQuote(deps(), body());
+        expect(legacy.expiresAt).toBe(NOW + 60);
+        expect(swapFills.get(legacy.fillId)!.validUntil).toBeUndefined();
+    });
+
+    it("floors a bound fill and its advance together on the caller ceiling", async () => {
+        const tight = await createBoundJointFill({ validUntil: NOW + 25 });
+        try {
+            expect(tight.receiveQuotes.get("receive-1")!.expiresAt).toBe(NOW + 60);
+            expect(tight.quote.expiresAt).toBe(NOW + 25);
+            expect(tight.fill.expiresAt).toBe(NOW + 25);
+            expect(tight.fill.validUntil).toBe(NOW + 25);
+            // bind() refuses an advance whose deadline drifts from its fill's.
+            expect(tight.advance.expiresAt).toBe(NOW + 25);
+        } finally {
+            tight.close();
+        }
+        const loose = await createBoundJointFill({ validUntil: NOW + 6000 });
+        try {
+            expect(loose.fill.expiresAt).toBe(NOW + 60);
+            expect(loose.advance.expiresAt).toBe(NOW + 60);
+        } finally {
+            loose.close();
+        }
+    });
+
+    it("treats a changed caller ceiling as a conflict, not a mutable extension", async () => {
+        const d = deps();
+        const first = await createSwapFillQuote(d, body({ validUntil: NOW + 25 }));
+        expect(await createSwapFillQuote(d, body({ validUntil: NOW + 25 }))).toEqual(first);
+        for (const validUntil of [NOW + 26, undefined]) {
+            const conflict = await caught(() => createSwapFillQuote(d, body({ validUntil })));
+            expect(conflict.status).toBe(409);
+            expect(conflict.code).toBe("operation_conflict");
+        }
+        expect(swapFills.rows.size).toBe(1);
+        expect(builder.built).toHaveLength(1);
+    });
+
+    it("refuses a ceiling already reached without reserving or building anything", async () => {
+        for (const validUntil of [NOW, NOW - 1]) {
+            const refused = await caught(() => createSwapFillQuote(deps(), body({ validUntil })));
+            expect(refused.status).toBe(409);
+            expect(refused.code).toBe("swap_fill_deadline_expired");
+        }
+        expect(swapFills.rows.size).toBe(0);
+        expect(swapFills.listReservedOutpoints()).toEqual([]);
+        expect(builder.built).toHaveLength(0);
+    });
+
+    it("refuses a ceiling the clock crosses while the graph is being built", async () => {
+        let clock = NOW;
+        builder.mutate = (graph) => {
+            clock = NOW + 25;
+            return graph;
+        };
+        const refused = await caught(() =>
+            createSwapFillQuote(
+                deps({ now: () => clock, nowMs: () => clock * 1000 }),
+                body({ validUntil: NOW + 25 }),
+            ),
+        );
+        expect(refused.status).toBe(409);
+        expect(refused.code).toBe("swap_fill_deadline_expired");
+        expect(builder.built).toHaveLength(1);
+        expect(swapFills.rows.size).toBe(0);
+        expect(swapFills.listReservedOutpoints()).toEqual([]);
     });
 
     it("refuses to quote while paused or below reserve", async () => {

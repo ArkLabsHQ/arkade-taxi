@@ -116,6 +116,35 @@ describe("swap-fill wire codec", () => {
         ).toBeUndefined();
     });
 
+    it("preserves an optional caller deadline ceiling and leaves a legacy request alone", () => {
+        expect(
+            swapFillQuoteRequestFromWire({ ...REQUEST, validUntil: 1_800_000_000 }).validUntil,
+        ).toBe(1_800_000_000);
+        expect(swapFillQuoteRequestFromWire(REQUEST).validUntil).toBeUndefined();
+        expect(
+            swapFillQuoteRequestFromWire({ ...REQUEST, validUntil: undefined }).validUntil,
+        ).toBeUndefined();
+    });
+
+    it("rejects a deadline that is not a positive safe integer of unix seconds", () => {
+        for (const validUntil of [
+            0,
+            -1,
+            1.5,
+            Number.NaN,
+            Number.POSITIVE_INFINITY,
+            2 ** 53,
+            "1800000000",
+            null,
+        ])
+            expect(() =>
+                swapFillQuoteRequestFromWire({
+                    ...REQUEST,
+                    validUntil,
+                } as unknown as SwapFillQuoteRequestBody),
+            ).toThrow(/validUntil/);
+    });
+
     it("rejects solver keys that are not x-only or compressed hex", () => {
         expect(() =>
             swapFillQuoteRequestFromWire({ ...REQUEST, solverKeys: ["not-a-key"] }),

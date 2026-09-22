@@ -63,7 +63,9 @@ const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`
  * fill can be exercised against a hand-written source: both the signing gate and
  * the startup invariant rebuild the recovery intent from these exact bytes.
  */
-export async function createBoundJointFill(): Promise<BoundJointFill> {
+export async function createBoundJointFill(
+    over: { validUntil?: number } = {},
+): Promise<BoundJointFill> {
     const db = openDatabase(":memory:");
     try {
         const cfg = config({ vtxoMinAmount: 1n });
@@ -219,6 +221,7 @@ export async function createBoundJointFill(): Promise<BoundJointFill> {
                 maxFare: { currency: "sats", units: "30" },
                 fundingTxid: BOUND_DEPOSIT.txid,
                 fundingVout: BOUND_DEPOSIT.vout,
+                ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),
             },
         );
         return {

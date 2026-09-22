@@ -72,6 +72,9 @@ export interface SwapFill {
     createdAt: number;
     updatedAt: number;
     expiresAt: number;
+    /** Caller's own wall-clock ceiling, unix seconds, kept so a replay of the
+     * same operation id under a different deadline reads as a conflict. */
+    validUntil?: number;
 }
 
 export class SwapFillClaimError extends Error {
@@ -175,6 +178,7 @@ interface SwapFillRow {
     created_at: bigint;
     updated_at: bigint;
     expires_at: bigint;
+    valid_until: bigint | null;
 }
 
 const fareFromRow = (r: SwapFillRow, id: string): SwapFillFare => {
@@ -271,6 +275,7 @@ function fromRow(r: SwapFillRow): SwapFill {
     if (r.lease_token !== null) fill.leaseToken = r.lease_token;
     if (r.lease_until !== null) fill.leaseUntil = Number(r.lease_until);
     if (r.next_attempt_at !== null) fill.nextAttemptAt = Number(r.next_attempt_at);
+    if (r.valid_until !== null) fill.validUntil = Number(r.valid_until);
     return fill;
 }
 
@@ -352,14 +357,15 @@ export class SwapFillRepository {
                          fare_asset_group_index, max_fare_json, graph_json, graph_id, solver_graph_json,
                          prepared_ark_tx, prepared_checkpoints_json, submit_invoked, txid, outpoint_txid,
                          outpoint_vout, spent_txid, failure_code, failure_detail, lease_owner, lease_token,
-                         lease_until, attempts, next_attempt_at, created_at, updated_at, expires_at)
+                         lease_until, attempts, next_attempt_at, created_at, updated_at, expires_at, valid_until)
                          VALUES (@id, @receive_quote_id, @operation_id, @state, @offer_hex, @offer_txid, @offer_vout,
                          @swap_address, @solver_inputs_json, @solver_proceeds_script, @solver_keys_json,
                          @taxi_inputs_json, @contribution_sats, @sponsor_script, @fare_currency, @fare_units, @fare_asset_txid,
                          @fare_asset_group_index, @max_fare_json, @graph_json, @graph_id, @solver_graph_json,
                          @prepared_ark_tx, @prepared_checkpoints_json, @submit_invoked, @txid, @outpoint_txid,
                          @outpoint_vout, @spent_txid, @failure_code, @failure_detail, @lease_owner, @lease_token,
-                         @lease_until, @attempts, @next_attempt_at, @created_at, @updated_at, @expires_at)`,
+                         @lease_until, @attempts, @next_attempt_at, @created_at, @updated_at, @expires_at,
+                         @valid_until)`,
                     )
                     .run({
                         id: fill.id,
@@ -417,6 +423,7 @@ export class SwapFillRepository {
                         created_at: fill.createdAt,
                         updated_at: fill.updatedAt,
                         expires_at: fill.expiresAt,
+                        valid_until: fill.validUntil ?? null,
                     });
                 const reserve = this.#db.prepare(
                     "INSERT INTO swap_fill_reservations (outpoint_txid, outpoint_vout, fill_id, created_at) VALUES (?, ?, ?, ?)",
