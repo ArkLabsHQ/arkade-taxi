@@ -95,7 +95,7 @@ const graph = {
     inputOwners: [null, "solver", "sponsor"] as (string | null)[],
 };
 
-const boundFill = (): SwapFill => ({
+const boundFill = (over: Partial<SwapFill> = {}): SwapFill => ({
     id: "fill-1",
     receiveQuoteId: "receive-1",
     operationId: "op-1",
@@ -118,9 +118,10 @@ const boundFill = (): SwapFill => ({
     createdAt: NOW,
     updatedAt: NOW,
     expiresAt: NOW + 60,
+    ...over,
 });
 
-const boundAdvance = (): Advance => ({
+const boundAdvance = (over: Partial<Advance> = {}): Advance => ({
     id: "receive-1",
     state: "locking",
     receiverKey: quote().params.receiverKey,
@@ -143,6 +144,7 @@ const boundAdvance = (): Advance => ({
     operatorInputs: [INPUT],
     unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":1}',
     unsignedLockupId: "ab".repeat(32),
+    ...over,
 });
 
 let cleanup: (() => void) | undefined;
@@ -310,6 +312,121 @@ describe("receive quote repository", () => {
         expect(repo.get("receive-1")?.state).toBe("expired");
         expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("expired");
         expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([]);
+        db.close();
+    });
+
+    it("isolates an inconsistent bound row so unrelated expiries still complete", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const quotes = new ReceiveQuoteRepository(db);
+        const fills = new SwapFillRepository(db);
+        const advances = new AdvanceRepository(db);
+        const reservations = new ReservationRepository(db);
+        const SECOND = { txid: "ee".repeat(32), vout: 2 };
+        const UNBOUND = { txid: "ff".repeat(32), vout: 0 };
+        const LIVE = { txid: "ff".repeat(32), vout: 1 };
+        insert(quotes, policy);
+        quotes.bind({
+            quoteId: "receive-1",
+            fill: boundFill(),
+            advance: boundAdvance(),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            now: NOW,
+        });
+        insert(
+            quotes,
+            policy,
+            quote({
+                id: "receive-2",
+                operatorInputs: [{ ...quote().operatorInputs[0]!, ...SECOND }],
+            }),
+        );
+        quotes.bind({
+            quoteId: "receive-2",
+            fill: boundFill({
+                id: "fill-2",
+                receiveQuoteId: "receive-2",
+                operationId: "op-2",
+                taxiInputs: [SECOND],
+            }),
+            advance: boundAdvance({ id: "receive-2", operatorInputs: [SECOND] }),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            now: NOW,
+        });
+        fills.insert(
+            boundFill({
+                id: "fill-3",
+                receiveQuoteId: undefined,
+                operationId: "op-3",
+                taxiInputs: [UNBOUND],
+            }),
+        );
+        fills.insert(
+            boundFill({
+                id: "fill-4",
+                receiveQuoteId: undefined,
+                operationId: "op-4",
+                taxiInputs: [LIVE],
+                expiresAt: NOW + 600,
+            }),
+        );
+        db.prepare(
+            "UPDATE receive_quotes SET state = 'expired', bound_fill_id = NULL WHERE id = 'receive-2'",
+        ).run();
+
+        expect(fills.expireQuotes(NOW + 60)).toBe(2);
+        expect(fills.get("fill-1")?.state).toBe("expired");
+        expect(advances.get("receive-1")?.state).toBe("expired");
+        expect(reservations.listForAdvance("receive-1")).toEqual([]);
+        expect(fills.get("fill-3")?.state).toBe("expired");
+        expect(fills.get("fill-4")?.state).toBe("quoted");
+        expect(fills.listReservedOutpoints()).toEqual([LIVE]);
+
+        const stuck = fills.get("fill-2")!;
+        expect(stuck.state).toBe("quoted");
+        expect(stuck.failureCode).toBe("swap_fill_bound_expiry_unsafe");
+        expect(stuck.failureDetail).toMatch(/receive-2/);
+        expect(advances.get("receive-2")?.state).toBe("locking");
+        expect(reservations.listForAdvance("receive-2")).toEqual([SECOND]);
+
+        expect(
+            fills.claimSubmit("fill-4", {
+                leaseOwner: "w1",
+                leaseToken: "t1",
+                leaseUntil: NOW + 90,
+                solverGraph: structuredClone(graph),
+                now: NOW + 60,
+            }).state,
+        ).toBe("submitting");
+        db.close();
+    });
+
+    it("refuses to claim a bound fill the sweep could not expire", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const quotes = new ReceiveQuoteRepository(db);
+        const fills = new SwapFillRepository(db);
+        insert(quotes, policy);
+        quotes.bind({
+            quoteId: "receive-1",
+            fill: boundFill(),
+            advance: boundAdvance(),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            now: NOW,
+        });
+        db.prepare(
+            "UPDATE receive_quotes SET state = 'expired', bound_fill_id = NULL WHERE id = 'receive-1'",
+        ).run();
+        expect(fills.expireQuotes(NOW + 60)).toBe(0);
+        expect(() =>
+            fills.claimSubmit("fill-1", {
+                leaseOwner: "w1",
+                leaseToken: "t1",
+                leaseUntil: NOW + 90,
+                solverGraph: structuredClone(graph),
+                now: NOW + 60,
+            }),
+        ).toThrow(/quote_expired/);
         db.close();
     });
 

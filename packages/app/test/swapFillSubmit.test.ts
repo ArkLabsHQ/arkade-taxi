@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
     ArkAddress,
     CSVMultisigTapscript,
@@ -42,6 +42,12 @@ import {
     MemorySwapFills,
     sealGraph,
 } from "./swapFillFixtures.js";
+import {
+    createBoundJointFill,
+    foreignRecoveryPreflight,
+    patchJointSource,
+    type BoundJointFill,
+} from "./jointFillFixtures.js";
 import { jointGraphFromWire } from "../src/arkade/swapFillBuilder.js";
 import { storedGraphToJoint } from "../src/arkade/swapFillBuilder.js";
 import type { Policy } from "@arkade-taxi/core";
@@ -601,6 +607,121 @@ describe("submitSwapFill", () => {
         expect(malformed.status).toBe(400);
         expect(swapFills.get(q.fillId)!.state).toBe("quoted");
         expect(joint.calls).toHaveLength(0);
+    });
+});
+
+describe("submitSwapFill bound freshness gate", () => {
+    let world: BoundJointFill;
+    let freshAt: string[][];
+    let freshFailures: (Error | null)[];
+
+    const boundFresh = async (): Promise<void> => {
+        freshAt.push([...joint.calls]);
+        const failure = freshFailures[freshAt.length - 1];
+        if (failure) throw failure;
+    };
+
+    const submitBound = (over: Partial<SwapFillSubmitDeps> = {}) =>
+        submitSwapFill(
+            deps({
+                swapFills: world.swapFills,
+                config: world.config,
+                advances: world.advances,
+                assertBoundFresh: boundFresh,
+                ...over,
+            }),
+            world.fill.id,
+            { solverGraph: world.quote.graph },
+        );
+
+    beforeEach(async () => {
+        world = await createBoundJointFill();
+        freshAt = [];
+        freshFailures = [];
+    });
+    afterEach(() => world.close());
+
+    it("straddles Taxi signing with two bound freshness checks before submitting", async () => {
+        expect(world.fill.receiveQuoteId).toBe("receive-1");
+        const result = await submitBound();
+        expect(result.state).toBe("submitting");
+        expect(freshAt).toEqual([["verify"], ["verify", "sign", "prepare", "covenant"]]);
+        expect(emulator.calls).toHaveLength(1);
+        expect(world.swapFills.get(world.fill.id)).toMatchObject({
+            state: "submitting",
+            submitInvoked: true,
+        });
+    });
+
+    it("fails closed before any Taxi signature when the bound state is stale", async () => {
+        freshFailures = [jointError("bound receive quote is missing, stale, or paused")];
+        const rejected = await caught(() => submitBound());
+        expect(rejected.status).toBe(409);
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toContain("(not submitted)");
+        expect(joint.calls).not.toContain("sign");
+        expect(emulator.calls).toHaveLength(0);
+        expect(world.swapFills.get(world.fill.id)).toMatchObject({
+            state: "quoted",
+            submitInvoked: false,
+            failureCode: "swap_fill_bound_unsafe",
+        });
+    });
+
+    it("fails closed after prepare and before the provider when freshness lapses", async () => {
+        freshFailures = [null, jointError("bound input cc..:0 changed")];
+        const rejected = await caught(() => submitBound());
+        expect(rejected.status).toBe(409);
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toContain("(not submitted)");
+        expect(freshAt).toHaveLength(2);
+        expect(joint.calls).toEqual(["verify", "sign", "prepare", "covenant"]);
+        expect(emulator.calls).toHaveLength(0);
+        const stored = world.swapFills.get(world.fill.id)!;
+        expect(stored.state).toBe("quoted");
+        expect(stored.submitInvoked).toBe(false);
+        expect(stored.preparedArkTx).toBeDefined();
+    });
+
+    it("refuses a bound fill when no freshness verifier is wired", async () => {
+        const rejected = await caught(() => submitBound({ assertBoundFresh: undefined }));
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toMatch(/freshness verifier is unavailable/);
+        expect(joint.calls).not.toContain("sign");
+        expect(emulator.calls).toHaveLength(0);
+    });
+
+    it("refuses a bound fill whose advance is missing", async () => {
+        const rejected = await caught(() => submitBound({ advances: { get: () => undefined } }));
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toMatch(/bound advance is missing/);
+        expect(freshAt).toHaveLength(0);
+        expect(joint.calls).not.toContain("sign");
+        expect(emulator.calls).toHaveLength(0);
+    });
+
+    it("refuses a bound advance whose persisted source names another fill", async () => {
+        const swapped = patchJointSource(world.advance, (source) => {
+            source.fillId = "fill-other";
+        });
+        const rejected = await caught(() => submitBound({ advances: { get: () => swapped } }));
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toMatch(/bound funding source association differs/);
+        expect(freshAt).toHaveLength(0);
+        expect(joint.calls).not.toContain("sign");
+        expect(emulator.calls).toHaveLength(0);
+    });
+
+    it("refuses a bound advance whose persisted recovery no longer rebuilds", async () => {
+        const drifted = patchJointSource(world.advance, (source) => {
+            source.recoveryPreflight = foreignRecoveryPreflight();
+        });
+        const rejected = await caught(() => submitBound({ advances: { get: () => drifted } }));
+        expect(rejected.code).toBe("swap_fill_bound_unsafe");
+        expect(rejected.message).toMatch(/recovery preflight differs from reconstructed recovery/);
+        expect(freshAt).toHaveLength(0);
+        expect(joint.calls).not.toContain("sign");
+        expect(emulator.calls).toHaveLength(0);
     });
 });
 

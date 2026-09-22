@@ -91,6 +91,8 @@ export class SwapFillReservationConflictError extends Error {
     }
 }
 
+const BOUND_EXPIRY_UNSAFE = "swap_fill_bound_expiry_unsafe";
+
 const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
 const unhex = (s: string): Uint8Array => Uint8Array.from(Buffer.from(s, "hex"));
 
@@ -504,7 +506,10 @@ export class SwapFillRepository {
                 }
                 const current = this.get(id);
                 if (!current) throw new SwapFillClaimError("not_found", id);
-                if (current.state === "expired") throw new SwapFillClaimError("quote_expired", id);
+                // A bound row the sweep quarantined stays quoted past its expiry,
+                // so the deadline is checked here rather than inferred from state.
+                if (current.state === "expired" || current.expiresAt <= claim.now)
+                    throw new SwapFillClaimError("quote_expired", id);
                 if (current.state !== "quoted") throw new SwapFillClaimError("invalid_state", id);
                 this.#db
                     .prepare(
@@ -750,23 +755,7 @@ export class SwapFillRepository {
 
     expireQuotes(at: number): number {
         assertNativeAccess(this.#db);
-        return this.#db
-            .transaction(() => {
-                const boundIds = this.#expiringBoundIds(at);
-                const expired = this.#db
-                    .prepare(
-                        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
-                    )
-                    .run(at, at).changes;
-                this.#expireBound(boundIds, at);
-                this.#db
-                    .prepare(
-                        "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
-                    )
-                    .run(at);
-                return Number(expired);
-            })
-            .immediate();
+        return this.#db.transaction(() => this.#expire(at)).immediate();
     }
 
     reconcileCandidates(now: number): SwapFill[] {
@@ -782,33 +771,70 @@ export class SwapFillRepository {
             .map(fromRow);
     }
 
-    #expire(at: number): void {
-        const boundIds = this.#expiringBoundIds(at);
-        this.#db
+    #expire(at: number): number {
+        const bound = this.#expiringBound(at);
+        const expired = this.#db
             .prepare(
-                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
+                `UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?)
+                 WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?`,
             )
-            .run(at, at);
-        this.#expireBound(boundIds, at);
+            .run(at, at).changes;
+        const boundExpired = this.#sweepBound(bound, at);
         this.#db
             .prepare(
                 "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
             )
             .run(at);
+        return Number(expired) + boundExpired;
     }
 
     #release(fillId: string): void {
         this.#db.prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?").run(fillId);
     }
 
-    #expiringBoundIds(at: number): string[] {
+    #expiringBound(at: number): { fillId: string; quoteId: string }[] {
         return this.#db
-            .prepare<[number], { receive_quote_id: string }>(
-                `SELECT receive_quote_id FROM swap_fills WHERE state = 'quoted'
+            .prepare<[number], { id: string; receive_quote_id: string }>(
+                `SELECT id, receive_quote_id FROM swap_fills WHERE state = 'quoted'
                  AND submit_invoked = 0 AND expires_at <= ? AND receive_quote_id IS NOT NULL`,
             )
             .all(at)
-            .map(({ receive_quote_id }) => receive_quote_id);
+            .map((row) => ({ fillId: row.id, quoteId: row.receive_quote_id }));
+    }
+
+    // One inconsistent association must not roll back everything else the sweep
+    // expires, so each bound row releases inside its own savepoint. A failure is
+    // recorded on the fill instead of thrown: the liability stays held, visible
+    // and unexpired rather than half-released.
+    #sweepBound(rows: readonly { fillId: string; quoteId: string }[], at: number): number {
+        const expireFill = this.#db.prepare(
+            `UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?)
+             WHERE id = ? AND state = 'quoted' AND submit_invoked = 0`,
+        );
+        const quarantine = this.#db.prepare(
+            `UPDATE swap_fills SET failure_code = ?, failure_detail = ?, updated_at = max(updated_at, ?)
+             WHERE id = ? AND state = 'quoted'`,
+        );
+        const release = this.#db.transaction((fillId: string, quoteId: string) => {
+            if (expireFill.run(at, fillId).changes !== 1)
+                throw new Error(`swap-fill: bound fill ${fillId} cannot expire safely`);
+            this.#expireBound([quoteId], at);
+        });
+        let expired = 0;
+        for (const { fillId, quoteId } of rows) {
+            try {
+                release(fillId, quoteId);
+                expired += 1;
+            } catch (cause) {
+                quarantine.run(
+                    BOUND_EXPIRY_UNSAFE,
+                    cause instanceof Error ? cause.message : BOUND_EXPIRY_UNSAFE,
+                    at,
+                    fillId,
+                );
+            }
+        }
+        return expired;
     }
 
     #expireBound(ids: readonly string[], at: number): void {
