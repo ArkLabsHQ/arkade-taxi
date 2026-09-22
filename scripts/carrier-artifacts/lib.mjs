@@ -50,6 +50,11 @@ export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex"
 export const CANDIDATE_SDK_SYMBOL = "SendDeadlineExceededError";
 export const CANDIDATE_SWAP_SYMBOL = "FundingOutputMismatchError";
 
+export const CANDIDATE_SYMBOLS = {
+    "@arkade-os/sdk": CANDIDATE_SDK_SYMBOL,
+    "@arkade-os/swap": CANDIDATE_SWAP_SYMBOL,
+};
+
 // A gzipped tar without a tar dependency: decode the POSIX ustar fields, skip the rest by size.
 export function readTarMember(archivePath, member) {
     const buffer = gunzipSync(readFileSync(archivePath));

@@ -4,14 +4,12 @@
 // in the Docker layer BEFORE `pnpm install`.
 
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
     ARCHIVE_DECLARER,
-    CANDIDATE_SDK_SYMBOL,
-    CANDIDATE_SWAP_SYMBOL,
+    CANDIDATE_SYMBOLS,
     EXEMPT_INSTALLS,
     MANIFEST_PATH,
     PINNED_PACKAGES,
@@ -266,31 +264,49 @@ if (wholeCheckout) {
     );
 }
 
-// What actually resolved, when there is an install to ask. Every importer that
-// reaches a candidate is asked, not only the root.
-const importers = ["package.json", "packages/app/package.json", "packages/client/package.json"]
-    .map((relative) => at(...relative.split("/")))
-    .filter((path) => existsSync(join(dirname(path), "node_modules")));
-for (const from of importers)
-    for (const [name, symbol] of [
-        ["@arkade-os/sdk", CANDIDATE_SDK_SYMBOL],
-        ["@arkade-os/swap", CANDIDATE_SWAP_SYMBOL],
-    ]) {
+// What actually resolved, when there is an install to ask. Which importers owe
+// an answer is read from the manifests, so a resolution that is merely absent
+// cannot read as one that passed.
+const declaredBy = new Map(PINNED_PACKAGES.map((name) => [name, []]));
+for (const relative of manifests) {
+    const declared = readJson(at(...relative.split("/")));
+    for (const name of PINNED_PACKAGES)
+        if (declared.dependencies?.[name] ?? declared.devDependencies?.[name])
+            declaredBy.get(name).push(relative);
+}
+const installed = existsSync(at("node_modules"));
+let confirmed = 0;
+let owed = 0;
+for (const [name, importers] of declaredBy) {
+    if (
+        !check(
+            importers.length > 0,
+            `no workspace manifest declares ${name}, so nothing pins its build`,
+        )
+    )
+        continue;
+    owed += importers.length;
+    if (!installed) continue;
+    for (const relative of importers)
         try {
-            createRequire(from).resolve(name);
-        } catch {
-            continue;
-        }
-        try {
-            await assertCandidateExport(packageRootFrom(from, name), name, symbol);
+            await assertCandidateExport(
+                packageRootFrom(at(...relative.split("/")), name),
+                name,
+                CANDIDATE_SYMBOLS[name],
+            );
+            confirmed++;
         } catch (error) {
-            failures.push(error.message);
+            failures.push(`${relative}: ${error.message}`);
         }
-    }
+}
+check(
+    !installed || confirmed === owed,
+    `${confirmed} of ${owed} declared candidate resolutions were confirmed`,
+);
 
 if (failures.length) fail(failures.join("\n  - "));
 process.stdout.write(
     `carrier artifacts verified: ${manifest.artifacts.length} archives, lock pinned to their bytes, ` +
         `${wholeCheckout ? "Dockerfile and workflows checked" : "install context, no Dockerfile to check"}, ` +
-        `${importers.length ? `candidate exports confirmed from ${importers.length} importers` : "no install to inspect yet"}\n`,
+        `${installed ? `candidate exports confirmed on ${confirmed} of ${owed} declared resolutions` : "no install to inspect yet"}\n`,
 );

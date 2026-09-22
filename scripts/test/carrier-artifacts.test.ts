@@ -33,6 +33,13 @@ const CANDIDATES = [
     ["@arkade-os/swap", "FundingOutputMismatchError"],
 ] as const;
 
+/** Every workspace manifest that declares a candidate owes a resolution for it. */
+const declarersOf = (name: string): string[] =>
+    workspaceManifests(REPO).filter((relative) => {
+        const declared = readJson(at(...relative.split("/")));
+        return declared.dependencies?.[name] ?? declared.devDependencies?.[name];
+    });
+
 describe("frozen carrier artifacts", () => {
     it("passes the built-in-Node verification with every scan group run", () => {
         const output = execFileSync(
@@ -45,17 +52,22 @@ describe("frozen carrier artifacts", () => {
         );
         expect(output).toContain(`${PINNED_PACKAGES.length} archives`);
         expect(output).toContain("Dockerfile and workflows checked");
-        expect(output).toContain("candidate exports confirmed from 3 importers");
+        // Coverage may grow; it must never shrink silently, and "0 of 0" must
+        // not read as a pass.
+        const confirmed = /confirmed on (\d+) of (\d+) declared resolutions/.exec(output);
+        expect(confirmed).not.toBeNull();
+        expect(confirmed![1]).toBe(confirmed![2]);
+        expect(Number(confirmed![1])).toBeGreaterThanOrEqual(6);
     }, 30_000);
 
     it("resolves the candidate build, not the registry build of the same version", async () => {
-        for (const importer of [
-            "package.json",
-            "packages/app/package.json",
-            "packages/client/package.json",
-        ])
-            for (const [name, symbol] of CANDIDATES)
+        let asserted = 0;
+        for (const [name, symbol] of CANDIDATES)
+            for (const importer of declarersOf(name)) {
                 await assertCandidateExport(packageRootFrom(at(importer), name), name, symbol);
+                asserted++;
+            }
+        expect(asserted).toBe(6);
     });
 
     it("refuses an archive packed from anywhere but the pinned source", () => {
