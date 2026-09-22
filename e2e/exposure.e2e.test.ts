@@ -2,6 +2,21 @@ import { expect } from "vitest";
 import { liveScenario } from "./scenarios.js";
 import { admin, lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
 
+const bitcoinSatsFare = (units: string) =>
+    admin("policy", {
+        assetRules: [
+            {
+                assetId: null,
+                enabled: true,
+                fares: [
+                    { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units } },
+                ],
+                claim: "either",
+                maxTopupSats: null,
+            },
+        ],
+    });
+
 liveScenario("exposure-cap-rejects-quote", async () => {
     const live = await openLive();
     try {
@@ -21,6 +36,14 @@ liveScenario("exposure-cap-rejects-quote", async () => {
         });
         expect((await admin("status")).exposure).toEqual(before.exposure);
         await admin("policy", { maxOutstandingSats: "2" });
+        // Admitted on exposure, refused on the fare: a bitcoin transfer's
+        // payment IS its sender sats, so a sats fare has nothing to come from.
+        await bitcoinSatsFare("1");
+        await expect(
+            quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        ).rejects.toMatchObject({ code: "fare_unavailable" });
+        expect((await admin("status")).exposure).toEqual(before.exposure);
+        await bitcoinSatsFare("0");
         const second = await lock(
             live,
             await quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),

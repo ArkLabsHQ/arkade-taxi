@@ -589,7 +589,10 @@ const vendoredClientDependencies = () => {
         .map(([name, spec]) => {
             const vendored = resolve(clientDir, spec.slice("file:".length));
             if (!existsSync(vendored))
-                throw new Error(`packed client dependency ${name} is missing at ${vendored}`);
+                throw new Error(
+                    `packed client dependency ${name} is untracked and absent at ${vendored}; ` +
+                        "this checkout cannot install, build or pack until it is provisioned",
+                );
             return [name, `file:${vendored.replaceAll("\\", "/")}`];
         });
 };
