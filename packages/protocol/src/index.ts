@@ -121,6 +121,9 @@ export interface QuoteRequestBody {
     receiverKey: string;
     senderKey: string;
     assetId?: AssetIdWire;
+    /** Which claim leaf the sender authorises. Omitted resolves against the
+     * operator's rule for this asset. */
+    claimMode?: "recycle" | "purchase";
     senderSats: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
     assetUnits?: string;
@@ -138,6 +141,9 @@ export interface QuoteParams {
     topup: string;
     assetId?: AssetIdWire;
     locktime: string;
+    /** Absent is the historical four-leaf tree; present pins which claim leaf
+     * the covenant actually commits to. */
+    claimMode?: "recycle" | "purchase";
 }
 
 export interface QuoteResponse {

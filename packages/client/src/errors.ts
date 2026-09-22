@@ -40,6 +40,7 @@ export const VerificationErrorCode = {
     Topup: "TOPUP_ABOVE_MAX",
     Fee: "FEE_ABOVE_MAX",
     Locktime: "LOCKTIME_BELOW_MIN",
+    ClaimMode: "CLAIM_MODE_MISMATCH",
     InvalidParams: "INVALID_COVENANT_PARAMS",
     Address: "COVENANT_ADDRESS_MISMATCH",
     PaymentOutput: "PAYMENT_OUTPUT_MISMATCH",

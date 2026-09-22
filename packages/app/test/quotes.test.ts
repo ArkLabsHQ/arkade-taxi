@@ -194,6 +194,7 @@ describe("createQuote", () => {
             dust: "330",
             topup: "330",
             locktime: LOCKTIME.toString(),
+            claimMode: "recycle",
         });
         expect(res.fare.units).toBe("10");
         expect(res.unsignedLockupTx).toBe(lockupBuilder.unsignedTx);
@@ -217,6 +218,7 @@ describe("createQuote", () => {
                 dust: DUST,
                 topup: DUST,
                 locktime: LOCKTIME,
+                claimMode: "recycle",
             },
         })
             .address("ark", serverKey)

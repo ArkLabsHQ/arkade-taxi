@@ -176,6 +176,22 @@ describe("quoteParamsFromWire", () => {
         const w = { ...wire(), assetId: { txid: hex32("11"), groupIndex: 7 } };
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
     });
+
+    // Absence keeps every already-funded covenant on its four-leaf address.
+    it("omits claimMode entirely rather than defaulting it", () => {
+        expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty("claimMode");
+    });
+
+    it.each(["recycle", "purchase"] as const)("round-trips claimMode %s", (claimMode) => {
+        const w = { ...wire(), claimMode };
+        expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+    });
+
+    it.each(["either", "Recycle", ""])("rejects claimMode %j, naming the field", (claimMode) => {
+        expect(() => quoteParamsFromWire({ ...wire(), claimMode: claimMode as "recycle" })).toThrow(
+            /params\.claimMode/,
+        );
+    });
 });
 
 describe("sponsoredParamsFromWire", () => {

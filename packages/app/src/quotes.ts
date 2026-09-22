@@ -184,6 +184,7 @@ function decodeBody(body: unknown): {
     senderInputs: FundingInputValue[];
     assetUnits?: bigint;
     fareId?: string;
+    claimMode?: "recycle" | "purchase";
     assetId?: { txid: Uint8Array; groupIndex: number };
 } {
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
@@ -193,7 +194,15 @@ function decodeBody(body: unknown): {
     if (!Array.isArray(b.senderInputs) || !b.senderInputs.length || b.senderInputs.length > 256)
         throw badRequest("senderInputs must contain 1 to 256 funding inputs");
 
-    let decoded;
+    let decoded: {
+        receiverKey: Uint8Array;
+        senderKey: Uint8Array;
+        senderSats: bigint;
+        senderInputs: FundingInputValue[];
+        assetUnits?: bigint;
+        fareId?: string;
+        claimMode?: "recycle" | "purchase";
+    };
     try {
         decoded = {
             receiverKey: hexToBytes(b.receiverKey, "receiverKey"),
@@ -212,6 +221,13 @@ function decodeBody(body: unknown): {
     }
     if (b.fareId !== undefined && (typeof b.fareId !== "string" || !b.fareId.length))
         throw badRequest("invalid fareId");
+    // Rejected here rather than defaulted: a client that named a mode gets that
+    // mode or an error, never a silently different covenant.
+    if (b.claimMode !== undefined) {
+        if (b.claimMode !== "recycle" && b.claimMode !== "purchase")
+            throw badRequest("claimMode must be recycle or purchase");
+        decoded.claimMode = b.claimMode;
+    }
     if (
         new Set(decoded.senderInputs.map((i) => `${i.txid}:${i.vout}`)).size !==
         decoded.senderInputs.length
@@ -386,6 +402,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         dust: config.dust,
         topup: decision.topup,
         locktime,
+        claimMode: decision.claim,
         ...(req.assetId ? { assetId: req.assetId } : {}),
     };
     const covenant = deriveCovenant(config, params);
@@ -449,6 +466,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         dust: params.dust,
         topup: params.topup,
         locktime: params.locktime,
+        claimMode: decision.claim,
         recoveryLocktime: { kind: expiry.kind, value: params.locktime },
         ...funding,
         batchExpiry: expiry,

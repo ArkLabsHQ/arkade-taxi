@@ -284,6 +284,7 @@ function assertPersistedGraph(
             dust: advance.dust,
             topup: advance.topup,
             locktime: advance.locktime,
+            ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
         covenantAddress: advance.covenantAddress,
@@ -370,6 +371,7 @@ export function validateLockupSubmission(
                 dust: advance.dust,
                 topup: advance.topup,
                 locktime: advance.locktime,
+                ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
                 ...(advance.assetId ? { assetId: advance.assetId } : {}),
             },
         });

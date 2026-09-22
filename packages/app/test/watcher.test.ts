@@ -91,12 +91,16 @@ async function setup(
     locktime?: bigint,
     receiverLeaf?: Uint8Array,
     receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
+    claimMode?: "recycle" | "purchase",
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
         receiverLeaf ?? MultisigTapscript.encode({ pubkeys: [serverKey, receiverOwner] }).script,
     ]);
     const request = buildRequest();
+    request.params.claimMode = "purchase";
+    if (kind === "recycled" || kind === "refunded") request.params.claimMode = "recycle";
+    if (claimMode !== undefined) request.params.claimMode = claimMode;
     if (locktime !== undefined) {
         request.params.locktime = locktime;
         if (locktime >= 500_000_000n) {
@@ -423,6 +427,30 @@ describe("canonical covenant observation", () => {
                 state: "recovered",
                 spentTxid: state.finalArk!.id,
             });
+        } finally {
+            state.db.close();
+        }
+    });
+    it("re-derives a claim-only covenant from the persisted mode after a restart", async () => {
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            false,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+        );
+        try {
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "recycled",
+                claimMode: "recycle",
+                spentTxid: state.finalArk!.id,
+            });
+            expect(state.policy.get().paused).toBe(false);
         } finally {
             state.db.close();
         }

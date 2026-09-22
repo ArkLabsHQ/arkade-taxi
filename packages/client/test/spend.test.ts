@@ -1187,6 +1187,35 @@ describe("purchase", () => {
         expect(emulator.submitTx).not.toHaveBeenCalled();
     });
 
+    // The tree keeps a parseable slot for the forbidden leaf, so the refusal has
+    // to come from the mode and land before any provider call.
+    it("refuses a purchase on a recycle-only covenant, then still recycles", async () => {
+        const a = args();
+        const funding = await receiverFunding();
+        const recycleOnly = {
+            ...a,
+            quote: quote({ ...params(), receiverKey: funding.receiverKey, claimMode: "recycle" }),
+            expect: {
+                ...a.expect,
+                receiverKey: funding.receiverKey,
+                claimMode: "recycle" as const,
+            },
+        };
+        const { transfer, fetcher } = await setup(recycleOnly, [], [funding]);
+        const before = fetcher.mock.calls.length;
+        await expect(
+            purchase(transfer, new Uint8Array([0x51, 0x20, ...funding.receiverKey])),
+        ).rejects.toThrow(/mode does not permit/i);
+        expect(fetcher.mock.calls.length).toBe(before);
+        await expect(
+            recycle(
+                transfer,
+                funding.walletInput,
+                new Uint8Array([0x51, 0x20, ...funding.receiverKey]),
+            ),
+        ).resolves.toBeTypeOf("string");
+    });
+
     it("conserves large asset quantities and emits no asset packet for bitcoin", async () => {
         const assetVerify = assetArgs();
         const id = asset.AssetId.create(
@@ -1473,6 +1502,33 @@ describe("one-shot covenant capability", () => {
 });
 
 describe("recycle", () => {
+    it("refuses a recycle on a purchase-only covenant, then still purchases", async () => {
+        const a = args();
+        const funding = await receiverFunding();
+        const purchaseOnly = {
+            ...a,
+            quote: quote({ ...params(), receiverKey: funding.receiverKey, claimMode: "purchase" }),
+            expect: {
+                ...a.expect,
+                receiverKey: funding.receiverKey,
+                claimMode: "purchase" as const,
+            },
+        };
+        const { transfer, fetcher } = await setup(purchaseOnly, [], [funding]);
+        const before = fetcher.mock.calls.length;
+        await expect(
+            recycle(
+                transfer,
+                funding.walletInput,
+                new Uint8Array([0x51, 0x20, ...funding.receiverKey]),
+            ),
+        ).rejects.toThrow(/mode does not permit/i);
+        expect(fetcher.mock.calls.length).toBe(before);
+        await expect(
+            purchase(transfer, new Uint8Array([0x51, 0x20, ...funding.receiverKey])),
+        ).resolves.toBeTypeOf("string");
+    });
+
     it("spends a literal owner-first leaf matching SDK 0.4.72 DefaultVtxo", async () => {
         const leaf = hex.decode(
             "20f006a18d5653c4edf5391ff23a61f03ff83d237e880ee61187fa9f379a028e0aad20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bac",

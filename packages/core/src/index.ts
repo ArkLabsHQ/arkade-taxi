@@ -15,6 +15,7 @@ export {
     fareBase,
     fareNeedsSenderSats,
     FareError,
+    resolveClaimMode,
     resolveFare,
     ruleFor,
     sameAsset,
@@ -27,4 +28,5 @@ export {
     type FareOption,
     type FarePricing,
     type FareSpec,
+    type ResolvedClaimMode,
 } from "./fares.js";

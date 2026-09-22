@@ -12,6 +12,10 @@ export interface DustCovenantParams {
     topup: bigint;
     assetId?: AssetIdRef;
     locktime: bigint;
+    /** Which claim leaf this covenant commits to. Absent is the historical
+     * four-leaf tree; a mode disables the forbidden closure in place, so the
+     * tree height and every control proof are unchanged. */
+    claimMode?: "recycle" | "purchase";
 }
 
 const equalKeys = (a: Uint8Array, b: Uint8Array) =>
@@ -45,6 +49,9 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     }
     if (p.locktime === 0n) {
         throw new Error("covenant: locktime must be non-zero");
+    }
+    if (p.claimMode !== undefined && p.claimMode !== "recycle" && p.claimMode !== "purchase") {
+        throw new Error(`covenant: unknown claimMode ${String(p.claimMode)}`);
     }
 }
 

@@ -16,6 +16,7 @@ const COLUMNS = [
     "asset_txid",
     "asset_group_index",
     "asset_units",
+    "claim_mode",
     "locktime",
     "covenant_address",
     "fare_currency",
@@ -90,6 +91,7 @@ interface AdvanceRow {
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
     asset_units: bigint | null;
+    claim_mode: "recycle" | "purchase" | null;
     locktime: bigint;
     covenant_address: string;
     fare_currency: string;
@@ -202,6 +204,7 @@ function toParams(a: Advance): AdvanceParams {
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
         asset_units: a.assetUnits ?? null,
+        claim_mode: a.claimMode ?? null,
         locktime: a.locktime,
         covenant_address: a.covenantAddress,
         fare_currency: a.fare.currency,
@@ -344,6 +347,7 @@ function fromRow(r: AdvanceRow): Advance {
         a.assetId = { txid: bytes(r.asset_txid), groupIndex: Number(r.asset_group_index) };
     }
     if (r.asset_units !== null) a.assetUnits = r.asset_units;
+    if (r.claim_mode !== null) a.claimMode = r.claim_mode;
     if (r.outpoint_txid !== null) {
         a.outpoint = { txid: r.outpoint_txid, vout: Number(r.outpoint_vout) };
     }

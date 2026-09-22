@@ -247,6 +247,13 @@ export const MIGRATIONS: readonly Migration[] = [
         // predate deployment, so no backfill beyond the empty default.
         up: `ALTER TABLE swap_fills ADD COLUMN sponsor_script TEXT NOT NULL DEFAULT ''`,
     },
+    {
+        id: 5,
+        // Additive and nullable: NULL is the legacy four-leaf covenant, so no
+        // row is rewritten and no address changes.
+        up: `ALTER TABLE advances ADD COLUMN claim_mode TEXT
+            CHECK (claim_mode IS NULL OR claim_mode IN ('recycle', 'purchase'))`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -315,6 +322,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'sponsor_script' AND type = 'TEXT'",
             )
             .get();
+    const hasClaimMode =
+        hasSponsorScript &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'claim_mode' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -322,7 +336,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 1 && !hasCanonicalV1) ||
             (current === 2 && !hasKind) ||
             (current === 3 && !hasSwapFills) ||
-            (current === 4 && !hasSponsorScript))
+            (current === 4 && !hasSponsorScript) ||
+            (current === 5 && !hasClaimMode))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

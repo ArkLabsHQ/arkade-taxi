@@ -83,6 +83,7 @@ const advance = (): Advance => {
         dust: request.params.dust,
         topup: request.params.topup,
         locktime: request.params.locktime,
+        claimMode: request.params.claimMode,
         covenantAddress: request.covenantAddress,
         fare: request.fare,
         batchExpiry: request.funding.batchExpiry,

@@ -28,6 +28,7 @@ export function buildRequest(): LockupBuildRequest {
         dust: 330n,
         topup: 230n,
         locktime: 899856n,
+        claimMode: "recycle" as const,
     };
     const covenant = new DustCovenantScript({
         params,

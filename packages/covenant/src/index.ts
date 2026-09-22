@@ -9,6 +9,12 @@ export {
     buildScripts,
     type CovenantScripts,
 } from "./scripts.js";
-export { DustCovenantScript, Leaf, type DustCovenantOptions } from "./vtxo.js";
+export {
+    claimLeafDisabled,
+    DISABLED_CLAIM_SCRIPT,
+    DustCovenantScript,
+    Leaf,
+    type DustCovenantOptions,
+} from "./vtxo.js";
 export { covenantSpendInput, type CovenantSpendInput } from "./spend.js";
 export { copyByteView, signerTransaction } from "./signer.js";

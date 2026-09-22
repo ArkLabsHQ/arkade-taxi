@@ -151,7 +151,9 @@ describe("createSponsoredQuote", () => {
         expect(quote.receiverAddress).toBe(receiverAddress);
         expect(quote.params).toMatchObject({
             dust: DUST.toString(),
-            contribution: "10",
+            // Asset transfers front the whole dust unit: the sender's 1000 sats
+            // are change, not a contribution toward it.
+            contribution: DUST.toString(),
         });
         expect(quote.fare).toMatchObject({ currency: "asset", units: "1000000" });
         expect(quote.commitment).toMatchObject({

@@ -47,6 +47,7 @@ import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./
 import { WeakValueRegistry } from "./lifecycle.js";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
 import type { VerifiedQuote } from "./verify.js";
+import { claimLeafDisabled } from "@arkade-taxi/covenant";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -542,11 +543,16 @@ const observe = async (
 
 const activeState = (
     transfer: CovenantTransfer,
+    requestedLeaf: Leaf,
 ): CapabilityState & { script: DustCovenantScript } => {
     if (!transfer || typeof transfer !== "object")
         reject("unrecognized covenant-transfer capability");
     const retained = capabilities.get(transfer);
     if (retained === undefined) return reject("unrecognized covenant-transfer capability");
+    // Checked before the one-shot lifecycle is consumed, so a wrong-mode call
+    // is a no-op and the right one can still be attempted.
+    if (claimLeafDisabled(retained.params, requestedLeaf))
+        reject("covenant mode does not permit this claim leaf");
     lifecycleRegistry().claim(retained.lifecycle, (lifecycle) => {
         if (lifecycle.state !== "available")
             reject(
@@ -1437,7 +1443,7 @@ export async function purchase(
     transfer: CovenantTransfer,
     destination: Uint8Array,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.Purchase);
     const output = exactDestination(destination, state);
     if (state.params.dust < state.vtxoMinAmount)
         reject("purchase output is below the Ark operator minimum");
@@ -1461,7 +1467,7 @@ export async function recycle(
     receiverWalletInput: ReceiverWalletInput,
     destination: Uint8Array,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.Recycle);
     receiverWalletInput = receiverInputSnapshot(receiverWalletInput);
     const output = exactDestination(destination, state);
     const funding = await exactFundingInput(receiverWalletInput, state);
@@ -1502,7 +1508,7 @@ export async function refund(
     transfer: CovenantTransfer,
     senderIdentity: Identity,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.RefundSender);
     const sender = await identityKey(senderIdentity, state.params.senderKey, "sender");
     const topup = refundTopup(state.params, state.vtxoMinAmount);
     const returned = state.params.dust - topup;

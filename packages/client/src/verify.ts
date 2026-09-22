@@ -51,6 +51,10 @@ export interface QuoteExpectation {
      */
     maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     minLocktime: bigint;
+    /** The mode the caller asked the covenant to commit to. Checked against
+     * what the CALLER named, so an operator cannot echo a swapped leaf back
+     * self-consistently. Omitted accepts the operator's resolution. */
+    claimMode?: "recycle" | "purchase";
 }
 
 export interface VerifyQuoteArgs {
@@ -176,6 +180,12 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
         reject(
             VerificationErrorCode.Locktime,
             `locktime ${params.locktime} is earlier than your minimum ${expect.minLocktime}`,
+        );
+    }
+    if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode) {
+        reject(
+            VerificationErrorCode.ClaimMode,
+            `quote commits to ${params.claimMode ?? "the legacy tree"}, you asked for ${expect.claimMode}`,
         );
     }
 

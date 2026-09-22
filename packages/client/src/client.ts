@@ -107,6 +107,8 @@ export interface QuoteRequest {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     assetId?: AssetIdValue;
+    /** Which claim leaf to authorise. Omitted lets the operator resolve it. */
+    claimMode?: "recycle" | "purchase";
     assetUnits?: bigint;
     fareId?: string;
     /** Exact sum of the selected sender input values. */
@@ -122,6 +124,9 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     selectedVtxos: readonly ExtendedVirtualCoin[];
     assetId?: AssetIdValue;
     fareId?: string;
+    /** The leaf to authorise. Sent as the request and bound as the expectation
+     * from this one field, so a substituted quote cannot pass the check. */
+    claimMode?: "recycle" | "purchase";
     expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId">;
 }
 
@@ -198,6 +203,7 @@ export class TaxiClient {
             senderInputs: req.senderInputs.map(fundingInputToWire),
         };
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
+        if (req.claimMode !== undefined) wire.claimMode = req.claimMode;
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
@@ -210,6 +216,16 @@ export class TaxiClient {
     ): Promise<{ verified: VerifiedQuote; senderInputs: FundingInputValue[] }> {
         const { selectedVtxos, ...options } = args;
         const request = immutablePlainCopy(options, "verified quote request");
+        const requestedClaimMode = request.claimMode ?? request.expect.claimMode;
+        if (
+            request.claimMode !== undefined &&
+            request.expect.claimMode !== undefined &&
+            request.claimMode !== request.expect.claimMode
+        )
+            throw new TaxiError(
+                ClientErrorCode.InvalidResponse,
+                `taxi: claimMode ${request.claimMode} contradicts the expected ${request.expect.claimMode}`,
+            );
         const receiver = ArkAddress.decode(request.receiverAddress);
         if (
             receiver.encode() !== request.receiverAddress ||
@@ -226,6 +242,7 @@ export class TaxiClient {
         const quote = await this.requestQuote({
             ...request,
             receiverKey,
+            claimMode: requestedClaimMode,
             senderInputs,
             senderSats,
         });
@@ -240,6 +257,7 @@ export class TaxiClient {
                 receiverKey,
                 senderKey: request.senderKey,
                 assetId: request.assetId,
+                claimMode: requestedClaimMode,
             },
         });
         return { verified, senderInputs };

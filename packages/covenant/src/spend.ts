@@ -1,6 +1,6 @@
 import { asset, type Outpoint, type TapLeafScript } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { DustCovenantScript, Leaf } from "./vtxo.js";
+import { claimLeafDisabled, DustCovenantScript, Leaf } from "./vtxo.js";
 
 const { AssetGroup, AssetId, AssetOutput, Packet } = asset;
 
@@ -62,6 +62,10 @@ export function covenantSpendInput(
         throw new Error("covenant spend: value must be a positive bigint");
     if (!Number.isInteger(leaf) || leaf < Leaf.Recycle || leaf > Leaf.Recovery)
         throw new Error("covenant spend: invalid leaf");
+    // The slot still parses so the merkle proof is valid; the mode is enforced
+    // here, not by the tree shape.
+    if (claimLeafDisabled(script.options.params, leaf))
+        throw new Error("covenant spend: claim leaf is disabled by the covenant mode");
     const selected = script.findLeaf(hex.encode(script.scripts[leaf]));
     return {
         txid: outpoint.txid,

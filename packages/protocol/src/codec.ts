@@ -100,6 +100,7 @@ export interface CovenantParamsValue {
     topup: bigint;
     assetId?: AssetIdValue;
     locktime: bigint;
+    claimMode?: "recycle" | "purchase";
 }
 
 const fail = (label: string, reason: string): never => {
@@ -292,6 +293,11 @@ export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantP
         locktime: satsFromWire(p.locktime, `${label}.locktime`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    if (p.claimMode !== undefined) {
+        if (p.claimMode !== "recycle" && p.claimMode !== "purchase")
+            fail(`${label}.claimMode`, "must be recycle or purchase");
+        out.claimMode = p.claimMode;
+    }
     return out;
 }
 
@@ -305,6 +311,7 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         locktime: satsToWire(p.locktime),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    if (p.claimMode !== undefined) out.claimMode = p.claimMode;
     return out;
 }
 

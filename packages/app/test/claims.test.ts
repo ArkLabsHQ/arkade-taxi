@@ -151,6 +151,7 @@ describe("listReceiverClaims", () => {
                         dust: "330",
                         topup: "230",
                         locktime: "899856",
+                        claimMode: "recycle",
                     },
                     covenantAddress: row.covenantAddress,
                     outpoint: { txid: "cd".repeat(32), vout: 0 },

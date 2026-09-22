@@ -190,13 +190,19 @@ const quoteParams = (value: unknown, label: string): QuoteParams => {
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "topup", "locktime"],
-        ["assetId"],
+        ["assetId", "claimMode"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
     bytes32(wire.senderKey, `${label}.senderKey`);
     bytes32(wire.operatorKey, `${label}.operatorKey`);
     if (wire.assetId !== undefined) assetId(wire.assetId, `${label}.assetId`);
+    if (
+        wire.claimMode !== undefined &&
+        wire.claimMode !== "recycle" &&
+        wire.claimMode !== "purchase"
+    )
+        invalid(`${label}.claimMode must be recycle or purchase`);
     quoteParamsFromWire(wire as unknown as QuoteParams, label);
     return wire as unknown as QuoteParams;
 };

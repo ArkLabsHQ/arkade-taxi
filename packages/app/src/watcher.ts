@@ -314,6 +314,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
             dust: advance.dust,
             topup: advance.topup,
             locktime: advance.locktime,
+            ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
     });
@@ -641,6 +642,7 @@ export async function classifyObservedSpend(
                 dust: advance.dust,
                 topup: advance.topup,
                 locktime: advance.locktime,
+                ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
                 ...(advance.assetId ? { assetId: advance.assetId } : {}),
             },
             deps.config.vtxoMinAmount,

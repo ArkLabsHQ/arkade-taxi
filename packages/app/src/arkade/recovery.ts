@@ -80,6 +80,7 @@ function covenantScript(advance: Advance, config: RuntimeConfig): DustCovenantSc
             dust: advance.dust,
             topup: advance.topup,
             locktime: advance.locktime,
+            ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
     });

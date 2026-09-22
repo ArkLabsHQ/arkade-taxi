@@ -37,6 +37,26 @@ export type FareSpec =
 /** Which claim leaves a rule permits. */
 export type ClaimMode = "recycle" | "purchase" | "either";
 
+/** A mode a covenant can actually commit to: `either` is policy, not a shape. */
+export type ResolvedClaimMode = "recycle" | "purchase";
+
+/** `either` never reaches the tree; an omitted request on it resolves to
+ * recycle, which the receiver can always take and which repays the advance. */
+export function resolveClaimMode(
+    permitted: ClaimMode,
+    requested?: ResolvedClaimMode,
+): ResolvedClaimMode | { reason: string } {
+    // Only reachable from a path that skipped the wire codec.
+    if (requested !== undefined && requested !== "recycle" && requested !== "purchase") {
+        return { reason: "unknown_claim_mode" };
+    }
+    const resolved = requested ?? (permitted === "either" ? "recycle" : permitted);
+    if (permitted !== "either" && resolved !== permitted) {
+        return { reason: "claim_mode_not_allowed" };
+    }
+    return resolved;
+}
+
 /**
  * One asset's terms. `assetId: null` is the plain sub-dust bitcoin transfer,
  * which is a first-class case and not an asset with a missing id.

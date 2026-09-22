@@ -52,6 +52,39 @@ describe("verifyQuote — happy path", () => {
     });
 });
 
+// The expectation is bound by the caller, not echoed from the quote.
+describe("verifyQuote — claim mode", () => {
+    const asksFor = (claimMode: "recycle" | "purchase") => {
+        const p = { ...params(), claimMode };
+        return { ...args(), quote: quote(p), expect: { ...args().expect, claimMode } };
+    };
+
+    it.each(["recycle", "purchase"] as const)("accepts the %s mode it asked for", (claimMode) => {
+        expect(verifyQuote(asksFor(claimMode)).params.claimMode).toBe(claimMode);
+    });
+
+    it("rejects a quote whose tree commits to the other leaf", () => {
+        const a = asksFor("purchase");
+        rejects(
+            { ...a, quote: quote({ ...params(), claimMode: "recycle" }) },
+            "CLAIM_MODE_MISMATCH",
+        );
+    });
+
+    it("rejects a legacy tree when the caller named a mode", () => {
+        rejects({ ...asksFor("recycle"), quote: quote({ ...params() }) }, "CLAIM_MODE_MISMATCH");
+    });
+
+    // Absence is a claim: the caller accepted the operator's resolution.
+    it("accepts whatever the operator resolved when the caller named nothing", () => {
+        expect(
+            verifyQuote({ ...args(), quote: quote({ ...params(), claimMode: "purchase" }) }).params
+                .claimMode,
+        ).toBe("purchase");
+        expect(verifyQuote(args()).params.claimMode).toBeUndefined();
+    });
+});
+
 // Without this the address check below is self-consistent and worthless: an
 // operator naming an emulator it controls would derive an address that agrees.
 describe("verifyQuote — trusted key pinning", () => {

@@ -60,7 +60,7 @@ function insertRaw(db: Database, overrides: Record<string, unknown> = {}): void 
 }
 
 describe("migrations", () => {
-    it.each([1, 2, 3, 4, 5, 6, 7, 8])(
+    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
         "rejects development schema v%s without modifying its schema or data",
         (version) => {
             const db = fresh();
@@ -96,20 +96,30 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(4);
+            expect(userVersion(reopened)).toBe(5);
             expect(
-                reopened.prepare("SELECT id, topup, asset_units, kind FROM advances").all(),
-            ).toEqual([{ id: "a1", topup: 300n, asset_units: null, kind: "covenant" }]);
+                reopened
+                    .prepare("SELECT id, topup, asset_units, kind, claim_mode FROM advances")
+                    .all(),
+            ).toEqual([
+                {
+                    id: "a1",
+                    topup: 300n,
+                    asset_units: null,
+                    kind: "covenant",
+                    claim_mode: null,
+                },
+            ]);
         } finally {
             reopened.close();
         }
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(4);
+        expect(userVersion(db)).toBe(5);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -130,7 +140,7 @@ describe("migrations", () => {
         expect(columns).toEqual(
             `
             id state kind receiver_key sender_key operator_key dust topup asset_txid asset_group_index
-            asset_units locktime covenant_address fare_currency fare_units fare_asset_txid
+            asset_units claim_mode locktime covenant_address fare_currency fare_units fare_asset_txid
             fare_asset_group_index outpoint_txid outpoint_vout spent_txid created_at updated_at expires_at
             batch_expiry_kind batch_expiry_value operator_inputs_json unsigned_lockup_tx unsigned_lockup_id
             submission_key ark_txid submitted_at recovery_txid recovery_submitted_at last_observed_at
@@ -174,12 +184,23 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(4);
+        expect(userVersion(db)).toBe(5);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
+        expect(
+            db
+                .prepare<[], { claim_mode: string | null }>(
+                    "SELECT claim_mode FROM advances WHERE id = 'a1'",
+                )
+                .get(),
+        ).toEqual({ claim_mode: null });
         expect(() => insertRaw(db, { id: "a2", kind: "sponsored" })).not.toThrow();
         expect(() => insertRaw(db, { id: "a3", kind: "escrow" })).toThrow(
+            /CHECK constraint failed/,
+        );
+        expect(() => insertRaw(db, { id: "a4", claim_mode: "purchase" })).not.toThrow();
+        expect(() => insertRaw(db, { id: "a5", claim_mode: "either" })).toThrow(
             /CHECK constraint failed/,
         );
         db.close();
@@ -193,13 +214,13 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(4);
+        expect(userVersion(db)).toBe(5);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
         db.close();
     });
-    it("migrates a v3 database to v4 with a sponsor script column on swap fills", () => {
+    it("migrates a v3 database forward with a sponsor script column on swap fills", () => {
         const db = fresh();
         applyMigrations(
             db,
@@ -207,12 +228,31 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(4);
+        expect(userVersion(db)).toBe(5);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
             .map(({ name }) => name);
         expect(columns).toContain("sponsor_script");
+        db.close();
+    });
+    it("migrates a v4 database forward adding a nullable claim mode", () => {
+        const db = fresh();
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 4),
+        );
+        expect(userVersion(db)).toBe(4);
+        insertRaw(db);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(5);
+        expect(
+            db
+                .prepare<[], { claim_mode: string | null }>(
+                    "SELECT claim_mode FROM advances WHERE id = 'a1'",
+                )
+                .get(),
+        ).toEqual({ claim_mode: null });
         db.close();
     });
     it("rejects old v1 without proceeds storage without changing its data", () => {
@@ -234,7 +274,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(4);
+        expect(userVersion(db)).toBe(5);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

@@ -46,12 +46,50 @@ const fill = (over: Partial<SwapFill> = {}): SwapFill => ({
     ...over,
 });
 
+/** Inserts directly so this works against the schema before claim_mode exists. */
+function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): void {
+    const row: Record<string, unknown> = {
+        id: "a1",
+        state: "locked",
+        receiver_key: new Uint8Array(32).fill(1),
+        sender_key: new Uint8Array(32).fill(2),
+        operator_key: new Uint8Array(32).fill(3),
+        dust: 330n,
+        topup: 300n,
+        asset_txid: null,
+        asset_group_index: null,
+        asset_units: null,
+        locktime: 850_000n,
+        covenant_address: "tark1qcovenantexample",
+        fare_currency: "sats",
+        fare_units: 25n,
+        fare_asset_txid: null,
+        fare_asset_group_index: null,
+        outpoint_txid: null,
+        outpoint_vout: null,
+        spent_txid: null,
+        created_at: 1n,
+        updated_at: 1n,
+        expires_at: 2n,
+        batch_expiry_kind: "height",
+        batch_expiry_value: 900_000n,
+        operator_inputs_json: JSON.stringify([{ txid: "aa".repeat(32), vout: 0 }]),
+        unsigned_lockup_tx: "unsigned",
+        unsigned_lockup_id: "bb".repeat(32),
+        ...over,
+    };
+    const cols = Object.keys(row);
+    db.prepare(
+        `INSERT INTO advances (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`,
+    ).run(row);
+}
+
 describe("swap-fill migration", () => {
     it("adds swap-fill storage as a new migration without touching prior ones", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5]);
         const db = fresh();
         applyMigrations(db);
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(4);
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(5);
         const tables = db
             .prepare<[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table'")
             .all();
@@ -67,28 +105,13 @@ describe("swap-fill migration", () => {
             db,
             MIGRATIONS.filter((m) => m.id <= 2),
         );
-        new AdvanceRepository(db).insert({
+        insertLegacyAdvance(db, {
             id: "a1",
             state: "locked",
-            receiverKey: new Uint8Array(32).fill(1),
-            senderKey: new Uint8Array(32).fill(2),
-            operatorKey: new Uint8Array(32).fill(3),
-            dust: 330n,
-            topup: 300n,
-            locktime: 850_000n,
-            batchExpiry: { kind: "height", value: 900_000n },
-            recoveryLocktime: { kind: "height", value: 850_000n },
-            operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
-            unsignedLockupTx: "unsigned",
-            unsignedLockupId: "bb".repeat(32),
-            covenantAddress: "tark1qcovenantexample",
-            fare: { currency: "sats", units: 25n },
-            createdAt: 1,
-            updatedAt: 1,
-            expiresAt: 2,
         });
         applyMigrations(db);
         expect(new AdvanceRepository(db).get("a1")?.topup).toBe(300n);
+        expect(new AdvanceRepository(db).get("a1")?.claimMode).toBeUndefined();
         db.close();
     });
 });
