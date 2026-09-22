@@ -83,6 +83,25 @@ const satsFarePolicy = (units: bigint): Policy =>
         ],
     });
 
+const bitcoinSatsFarePolicy = (units: bigint): Policy =>
+    basePolicy({
+        assetRules: [
+            {
+                assetId: null,
+                enabled: true,
+                claim: "either",
+                maxTopupSats: null,
+                fares: [
+                    {
+                        id: "sats-fare",
+                        currency: { kind: "sats" },
+                        pricing: { kind: "flat", units },
+                    },
+                ],
+            },
+        ],
+    });
+
 const deps = (
     over: { policy?: Policy } = {},
 ): SponsoredQuoteDeps & Pick<QuoteDeps, "lockupSubmitter"> => ({
@@ -153,6 +172,40 @@ const sponsoredBody = (over: Record<string, unknown> = {}) => {
     };
 };
 
+/** No asset anywhere: the bitcoin rule, where `topup` is derived from the sender's
+ * own sats rather than fronting the whole carrier. */
+const bitcoinBody = (senderSats: string) => {
+    const txid = "cd".repeat(32);
+    const vout = 3;
+    registerSenderCoin(
+        txid,
+        vout,
+        fundingCoin({
+            txid,
+            vout,
+            value: Number(senderSats),
+            script: bytesToHex(senderTree.pkScript),
+            expiresAtHeight: 910000,
+        }),
+    );
+    return {
+        receiverAddress,
+        senderKey: bytesToHex(senderKey),
+        senderSats,
+        senderInputs: [
+            {
+                txid,
+                vout,
+                value: senderSats,
+                tapTree: bytesToHex(senderTree.encode()),
+                spendLeaf: bytesToHex(senderTree.scripts[0]),
+                expiry: { kind: "height", value: "910000" },
+            },
+        ],
+        fareId: "sats-fare",
+    };
+};
+
 const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
     try {
         await fn();
@@ -203,6 +256,30 @@ describe("createSponsoredQuote", () => {
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
         expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 10n, 990n, 19_670n]);
         expect(advances.get("adv-1")?.fare).toEqual({ currency: "sats", units: 10n });
+    });
+
+    // A sponsored bitcoin fill pays the receiver the whole carrier whatever the
+    // sender brings, so unlike a covenant one it has change to charge against.
+    it("charges a sats fare on a bitcoin fill that has change to pay it from", async () => {
+        const quote = await createSponsoredQuote(
+            deps({ policy: bitcoinSatsFarePolicy(10n) }),
+            bitcoinBody("1000"),
+        );
+        expect(quote.fare).toEqual({ currency: "sats", units: "10" });
+        expect(quote.params.contribution).toBe("10");
+        const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
+        expect(envelope.satsFarePayer).toBe("sender");
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 10n, 670n, 19_990n]);
+        expect(advances.get(quote.transferId)?.fare).toEqual({ currency: "sats", units: 10n });
+    });
+
+    it("refuses a sats fare on a sub-dust bitcoin fill, which has no change", async () => {
+        const d = deps({ policy: bitcoinSatsFarePolicy(10n) });
+        const bad = await caught(() => createSponsoredQuote(d, bitcoinBody("100")));
+        expect(bad.code).toBe("fare_unavailable");
+        expect(bad.status).toBe(409);
+        expect(advances.rows.size).toBe(0);
     });
 
     it("refuses a sats fare the sender's change cannot cover, before reserving", async () => {
