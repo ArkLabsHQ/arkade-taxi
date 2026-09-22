@@ -101,6 +101,7 @@ interface QuoteFixtureOptions {
     senderSats?: bigint;
     assetUnits?: bigint;
     fare?: FareSpec;
+    satsFarePayer?: "sender";
     serverUnrollScript?: CSVMultisigTapscript.Type;
 }
 
@@ -123,6 +124,7 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
+            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         opts.serverUnrollScript ?? unroll,
@@ -201,6 +203,23 @@ export const assetArgs = (): VerifyQuoteArgs => {
         senderInputs,
         senderSats: 700n,
         assetUnits,
+    };
+};
+
+/** The asset fixture with the fare billed to the sender, as a new quote issues it. */
+export const senderPaidAssetArgs = (): VerifyQuoteArgs => {
+    const a = assetArgs();
+    return {
+        ...a,
+        quote: quote(
+            { ...params(), assetId: a.expect.assetId! },
+            {
+                senderInputs: a.senderInputs,
+                senderSats: a.senderSats,
+                assetUnits: a.assetUnits!,
+                satsFarePayer: "sender",
+            },
+        ),
     };
 };
 

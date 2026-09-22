@@ -21,6 +21,7 @@ import {
     params,
     quote,
     senderIdentity,
+    senderPaidAssetArgs,
     otherKey,
 } from "./fixtures.js";
 
@@ -459,5 +460,57 @@ describe("sender-only lockup signing", () => {
         const signed = await signLockup({ verified, identity: senderIdentity });
         const changed = mutateArk(signed, (tx) => tx.updateOutput(0, { amount: 331n }, true));
         expect(() => assertSignedLockup(verified, changed)).toThrow();
+    });
+});
+
+describe("sender-paid sats fare", () => {
+    const amounts = (encoded: string): bigint[] => {
+        const tx = Transaction.fromPSBT(base64.decode(decodeLockupEnvelope(encoded).arkTx));
+        return [0, 1, 2, 3].map((index) => tx.getOutput(index).amount!);
+    };
+
+    it("accepts the layout that bills the fare to the sender", () => {
+        const a = senderPaidAssetArgs();
+        const verified = verifyQuote(a);
+        expect(verified.envelope.satsFarePayer).toBe("sender");
+        expect(amounts(a.quote.unsignedLockupTx)).toEqual([330n, 10n, 690n, 19_670n]);
+        expect(amounts(assetArgs().quote.unsignedLockupTx)).toEqual([330n, 10n, 700n, 19_660n]);
+    });
+
+    it("keeps the discriminator across signing", async () => {
+        const verified = verifyQuote(senderPaidAssetArgs());
+        const signed = await signLockup({ verified, identity: senderIdentity });
+        expect(decodeLockupEnvelope(signed).satsFarePayer).toBe("sender");
+    });
+
+    it("refuses a sender-paid claim stapled onto a legacy layout", () => {
+        const a = assetArgs();
+        a.quote.unsignedLockupTx = rewrite(
+            a.quote.unsignedLockupTx,
+            (wire) => {
+                wire.satsFarePayer = "sender";
+            },
+            true,
+        );
+        a.quote.lockup.unsignedTxId = decodeLockupEnvelope(a.quote.unsignedLockupTx).unsignedTxId;
+        expect(() => verifyQuote(a)).toThrow(/Arkade transaction/);
+    });
+
+    it("refuses an unrecognised fare payer", () => {
+        const a = senderPaidAssetArgs();
+        a.quote.unsignedLockupTx = rewrite(a.quote.unsignedLockupTx, (wire) => {
+            (wire as { satsFarePayer?: string }).satsFarePayer = "operator";
+        });
+        expect(() => verifyQuote(a)).toThrow(/satsFarePayer/);
+    });
+
+    it("refuses a fare payer named against no positive sats fare", () => {
+        const a = args();
+        a.quote.unsignedLockupTx = rewrite(a.quote.unsignedLockupTx, (wire) => {
+            wire.satsFarePayer = "sender";
+        });
+        a.expect.maxFare = { currency: "sats", units: 0n };
+        a.quote.fare = { currency: "sats", units: "0" };
+        expect(() => verifyQuote(a)).toThrow(/positive sats fare/);
     });
 });

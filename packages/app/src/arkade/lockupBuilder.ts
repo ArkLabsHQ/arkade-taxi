@@ -99,6 +99,19 @@ export function toArkInput(
     };
 }
 
+/**
+ * Absent is the legacy layout, where the fare left operator change and came
+ * straight back to the operator — a net fare of zero. Only a positive sats fare
+ * can name a payer; asset fares are hosted, not paid, out of operator sats.
+ */
+function senderPaysSatsFare(req: LockupBuildRequest): boolean {
+    if (req.satsFarePayer === undefined) return false;
+    if (req.satsFarePayer !== "sender") throw new LockupShapeError("unknown sats fare payer");
+    if (req.fare.currency !== "sats" || req.fare.units <= 0n)
+        throw new LockupShapeError("a sats fare payer needs a positive sats fare");
+    return true;
+}
+
 export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
     if (!isDeepStrictEqual(req.params.operatorKey, config.operatorKey))
         throw new LockupShapeError("operator payout differs from runtime configuration");
@@ -147,16 +160,20 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
               ? req.fare.units
               : config.vtxoMinAmount;
     if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
+    const senderPaysFare = senderPaysSatsFare(req);
     if (fareHosting > 0n)
         outputs.push({
             role: "operator-fare",
             amount: fareHosting,
             script: ownerOutputScript(req.params.operatorKey, fareHosting, config),
         });
-    const senderChange = req.senderSats + req.params.topup - req.params.dust;
-    const operatorChange = req.funding.totalValue - req.params.topup - fareHosting;
-    if (senderChange < 0n || operatorChange < 0n)
-        throw new LockupShapeError("insufficient funding");
+    const senderFare = senderPaysFare ? fareHosting : 0n;
+    const operatorFare = fareHosting - senderFare;
+    const senderChange = req.senderSats + req.params.topup - req.params.dust - senderFare;
+    const operatorChange = req.funding.totalValue - req.params.topup - operatorFare;
+    if (senderChange < 0n)
+        throw new LockupShapeError("sender funding does not cover the dust carrier and fare");
+    if (operatorChange < 0n) throw new LockupShapeError("insufficient funding");
     const destinations = new Map<string, Map<number, bigint>>();
     const toId = (id: { txid: Uint8Array; groupIndex: number }) =>
         AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
@@ -250,6 +267,7 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
         outputs: transactionOutputs,
         valueOutputs: outputs,
         covenant,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         assetUnits: paymentId ? destinations.get(paymentId)!.get(0)! : req.assetUnits,
         arkInputs: inputs.map((input, i) =>
             toArkInput(
@@ -272,6 +290,7 @@ export function buildLockupEnvelope(
         arkTx: base64.encode(graph.arkTx.toPSBT()),
         checkpoints: graph.checkpoints.map((tx) => base64.encode(tx.toPSBT())),
         ...(plan.assetUnits !== undefined ? { assetUnits: plan.assetUnits.toString() } : {}),
+        ...(plan.satsFarePayer ? { satsFarePayer: plan.satsFarePayer } : {}),
         unsignedTxId: unsignedGraphId(graph.arkTx, graph.checkpoints),
         covenantOutputIndex: 0,
         senderInputIndexes: req.senderInputs.map((_, i) => i),

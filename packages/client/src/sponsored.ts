@@ -318,6 +318,8 @@ export function validateSponsoredPayment(
     context: SponsoredValidationContext,
 ): ValidatedSponsoredPayment {
     const envelope = decodeLockupEnvelope(context.quote.unsignedSponsoredTx);
+    if (envelope.satsFarePayer !== undefined)
+        reject(VerificationErrorCode.Malformed, "a sponsored payment has no sats fare payer");
     const senderInputs = envelope.senderInputs.map((input, index) =>
         decodeInput(input, `senderInputs[${index}]`),
     );

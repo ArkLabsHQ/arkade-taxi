@@ -64,6 +64,9 @@ export interface LockupBuildRequest {
     /** A separate output at lockup: the covenant pins the operator's repayment
      * to exactly `topup`, so no fee is expressible inside it. */
     fare: FareSpec;
+    /** Set on every new positive-sats-fare lockup: the fare leaves sender change
+     * instead of operator change. Absent reconstructs a funded legacy graph. */
+    satsFarePayer?: "sender";
     senderSats: bigint;
 }
 
@@ -350,6 +353,24 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     );
     const decision = admit(req, policy, exposure, config.dust, config.vtxoMinAmount);
     if (!decision.ok) throw admissionError(decision.reason);
+    const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
+    if (senderPaysFare) {
+        // A bitcoin transfer's payment IS its senderSats, and `topup` is derived
+        // from them, so there is nothing to take a fare from that is not the
+        // amount asked to be sent.
+        if (req.assetId === undefined)
+            throw new ServiceError(
+                "fare_unavailable",
+                409,
+                "a sats fare has no net amount to come out of on a bitcoin transfer",
+            );
+        if (req.senderSats + decision.topup - config.dust < decision.fare.units)
+            throw new ServiceError(
+                "fare_unavailable",
+                409,
+                "sender funding does not cover the dust carrier and this fare",
+            );
+    }
 
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
@@ -370,7 +391,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
-            (decision.fare.units === 0n
+            (senderPaysFare || decision.fare.units === 0n
                 ? 0n
                 : decision.fare.currency === "sats"
                   ? decision.fare.units
@@ -423,6 +444,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         params,
         covenantAddress: covenant.address,
         fare: decision.fare,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         senderSats: req.senderSats,
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),

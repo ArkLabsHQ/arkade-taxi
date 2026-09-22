@@ -290,6 +290,7 @@ function assertPersistedGraph(
         },
         covenantAddress: advance.covenantAddress,
         fare: advance.fare,
+        ...(envelope.satsFarePayer === undefined ? {} : { satsFarePayer: envelope.satsFarePayer }),
     };
     const unroll = CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript));
     const rebuilt =

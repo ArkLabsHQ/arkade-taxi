@@ -264,6 +264,42 @@ describe("persisted-fact submission validation", () => {
         expect(() => validateLockupSubmission(persisted, signed, config())).not.toThrow();
     });
 
+    it.each(["kept", "stripped"])(
+        "rebuilds a sender-paid graph from the %s envelope",
+        async (discriminator) => {
+            const request = buildRequest();
+            request.params.topup = 330n;
+            request.senderSats = 700n;
+            request.senderInputs[0]!.value = 700n;
+            request.satsFarePayer = "sender";
+            request.covenantAddress = new DustCovenantScript({
+                params: request.params,
+                serverKey: config().serverPubkey,
+                emulatorKey: config().emulatorPubkey,
+                vtxoMinAmount: config().vtxoMinAmount,
+            })
+                .address(config().addressHrp, config().serverPubkey)
+                .encode();
+            const encoded = buildLockupEnvelope(request, config(), unroll);
+            const persisted = {
+                ...advance(),
+                topup: 330n,
+                covenantAddress: request.covenantAddress,
+                unsignedLockupTx: encoded,
+                unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
+            };
+            if (discriminator === "stripped") {
+                const wire = decodeLockupEnvelope(encoded);
+                delete wire.satsFarePayer;
+                persisted.unsignedLockupTx = encodeLockupEnvelope(wire);
+            }
+            const signed = await signedEnvelope(encoded);
+            const validate = () => validateLockupSubmission(persisted, signed, config());
+            if (discriminator === "stripped") expect(validate).toThrow(/persisted/);
+            else expect(validate).not.toThrow();
+        },
+    );
+
     it("rejects when the persisted fare no longer matches the original unsigned graph", async () => {
         const persisted = advance();
         persisted.fare = { currency: "sats", units: persisted.fare.units + 1n };

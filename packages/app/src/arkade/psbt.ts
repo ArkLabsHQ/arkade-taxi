@@ -32,6 +32,8 @@ export interface LockupEnvelope extends LockupCommitment {
     operatorInputs: FundingInputWire[];
     serverUnrollScript: string;
     assetUnits?: string;
+    /** Present only on lockups whose sats fare comes out of sender change. */
+    satsFarePayer?: "sender";
 }
 
 export function decodeBase64(value: string): Uint8Array {
@@ -194,6 +196,7 @@ export interface JointPlan {
     valueOutputs: { role: string; amount: bigint; script: Uint8Array }[];
     arkInputs: ArkTxInput[];
     assetUnits?: bigint;
+    satsFarePayer?: "sender";
 }
 
 export interface JointParseRequest {
@@ -238,6 +241,7 @@ export function parseJointEnvelope(
         plan.assetUnits,
         "payment asset units",
     );
+    same(wire.satsFarePayer, plan.satsFarePayer, "sats fare payer");
     same(
         wire.senderInputs.map((i) => fundingInputToWire(fundingInputFromWire(i))),
         req.senderInputs.map(fundingInputToWire),

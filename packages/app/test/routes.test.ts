@@ -873,7 +873,7 @@ describe("GET /v1/info", () => {
                     assetId: null,
                     enabled: true,
                     fares: [
-                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "10" } },
+                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "0" } },
                     ],
                     claim: "either",
                     maxTopupSats: null,
@@ -952,7 +952,7 @@ describe("POST /v1/transfers", () => {
         const body = (await res.json()) as QuoteResponse;
         expect(body.transferId).toBe("adv-1");
         expect(body.params.topup).toBe("330");
-        expect(body.fare.units).toBe("10");
+        expect(body.fare.units).toBe("0");
         expect(body.expiresAt).toBe(NOW + 60);
     });
 

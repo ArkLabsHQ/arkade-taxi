@@ -67,6 +67,24 @@ const deps = (over: { policy?: Partial<Policy>; expiry?: bigint } = {}): QuoteDe
     lockupSubmitter: lockupBuilder,
 });
 
+const satsFareRule = (assetId: typeof ASSET | null, units: bigint) => ({
+    assetRules: [
+        {
+            assetId,
+            enabled: true,
+            fares: [
+                {
+                    id: "sats",
+                    currency: { kind: "sats" as const },
+                    pricing: { kind: "flat" as const, units },
+                },
+            ],
+            claim: "either" as const,
+            maxTopupSats: null,
+        },
+    ],
+});
+
 const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
     try {
         await fn();
@@ -112,7 +130,7 @@ describe("createQuote", () => {
                                 {
                                     id: "sats",
                                     currency: { kind: "sats" },
-                                    pricing: { kind: "flat", units: 10n },
+                                    pricing: { kind: "flat", units: 0n },
                                 },
                             ],
                         },
@@ -196,7 +214,7 @@ describe("createQuote", () => {
             locktime: LOCKTIME.toString(),
             claimMode: "recycle",
         });
-        expect(res.fare.units).toBe("10");
+        expect(res.fare.units).toBe("0");
         expect(res.unsignedLockupTx).toBe(lockupBuilder.unsignedTx);
     });
 
@@ -233,7 +251,7 @@ describe("createQuote", () => {
 
         expect(stored.state).toBe("quoted");
         expect(stored.topup).toBe(330n);
-        expect(stored.fare).toEqual({ currency: "sats", units: 10n });
+        expect(stored.fare).toEqual({ currency: "sats", units: 0n });
         expect(stored.locktime).toBe(LOCKTIME);
         expect(stored.batchExpiry.value).toBe(EXPIRY_HEIGHT);
         expect(stored.operatorInputs).toEqual([{ txid: "bb".repeat(32), vout: 0 }]);
@@ -248,13 +266,46 @@ describe("createQuote", () => {
         expect(res.params.topup).toBe("230");
     });
 
+    it("refuses a positive sats fare on a bitcoin transfer", async () => {
+        const d = deps({ policy: satsFareRule(null, 10n) });
+        const error = await caught(() => createQuote(d, quoteBody()));
+        expect(error.code).toBe("fare_unavailable");
+        expect(error.status).toBe(409);
+        expect(advances.rows.size).toBe(0);
+        expect(d.reservations.listReservedOutpoints()).toEqual([]);
+    });
+
+    it("refuses an asset sender that cannot cover the sats fare", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+        const error = await caught(() =>
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET) })),
+        );
+        expect(error.code).toBe("fare_unavailable");
+        expect(advances.rows.size).toBe(0);
+    });
+
+    it("bills a new asset lockup to the sender and lends only the loan", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+        await createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }));
+        const built = lockupBuilder.built[0]!;
+        expect(built.satsFarePayer).toBe("sender");
+        const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
+        expect(envelope.satsFarePayer).toBe("sender");
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([
+            DUST,
+            10n,
+            20000n - built.params.topup,
+        ]);
+    });
+
     it.each([
-        [undefined, "sats", 100n],
-        [undefined, "sameAsset", 90n],
-        ["90", "sameAsset", 90n],
+        [undefined, "sats", 100n, "10"],
+        [undefined, "sameAsset", 90n, "0"],
+        ["90", "sameAsset", 90n, "0"],
     ] as const)(
         "persists resolved units for request %s and fare %s",
-        async (quantity, currency, expected) => {
+        async (quantity, currency, expected, senderSats) => {
             const withAsset = deps({
                 policy: {
                     assetRules: [
@@ -276,7 +327,7 @@ describe("createQuote", () => {
             });
             const res = await createQuote(
                 withAsset,
-                quoteBody({ assetId: assetIdToWire(ASSET), assetUnits: quantity }),
+                quoteBody({ assetId: assetIdToWire(ASSET), assetUnits: quantity, senderSats }),
             );
             expect(res.params.assetId).toEqual(assetIdToWire(ASSET));
             expect(advances.get(res.transferId)!.assetId).toEqual(ASSET);
@@ -288,7 +339,7 @@ describe("createQuote", () => {
         const res = await createQuote(deps(), quoteBody());
         expect(lockupBuilder.built).toHaveLength(1);
         expect(lockupBuilder.built[0]!.covenantAddress).toBe(res.covenantAddress);
-        expect(lockupBuilder.built[0]!.fare).toEqual({ currency: "sats", units: 10n });
+        expect(lockupBuilder.built[0]!.fare).toEqual({ currency: "sats", units: 0n });
     });
 
     it("subtracts the policy margin from the covenant VTXO expiry", async () => {
@@ -377,48 +428,29 @@ describe("createQuote admission", () => {
             expect(events.lastIndexOf("safety")).toBeGreaterThan(events.indexOf("sender-finished"));
         },
     );
-    it("refuses minimum 10, fare 8, and operator residual 1 before reservation", async () => {
-        const d = deps({
-            policy: {
-                assetRules: [
-                    {
-                        ...basePolicy().assetRules[0],
-                        fares: [
-                            {
-                                id: "sats",
-                                currency: { kind: "sats" },
-                                pricing: { kind: "flat", units: 8n },
-                            },
-                        ],
-                    },
-                ],
-            },
-        });
+    it("refuses a fare 8 below the minimum 10 before reservation", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 8n) });
+        await expect(
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "8" })),
+        ).rejects.toThrow(/minimum/);
+        expect(advances.rows.size).toBe(0);
+    });
+    it("refuses a residual below minimum even with a valid fare", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 10n) });
         d.inventory.getSpendableVtxos = async () => [
             fundingCoin({ value: 339 }),
             fundingCoin({ vout: 1, value: 10000, expiresAtHeight: 900001 }),
         ];
-        await expect(createQuote(d, quoteBody())).rejects.toThrow(/minimum/);
-        expect(advances.rows.size).toBe(0);
-    });
-    it("refuses a residual below minimum even with a valid fare", async () => {
-        const d = deps();
-        d.inventory.getSpendableVtxos = async () => [
-            fundingCoin({ value: 341 }),
-            fundingCoin({ vout: 1, value: 10000, expiresAtHeight: 900001 }),
-        ];
-        await expect(createQuote(d, quoteBody())).rejects.toThrow(/operator-change.*minimum/);
+        await expect(
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" })),
+        ).rejects.toThrow(/operator-change.*minimum/);
         expect(advances.rows.size).toBe(0);
     });
     it("refuses an unrepresentable OP_RETURN shape before reserving", async () => {
-        const d = deps();
-        d.inventory.getSpendableVtxos = async () => [
-            fundingCoin({ value: 30 }),
-            fundingCoin({ vout: 1, value: 10000, expiresAtHeight: 900001 }),
-        ];
-        await expect(createQuote(d, quoteBody({ senderSats: "330" }))).rejects.toThrow(
-            /public SDK.*two OP_RETURN/,
-        );
+        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+        await expect(
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "20" })),
+        ).rejects.toThrow(/public SDK.*two OP_RETURN/);
         expect(advances.rows.size).toBe(0);
     });
     it.each(["value", "script", "assets", "expiry", "spent", "missing"])(
@@ -491,22 +523,55 @@ describe("createQuote admission", () => {
         await expect(createQuote(d, quoteBody())).rejects.toMatchObject({ status: 503 });
         expect(advances.rows.size).toBe(0);
     });
-    it("reserves enough inputs for topup plus a sats fare", async () => {
-        const d = deps();
+    it("reserves the loan alone when the sender pays the sats fare", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 10n) });
         d.inventory.getSpendableVtxos = async () => [
             fundingCoin({ value: 330 }),
             fundingCoin({ vout: 1, value: 10, expiresAtHeight: 900001 }),
             fundingCoin({ vout: 2, value: 10000, expiresAtHeight: 900002 }),
         ];
-        const response = await createQuote(d, quoteBody());
+        const response = await createQuote(
+            d,
+            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }),
+        );
         expect(advances.get(response.transferId)?.operatorInputs).toEqual([
             { txid: "bb".repeat(32), vout: 0 },
-            { txid: "bb".repeat(32), vout: 1 },
         ]);
         expect(advances.get(response.transferId)?.batchExpiry).toEqual({
             kind: "height",
             value: 900000n,
         });
+    });
+    it("reserves the hosting sats an asset fare needs on top of the loan", async () => {
+        const d = deps({
+            policy: {
+                assetRules: [
+                    {
+                        assetId: ASSET,
+                        enabled: true,
+                        fares: [
+                            {
+                                id: "asset",
+                                currency: { kind: "sameAsset" },
+                                pricing: { kind: "flat", units: 10n },
+                            },
+                        ],
+                        claim: "either",
+                        maxTopupSats: null,
+                    },
+                ],
+            },
+        });
+        d.inventory.getSpendableVtxos = async () => [
+            fundingCoin({ value: 330 }),
+            fundingCoin({ vout: 1, value: 10, expiresAtHeight: 900001 }),
+            fundingCoin({ vout: 2, value: 10000, expiresAtHeight: 900002 }),
+        ];
+        const response = await createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET) }));
+        expect(advances.get(response.transferId)?.operatorInputs).toEqual([
+            { txid: "bb".repeat(32), vout: 0 },
+            { txid: "bb".repeat(32), vout: 1 },
+        ]);
     });
     it("uses the millisecond clock for runtime freshness without rounding it down", async () => {
         const d = deps();
