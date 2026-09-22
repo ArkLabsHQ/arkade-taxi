@@ -17,6 +17,12 @@ takes its overrides from that same manifest, so the packed client is exercised
 against the frozen candidates rather than silently falling back to the registry
 build of the same version numbers.
 
+The override alone is not the proof. Those version numbers are published, so an
+override that stopped applying would install cleanly against other bytes. After
+the consumer installs, the harness resolves both packages from the installed
+client and requires the frozen version plus a symbol only the `adc6b329` build
+exports; an import that merely succeeds cannot tell the two apart.
+
 ## Running it
 
 Run the complete isolated stack harness:

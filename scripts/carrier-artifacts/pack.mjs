@@ -199,7 +199,7 @@ try {
         join(outDir, "manifest.json"),
         `${JSON.stringify(
             {
-                note: "Frozen candidate packages, built from source and never published to any registry. These digests are of THIS bundle: repacking @arkade-os/sdk from the same commit emits different tsup chunk ids, so a re-pack is a deliberate re-freeze — run scripts/carrier-artifacts/pack.mjs, then pnpm install, then node scripts/carrier-artifacts/verify.mjs.",
+                note: "Frozen candidate packages, built from source. These version numbers ARE published, from a different build, so a dropped or narrowed root override does not fail: it installs the registry bytes under the same number. These digests are of THIS bundle: repacking @arkade-os/sdk from the same commit emits different tsup chunk ids, so a re-pack is a deliberate re-freeze — run scripts/carrier-artifacts/pack.mjs, then pnpm install, then node scripts/carrier-artifacts/verify.mjs.",
                 packedAtUtc: new Date().toISOString(),
                 artifacts,
             },
