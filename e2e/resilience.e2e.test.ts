@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { expect } from "vitest";
 import { signLockup } from "@arkade-taxi/client";
-import { Extension, Transaction } from "@arkade-os/sdk";
+import { Extension, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { preEffectRequest } from "./admission.js";
@@ -76,6 +76,10 @@ async function mineTo(live: Live, time: number) {
     return tip;
 }
 
+// A scenario that ends in a purchase has to say so at quote time.
+const buys = (live: Live, coin: ExtendedVirtualCoin) =>
+    quoteFor(live, "receiverSats", coin, false, false, "purchase");
+
 async function purchase(live: Live, locked: Locked) {
     const txid = await live.client.purchase(locked.transfer, locked.destination);
     await terminal(live, locked, "purchased", txid);
@@ -94,7 +98,7 @@ async function submitSame(
 
 liveScenario("restart-quoted-reservation", async () => {
     const live = await openLive();
-    const offered = await quoteFor(live, "receiverSats", await sizedSender(live));
+    const offered = await buys(live, await sizedSender(live));
     const before = await rowFor(offered.quote.transferId);
     const status = await admin("status");
     const reservedValue = offered.verified.envelope.operatorInputs.reduce(
@@ -116,17 +120,17 @@ liveScenario("restart-quoted-reservation", async () => {
     expect((await admin("status")).exposure).toEqual(status.exposure);
     expect((await ready()).body.runtime.inventory).toEqual(inventory);
     const secondCoin = await sizedSender(live);
-    await expect(quoteFor(live, "receiverSats", secondCoin)).rejects.toMatchObject({
+    await expect(buys(live, secondCoin)).rejects.toMatchObject({
         code: "operator_inventory_insufficient",
     });
     await purchase(live, await lock(live, offered));
-    const second = await quoteFor(live, "receiverSats", secondCoin);
+    const second = await buys(live, secondCoin);
     await purchase(live, await lock(live, second));
 });
 
 liveScenario("restart-submitted-reconciliation", async () => {
     const live = await openLive();
-    const offered = await quoteFor(live, "receiverSats", await sizedSender(live));
+    const offered = await buys(live, await sizedSender(live));
     const signed = await signLockup({
         verified: offered.verified,
         identity: live.actors.sender.identity,
@@ -157,7 +161,7 @@ liveScenario("restart-submitted-reconciliation", async () => {
 
 liveScenario("dropped-submit-response", async () => {
     const live = await openLive();
-    const offered = await quoteFor(live, "receiverSats", await sizedSender(live));
+    const offered = await buys(live, await sizedSender(live));
     const signed = await signLockup({
         verified: offered.verified,
         identity: live.actors.sender.identity,
@@ -198,7 +202,7 @@ liveScenario("dropped-submit-response", async () => {
 
 liveScenario("duplicate-lockup-idempotent", async () => {
     const live = await openLive();
-    const offered = await quoteFor(live, "receiverSats", await sizedSender(live));
+    const offered = await buys(live, await sizedSender(live));
     const signed = await signLockup({
         verified: offered.verified,
         identity: live.actors.sender.identity,
@@ -233,7 +237,7 @@ liveScenario("duplicate-lockup-idempotent", async () => {
 
 liveScenario("stale-provider-identity", async () => {
     const live = await openLive();
-    const offered = await quoteFor(live, "receiverSats", await sizedSender(live));
+    const offered = await buys(live, await sizedSender(live));
     const locked = await lock(live, offered);
     await control("configure", { target: "esplora", path: "/", mode: "pause", phase: "request" });
     await poll("unknown chain clock closes readiness", health, (body) =>

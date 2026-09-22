@@ -579,6 +579,21 @@ const assertProjectLabels = async (project, expectedServices) => {
     return assertCleanupCandidates(details, { project, services: expectedServices });
 };
 
+/** pnpm resolves a tarball dependency's own `file:` specs against the installing
+ * project, not the package that declared them, so re-point them here. */
+const vendoredClientDependencies = () => {
+    const clientDir = join(REPO, "packages", "client");
+    const { dependencies } = JSON.parse(readFileSync(join(clientDir, "package.json"), "utf8"));
+    return Object.entries(dependencies ?? {})
+        .filter(([, spec]) => typeof spec === "string" && spec.startsWith("file:"))
+        .map(([name, spec]) => {
+            const vendored = resolve(clientDir, spec.slice("file:".length));
+            if (!existsSync(vendored))
+                throw new Error(`packed client dependency ${name} is missing at ${vendored}`);
+            return [name, `file:${vendored.replaceAll("\\", "/")}`];
+        });
+};
+
 export const packClient = async (root, env) => {
     const packDir = join(root, "packs");
     const consumer = join(root, "consumer");
@@ -613,6 +628,7 @@ export const packClient = async (root, env) => {
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);
     const manifest = buildConsumerManifest(tarballs, consumer);
+    for (const [name, spec] of vendoredClientDependencies()) manifest.pnpm.overrides[name] = spec;
     writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
@@ -1109,7 +1125,9 @@ await import("/app/dist/cli.js");
         writeStackManifest(join(artifacts, "stack.json"), {
             startedAtUtc,
             regtest: { repository: REGTEST_REPOSITORY, branch: "master", sha },
-            sdkVersion: "0.4.72",
+            sdkVersion: JSON.parse(
+                readFileSync(join(REPO, "packages", "app", "package.json"), "utf8"),
+            ).dependencies["@arkade-os/sdk"],
             taxi,
             stack: {
                 project,
@@ -1163,7 +1181,8 @@ await import("/app/dist/cli.js");
                     cwd: REPO,
                     env: testEnv,
                     secrets: knownSecrets,
-                    timeoutMs: 900_000,
+                    // Whole-run bound; vitest still enforces its own 300s each.
+                    timeoutMs: 2_700_000,
                 },
             ),
         );

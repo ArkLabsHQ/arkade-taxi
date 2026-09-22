@@ -7,19 +7,24 @@ liveScenario("exposure-cap-rejects-quote", async () => {
     try {
         const first = await lock(
             live,
-            await quoteFor(live, "receiverSats", await sizedSender(live)),
+            await quoteFor(live, "receiverSats", await sizedSender(live), false, false, "purchase"),
         );
         const nextCoin = await sizedSender(live);
         const before = await admin("status");
         expect(before.exposure.outstandingSats).toBe("1");
         expect(before.exposure.activeCount).toBe(1);
         await admin("policy", { maxOutstandingSats: "1" });
-        await expect(quoteFor(live, "receiverSats", nextCoin)).rejects.toMatchObject({
+        await expect(
+            quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        ).rejects.toMatchObject({
             code: "exceeds_max_outstanding",
         });
         expect((await admin("status")).exposure).toEqual(before.exposure);
         await admin("policy", { maxOutstandingSats: "2" });
-        const second = await lock(live, await quoteFor(live, "receiverSats", nextCoin));
+        const second = await lock(
+            live,
+            await quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        );
         expect((await admin("status")).exposure.outstandingSats).toBe("2");
         for (const locked of [first, second]) {
             const txid = await live.client.purchase(locked.transfer, locked.destination);

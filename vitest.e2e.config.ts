@@ -8,6 +8,9 @@ class LiveSequencer extends BaseSequencer {
             "provider-contract",
             "claim",
             "sponsored",
+            // After the scenarios that pin fixture inventory, before the ones
+            // that jump chain time past every wallet's expiry headroom.
+            "joint-fill",
             "exposure",
             "verify-quote",
             "refund-recovery",
@@ -25,6 +28,10 @@ class LiveSequencer extends BaseSequencer {
 const src = (name: string) =>
     fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
 const clientEntry = process.env.TAXI_E2E_CLIENT_ENTRY || src("client");
+// A dependency of the client package, not of the workspace root; same artifact.
+const swapEntry = fileURLToPath(
+    new URL("./packages/client/node_modules/@arkade-os/swap/dist/index.js", import.meta.url),
+);
 
 export default defineConfig({
     test: {
@@ -51,6 +58,7 @@ export default defineConfig({
             "@arkade-taxi/protocol": src("protocol"),
             "@arkade-taxi/db": src("db"),
             "@arkade-taxi/client": clientEntry,
+            "@arkade-os/swap": swapEntry,
         },
     },
 });

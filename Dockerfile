@@ -14,6 +14,8 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/db/package.json packages/db/
 COPY packages/client/package.json packages/client/
 COPY packages/app/package.json packages/app/
+# The lockfile resolves pre-release Arkade packages from these tarballs.
+COPY .reference/vendor/ .reference/vendor/
 RUN pnpm install --frozen-lockfile
 
 COPY . .

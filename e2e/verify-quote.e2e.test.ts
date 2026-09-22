@@ -7,7 +7,14 @@ import { lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
 liveScenario("verify-quote-rejects-tampered-params", async () => {
     const live = await openLive();
     try {
-        const offered = await quoteFor(live, "receiverSats", await sizedSender(live, true), true);
+        const offered = await quoteFor(
+            live,
+            "receiverSats",
+            await sizedSender(live, true),
+            true,
+            false,
+            "purchase",
+        );
         const mutations: [string, (quote: QuoteResponse) => void, string][] = [
             [
                 "receiver",
@@ -54,7 +61,7 @@ liveScenario("verify-quote-rejects-tampered-params", async () => {
             [
                 "topup",
                 (q) => {
-                    q.params.topup = "2";
+                    q.params.topup = "331";
                 },
                 Code.Topup,
             ],
