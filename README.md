@@ -120,7 +120,8 @@ comes from pinned wallet config, never from the URI.
 ## Development
 
 ```bash
-pnpm install
+pnpm verify:artifacts
+pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
 pnpm test
@@ -129,6 +130,17 @@ pnpm format:check
 
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
+
+A clean checkout needs nothing placed by hand. `@arkade-os/sdk` and
+`@arkade-os/swap` are pre-release builds that no registry carries, so
+`vendor/carrier/` holds them as tracked archives named for their source commit,
+`vendor/carrier/manifest.json` records the provenance of each, and the root
+`pnpm.overrides` point every resolution — direct and transitive — at those
+bytes. `pnpm verify:artifacts` runs on built-in Node with nothing installed and
+fails on a source, identity or hash mismatch; every path that installs
+dependencies runs it first. Re-freezing the bundle is
+`node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout>`, then
+`pnpm install`, then `pnpm verify:artifacts`.
 
 Regenerate the golden vectors from the Go reference (requires Go):
 

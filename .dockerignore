@@ -3,8 +3,7 @@ node_modules
 **/dist
 .git
 .superpowers
-.reference/*
-!.reference/vendor
+.reference
 docs
 *.db
 *.sqlite

@@ -16,10 +16,11 @@
         "e2e:stack": "node scripts/e2e-stack.mjs",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "vectors": "node scripts/gen-vectors.mjs"
+        "vectors": "node scripts/gen-vectors.mjs",
+        "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs"
     },
     "devDependencies": {
-        "@arkade-os/sdk": "0.4.74",
+        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
@@ -33,7 +34,8 @@
             "esbuild"
         ],
         "overrides": {
-            "@arkade-os/sdk": "file:./.reference/vendor/arkade-os-sdk-0.4.74.tgz"
+            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",
+            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz"
         }
     }
 }

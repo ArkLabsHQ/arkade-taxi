@@ -53,6 +53,7 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
+import { VENDOR_DIR } from "./carrier-artifacts/lib.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REGTEST_REPOSITORY = "https://github.com/ArkLabsHQ/arkade-regtest.git";
@@ -579,22 +580,18 @@ const assertProjectLabels = async (project, expectedServices) => {
     return assertCleanupCandidates(details, { project, services: expectedServices });
 };
 
-/** pnpm resolves a tarball dependency's own `file:` specs against the installing
- * project, not the package that declared them, so re-point them here. */
+/** The packed client names the candidates by version, so a fresh consumer would
+ * take the registry build; point it at the same frozen archives the repo installs. */
 const vendoredClientDependencies = () => {
-    const clientDir = join(REPO, "packages", "client");
-    const { dependencies } = JSON.parse(readFileSync(join(clientDir, "package.json"), "utf8"));
-    return Object.entries(dependencies ?? {})
-        .filter(([, spec]) => typeof spec === "string" && spec.startsWith("file:"))
-        .map(([name, spec]) => {
-            const vendored = resolve(clientDir, spec.slice("file:".length));
-            if (!existsSync(vendored))
-                throw new Error(
-                    `packed client dependency ${name} is untracked and absent at ${vendored}; ` +
-                        "this checkout cannot install, build or pack until it is provisioned",
-                );
-            return [name, `file:${vendored.replaceAll("\\", "/")}`];
-        });
+    const vendorDir = join(REPO, VENDOR_DIR);
+    const { artifacts } = JSON.parse(readFileSync(join(vendorDir, "manifest.json"), "utf8"));
+    if (!artifacts?.length) throw new Error(`${VENDOR_DIR}/manifest.json freezes no archives`);
+    return artifacts.map(({ package: name, file }) => {
+        const vendored = join(vendorDir, file);
+        if (!existsSync(vendored))
+            throw new Error(`frozen carrier archive ${file} is missing from ${VENDOR_DIR}`);
+        return [name, `file:${vendored.replaceAll("\\", "/")}`];
+    });
 };
 
 export const packClient = async (root, env) => {

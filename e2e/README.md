@@ -7,16 +7,15 @@ Twenty-one live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
-## This suite cannot run from a clean checkout
+## Candidate packages this suite runs against
 
 `pnpm-lock.yaml` resolves `@arkade-os/sdk` and `@arkade-os/swap` from
-`.reference/vendor/*.tgz`, and `.gitignore` excludes `.reference/`, so those
-tarballs are **untracked**: no file under `.reference/` is in the repository.
-On a machine that does not already have them, `pnpm install`, `docker build`
-and the harness's client pack all fail with `ENOENT` on the tarball path. The
-harness fails loudly rather than silently, but it still cannot run. Until those
-artifacts are tracked and hash-pinned, this gate only runs where someone has
-already placed them by hand — treat a green run as evidence about one machine.
+`vendor/carrier/*.tgz`, which are **tracked** and hash-pinned against
+`vendor/carrier/manifest.json`, so `pnpm install`, `docker build` and the
+harness's client pack all work from a clean checkout. The temporary consumer
+takes its overrides from that same manifest, so the packed client is exercised
+against the frozen candidates rather than silently falling back to the registry
+build of the same version numbers.
 
 ## Running it
 

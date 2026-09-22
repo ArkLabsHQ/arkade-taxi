@@ -72,6 +72,7 @@ jobs:
                   node-version: 22
                   cache: pnpm
                   registry-url: https://registry.npmjs.org
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
             - run: pnpm -r build
 

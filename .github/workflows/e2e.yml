@@ -55,6 +55,8 @@ jobs:
                   node-version: 22
                   cache: pnpm
 
+            - run: node scripts/carrier-artifacts/verify.mjs
+
             - name: Install
               run: |
                   set -eu

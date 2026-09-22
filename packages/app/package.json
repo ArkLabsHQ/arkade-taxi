@@ -15,7 +15,7 @@
     },
     "dependencies": {
         "@arkade-os/sdk": "0.4.74",
-        "@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-0.0.20.tgz",
+        "@arkade-os/swap": "0.0.20",
         "@arkade-taxi/client": "workspace:*",
         "@arkade-taxi/core": "workspace:*",
         "@arkade-taxi/covenant": "workspace:*",
