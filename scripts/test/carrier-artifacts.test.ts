@@ -3,12 +3,15 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+    EXEMPT_INSTALLS,
     MANIFEST_PATH,
     PINNED_PACKAGES,
     PINNED_SOURCES,
     SUPERSEDED_VENDOR,
     VENDOR_DIR,
     assertCandidateExport,
+    assertFrozenResolutions,
+    declaredSpec,
     dockerfileStages,
     installsDependencies,
     isOptOut,
@@ -35,10 +38,9 @@ const CANDIDATES = [
 
 /** Every workspace manifest that declares a candidate owes a resolution for it. */
 const declarersOf = (name: string): string[] =>
-    workspaceManifests(REPO).filter((relative) => {
-        const declared = readJson(at(...relative.split("/")));
-        return declared.dependencies?.[name] ?? declared.devDependencies?.[name];
-    });
+    workspaceManifests(REPO).filter(
+        (relative) => declaredSpec(readJson(at(...relative.split("/"))), name) !== undefined,
+    );
 
 describe("frozen carrier artifacts", () => {
     it("passes the built-in-Node verification with every scan group run", () => {
@@ -58,6 +60,58 @@ describe("frozen carrier artifacts", () => {
         expect(confirmed).not.toBeNull();
         expect(confirmed![1]).toBe(confirmed![2]);
         expect(Number(confirmed![1])).toBeGreaterThanOrEqual(6);
+        const paths = /across (\d+) units holding (\d+) installing paths/.exec(output);
+        expect(paths).not.toBeNull();
+        expect(Number(paths![1])).toBeGreaterThanOrEqual(6);
+        expect(Number(paths![2])).toBe(5);
+    }, 30_000);
+
+    it("reads a candidate out of any dependency field a manifest can install from", () => {
+        for (const field of [
+            "dependencies",
+            "devDependencies",
+            "peerDependencies",
+            "optionalDependencies",
+        ])
+            expect(
+                declaredSpec({ [field]: { "@arkade-os/swap": "0.0.20" } }, "@arkade-os/swap"),
+            ).toBe("0.0.20");
+        expect(declaredSpec({ dependencies: {} }, "@arkade-os/swap")).toBeUndefined();
+    });
+
+    it("pins every published coordinate to the frozen version the registry shadows", () => {
+        const frozen = new Map<string, string>(
+            readJson(at(MANIFEST_PATH)).artifacts.map(
+                (artifact: { package: string; version: string }) => [
+                    artifact.package,
+                    artifact.version,
+                ],
+            ),
+        );
+        for (const relative of workspaceManifests(REPO)) {
+            if (relative === "package.json") continue;
+            const declared = readJson(at(...relative.split("/")));
+            for (const name of PINNED_PACKAGES) {
+                const spec = declaredSpec(declared, name);
+                if (spec === undefined) continue;
+                expect(spec).toBe(frozen.get(name));
+            }
+        }
+    });
+
+    it("asks a consumer's own resolver for the frozen version and the candidate symbol", async () => {
+        const artifacts = readJson(at(MANIFEST_PATH)).artifacts;
+        await expect(
+            assertFrozenResolutions(at("packages/client/package.json"), artifacts),
+        ).resolves.toBe(artifacts.length);
+        await expect(
+            assertFrozenResolutions(at("packages/client/package.json"), [
+                { ...artifacts[0], version: "9.9.9" },
+            ]),
+        ).rejects.toThrow("not the frozen 9.9.9");
+        await expect(assertFrozenResolutions(at("package.json"), [])).rejects.toThrow(
+            "freezes no archives",
+        );
     }, 30_000);
 
     it("resolves the candidate build, not the registry build of the same version", async () => {
@@ -216,6 +270,11 @@ describe("installing-path scan", () => {
         expect(localWorkflowCalls(["        uses: ./elsewhere.yml # reusable"])).toEqual([
             "elsewhere.yml",
         ]);
+        expect(localWorkflowCalls(['        uses: "./.github/actions/elsewhere"'])).toEqual([
+            ".github/actions/elsewhere",
+        ]);
+        expect(localWorkflowCalls(["        uses: './x.yml'"])).toEqual(["x.yml"]);
+        expect(localWorkflowCalls(['        uses: "./x.yml" # reusable'])).toEqual(["x.yml"]);
         expect(localWorkflowCalls(["        uses: actions/checkout@v5"])).toEqual([]);
     });
 
@@ -226,7 +285,73 @@ describe("installing-path scan", () => {
         expect(isOptOut(undefined)).toBe(false);
         const scanned = ["Dockerfile", ...WORKFLOWS.map((file) => `.github/workflows/${file}`)];
         const written = scanned.flatMap((file) => lines(...file.split("/"))).filter(isOptOut);
-        expect(written.length).toBeLessThanOrEqual(1);
+        expect(written.length).toBe(EXEMPT_INSTALLS);
+    });
+});
+
+describe("a verify only counts where its failure is fatal (both shapes are live in the wallet's lib.mjs)", () => {
+    it.each([
+        [
+            "SHARED with the wallet: a step guarded on the dash line",
+            ["- if: false", "  run: pnpm verify:artifacts", "- run: pnpm i"],
+            3,
+        ],
+        [
+            "a step told to continue on error",
+            [
+                "- name: gate",
+                "  continue-on-error: true",
+                "  run: pnpm verify:artifacts",
+                "- run: pnpm i",
+            ],
+            4,
+        ],
+        [
+            "the same written on the dash line",
+            ["- continue-on-error: 'true'", "  run: pnpm verify:artifacts", "- run: pnpm i"],
+            3,
+        ],
+        [
+            "a whole job told to continue on error",
+            [
+                "    continue-on-error: true",
+                "    steps:",
+                "        - run: pnpm verify:artifacts",
+                "        - run: pnpm i",
+            ],
+            4,
+        ],
+        [
+            "an expression this scan cannot read as false",
+            [
+                "- continue-on-error: ${{ github.event_name == 'push' }}",
+                "  run: pnpm verify:artifacts",
+                "- run: pnpm i",
+            ],
+            3,
+        ],
+        ["a shell that swallows it", ["RUN pnpm verify:artifacts || true", "RUN pnpm i"], 2],
+        ["a semicolon that swallows it", ["RUN pnpm verify:artifacts ; true", "RUN pnpm i"], 2],
+        ["a no-op that swallows it", ["RUN pnpm verify:artifacts || :", "RUN pnpm i"], 2],
+        [
+            "a pipe, whose status is the last stage's",
+            ["RUN pnpm verify:artifacts | tee v", "RUN pnpm i"],
+            2,
+        ],
+        ["an install chained ahead of it", ["RUN pnpm i && pnpm verify:artifacts"], 1],
+    ])("%s", (_case, source, expected) => {
+        expect(unverifiedInstall(source)).toBe(expected);
+    });
+
+    it.each([
+        [
+            "an explicit false",
+            ["- continue-on-error: false", "  run: pnpm verify:artifacts", "- run: pnpm i"],
+        ],
+        ["a chain that propagates", ["RUN pnpm verify:artifacts && pnpm i"]],
+        ["an unguarded step", ["- run: pnpm verify:artifacts", "- run: pnpm i"]],
+    ])("still counts %s", (_case, source) => {
+        expect(unverifiedInstall(source)).toBeUndefined();
     });
 });
 

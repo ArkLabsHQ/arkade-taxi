@@ -18,6 +18,7 @@ import {
     WORKSPACE_FILE,
     archiveManifest,
     assertCandidateExport,
+    declaredSpec,
     dockerfileStages,
     fileSpec,
     installsDependencies,
@@ -144,7 +145,7 @@ for (const relative of manifests) {
         `${relative} still names ${SUPERSEDED_VENDOR}, which no checkout tracks`,
     );
     for (const name of PINNED_PACKAGES) {
-        const spec = declared.dependencies?.[name] ?? declared.devDependencies?.[name];
+        const spec = declaredSpec(declared, name);
         if (spec === undefined) continue;
         // `release.yml` publishes packages/*, so only the private root may name
         // a path; everywhere else the root override supplies the bytes.
@@ -153,11 +154,18 @@ for (const relative of manifests) {
                 spec === fileSpec(`./${VENDOR_DIR}`, byPackage.get(name)?.file),
                 `${relative} declares ${name} as ${spec}, which is not the frozen archive`,
             );
-        else
+        else {
             check(
                 !spec.startsWith("file:"),
                 `${relative} declares ${name} as ${spec}; a published manifest must not carry a path`,
             );
+            // The registry serves this number from a DIFFERENT build, so drift here
+            // turns a dropped override from a failed install into a silent swap.
+            check(
+                spec === byPackage.get(name)?.version,
+                `${relative} declares ${name} as ${spec}, not the frozen ${byPackage.get(name)?.version}; the registry answers that coordinate with other bytes`,
+            );
+        }
     }
 }
 
@@ -195,6 +203,8 @@ for (const name of PINNED_PACKAGES) {
 // so this group has nothing to read there; the unit suite runs in a whole
 // checkout and asserts it was not skipped.
 const wholeCheckout = existsSync(at("Dockerfile"));
+let scannedUnits = 0;
+let scannedInstalls = 0;
 if (wholeCheckout) {
     const workflowDir = at(".github", "workflows");
     const workflows = existsSync(workflowDir)
@@ -230,6 +240,8 @@ if (wholeCheckout) {
             cursor = start + unitLines.length;
             scanned.push([`${name} ${label} ${unit}`, unitLines, start]);
         }
+        scannedUnits += units.size;
+        scannedInstalls += installs(lines);
         // A job delegating to a reusable workflow selects the file that installs.
         for (const target of localWorkflowCalls(lines))
             check(
@@ -271,8 +283,7 @@ const declaredBy = new Map(PINNED_PACKAGES.map((name) => [name, []]));
 for (const relative of manifests) {
     const declared = readJson(at(...relative.split("/")));
     for (const name of PINNED_PACKAGES)
-        if (declared.dependencies?.[name] ?? declared.devDependencies?.[name])
-            declaredBy.get(name).push(relative);
+        if (declaredSpec(declared, name) !== undefined) declaredBy.get(name).push(relative);
 }
 const installed = existsSync(at("node_modules"));
 let confirmed = 0;
@@ -307,6 +318,6 @@ check(
 if (failures.length) fail(failures.join("\n  - "));
 process.stdout.write(
     `carrier artifacts verified: ${manifest.artifacts.length} archives, lock pinned to their bytes, ` +
-        `${wholeCheckout ? "Dockerfile and workflows checked" : "install context, no Dockerfile to check"}, ` +
+        `${wholeCheckout ? `Dockerfile and workflows checked across ${scannedUnits} units holding ${scannedInstalls} installing paths` : "install context, no Dockerfile to check"}, ` +
         `${installed ? `candidate exports confirmed on ${confirmed} of ${owed} declared resolutions` : "no install to inspect yet"}\n`,
 );

@@ -53,7 +53,7 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
-import { VENDOR_DIR } from "./carrier-artifacts/lib.mjs";
+import { VENDOR_DIR, assertFrozenResolutions } from "./carrier-artifacts/lib.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REGTEST_REPOSITORY = "https://github.com/ArkLabsHQ/arkade-regtest.git";
@@ -580,19 +580,21 @@ const assertProjectLabels = async (project, expectedServices) => {
     return assertCleanupCandidates(details, { project, services: expectedServices });
 };
 
+const frozenArtifacts = () => {
+    const { artifacts } = JSON.parse(readFileSync(join(REPO, VENDOR_DIR, "manifest.json"), "utf8"));
+    if (!artifacts?.length) throw new Error(`${VENDOR_DIR}/manifest.json freezes no archives`);
+    return artifacts;
+};
+
 /** The packed client names the candidates by version, so a fresh consumer would
  * take the registry build; point it at the same frozen archives the repo installs. */
-const vendoredClientDependencies = () => {
-    const vendorDir = join(REPO, VENDOR_DIR);
-    const { artifacts } = JSON.parse(readFileSync(join(vendorDir, "manifest.json"), "utf8"));
-    if (!artifacts?.length) throw new Error(`${VENDOR_DIR}/manifest.json freezes no archives`);
-    return artifacts.map(({ package: name, file }) => {
-        const vendored = join(vendorDir, file);
+const vendoredClientDependencies = () =>
+    frozenArtifacts().map(({ package: name, file }) => {
+        const vendored = join(REPO, VENDOR_DIR, file);
         if (!existsSync(vendored))
             throw new Error(`frozen carrier archive ${file} is missing from ${VENDOR_DIR}`);
         return [name, `file:${vendored.replaceAll("\\", "/")}`];
     });
-};
 
 export const packClient = async (root, env) => {
     const packDir = join(root, "packs");
@@ -660,6 +662,11 @@ export const packClient = async (root, env) => {
     )[0];
     const lock = readFileSync(join(consumer, "pnpm-lock.yaml"), "utf8");
     assertLocalConsumerResolution(manifest, lock, listed);
+    // This consumer reaches the real registry, and a bare import cannot tell it apart.
+    await assertFrozenResolutions(
+        join(consumer, "node_modules", "@arkade-taxi", "client", "package.json"),
+        frozenArtifacts(),
+    );
     await import(pathToFileURL(entry).href);
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };
 };

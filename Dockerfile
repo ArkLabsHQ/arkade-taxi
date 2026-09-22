@@ -20,6 +20,8 @@ COPY vendor/carrier/ vendor/carrier/
 COPY scripts/carrier-artifacts/ scripts/carrier-artifacts/
 RUN node scripts/carrier-artifacts/verify.mjs
 RUN pnpm install --frozen-lockfile
+# Again: only a run with node_modules present can ask what actually resolved.
+RUN node scripts/carrier-artifacts/verify.mjs
 
 COPY . .
 RUN pnpm -r build \

@@ -86,16 +86,23 @@ export const archiveManifest = (archivePath) => {
 
 export const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 
+// All four install the candidate, so peer or optional must not escape the scan.
+export const declaredSpec = (manifest, name) =>
+    manifest.dependencies?.[name] ??
+    manifest.devDependencies?.[name] ??
+    manifest.peerDependencies?.[name] ??
+    manifest.optionalDependencies?.[name];
+
 export const isComment = (line) => /^\s*#/.test(line);
 
 const PACKAGE_MANAGERS = new Set(["pnpm", "npm", "yarn", "bun"]);
 const INSTALL_SUBCOMMANDS = new Set(["install", "i", "ci", "add"]);
 const INVOKERS = new Set(["node", "pnpm", "npm", "corepack", "bash", "sh"]);
 
-// A comment on the line IMMEDIATELY above the install it excuses; at most
-// EXEMPT_INSTALLS of them exist, which is a ceiling and not a quota.
+// A comment on the line IMMEDIATELY above the install it excuses. The ceiling is
+// what is written, not a spare one: a first bypass is an edit here as well as there.
 export const OPT_OUT = "carrier-artifacts: not a dependency install";
-export const EXEMPT_INSTALLS = 1;
+export const EXEMPT_INSTALLS = 0;
 
 // `pnpm/action-setup` installs with no command line at all when its step says so.
 const ACTION_INSTALL = /^\s*run_install:\s*(?!false\b|'false'|"false")\S/;
@@ -114,29 +121,54 @@ export function installsDependencies(line) {
 
 export const isOptOut = (line) => line !== undefined && isComment(line) && line.includes(OPT_OUT);
 
-const commandOf = (line) =>
+const commandBody = (line) =>
     line
         .replace(/^\s*(?:RUN|-)\s+/, "")
         .replace(/^\s*run:\s*/, "")
-        .trim()
-        .split(/\s+/)[0];
+        .trim();
 
-// `echo …verify.mjs` names the command without running it.
-export const invokesVerify = (line) =>
-    /carrier-artifacts\/verify\.mjs|verify:artifacts/.test(line) && INVOKERS.has(commandOf(line));
+// `|| true`, `;`, `|| :` and a pipe leave the job green; `&&` is the one that does not.
+const swallowsStatus = (command) => /[|;&]/.test(command.replaceAll("&&", " "));
 
-// Indices inside a step an `if:` may keep from running. The guard is idiom on
-// the dash line as well as under it — `release.yml` writes it both ways.
+// `echo …verify.mjs` names the command without running it, and a verify must lead
+// the line: an install chained ahead of it has already run.
+export const invokesVerify = (line) => {
+    const command = commandBody(line);
+    if (swallowsStatus(command)) return false;
+    const leading = command.split("&&")[0].trim();
+    return (
+        /carrier-artifacts\/verify\.mjs|verify:artifacts/.test(leading) &&
+        INVOKERS.has(leading.split(/\s+/)[0])
+    );
+};
+
+// Both are idiom on the dash line as well as under it; `release.yml` writes `if:`
+// both ways.
+const KEPT_FROM_RUNNING = /^\s*(?:-\s+)?if:\s/;
+const NON_FATAL = /^\s*(?:-\s+)?continue-on-error:\s*(?!false\b|'false'|"false")\S/;
+
+/** Indices whose verify must not count towards a later install. */
 export function guardedLines(lines) {
     const guarded = new Set();
     let start = 0;
+    let stepped = false;
     const close = (end) => {
-        if (lines.slice(start, end).some((line) => /^\s*(?:-\s+)?if:\s/.test(line)))
-            for (let index = start; index < end; index++) guarded.add(index);
+        const block = lines.slice(start, end);
+        // Actions takes `continue-on-error` on a job too, and one above the first
+        // step leaves the workflow green after a failed gate.
+        const unitWide = !stepped && block.some((line) => NON_FATAL.test(line));
+        if (
+            !unitWide &&
+            !block.some((line) => KEPT_FROM_RUNNING.test(line) || NON_FATAL.test(line))
+        )
+            return;
+        for (let index = start; index < (unitWide ? lines.length : end); index++)
+            guarded.add(index);
     };
     lines.forEach((line, index) => {
         if (!/^\s*-\s/.test(line)) return;
         close(index);
+        stepped = true;
         start = index;
     });
     close(lines.length);
@@ -198,11 +230,11 @@ export function workflowJobs(yaml) {
 
 // Anything local a job delegates to selects the file that installs, so match any
 // `./` target rather than only the ones already scanned — a check that can only
-// fail for what it already accepts cannot fail at all.
+// fail for what it already accepts cannot fail at all — quoted or bare.
 export const localWorkflowCalls = (lines) =>
     lines
         .filter((line) => !isComment(line))
-        .map((line) => /^\s*-?\s*uses:\s*\.\/(\S+?)\/*\s*(?:#.*)?$/.exec(line)?.[1])
+        .map((line) => /^\s*-?\s*uses:\s*(['"]?)\.\/(\S+?)\/*\1\s*(?:#.*)?$/.exec(line)?.[2])
         .filter(Boolean);
 
 // An override resolves against the workspace root, a dependency against the
@@ -297,4 +329,20 @@ export async function assertCandidateExport(packageRoot, name, symbol) {
             `${name} resolved to ${packageRoot}, which does not export ${symbol}: that is not the candidate`,
         );
     return packageRoot;
+}
+
+/** Each frozen artifact as one importer's resolver answers, for an install tree
+ * outside this workspace, which the census over `pnpm-workspace.yaml` cannot see. */
+export async function assertFrozenResolutions(fromFile, artifacts) {
+    if (!artifacts?.length) throw new Error(`${MANIFEST_PATH} freezes no archives to resolve`);
+    for (const { package: name, version } of artifacts) {
+        const root = packageRootFrom(fromFile, name);
+        const resolved = readJson(join(root, "package.json")).version;
+        if (resolved !== version)
+            throw new Error(
+                `${name} resolved to ${resolved} at ${root}, not the frozen ${version}`,
+            );
+        await assertCandidateExport(root, name, CANDIDATE_SYMBOLS[name]);
+    }
+    return artifacts.length;
 }

@@ -41,6 +41,7 @@ jobs:
                   go-version: "1.26"
             - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm vectors
             # A committed vectors.json that no longer matches the Go reference is
             # worse than none: every test would still pass, against stale bytes.

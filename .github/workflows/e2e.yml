@@ -67,6 +67,8 @@ jobs:
                   done
                   exit 1
 
+            - run: node scripts/carrier-artifacts/verify.mjs
+
             - name: Build packages for the release tarballs
               run: pnpm -r build
 

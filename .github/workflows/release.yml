@@ -74,6 +74,7 @@ jobs:
                   registry-url: https://registry.npmjs.org
             - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm -r build
 
             - name: Verify tag matches manifest versions
