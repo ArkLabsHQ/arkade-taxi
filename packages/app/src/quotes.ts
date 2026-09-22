@@ -41,6 +41,7 @@ import {
     ReservationConflictError,
     LockupClaimError,
     type ReservationRepository,
+    type ReceiveQuoteRepository,
     type SwapFillRepository,
     type PolicySnapshot,
 } from "@arkade-taxi/db";
@@ -161,7 +162,11 @@ export interface QuoteDeps {
     >;
     /** Swap-fill reservations also tie up Taxi coins; unioned into funding
      * selection so an advance never double-spends a fill's coin. */
-    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
+    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints" | "expireQuotes">;
+    receiveQuotes?: Pick<
+        ReceiveQuoteRepository,
+        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
+    >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
         getLockedVtxoOutpoints(): Promise<Outpoint[]>;
@@ -305,6 +310,8 @@ export async function createQuote(
 async function createAdmittedQuote(deps: QuoteDeps, body: unknown): Promise<QuoteResponse> {
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     deps.reservations.expireQuotes(deps.now());
+    deps.swapFills?.expireQuotes(deps.now());
+    deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
             return await createReservedQuote(deps, body);
@@ -357,10 +364,10 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
             { cause },
         );
     }
-    const reserved = deps.reservations.listReservedOutpoints();
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
-        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...intentLocks],
+        reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
             (decision.fare.units === 0n
@@ -512,7 +519,10 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...currentLocks],
+        reserved: [
+            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...currentLocks,
+        ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });

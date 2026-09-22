@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
-import { AdvanceRepository, openDatabase, PolicyRepository } from "@arkade-taxi/db";
+import {
+    AdvanceRepository,
+    openDatabase,
+    PolicyRepository,
+    type InsertReceiveQuoteRequest,
+    type ReceiveQuote,
+} from "@arkade-taxi/db";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
 import type {
@@ -10,6 +16,7 @@ import type {
     InfoResponse,
     LockupResponse,
     QuoteResponse,
+    ReceiveQuoteResponse,
     SponsoredQuoteResponse,
     SwapFillQuoteResponse,
     SwapFillStatusResponse,
@@ -92,6 +99,7 @@ let lockupBuilder: FakeLockupBuilder;
 let sponsoredBuilder: FakeSponsoredLockupBuilder;
 let swapFills: MemorySwapFills;
 let swapFillBuilder: FakeSwapFillGraphBuilder;
+let receiveQuotes: MemoryReceiveQuotes;
 let sweeperStatus: SweeperStatus;
 let reconcilerStatus: ReconcilerStatus;
 let clock: number;
@@ -136,6 +144,7 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
     lockupSubmitter: lockupBuilder,
     sponsoredBuilder,
     swapFills,
+    receiveQuotes,
     swapFillBuilder,
     swapFillSubmit: {
         swapFills,
@@ -155,6 +164,38 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
 });
 
 const app = (over: Partial<Policy> = {}) => createRoutes(deps(over));
+
+class MemoryReceiveQuotes {
+    readonly rows = new Map<string, ReceiveQuote>();
+    insert(request: InsertReceiveQuoteRequest): void {
+        this.rows.set(request.quote.id, structuredClone(request.quote));
+    }
+    get(id: string): ReceiveQuote | undefined {
+        const row = this.rows.get(id);
+        return row && structuredClone(row);
+    }
+    expireQuotes(at: number): number {
+        let count = 0;
+        for (const row of this.rows.values())
+            if (row.state === "quoted" && row.expiresAt <= at) {
+                row.state = "expired";
+                count++;
+            }
+        return count;
+    }
+    listReservedOutpoints() {
+        return [...this.rows.values()]
+            .filter((row) => row.state === "quoted")
+            .flatMap((row) => row.operatorInputs.map(({ txid, vout }) => ({ txid, vout })));
+    }
+    exposureTotals() {
+        const active = [...this.rows.values()].filter((row) => row.state === "quoted");
+        return {
+            outstandingSats: active.reduce((sum, row) => sum + row.loanSats, 0n),
+            activeCount: active.length,
+        };
+    }
+}
 
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const senderAddress = new ArkAddress(serverKey, senderKey, "ark").encode();
@@ -797,6 +838,7 @@ beforeEach(() => {
     sponsoredBuilder = new FakeSponsoredLockupBuilder(config(), serverUnroll);
     swapFills = new MemorySwapFills();
     swapFillBuilder = new FakeSwapFillGraphBuilder(FAKE_MAKER_SCRIPT, 5000n);
+    receiveQuotes = new MemoryReceiveQuotes();
     sweeperStatus = okSweeper();
     reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
     clock = NOW;
@@ -843,6 +885,54 @@ describe("GET /v1/info", () => {
         const res = await app({ paused: true }).request("/v1/info");
         expect(res.status).toBe(200);
         expect(((await res.json()) as InfoResponse).paused).toBe(true);
+    });
+});
+
+describe("receive quote routes", () => {
+    const receivePolicy = {
+        assetRules: [
+            {
+                assetId: ASSET,
+                enabled: true,
+                fares: [
+                    {
+                        id: "receive",
+                        currency: { kind: "sats" as const },
+                        pricing: { kind: "flat" as const, units: 3n },
+                    },
+                ],
+                claim: "either" as const,
+                maxTopupSats: null,
+            },
+        ],
+    };
+
+    it("POSTs a reserved quote and GET returns its saved state without renewing TTL", async () => {
+        const response = await post(
+            "/v1/receive-quotes",
+            {
+                receiverAddress,
+                makerPublicKey: bytesToHex(senderKey),
+                assetId: assetIdToWire(ASSET),
+                fundingExpiry: { kind: "height", value: "850000" },
+            },
+            receivePolicy,
+        );
+        expect(response.status).toBe(200);
+        const created = (await response.json()) as ReceiveQuoteResponse;
+        expect(created).toMatchObject({
+            quoteId: "adv-1",
+            state: "quoted",
+            batchExpiry: { kind: "height", value: "900000" },
+            inputExpiryFloor: { kind: "height", value: "850000" },
+            recoveryLocktime: { kind: "height", value: "849856" },
+        });
+        expect(advances.rows.size).toBe(0);
+
+        clock = created.expiresAt;
+        const read = await app(receivePolicy).request(`/v1/receive-quotes/${created.quoteId}`);
+        expect(read.status).toBe(200);
+        expect(await read.json()).toEqual({ ...created, state: "expired" });
     });
 });
 

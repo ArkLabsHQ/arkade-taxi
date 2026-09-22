@@ -102,6 +102,7 @@ export interface SwapFillSubmitDeps {
     now(): number;
     randomId(): string;
     leaseSeconds: number;
+    policy?: { getSnapshot(): { revision: bigint } };
     joint?: SwapFillJointOps;
     assertSolverAuthorised?: SolverAuthFn;
 }
@@ -320,13 +321,17 @@ export async function submitSwapFill(
     const leaseUntil = now + deps.leaseSeconds;
     let claimed: SwapFill;
     try {
-        claimed = deps.swapFills.claimSubmit(id, {
-            leaseOwner: SWAP_FILL_SUBMIT_LEASE_OWNER,
-            leaseToken,
-            leaseUntil,
-            solverGraph: protocolGraphToStored(solverDomain),
-            now,
-        });
+        claimed = deps.swapFills.claimSubmit(
+            id,
+            {
+                leaseOwner: SWAP_FILL_SUBMIT_LEASE_OWNER,
+                leaseToken,
+                leaseUntil,
+                solverGraph: protocolGraphToStored(solverDomain),
+                now,
+            },
+            deps.policy?.getSnapshot().revision,
+        );
     } catch (e) {
         if (e instanceof SwapFillClaimError)
             throw new ServiceError(

@@ -293,6 +293,29 @@ export interface TaggedLocktimeWire {
     value: string;
 }
 
+export interface ReceiveQuoteRequestBody {
+    receiverAddress: string;
+    makerPublicKey: string;
+    assetId: AssetIdWire;
+    fareId?: string;
+    fundingExpiry?: TaggedLocktimeWire;
+}
+
+export interface ReceiveQuoteResponse {
+    quoteId: string;
+    state: "quoted" | "bound" | "expired";
+    receiverAddress: string;
+    makerPublicKey: string;
+    params: QuoteParams;
+    covenantAddress: string;
+    fare: FareWire;
+    batchExpiry: TaggedLocktimeWire;
+    inputExpiryFloor: TaggedLocktimeWire;
+    recoveryLocktime: TaggedLocktimeWire;
+    createdAt: number;
+    expiresAt: number;
+}
+
 export interface ReceiverClaimDescriptorWire {
     params: QuoteParams;
     covenantAddress: string;

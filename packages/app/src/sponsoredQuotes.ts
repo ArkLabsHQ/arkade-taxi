@@ -248,6 +248,8 @@ async function createAdmittedSponsoredQuote(
 ): Promise<SponsoredQuoteResponse> {
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     deps.reservations.expireQuotes(deps.now());
+    deps.swapFills?.expireQuotes(deps.now());
+    deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
             return await createReservedSponsoredQuote(deps, body);
@@ -313,10 +315,10 @@ async function createReservedSponsoredQuote(
             { cause },
         );
     }
-    const reserved = deps.reservations.listReservedOutpoints();
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
-        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...intentLocks],
+        reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
             (decision.fare.units === 0n
@@ -456,7 +458,10 @@ async function createReservedSponsoredQuote(
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...unionReservedOutpoints(deps.reservations, deps.swapFills), ...currentLocks],
+        reserved: [
+            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...currentLocks,
+        ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });

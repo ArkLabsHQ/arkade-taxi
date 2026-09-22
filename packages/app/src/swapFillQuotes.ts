@@ -24,7 +24,12 @@ import {
     type SwapFillQuoteResponse,
     type SwapFillStatusResponse,
 } from "@arkade-taxi/protocol";
-import type { ReservationRepository, SwapFill, SwapFillRepository } from "@arkade-taxi/db";
+import type {
+    ReceiveQuoteRepository,
+    ReservationRepository,
+    SwapFill,
+    SwapFillRepository,
+} from "@arkade-taxi/db";
 import {
     buildSwapFillGraph,
     jointGraphToStored,
@@ -122,6 +127,10 @@ export interface SwapFillQuoteDeps {
     advances: Pick<AdvanceStore, "exposureTotals">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints" | "expireQuotes">;
     swapFills: SwapFillStore;
+    receiveQuotes?: Pick<
+        ReceiveQuoteRepository,
+        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
+    >;
     inventory: QuoteDeps["inventory"];
     senderInventory: QuoteDeps["senderInventory"];
     config: QuoteDeps["config"];
@@ -244,6 +253,7 @@ async function createAdmittedSwapFillQuote(
     const now = deps.now();
     deps.reservations.expireQuotes(now);
     deps.swapFills.expireQuotes(now);
+    deps.receiveQuotes?.expireQuotes(now);
     let req: SwapFillQuoteRequest;
     try {
         req = swapFillQuoteRequestFromWire(body);
@@ -346,12 +356,22 @@ async function createAdmittedSwapFillQuote(
         throw admissionError("topup_exceeds_max_per_payment");
     const advancesExposure = deps.advances.exposureTotals();
     const fillsExposure = deps.swapFills.exposureTotals();
+    const receiveExposure = deps.receiveQuotes?.exposureTotals() ?? {
+        outstandingSats: 0n,
+        activeCount: 0,
+    };
     if (
-        advancesExposure.outstandingSats + fillsExposure.outstandingSats + req.contributionSats >
+        advancesExposure.outstandingSats +
+            fillsExposure.outstandingSats +
+            receiveExposure.outstandingSats +
+            req.contributionSats >
         policy.maxOutstandingSats
     )
         throw admissionError("exceeds_max_outstanding");
-    if (advancesExposure.lockedCount + fillsExposure.activeCount >= policy.maxConcurrentAdvances)
+    if (
+        advancesExposure.lockedCount + fillsExposure.activeCount + receiveExposure.activeCount >=
+        policy.maxConcurrentAdvances
+    )
         throw admissionError("max_concurrent_advances");
     let spendable;
     let intentLocks;
@@ -366,7 +386,7 @@ async function createAdmittedSwapFillQuote(
             { cause },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     let selection;
     try {
         selection = selectOperatorFunding({
@@ -493,7 +513,7 @@ async function createAdmittedSwapFillQuote(
         expiresAt: now + policy.quoteTtlSeconds,
     };
     try {
-        deps.swapFills.insert(fill);
+        deps.swapFills.insert(fill, revision);
     } catch (cause) {
         const raced = deps.swapFills.getByOperation(req.operationId);
         if (!raced) throw cause;
@@ -835,7 +855,7 @@ async function reverifyFreshness(
             { cause },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const latest = selectOperatorFunding({
         spendable: currentSpendable,
         reserved: [...reserved, ...currentLocks],

@@ -5,6 +5,8 @@ export {
     type QuoteRequest,
     type RequestVerifiedQuoteArgs,
     type RequestVerifiedSponsoredQuoteArgs,
+    type ReceiveQuoteRequest,
+    type RequestVerifiedReceiveQuoteArgs,
     type SponsoredQuoteRequest,
     type SubscribeClaimsArgs,
     type TaxiClientOptions,
@@ -24,6 +26,13 @@ export {
     type VerifiedQuote,
     type VerifyQuoteArgs,
 } from "./verify.js";
+export {
+    verifyReceiveQuote,
+    type ReceiveQuoteExpectation,
+    type RecycleCarrierQuote,
+    type VerifiedReceiveQuote,
+    type VerifyReceiveQuoteArgs,
+} from "./receiveQuote.js";
 export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup.js";
 export {
     assertSignedSponsoredPayment,
@@ -59,12 +68,14 @@ export {
     decodeClaimsSnapshot,
     decodeLockup,
     decodeQuote,
+    decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
     decodeSwapFillQuote,
     decodeSwapFillStatus,
     type DecodedInfo,
     type DecodedQuote,
+    type DecodedReceiveQuote,
     type DecodedSponsoredQuote,
     type DecodedSwapFillQuote,
 } from "./decode.js";

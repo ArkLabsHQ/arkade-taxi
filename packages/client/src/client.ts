@@ -11,6 +11,8 @@ import {
     type LockupResponse,
     type QuoteRequestBody,
     type QuoteResponse,
+    type ReceiveQuoteRequestBody,
+    type ReceiveQuoteResponse,
     type ReceiverClaimWire,
     type SponsoredQuoteRequestBody,
     type SponsoredQuoteResponse,
@@ -24,6 +26,7 @@ import {
     decodeInfo,
     decodeLockup,
     decodeQuote,
+    decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
     decodeSwapFillQuote,
@@ -46,6 +49,7 @@ import {
     type ReceiverWalletInput,
 } from "./spend.js";
 import { ArkAddress, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
+import { PubT, validatePubkey } from "@scure/btc-signer/utils.js";
 import {
     verifyQuote,
     type QuoteExpectation,
@@ -75,6 +79,12 @@ import type {
     SwapFillQuoteResponse,
     SwapFillStatusResponse,
 } from "@arkade-taxi/protocol";
+import {
+    verifyReceiveQuote,
+    type ReceiveQuoteExpectation,
+    type VerifiedReceiveQuote,
+    type VerifyReceiveQuoteArgs,
+} from "./receiveQuote.js";
 
 export interface TaxiClientOptions {
     baseUrl: string;
@@ -144,6 +154,29 @@ export interface SponsoredQuoteRequest {
     extraPacket?: { type: number; payload: Uint8Array };
 }
 
+export interface ReceiveQuoteRequest {
+    receiverAddress: string;
+    makerPublicKey: Uint8Array;
+    assetId: AssetIdValue;
+    fareId?: string;
+    fundingExpiry?: { kind: "height" | "time"; value: bigint };
+}
+
+export interface RequestVerifiedReceiveQuoteArgs extends Omit<
+    VerifyReceiveQuoteArgs,
+    "quote" | "info" | "expect" | "now"
+> {
+    receiverAddress: string;
+    makerPublicKey: Uint8Array;
+    assetId: AssetIdValue;
+    fareId?: string;
+    fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    expect: Omit<
+        ReceiveQuoteExpectation,
+        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry"
+    >;
+}
+
 export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     VerifySponsoredQuoteArgs,
     "quote" | "info" | "senderInputs" | "senderSats" | "expect"
@@ -209,6 +242,62 @@ export class TaxiClient {
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
         decodeQuote(body);
         return body;
+    }
+
+    async requestReceiveQuote(req: ReceiveQuoteRequest): Promise<ReceiveQuoteResponse> {
+        const wire: ReceiveQuoteRequestBody = {
+            receiverAddress: req.receiverAddress,
+            makerPublicKey: bytesToHex(req.makerPublicKey),
+            assetId: assetIdToWire(req.assetId),
+        };
+        if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.fundingExpiry !== undefined)
+            wire.fundingExpiry = {
+                kind: req.fundingExpiry.kind,
+                value: satsToWire(req.fundingExpiry.value),
+            };
+        const body = await this.request("POST", "/v1/receive-quotes", wire);
+        decodeReceiveQuote(body);
+        return body as ReceiveQuoteResponse;
+    }
+
+    async getReceiveQuote(quoteId: string): Promise<ReceiveQuoteResponse> {
+        if (!quoteId.length || quoteId.length > 128)
+            throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: invalid receive quote id");
+        const body = await this.request("GET", `/v1/receive-quotes/${encodeURIComponent(quoteId)}`);
+        decodeReceiveQuote(body);
+        return body as ReceiveQuoteResponse;
+    }
+
+    async requestVerifiedReceiveQuote(
+        raw: RequestVerifiedReceiveQuoteArgs,
+    ): Promise<{ verified: VerifiedReceiveQuote }> {
+        const request = immutablePlainCopy(raw, "verified receive quote request");
+        await preflightReceiveRequest(request);
+        const info = await this.info();
+        const quote = await this.requestReceiveQuote(request);
+        return {
+            verified: verifyReceiveQuote({
+                quote,
+                info,
+                trustedServerKey: request.trustedServerKey,
+                trustedEmulatorKey: request.trustedEmulatorKey,
+                dust: request.dust,
+                vtxoMinAmount: request.vtxoMinAmount,
+                hrp: request.hrp,
+                now: Math.floor(Date.now() / 1000),
+                expect: {
+                    ...request.expect,
+                    receiverAddress: request.receiverAddress,
+                    makerPublicKey: request.makerPublicKey,
+                    assetId: request.assetId,
+                    ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
+                    ...(request.fundingExpiry === undefined
+                        ? {}
+                        : { fundingExpiry: request.fundingExpiry }),
+                },
+            }),
+        };
     }
 
     async requestVerifiedQuote(
@@ -598,5 +687,86 @@ export class TaxiClient {
                 { cause },
             );
         }
+    }
+}
+
+async function preflightReceiveRequest(request: RequestVerifiedReceiveQuoteArgs): Promise<void> {
+    let receiver: ArkAddress;
+    try {
+        receiver = ArkAddress.decode(request.receiverAddress);
+    } catch (cause) {
+        throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: receiver address is invalid", {
+            cause,
+        });
+    }
+    if (
+        receiver.encode() !== request.receiverAddress ||
+        receiver.hrp !== request.hrp ||
+        bytesToHex(receiver.serverPubKey) !== bytesToHex(request.trustedServerKey)
+    )
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: receiver address must be canonical and match the trusted network and server",
+        );
+    if (!(request.makerPublicKey instanceof Uint8Array) || request.makerPublicKey.length !== 32)
+        throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: maker key must be 32 bytes");
+    try {
+        validatePubkey(request.makerPublicKey, PubT.schnorr);
+    } catch (cause) {
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: maker key is not a curve point",
+            {
+                cause,
+            },
+        );
+    }
+    const deadline = (value: unknown): value is { kind: "height" | "time"; value: bigint } =>
+        !!value &&
+        typeof value === "object" &&
+        ((value as { kind?: unknown }).kind === "height" ||
+            (value as { kind?: unknown }).kind === "time") &&
+        typeof (value as { value?: unknown }).value === "bigint" &&
+        (value as { value: bigint }).value > 0n;
+    if (
+        !(request.assetId.txid instanceof Uint8Array) ||
+        request.assetId.txid.length !== 32 ||
+        !Number.isSafeInteger(request.assetId.groupIndex) ||
+        request.assetId.groupIndex < 0 ||
+        (request.fareId !== undefined &&
+            (typeof request.fareId !== "string" ||
+                !request.fareId.length ||
+                request.fareId.length > 128)) ||
+        !(request.trustedServerKey instanceof Uint8Array) ||
+        request.trustedServerKey.length !== 32 ||
+        !(request.trustedEmulatorKey instanceof Uint8Array) ||
+        request.trustedEmulatorKey.length !== 32 ||
+        typeof request.hrp !== "string" ||
+        !request.hrp.length ||
+        typeof request.dust !== "bigint" ||
+        typeof request.vtxoMinAmount !== "bigint" ||
+        request.dust <= 0n ||
+        request.vtxoMinAmount <= 0n ||
+        request.dust - request.vtxoMinAmount < request.vtxoMinAmount ||
+        typeof request.expect.maxServiceFareSats !== "bigint" ||
+        request.expect.maxServiceFareSats < 0n ||
+        !deadline(request.expect.minRecoveryLocktime) ||
+        !deadline(request.expect.minInputExpiryFloor) ||
+        request.expect.minRecoveryLocktime.kind !== request.expect.minInputExpiryFloor.kind ||
+        (request.fundingExpiry !== undefined && !deadline(request.fundingExpiry))
+    )
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: receive quote expectations are invalid",
+        );
+    try {
+        validatePubkey(request.trustedServerKey, PubT.schnorr);
+        validatePubkey(request.trustedEmulatorKey, PubT.schnorr);
+    } catch (cause) {
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: trusted server or emulator key is not a curve point",
+            { cause },
+        );
     }
 }

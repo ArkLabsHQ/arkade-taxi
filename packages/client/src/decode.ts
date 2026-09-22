@@ -11,6 +11,7 @@ import type {
     ClaimsSnapshotResponse,
     FareWire,
     QuoteParams,
+    ReceiveQuoteResponse,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,
@@ -84,6 +85,21 @@ export interface DecodedSwapFillQuote {
     contributionSats: bigint;
     fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     graph: SwapFillGraph;
+}
+
+export interface DecodedReceiveQuote {
+    quoteId: string;
+    state: "quoted" | "bound" | "expired";
+    receiverAddress: string;
+    makerPublicKey: string;
+    params: CovenantParamsValue;
+    covenantAddress: string;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    batchExpiry: { kind: "height" | "time"; value: bigint };
+    inputExpiryFloor: { kind: "height" | "time"; value: bigint };
+    recoveryLocktime: { kind: "height" | "time"; value: bigint };
+    createdAt: number;
+    expiresAt: number;
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -413,6 +429,61 @@ export function decodeSponsoredQuote(quote: SponsoredQuoteResponse): DecodedSpon
                 "sponsored quote.unsignedSponsoredTx",
             ),
             commitment: commitment(quote.commitment, "sponsored quote.commitment"),
+        };
+    });
+}
+
+export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
+    return wrap("receive quote", () => {
+        const quote = exactRecord(
+            value,
+            [
+                "quoteId",
+                "state",
+                "receiverAddress",
+                "makerPublicKey",
+                "params",
+                "covenantAddress",
+                "fare",
+                "batchExpiry",
+                "inputExpiryFloor",
+                "recoveryLocktime",
+                "createdAt",
+                "expiresAt",
+            ],
+            [],
+            "receive quote",
+        );
+        if (quote.state !== "quoted" && quote.state !== "bound" && quote.state !== "expired")
+            invalid("receive quote.state is invalid");
+        const state = quote.state as "quoted" | "bound" | "expired";
+        const makerPublicKey = str(quote.makerPublicKey, "receive quote.makerPublicKey");
+        if (!/^[0-9a-f]{64}$/.test(makerPublicKey))
+            invalid("receive quote.makerPublicKey must be lowercase x-only hex");
+        const deadline = (field: "batchExpiry" | "inputExpiryFloor" | "recoveryLocktime") => {
+            const wire = taggedLocktime(quote[field], `receive quote.${field}`);
+            const parsed = satsFromWire(wire.value, `receive quote.${field}.value`);
+            if (parsed <= 0n) invalid(`receive quote.${field}.value must be positive`);
+            return { kind: wire.kind, value: parsed };
+        };
+        const quoteId = str(quote.quoteId, "receive quote.quoteId");
+        if (quoteId.length > 128) invalid("receive quote.quoteId is too long");
+        return {
+            quoteId,
+            state,
+            receiverAddress: str(quote.receiverAddress, "receive quote.receiverAddress"),
+            makerPublicKey,
+            params: quoteParamsFromWire(
+                quoteParams(quote.params, "receive quote.params"),
+                "receive quote.params",
+            ),
+            covenantAddress: str(quote.covenantAddress, "receive quote.covenantAddress"),
+            fare: fareFromWire(fare(quote.fare, "receive quote.fare"), "receive quote.fare"),
+            batchExpiry: deadline("batchExpiry"),
+            inputExpiryFloor: deadline("inputExpiryFloor"),
+            recoveryLocktime: deadline("recoveryLocktime"),
+            createdAt: uint(quote.createdAt, "receive quote.createdAt"),
+            expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
         };
     });
 }

@@ -259,6 +259,49 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE advances ADD COLUMN recovery_recipient TEXT
             CHECK (recovery_recipient IS NULL OR recovery_recipient IN ('sender', 'receiver'))`,
     },
+    {
+        id: 7,
+        up: `CREATE TABLE receive_quotes (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'bound', 'expired')),
+            receiver_address TEXT NOT NULL CHECK (length(receiver_address) > 0),
+            maker_public_key TEXT NOT NULL CHECK (
+                length(maker_public_key) = 64 AND maker_public_key NOT GLOB '*[^0-9a-f]*'
+            ),
+            params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+            covenant_address TEXT NOT NULL CHECK (length(covenant_address) > 0),
+            fare_json TEXT NOT NULL CHECK (json_valid(fare_json)),
+            batch_expiry_kind TEXT NOT NULL CHECK (batch_expiry_kind IN ('height', 'time')),
+            batch_expiry_value INTEGER NOT NULL,
+            input_expiry_floor_kind TEXT NOT NULL CHECK (input_expiry_floor_kind IN ('height', 'time')),
+            input_expiry_floor_value INTEGER NOT NULL,
+            recovery_locktime_kind TEXT NOT NULL CHECK (recovery_locktime_kind IN ('height', 'time')),
+            recovery_locktime_value INTEGER NOT NULL,
+            loan_sats INTEGER NOT NULL CHECK (loan_sats > 0),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+            operator_inputs_json TEXT NOT NULL CHECK (json_valid(operator_inputs_json)),
+            bound_fill_id TEXT,
+            CHECK (expires_at > created_at),
+            CHECK (batch_expiry_kind = input_expiry_floor_kind),
+            CHECK (input_expiry_floor_kind = recovery_locktime_kind),
+            CHECK (batch_expiry_value >= input_expiry_floor_value),
+            CHECK (input_expiry_floor_value > recovery_locktime_value),
+            CHECK ((state = 'bound') = (bound_fill_id IS NOT NULL))
+        );
+        CREATE INDEX receive_quotes_state_expiry ON receive_quotes (state, expires_at);
+        CREATE TABLE receive_quote_reservations (
+            outpoint_txid TEXT NOT NULL CHECK (
+                length(outpoint_txid) = 64 AND outpoint_txid NOT GLOB '*[^0-9a-f]*'
+            ),
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            quote_id TEXT NOT NULL REFERENCES receive_quotes(id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX receive_quote_reservations_quote ON receive_quote_reservations (quote_id);`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -341,6 +384,18 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'recovery_recipient' AND type = 'TEXT'",
             )
             .get();
+    const hasReceiveQuotes =
+        hasRecoveryRecipient &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('receive_quotes') WHERE name = 'input_expiry_floor_value' AND type = 'INTEGER'",
+            )
+            .get() &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('receive_quote_reservations') WHERE name = 'quote_id' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -350,7 +405,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 3 && !hasSwapFills) ||
             (current === 4 && !hasSponsorScript) ||
             (current === 5 && !hasClaimMode) ||
-            (current === 6 && !hasRecoveryRecipient))
+            (current === 6 && !hasRecoveryRecipient) ||
+            (current === 7 && !hasReceiveQuotes))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

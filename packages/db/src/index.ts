@@ -39,3 +39,4 @@ export function openDatabase(path: string): Database {
     return db;
 }
 export * from "./proceeds.js";
+export * from "./receiveQuotes.js";

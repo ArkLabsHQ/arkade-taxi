@@ -4,6 +4,7 @@ import {
     AdvanceRepository,
     openDatabase,
     PolicyRepository,
+    ReceiveQuoteRepository,
     ReservationRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
@@ -46,6 +47,7 @@ function setup() {
     const advances = new AdvanceRepository(db);
     const reservations = new ReservationRepository(db);
     const swapFills = new SwapFillRepository(db);
+    const receiveQuotes = new ReceiveQuoteRepository(db);
     const terms = new PolicyRepository(db);
     terms.update(policy(), "test");
     const cfg = config({ addressHrp: "tark", reconcileIntervalMs: 1_000 });
@@ -99,6 +101,7 @@ function setup() {
         config: cfg,
         advances,
         reservations,
+        receiveQuotes,
         policy: terms,
         now: () => Math.floor(now / 1_000),
         nowMs: () => now,
@@ -150,6 +153,7 @@ function setup() {
         createRoutes({
             ...deps,
             sponsoredBuilder: new FakeSponsoredLockupBuilder(cfg, serverUnroll),
+            receiveQuotes,
             swapFills,
             swapFillBuilder: new FakeSwapFillGraphBuilder("bd".repeat(34), 5000n),
             swapFillSubmit: {

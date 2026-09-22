@@ -9,6 +9,7 @@ import {
     PolicyRepository,
     ReservationRepository,
     ProceedsRepository,
+    ReceiveQuoteRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
@@ -41,6 +42,7 @@ async function runServe(): Promise<void> {
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
     const swapFills = new SwapFillRepository(db);
+    const receiveQuotes = new ReceiveQuoteRepository(db);
     assertRecoveryStartupInvariants(
         ["locking", "locked", "recovering"]
             .flatMap((state) => advances.byState(state as "locking" | "locked" | "recovering"))
@@ -48,7 +50,7 @@ async function runServe(): Promise<void> {
         config,
     );
     const runtime = createOperatorRuntime(config, db, {
-        reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills),
+        reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
     });
     const proceeds = createProceedsCollector({
         config,
@@ -56,6 +58,7 @@ async function runServe(): Promise<void> {
         advances,
         reservations,
         swapFills,
+        receiveQuotes,
         jobs: new ProceedsRepository(db),
     });
     const lockupSubmitter = productionLockupSubmitter(
@@ -150,6 +153,7 @@ async function runServe(): Promise<void> {
         randomId: () => randomUUID(),
         nowMs: Date.now,
         reservations,
+        receiveQuotes,
         inventory: {
             getSpendableVtxos: async () => {
                 if (!runtime.wallet)
@@ -169,6 +173,7 @@ async function runServe(): Promise<void> {
         }, config.arkdUrl),
         swapFillSubmit: {
             swapFills,
+            policy,
             taxiIdentity: () => {
                 const wallet = runtime.wallet;
                 if (!wallet)
@@ -234,6 +239,7 @@ async function runServe(): Promise<void> {
         firstRecoveryTick: async () => {
             reservations.expireQuotes(seconds());
             swapFills.expireQuotes(seconds());
+            receiveQuotes.expireQuotes(seconds());
             const safety = await runtime.assertRecovery();
             const result = await sweeper.tick(safety.chainHeight, safety.chainTime);
             if (result.considered > 0)

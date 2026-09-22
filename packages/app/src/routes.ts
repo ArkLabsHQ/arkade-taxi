@@ -11,6 +11,7 @@ import {
 import { ErrorCode, sanitizeOperationalError, ServiceError, toErrorResponse } from "./errors.js";
 import { assetRuleToWire } from "./rulesWire.js";
 import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
+import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
 import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
 import {
     createSwapFillQuote,
@@ -29,6 +30,7 @@ import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
 
 export interface RouteDeps extends QuoteDeps {
+    receiveQuotes: ReceiveQuoteDeps["receiveQuotes"];
     sponsoredBuilder: SponsoredLockupBuilder;
     swapFills: SwapFillStore;
     swapFillBuilder: SwapFillGraphBuilder;
@@ -400,6 +402,18 @@ export function createRoutes(deps: RouteDeps): Hono {
     });
 
     app.get("/v1/transfers/:id", (c) => handle(c, () => getTransfer(deps, c.req.param("id"))));
+
+    app.post("/v1/receive-quotes", (c) =>
+        handle(c, async () => {
+            return createReceiveQuote(deps, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
+            );
+        }),
+    );
+
+    app.get("/v1/receive-quotes/:id", (c) =>
+        handle(c, () => getReceiveQuote(deps, c.req.param("id"))),
+    );
 
     app.post("/v1/sponsored-transfers", (c) =>
         handle(c, async () => {

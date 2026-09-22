@@ -1,5 +1,8 @@
 import type { Database } from "better-sqlite3";
+import { ruleFor } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
+import { PolicyRepository } from "./policy.js";
+import { PolicyRevisionConflictError } from "./reservations.js";
 
 export type SwapFillState = "quoted" | "submitting" | "settled" | "expired" | "cancelled";
 
@@ -268,13 +271,15 @@ function fromRow(r: SwapFillRow): SwapFill {
 
 export class SwapFillRepository {
     readonly #db: Database;
+    readonly #policy: PolicyRepository;
 
     constructor(db: Database) {
         assertNativeAccess(db);
         this.#db = db;
+        this.#policy = new PolicyRepository(db);
     }
 
-    insert(fill: SwapFill): void {
+    insert(fill: SwapFill, expectedPolicyRevision?: bigint): void {
         assertNativeAccess(this.#db);
         const maxFare =
             fill.maxFare.currency === "asset"
@@ -289,6 +294,23 @@ export class SwapFillRepository {
                 : { currency: "sats", units: fill.maxFare.units.toString(10) };
         this.#db
             .transaction(() => {
+                if (expectedPolicyRevision !== undefined) {
+                    this.#expireReceive(fill.createdAt);
+                    const { policy, revision } = this.#policy.getSnapshot();
+                    if (revision !== expectedPolicyRevision)
+                        throw new PolicyRevisionConflictError();
+                    if (policy.paused) throw new Error("swap fill: paused");
+                    const rule = ruleFor(policy.assetRules, undefined);
+                    if (!rule?.enabled) throw new Error("swap fill: asset not served");
+                    const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
+                    if (fill.contributionSats > cap)
+                        throw new Error("swap fill: contribution exceeds per-payment limit");
+                    const exposure = this.#allExposure();
+                    if (exposure.total + fill.contributionSats > policy.maxOutstandingSats)
+                        throw new Error("swap fill: exceeds max outstanding");
+                    if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
+                        throw new Error("swap fill: max concurrent advances");
+                }
                 // Cross-flow fence: an advance or proceeds job may hold this
                 // coin; checked here so the database serializes the race.
                 for (const input of fill.taxiInputs) {
@@ -304,6 +326,14 @@ export class SwapFillRepository {
                         this.#db
                             .prepare(
                                 "SELECT 1 FROM proceeds_inputs WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new SwapFillReservationConflictError();
+                    if (
+                        this.#db
+                            .prepare(
+                                "SELECT 1 FROM receive_quote_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
                             )
                             .get(input.txid, input.vout)
                     )
@@ -450,11 +480,24 @@ export class SwapFillRepository {
             solverGraph: SwapFillGraph;
             now: number;
         },
+        expectedPolicyRevision?: bigint,
     ): SwapFill {
         assertNativeAccess(this.#db);
         const result = this.#db
             .transaction(() => {
                 this.#expire(claim.now);
+                if (expectedPolicyRevision !== undefined) {
+                    this.#expireReceive(claim.now);
+                    const { policy, revision } = this.#policy.getSnapshot();
+                    if (revision !== expectedPolicyRevision)
+                        throw new PolicyRevisionConflictError();
+                    if (policy.paused) throw new Error("swap fill: paused");
+                    const exposure = this.#allExposure();
+                    if (exposure.total > policy.maxOutstandingSats)
+                        throw new Error("swap fill: exceeds max outstanding");
+                    if (exposure.count > BigInt(policy.maxConcurrentAdvances))
+                        throw new Error("swap fill: max concurrent advances");
+                }
                 const current = this.get(id);
                 if (!current) throw new SwapFillClaimError("not_found", id);
                 if (current.state === "expired") throw new SwapFillClaimError("quote_expired", id);
@@ -692,5 +735,36 @@ export class SwapFillRepository {
 
     #release(fillId: string): void {
         this.#db.prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?").run(fillId);
+    }
+
+    #expireReceive(at: number): void {
+        this.#db
+            .prepare(
+                "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
+            )
+            .run(at);
+        this.#db
+            .prepare(
+                "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
+            )
+            .run(at);
+    }
+
+    #allExposure(): { total: bigint; count: bigint } {
+        return this.#db
+            .prepare<[], { total: bigint; count: bigint }>(
+                `SELECT
+                    (SELECT coalesce(sum(topup), 0) FROM advances
+                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                    + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
+                       WHERE state IN ('quoted', 'submitting'))
+                    + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
+                    (SELECT count(*) FROM advances
+                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                    + (SELECT count(*) FROM swap_fills WHERE state IN ('quoted', 'submitting'))
+                    + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
+            )
+            .safeIntegers(true)
+            .get()!;
     }
 }

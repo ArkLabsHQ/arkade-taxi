@@ -44,6 +44,7 @@ export {
     type LockupBuildRequest,
     type QuoteDeps,
 } from "./quotes.js";
+export { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
 export {
     assertRecoveryStartupInvariants,
     buildRecoveryIntent,

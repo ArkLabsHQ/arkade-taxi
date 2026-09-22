@@ -21,6 +21,7 @@ import type {
     AdvanceRepository,
     ProceedsRepository,
     ProceedsPlan,
+    ReceiveQuoteRepository,
     ReservationRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
@@ -306,6 +307,7 @@ interface Deps {
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
     swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
+    receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
 }
@@ -397,7 +399,8 @@ export async function discoverProceeds(
 
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
-    const taxiLocksOf = () => unionReservedOutpoints(reservations, deps.swapFills);
+    const taxiLocksOf = () =>
+        unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
