@@ -38,6 +38,7 @@ export interface FillSponsor {
     netContributionSats: bigint | number;
     fare?: FillSponsorFare;
     changeScript: Uint8Array;
+    combineSatsFareWithChange?: boolean;
 }
 
 export interface BuildOfferFillPlanOpts {
@@ -112,6 +113,7 @@ function normalizeSponsor(sponsor: FillSponsor, assetCarrierSats: bigint): Spons
                   }
                 : undefined,
         changeScript: sponsor.changeScript,
+        combineSatsFareWithChange: sponsor.combineSatsFareWithChange,
     };
 }
 

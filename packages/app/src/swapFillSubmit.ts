@@ -7,6 +7,7 @@ import {
 import { base64, hex } from "@scure/base";
 import {
     SwapFillClaimError,
+    type AdvanceRepository,
     type SwapFill,
     type SwapFillGraph,
     type SwapFillRepository,
@@ -42,6 +43,9 @@ import {
     type SubmittedJointFill,
     unsignedPsbtBytes,
 } from "@arkade-taxi/client";
+import { readFundingSource } from "./arkade/fundingSource.js";
+import { buildRecoveryIntent } from "./arkade/recovery.js";
+import { isDeepStrictEqual } from "node:util";
 
 export const SWAP_FILL_SUBMIT_LEASE_OWNER = "swap-fill-submit";
 
@@ -98,13 +102,15 @@ export interface SwapFillSubmitDeps {
     swapFills: SwapFillSubmitStore;
     taxiIdentity: () => Identity;
     emulator: Pick<EmulatorProvider, "submitTx">;
-    config: Pick<RuntimeConfig, "serverPubkey" | "emulatorPubkey">;
+    config: RuntimeConfig;
     now(): number;
     randomId(): string;
     leaseSeconds: number;
     policy?: { getSnapshot(): { revision: bigint } };
     joint?: SwapFillJointOps;
     assertSolverAuthorised?: SolverAuthFn;
+    advances?: Pick<AdvanceRepository, "get">;
+    assertBoundFresh?: (fill: SwapFill) => Promise<void>;
 }
 
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
@@ -377,6 +383,29 @@ export async function submitSwapFill(
     } catch (cause) {
         failSigning(deps, id, leaseToken, now, "swap_fill_solver_unauthorised", 409, cause);
     }
+    if (claimed.receiveQuoteId) {
+        try {
+            const advance = deps.advances?.get(claimed.receiveQuoteId);
+            if (!advance) throw new Error("bound advance is missing");
+            const source = readFundingSource(advance.unsignedLockupTx);
+            if (
+                source.kind !== "joint-fill" ||
+                source.source.fillId !== claimed.id ||
+                source.source.receiveQuoteId !== claimed.receiveQuoteId
+            )
+                throw new Error("bound funding source association differs");
+            const exact = buildRecoveryIntent(
+                { ...advance, outpoint: source.covenantOutpoint },
+                deps.config,
+            );
+            if (!isDeepStrictEqual(source.source.recoveryPreflight, exact))
+                throw new Error("bound recovery preflight differs from reconstructed recovery");
+            if (!deps.assertBoundFresh) throw new Error("bound freshness verifier is unavailable");
+            await deps.assertBoundFresh(claimed);
+        } catch (cause) {
+            failSigning(deps, id, leaseToken, now, "swap_fill_bound_unsafe", 409, cause);
+        }
+    }
     let taxiIdentity: Identity;
     try {
         taxiIdentity = deps.taxiIdentity();
@@ -441,6 +470,13 @@ export async function submitSwapFill(
             500,
             new JointSigningError("covenant cosigner equals the raw emulator key"),
         );
+    if (claimed.receiveQuoteId) {
+        try {
+            await deps.assertBoundFresh!(claimed);
+        } catch (cause) {
+            failSigning(deps, id, leaseToken, now, "swap_fill_bound_unsafe", 409, cause);
+        }
+    }
     if (!deps.swapFills.recordSubmitInvoked(id, leaseToken, now))
         throw new ServiceError(
             ErrorCode.InvalidState,

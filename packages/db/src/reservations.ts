@@ -154,12 +154,13 @@ export class ReservationRepository {
                             (SELECT coalesce(sum(topup), 0) FROM advances
                              WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
                             + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting'))
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                             + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
                                WHERE state = 'quoted') AS total,
                             (SELECT count(*) FROM advances
                              WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT count(*) FROM swap_fills WHERE state IN ('quoted', 'submitting'))
+                            + (SELECT count(*) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                             + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
                     )
                     .safeIntegers(true)
@@ -263,12 +264,13 @@ export class ReservationRepository {
                             (SELECT coalesce(sum(topup), 0) FROM advances
                              WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
                             + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting'))
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                             + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
                                WHERE state = 'quoted') AS total,
                             (SELECT count(*) FROM advances
                              WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT count(*) FROM swap_fills WHERE state IN ('quoted', 'submitting'))
+                            + (SELECT count(*) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                             + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
                     )
                     .safeIntegers(true)
@@ -415,7 +417,7 @@ export class ReservationRepository {
     #expireCrossFlow(at: number): void {
         this.#db
             .prepare(
-                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
+                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
             )
             .run(at, at);
         this.#db

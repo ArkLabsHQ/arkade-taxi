@@ -16,7 +16,11 @@ import { loadConfig, resolveRuntimeConfig } from "./config.js";
 import { sanitizeOperationalError, ServiceError } from "./errors.js";
 import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
 import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
-import { createSwapOfferCodec, ProductionSwapFillGraphBuilder } from "./swapFillQuotes.js";
+import {
+    createSwapOfferCodec,
+    ProductionSwapFillGraphBuilder,
+    revalidateBoundSwapFill,
+} from "./swapFillQuotes.js";
 import { createSweeper } from "./sweeper.js";
 import { createApp } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
@@ -144,6 +148,24 @@ async function runServe(): Promise<void> {
     let accepting = true;
     const shutdown = new AbortController();
 
+    const inventory = {
+        getSpendableVtxos: async () => {
+            if (!runtime.wallet)
+                throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+            return runtime.wallet.getSpendableVtxos();
+        },
+        getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
+    };
+    const swapFillBuilder = new ProductionSwapFillGraphBuilder(() => {
+        const wallet = runtime.wallet;
+        if (!wallet) throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+        return wallet;
+    }, config.arkdUrl);
+    const offerCodec = createSwapOfferCodec(config.serverPubkey);
+    const providerLimits = async () => {
+        const info = await runtime.providers.arkProvider.getInfo();
+        return { vtxoMaxAmount: info.vtxoMaxAmount };
+    };
     const app = createApp({
         advances,
         policy,
@@ -154,23 +176,11 @@ async function runServe(): Promise<void> {
         nowMs: Date.now,
         reservations,
         receiveQuotes,
-        inventory: {
-            getSpendableVtxos: async () => {
-                if (!runtime.wallet)
-                    throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
-                return runtime.wallet.getSpendableVtxos();
-            },
-            getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
-        },
+        inventory,
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),
         sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),
         swapFills,
-        swapFillBuilder: new ProductionSwapFillGraphBuilder(() => {
-            const wallet = runtime.wallet;
-            if (!wallet)
-                throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
-            return wallet;
-        }, config.arkdUrl),
+        swapFillBuilder,
         swapFillSubmit: {
             swapFills,
             policy,
@@ -185,12 +195,32 @@ async function runServe(): Promise<void> {
             now: seconds,
             randomId: () => randomUUID(),
             leaseSeconds: Math.max(30, intervalSeconds * 2),
+            advances,
+            assertBoundFresh: (fill) =>
+                revalidateBoundSwapFill(
+                    {
+                        runtime,
+                        policy,
+                        advances,
+                        reservations,
+                        swapFills,
+                        receiveQuotes,
+                        inventory,
+                        senderInventory: runtime.providers.indexerProvider,
+                        config,
+                        now: seconds,
+                        nowMs: Date.now,
+                        randomId: () => randomUUID(),
+                        swapFillBuilder,
+                        offerCodec,
+                        providerLimits,
+                        getServerUnroll: runtime.getServerUnroll,
+                    },
+                    fill,
+                ),
         },
-        offerCodec: createSwapOfferCodec(config.serverPubkey),
-        providerLimits: async () => {
-            const info = await runtime.providers.arkProvider.getInfo();
-            return { vtxoMaxAmount: info.vtxoMaxAmount };
-        },
+        offerCodec,
+        providerLimits,
         lockupSubmitter,
         getServerUnroll: runtime.getServerUnroll,
         senderInventory: runtime.providers.indexerProvider,

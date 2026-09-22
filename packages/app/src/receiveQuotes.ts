@@ -46,7 +46,7 @@ export interface ReceiveQuoteDeps {
     >;
     receiveQuotes: Pick<
         ReceiveQuoteRepository,
-        "insert" | "get" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
+        "insert" | "get" | "bind" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
     >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
@@ -307,7 +307,9 @@ async function createReserved(
     const options = {
         spendable,
         reserved: [...reserved, ...locks],
-        requiredSats: terms.loan + terms.fare.units,
+        requiredSats:
+            terms.loan +
+            (deps.config.dust > terms.fare.units ? deps.config.dust - terms.fare.units : 0n),
         safety: firstSafety,
         nowMs: deps.nowMs(),
         maxSnapshotAgeMs: deps.config.reconcileIntervalMs,

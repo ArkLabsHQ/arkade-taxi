@@ -5,10 +5,13 @@ import {
     type ExpiryDeadline,
     type FareSpec,
     type Outpoint,
+    type Advance,
 } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
+import { AdvanceRepository } from "./advances.js";
 import { PolicyRepository } from "./policy.js";
 import { PolicyRevisionConflictError } from "./reservations.js";
+import { SwapFillRepository, type SwapFill } from "./swapFills.js";
 
 export type ReceiveQuoteState = "quoted" | "bound" | "expired";
 
@@ -56,6 +59,14 @@ export interface InsertReceiveQuoteRequest {
     expectedPolicyRevision: bigint;
     recoveryExecutionBudget: ExpiryDeadline;
     expectedReservedOutpoints?: readonly Outpoint[];
+}
+
+export interface BindReceiveQuoteRequest {
+    quoteId: string;
+    fill: SwapFill;
+    advance: Advance;
+    expectedPolicyRevision: bigint;
+    now: number;
 }
 
 export class ReceiveQuoteReservationConflictError extends Error {
@@ -453,6 +464,95 @@ export class ReceiveQuoteRepository {
             .immediate();
     }
 
+    bind(request: BindReceiveQuoteRequest): void {
+        assertNativeAccess(this.db);
+        if (!Number.isSafeInteger(request.now) || request.now < 0) fail("binding clock");
+        this.db
+            .transaction(() => {
+                this.#expire(request.now);
+                this.#expireSwap(request.now);
+                const quote = this.get(request.quoteId);
+                if (!quote || quote.state !== "quoted" || quote.boundFillId !== undefined)
+                    throw new Error("receive quote: state is not bindable");
+                const { policy, revision } = this.#policy.getSnapshot();
+                if (
+                    revision !== request.expectedPolicyRevision ||
+                    quote.policyRevision !== revision
+                )
+                    throw new PolicyRevisionConflictError();
+                if (policy.paused) throw new Error("receive quote: paused");
+                const { fill, advance } = request;
+                const sameOutpoints = (actual: readonly Outpoint[]) =>
+                    actual.length === quote.operatorInputs.length &&
+                    actual.every(
+                        (input, index) =>
+                            input.txid === quote.operatorInputs[index]!.txid &&
+                            input.vout === quote.operatorInputs[index]!.vout,
+                    );
+                const sameBytes = (first: Uint8Array, second: Uint8Array) =>
+                    first.length === second.length &&
+                    first.every((byte, index) => byte === second[index]);
+                if (
+                    fill.receiveQuoteId !== quote.id ||
+                    advance.id !== quote.id ||
+                    advance.state !== "locking" ||
+                    fill.state !== "quoted" ||
+                    fill.contributionSats !== quote.loanSats ||
+                    fill.fare.currency !== "sats" ||
+                    fill.fare.units !== quote.fare.units ||
+                    advance.topup !== quote.loanSats ||
+                    advance.dust !== quote.params.dust ||
+                    advance.assetUnits === undefined ||
+                    advance.assetUnits <= 0n ||
+                    !advance.assetId ||
+                    !sameBytes(advance.receiverKey, quote.params.receiverKey) ||
+                    !sameBytes(advance.senderKey, quote.params.senderKey) ||
+                    !sameBytes(advance.operatorKey, quote.params.operatorKey) ||
+                    !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
+                    advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
+                    advance.locktime !== quote.params.locktime ||
+                    advance.covenantAddress !== quote.covenantAddress ||
+                    advance.fare.currency !== "sats" ||
+                    advance.fare.units !== quote.fare.units ||
+                    advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
+                    advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||
+                    advance.batchExpiry.kind !== quote.batchExpiry.kind ||
+                    advance.batchExpiry.value < quote.inputExpiryFloor.value ||
+                    advance.expiresAt !== fill.expiresAt ||
+                    !sameOutpoints(fill.taxiInputs) ||
+                    !sameOutpoints(advance.operatorInputs)
+                )
+                    throw new Error("receive quote: bound economics mismatch");
+                this.db
+                    .prepare("DELETE FROM receive_quote_reservations WHERE quote_id = ?")
+                    .run(quote.id);
+                new SwapFillRepository(this.db).insert(fill);
+                this.db
+                    .prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?")
+                    .run(fill.id);
+                new AdvanceRepository(this.db).insert(advance);
+                const reserve = this.db.prepare(
+                    "INSERT INTO operator_input_reservations (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                );
+                for (const input of quote.operatorInputs)
+                    reserve.run(
+                        input.txid,
+                        input.vout,
+                        advance.id,
+                        quote.batchExpiry.kind,
+                        quote.batchExpiry.value,
+                        request.now,
+                    );
+                const changed = this.db
+                    .prepare(
+                        "UPDATE receive_quotes SET state = 'bound', bound_fill_id = ? WHERE id = ? AND state = 'quoted' AND bound_fill_id IS NULL",
+                    )
+                    .run(fill.id, quote.id).changes;
+                if (changed !== 1) throw new Error("receive quote: binding race");
+            })
+            .immediate();
+    }
+
     get(id: string): ReceiveQuote | undefined {
         assertNativeAccess(this.db);
         const row = this.db
@@ -461,20 +561,37 @@ export class ReceiveQuoteRepository {
             .get(id);
         if (!row) return undefined;
         const quote = decodeRow(row);
+        const table =
+            quote.state === "bound" ? "operator_input_reservations" : "receive_quote_reservations";
+        const owner = quote.state === "bound" ? "advance_id" : "quote_id";
         const reservations = this.db
             .prepare<[string], { txid: string; vout: bigint }>(
-                "SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM receive_quote_reservations WHERE quote_id = ? ORDER BY txid, vout",
+                `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM ${table} WHERE ${owner} = ? ORDER BY txid, vout`,
             )
             .safeIntegers(true)
             .all(id);
         const expected = new Set(quote.operatorInputs.map(({ txid, vout }) => `${txid}:${vout}`));
+        const boundAdvanceState =
+            quote.state === "bound"
+                ? this.db
+                      .prepare<[string], { state: string }>(
+                          "SELECT state FROM advances WHERE id = ?",
+                      )
+                      .get(id)?.state
+                : undefined;
+        const expectsReservations =
+            quote.state === "quoted" ||
+            (quote.state === "bound" &&
+                boundAdvanceState !== undefined &&
+                ["locking", "locked", "recovering"].includes(boundAdvanceState));
         if (
-            (quote.state === "expired" && reservations.length !== 0) ||
-            (quote.state !== "expired" &&
+            (!expectsReservations && reservations.length !== 0) ||
+            (expectsReservations &&
                 (reservations.length !== expected.size ||
                     reservations.some(
                         ({ txid, vout }) => !expected.has(`${txid}:${Number(vout)}`),
-                    )))
+                    ))) ||
+            (quote.state === "bound" && boundAdvanceState === undefined)
         )
             fail("reservations");
         return quote;
@@ -525,7 +642,7 @@ export class ReceiveQuoteRepository {
     #expireSwap(at: number): void {
         this.db
             .prepare(
-                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
+                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
             )
             .run(at, at);
         this.db
@@ -556,11 +673,12 @@ export class ReceiveQuoteRepository {
                     (SELECT coalesce(sum(topup), 0) FROM advances
                      WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
                     + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting'))
+                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                     + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
                     (SELECT count(*) FROM advances
                      WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT count(*) FROM swap_fills WHERE state IN ('quoted', 'submitting'))
+                    + (SELECT count(*) FROM swap_fills
+                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                     + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
             )
             .safeIntegers(true)

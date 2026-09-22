@@ -14,8 +14,8 @@
         "build": "tsc -p tsconfig.json"
     },
     "dependencies": {
-        "@arkade-os/sdk": "0.4.72",
-        "@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-0.0.18.tgz",
+        "@arkade-os/sdk": "0.4.74",
+        "@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-0.0.20.tgz",
         "@arkade-taxi/client": "workspace:*",
         "@arkade-taxi/core": "workspace:*",
         "@arkade-taxi/covenant": "workspace:*",

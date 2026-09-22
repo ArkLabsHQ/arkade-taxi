@@ -38,6 +38,7 @@ export interface SwapFillGraph {
 
 export interface SwapFill {
     id: string;
+    receiveQuoteId?: string;
     operationId: string;
     state: SwapFillState;
     offerHex: string;
@@ -134,6 +135,7 @@ const fareToRow = (
 
 interface SwapFillRow {
     id: string;
+    receive_quote_id: string | null;
     operation_id: string;
     state: SwapFillState;
     offer_hex: string;
@@ -247,6 +249,7 @@ function fromRow(r: SwapFillRow): SwapFill {
         updatedAt: Number(r.updated_at),
         expiresAt: Number(r.expires_at),
     };
+    if (r.receive_quote_id !== null) fill.receiveQuoteId = r.receive_quote_id;
     if (r.offer_txid !== null && r.offer_vout !== null) {
         fill.offerTxid = r.offer_txid;
         fill.offerVout = Number(r.offer_vout);
@@ -341,14 +344,14 @@ export class SwapFillRepository {
                 }
                 this.#db
                     .prepare(
-                        `INSERT INTO swap_fills (id, operation_id, state, offer_hex, offer_txid, offer_vout,
+                        `INSERT INTO swap_fills (id, receive_quote_id, operation_id, state, offer_hex, offer_txid, offer_vout,
                          swap_address, solver_inputs_json, solver_proceeds_script, solver_keys_json,
                          taxi_inputs_json, contribution_sats, sponsor_script, fare_currency, fare_units, fare_asset_txid,
                          fare_asset_group_index, max_fare_json, graph_json, graph_id, solver_graph_json,
                          prepared_ark_tx, prepared_checkpoints_json, submit_invoked, txid, outpoint_txid,
                          outpoint_vout, spent_txid, failure_code, failure_detail, lease_owner, lease_token,
                          lease_until, attempts, next_attempt_at, created_at, updated_at, expires_at)
-                         VALUES (@id, @operation_id, @state, @offer_hex, @offer_txid, @offer_vout,
+                         VALUES (@id, @receive_quote_id, @operation_id, @state, @offer_hex, @offer_txid, @offer_vout,
                          @swap_address, @solver_inputs_json, @solver_proceeds_script, @solver_keys_json,
                          @taxi_inputs_json, @contribution_sats, @sponsor_script, @fare_currency, @fare_units, @fare_asset_txid,
                          @fare_asset_group_index, @max_fare_json, @graph_json, @graph_id, @solver_graph_json,
@@ -358,6 +361,7 @@ export class SwapFillRepository {
                     )
                     .run({
                         id: fill.id,
+                        receive_quote_id: fill.receiveQuoteId ?? null,
                         operation_id: fill.operationId,
                         state: fill.state,
                         offer_hex: fill.offerHex,
@@ -453,7 +457,7 @@ export class SwapFillRepository {
         const row = this.#db
             .prepare<[], { total: bigint; count: bigint }>(
                 `SELECT coalesce(sum(contribution_sats), 0) AS total, count(*) AS count
-                 FROM swap_fills WHERE state IN ('quoted', 'submitting')`,
+                 FROM swap_fills WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL`,
             )
             .safeIntegers(true)
             .get()!;
@@ -643,6 +647,11 @@ export class SwapFillRepository {
         assertNativeAccess(this.#db);
         this.#db
             .transaction(() => {
+                const linked = this.#db
+                    .prepare<[string], { receive_quote_id: string | null }>(
+                        "SELECT receive_quote_id FROM swap_fills WHERE id = ?",
+                    )
+                    .get(id)?.receive_quote_id;
                 const update = this.#db
                     .prepare(
                         `UPDATE swap_fills SET state = 'cancelled', spent_txid = ?, failure_code = ?,
@@ -651,7 +660,10 @@ export class SwapFillRepository {
                          WHERE id = ? AND state IN ('quoted', 'submitting')`,
                     )
                     .run(spentTxid, code, now, id);
-                if (Number(update.changes) === 1) this.#release(id);
+                if (Number(update.changes) === 1) {
+                    this.#release(id);
+                    if (linked) this.#expireBound([linked], now);
+                }
             })
             .immediate();
     }
@@ -669,6 +681,54 @@ export class SwapFillRepository {
                     )
                     .run(txid, outpoint.txid, outpoint.vout, now, id);
                 if (Number(update.changes) !== 1) return false;
+                const linked = this.#db
+                    .prepare<[string], { receive_quote_id: string | null }>(
+                        "SELECT receive_quote_id FROM swap_fills WHERE id = ?",
+                    )
+                    .get(id)?.receive_quote_id;
+                if (linked) {
+                    const advance = this.#db
+                        .prepare<
+                            [string],
+                            {
+                                state: string;
+                                ark_txid: string | null;
+                                outpoint_txid: string | null;
+                                outpoint_vout: bigint | null;
+                            }
+                        >(
+                            "SELECT state, ark_txid, outpoint_txid, outpoint_vout FROM advances WHERE id = ?",
+                        )
+                        .safeIntegers(true)
+                        .get(linked);
+                    if (!advance) throw new Error(`swap-fill: linked advance ${linked} is missing`);
+                    if (advance.state === "locking") {
+                        if (
+                            this.#db
+                                .prepare(
+                                    `UPDATE advances SET state = 'locked', ark_txid = ?, outpoint_txid = ?,
+                                     outpoint_vout = ?, last_observed_at = ?, updated_at = max(updated_at, ?),
+                                     failure_code = NULL, failure_detail = NULL
+                                     WHERE id = ? AND state = 'locking'`,
+                                )
+                                .run(txid, outpoint.txid, outpoint.vout, now, now, linked)
+                                .changes !== 1
+                        )
+                            throw new Error(
+                                `swap-fill: linked advance ${linked} observation failed`,
+                            );
+                    } else if (
+                        !["locked", "recycled", "purchased", "refunded", "recovered"].includes(
+                            advance.state,
+                        ) ||
+                        advance.ark_txid !== txid ||
+                        advance.outpoint_txid !== outpoint.txid ||
+                        Number(advance.outpoint_vout) !== outpoint.vout
+                    )
+                        throw new Error(
+                            `swap-fill: linked advance ${linked} observation disagrees`,
+                        );
+                }
                 this.#release(id);
                 return true;
             })
@@ -692,11 +752,13 @@ export class SwapFillRepository {
         assertNativeAccess(this.#db);
         return this.#db
             .transaction(() => {
+                const boundIds = this.#expiringBoundIds(at);
                 const expired = this.#db
                     .prepare(
                         "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
                     )
                     .run(at, at).changes;
+                this.#expireBound(boundIds, at);
                 this.#db
                     .prepare(
                         "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
@@ -721,11 +783,13 @@ export class SwapFillRepository {
     }
 
     #expire(at: number): void {
+        const boundIds = this.#expiringBoundIds(at);
         this.#db
             .prepare(
                 "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
             )
             .run(at, at);
+        this.#expireBound(boundIds, at);
         this.#db
             .prepare(
                 "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
@@ -735,6 +799,35 @@ export class SwapFillRepository {
 
     #release(fillId: string): void {
         this.#db.prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?").run(fillId);
+    }
+
+    #expiringBoundIds(at: number): string[] {
+        return this.#db
+            .prepare<[number], { receive_quote_id: string }>(
+                `SELECT receive_quote_id FROM swap_fills WHERE state = 'quoted'
+                 AND submit_invoked = 0 AND expires_at <= ? AND receive_quote_id IS NOT NULL`,
+            )
+            .all(at)
+            .map(({ receive_quote_id }) => receive_quote_id);
+    }
+
+    #expireBound(ids: readonly string[], at: number): void {
+        const expireAdvance = this.#db.prepare(
+            "UPDATE advances SET state = 'expired', updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locking' AND ark_txid IS NULL",
+        );
+        const expireReceive = this.#db.prepare(
+            "UPDATE receive_quotes SET state = 'expired', bound_fill_id = NULL WHERE id = ? AND state = 'bound'",
+        );
+        const release = this.#db.prepare(
+            "DELETE FROM operator_input_reservations WHERE advance_id = ?",
+        );
+        for (const id of ids) {
+            if (expireAdvance.run(at, id).changes !== 1)
+                throw new Error(`swap-fill: linked advance ${id} cannot expire safely`);
+            release.run(id);
+            if (expireReceive.run(id).changes !== 1)
+                throw new Error(`swap-fill: linked receive quote ${id} cannot expire safely`);
+        }
     }
 
     #expireReceive(at: number): void {
@@ -757,11 +850,12 @@ export class SwapFillRepository {
                     (SELECT coalesce(sum(topup), 0) FROM advances
                      WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
                     + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting'))
+                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                     + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
                     (SELECT count(*) FROM advances
                      WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT count(*) FROM swap_fills WHERE state IN ('quoted', 'submitting'))
+                    + (SELECT count(*) FROM swap_fills
+                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                     + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
             )
             .safeIntegers(true)

@@ -140,6 +140,17 @@ describe("verifyReceiveQuote", () => {
         ).toThrow(/floor/);
     });
 
+    it("rejects an unknown pricing kind with plausible proportional fields", () => {
+        const changed = info();
+        changed.assetRules[0]!.fares[0]!.pricing = {
+            kind: "tiered",
+            bps: 100,
+            minUnits: "3",
+            maxUnits: "3",
+        } as never;
+        expect(() => verifyReceiveQuote({ ...args(), info: changed })).toThrow(/pricing/);
+    });
+
     it.each([
         ["receiverAddress", { receiverAddress: `${receiverAddress}x` }],
         ["maker", { makerPublicKey: "00".repeat(32) }],

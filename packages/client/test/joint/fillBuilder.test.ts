@@ -466,6 +466,27 @@ describe("buildOfferFillPlan (taxi-sponsored, unsigned)", () => {
         expect(ark.getOutput(2).amount).toBe(BigInt(1670));
     });
 
+    it("coalesces a small sats fare into the sponsor change", async () => {
+        reset();
+        state.vtxos = [satsDeposit()];
+        const plan = await buildOfferFillPlan(wallet, "http://ark", planOfferHex, {
+            fund: [solverCoin()] as never,
+            payoutScript: SOLVER_PAYOUT,
+            assetCarrierSats: 330n,
+            sponsor: {
+                fund: [taxiCoin()] as never,
+                netContributionSats: 329n,
+                fare: { script: TAXI_CHANGE_SCRIPT, sats: 4n },
+                changeScript: TAXI_CHANGE_SCRIPT,
+                combineSatsFareWithChange: true,
+            } as never,
+        });
+        const ark = Transaction.fromPSBT(base64.decode(plan.arkTx));
+        expect(ark.outputsLength).toBe(5);
+        expect(hex.encode(ark.getOutput(1).script!)).toBe(hex.encode(TAXI_CHANGE_SCRIPT));
+        expect(ark.getOutput(1).amount).toBe(675n);
+    });
+
     it("rejects a sponsor without a change script", async () => {
         reset();
         state.vtxos = [satsDeposit()];

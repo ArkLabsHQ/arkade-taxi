@@ -38,6 +38,7 @@ export type VerifiedSwapFillQuote = {
  * operation id plus the funding outpoints are the request binding. */
 export interface SwapFillQuoteExpectation {
     operationId: string;
+    receiveQuoteId?: string;
     solverProceedsScript: Uint8Array;
     solverInputs: { txid: string; vout: number }[];
     contributionSats: bigint;
@@ -59,6 +60,7 @@ export interface VerifySwapFillQuoteArgs {
 
 export interface RequestSwapFillQuoteArgs {
     operationId: string;
+    receiveQuoteId?: string;
     offerHex: string;
     solverInputs: {
         txid: string;
@@ -190,6 +192,7 @@ const exact = (actual: unknown, expected: unknown, label: string): void => {
 export function encodeSwapFillQuoteBody(args: RequestSwapFillQuoteArgs): SwapFillQuoteRequestBody {
     const body: SwapFillQuoteRequestBody = {
         operationId: args.operationId,
+        ...(args.receiveQuoteId !== undefined ? { receiveQuoteId: args.receiveQuoteId } : {}),
         offerHex: args.offerHex,
         solverInputs: args.solverInputs.map((input) => ({
             txid: input.txid,

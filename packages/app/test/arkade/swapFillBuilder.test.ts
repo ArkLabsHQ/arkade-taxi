@@ -209,6 +209,25 @@ describe("buildSwapFillGraph", () => {
         expect(sponsor.fund).toHaveLength(2);
     });
 
+    it("forwards combined sats fare assembly to the packed swap builder", async () => {
+        const buildPlan = planMock();
+        await buildSwapFillGraph(
+            deps(buildPlan),
+            request({
+                sponsor: {
+                    coins: [fundingCoin()],
+                    netContributionSats: 329n,
+                    changeScript: hex.decode(SPONSOR_SCRIPT),
+                    fare: { script: hex.decode(SPONSOR_SCRIPT), sats: 4n },
+                    combineSatsFareWithChange: true,
+                } as never,
+            }),
+        );
+        expect(buildPlan.mock.calls[0]![3]!.sponsor).toMatchObject({
+            combineSatsFareWithChange: true,
+        });
+    });
+
     it("rejects asset-bearing sponsor inventory explicitly instead of dropping it", async () => {
         const buildPlan = planMock();
         const assetCoin = fundingCoin({

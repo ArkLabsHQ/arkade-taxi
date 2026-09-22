@@ -59,6 +59,7 @@ const quote = (over: Partial<SwapFillQuoteResponse> = {}): SwapFillQuoteResponse
 
 const expectTerms = (over: Partial<SwapFillQuoteExpectation> = {}): SwapFillQuoteExpectation => ({
     operationId: "op-1",
+    receiveQuoteId: "receive-1",
     solverProceedsScript: PROCEEDS,
     solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout }],
     contributionSats: 330n,
@@ -361,6 +362,7 @@ describe("TaxiClient swap-fill endpoints", () => {
         const taxi = new TaxiClient({ baseUrl: BASE, fetch });
         await taxi.requestSwapFillQuote({
             operationId: "op-1",
+            receiveQuoteId: "receive-1",
             offerHex: "ab12",
             solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
             solverProceedsScript: PROCEEDS,
@@ -375,6 +377,7 @@ describe("TaxiClient swap-fill endpoints", () => {
         expect(call.init.method).toBe("POST");
         expect(JSON.parse(String(call.init.body))).toEqual({
             operationId: "op-1",
+            receiveQuoteId: "receive-1",
             offerHex: "ab12",
             solverInputs: [{ txid: SOLVER_COIN.txid, vout: 1, value: "6000" }],
             solverProceedsScript: "51",

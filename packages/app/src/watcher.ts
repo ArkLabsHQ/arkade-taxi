@@ -31,6 +31,7 @@ import {
 import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
+import { readFundingSource } from "./arkade/fundingSource.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
@@ -319,22 +320,39 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
     });
-    const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    const envelope =
+        tagged.kind === "legacy" ? decodeLockupEnvelope(advance.unsignedLockupTx) : undefined;
+    const graphId =
+        tagged.kind === "joint-fill" ? tagged.source.graph.graphId : envelope!.unsignedTxId;
+    const covenantOutputIndex =
+        tagged.kind === "joint-fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
+    const serverUnrollScript =
+        tagged.kind === "joint-fill"
+            ? tagged.source.serverUnrollScript
+            : envelope!.serverUnrollScript;
     if (
-        envelope.unsignedTxId !== advance.unsignedLockupId ||
-        envelope.covenantOutputIndex !== outpoint.vout ||
-        envelope.serverUnrollScript !==
-            hex.encode(CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript)).script)
+        graphId !== advance.unsignedLockupId ||
+        covenantOutputIndex !== outpoint.vout ||
+        serverUnrollScript !==
+            hex.encode(CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)).script)
     )
         fail("persisted lockup commitments are inconsistent");
-    const lockup = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+    const lockup = Transaction.fromPSBT(
+        base64.decode(tagged.kind === "joint-fill" ? tagged.source.graph.arkTx : envelope!.arkTx),
+    );
     if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
         fail("persisted covenant outpoint does not belong to the lockup graph");
     exactOutput(lockup, outpoint.vout, advance.dust, script.pkScript, "lockup covenant");
     if (script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress)
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);
-    const units = envelope.assetUnits === undefined ? undefined : BigInt(envelope.assetUnits);
+    const units =
+        tagged.kind === "joint-fill"
+            ? tagged.assetUnits
+            : envelope!.assetUnits === undefined
+              ? undefined
+              : BigInt(envelope!.assetUnits);
     if (
         (expectedAsset === undefined) !== (units === undefined) ||
         (units !== undefined && units <= 0n)
@@ -342,12 +360,18 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         fail("persisted covenant asset facts mismatch");
     return {
         script,
-        unroll: CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript)),
+        unroll: CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)),
         expectedHoldings: expectedAsset ? [{ id: expectedAsset, amount: units! }] : [],
     };
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    if (tagged.kind === "joint-fill") {
+        if (tagged.source.graph.graphId !== advance.unsignedLockupId)
+            fail("persisted lockup commitments are inconsistent");
+        return tagged.covenantOutpoint;
+    }
     const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
     if (envelope.unsignedTxId !== advance.unsignedLockupId)
         fail("persisted lockup commitments are inconsistent");

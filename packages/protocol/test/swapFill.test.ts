@@ -37,6 +37,7 @@ const GRAPH: SwapFillGraphWire = {
 
 const REQUEST: SwapFillQuoteRequestBody = {
     operationId: "op-1",
+    receiveQuoteId: "receive-1",
     offerHex: "deadbeef",
     solverInputs: [{ txid: "bb".repeat(32), vout: 1, value: "5000" }],
     solverProceedsScript: "deadbeef",
@@ -106,6 +107,13 @@ describe("swap-fill wire codec", () => {
         expect(() => swapFillQuoteRequestFromWire({ ...REQUEST, operationId: "" })).toThrow(
             /operationId/,
         );
+    });
+
+    it("preserves the optional receive quote binding", () => {
+        expect(swapFillQuoteRequestFromWire(REQUEST).receiveQuoteId).toBe("receive-1");
+        expect(
+            swapFillQuoteRequestFromWire({ ...REQUEST, receiveQuoteId: undefined }).receiveQuoteId,
+        ).toBeUndefined();
     });
 
     it("rejects solver keys that are not x-only or compressed hex", () => {

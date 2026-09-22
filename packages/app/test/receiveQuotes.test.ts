@@ -228,6 +228,61 @@ describe("createReceiveQuote", () => {
         expect((await createReceiveQuote(deps(), body())).fare.units).toBe(units);
     });
 
+    it("rejects a quote whose reserved input would leave subdust combined change", async () => {
+        configure({ assetRules: [rule({ kind: "flat", units: 4n })] });
+        await expect(
+            createReceiveQuote(
+                deps({
+                    inventory: {
+                        getSpendableVtxos: async () => [
+                            fundingCoin({ value: 330, expiresAtHeight: 900_000 }),
+                            fundingCoin({ vout: 1, expiresAtHeight: 900_000 }),
+                        ],
+                        getLockedVtxoOutpoints: async () => [],
+                    },
+                }),
+                body(),
+            ),
+        ).rejects.toThrow(/inventory/);
+        expect(quotes.get("receive-1")).toBeUndefined();
+    });
+
+    it("reserves a 1000 sat input for a 329 loan and 4 sat combined fare", async () => {
+        configure({ assetRules: [rule({ kind: "flat", units: 4n })] });
+        const response = await createReceiveQuote(
+            deps({
+                inventory: {
+                    getSpendableVtxos: async () => [
+                        fundingCoin({ value: 1_000, expiresAtHeight: 900_000 }),
+                        fundingCoin({ vout: 1, expiresAtHeight: 900_000 }),
+                    ],
+                    getLockedVtxoOutpoints: async () => [],
+                },
+            }),
+            body(),
+        );
+        expect(response.fare).toEqual({ currency: "sats", units: "4" });
+        expect(quotes.get(response.quoteId)?.operatorInputs[0]?.value).toBe(1_000n);
+    });
+
+    it("does not add a fare already large enough to make change spendable", async () => {
+        configure({ assetRules: [rule({ kind: "flat", units: 400n })] });
+        const response = await createReceiveQuote(
+            deps({
+                inventory: {
+                    getSpendableVtxos: async () => [
+                        fundingCoin({ value: 330, expiresAtHeight: 900_000 }),
+                        fundingCoin({ vout: 1, expiresAtHeight: 900_000 }),
+                    ],
+                    getLockedVtxoOutpoints: async () => [],
+                },
+            }),
+            body(),
+        );
+        expect(response.fare.units).toBe("400");
+        expect(quotes.get(response.quoteId)?.operatorInputs[0]?.value).toBe(330n);
+    });
+
     it("rejects an asset-denominated fare without substituting zero", async () => {
         configure({
             assetRules: [

@@ -302,6 +302,12 @@ export const MIGRATIONS: readonly Migration[] = [
         );
         CREATE INDEX receive_quote_reservations_quote ON receive_quote_reservations (quote_id);`,
     },
+    {
+        id: 8,
+        up: `ALTER TABLE swap_fills ADD COLUMN receive_quote_id TEXT;
+        CREATE UNIQUE INDEX swap_fills_receive_quote ON swap_fills (receive_quote_id)
+            WHERE receive_quote_id IS NOT NULL;`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -396,6 +402,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('receive_quote_reservations') WHERE name = 'quote_id' AND type = 'TEXT'",
             )
             .get();
+    const hasReceiveQuoteLink =
+        hasReceiveQuotes &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'receive_quote_id' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -406,7 +419,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 4 && !hasSponsorScript) ||
             (current === 5 && !hasClaimMode) ||
             (current === 6 && !hasRecoveryRecipient) ||
-            (current === 7 && !hasReceiveQuotes))
+            (current === 7 && !hasReceiveQuotes) ||
+            (current === 8 && !hasReceiveQuoteLink))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

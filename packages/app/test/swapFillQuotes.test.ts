@@ -1,8 +1,23 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { asset, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, asset, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import type { Policy } from "@arkade-taxi/core";
-import { createSwapFillQuote, getSwapFill, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
+import { DustCovenantScript } from "@arkade-taxi/covenant";
+import {
+    AdvanceRepository,
+    openDatabase,
+    PolicyRepository,
+    ReceiveQuoteRepository,
+    ReservationRepository,
+    SwapFillRepository,
+} from "@arkade-taxi/db";
+import { hex } from "@scure/base";
+import {
+    createSwapFillQuote,
+    getSwapFill,
+    revalidateBoundSwapFill,
+    type SwapFillQuoteDeps,
+} from "../src/swapFillQuotes.js";
 import type { ServiceError } from "../src/errors.js";
 import {
     config,
@@ -11,6 +26,8 @@ import {
     NOW,
     policy as basePolicy,
     runtimeSafety,
+    receiverKey,
+    serverUnroll,
 } from "./fixtures.js";
 import {
     FAKE_MAKER_SCRIPT,
@@ -18,6 +35,8 @@ import {
     fakeOfferTerms,
     MemorySwapFills,
 } from "./swapFillFixtures.js";
+import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
+import { readFundingSource } from "../src/arkade/fundingSource.js";
 
 const DEP = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_COIN = { txid: "ee".repeat(32), vout: 1 };
@@ -145,6 +164,182 @@ beforeEach(() => {
 });
 
 describe("createSwapFillQuote", () => {
+    it("atomically binds a live receive quote with its actual fare and recovery source", async () => {
+        const db = openDatabase(":memory:");
+        try {
+            const cfg = config({ vtxoMinAmount: 1n });
+            const wantedAsset = { txid: hex.decode(FARE_ASSET.txid), groupIndex: 0 };
+            const policies = new PolicyRepository(db);
+            policies.update(
+                {
+                    ...testPolicy,
+                    assetRules: [
+                        ...testPolicy.assetRules,
+                        {
+                            assetId: wantedAsset,
+                            enabled: true,
+                            claim: "either",
+                            maxTopupSats: null,
+                            fares: [
+                                {
+                                    id: "receive",
+                                    currency: { kind: "sats" },
+                                    pricing: { kind: "flat", units: 4n },
+                                },
+                            ],
+                        },
+                    ],
+                },
+                "test",
+            );
+            const revision = policies.getSnapshot().revision;
+            const quotes = new ReceiveQuoteRepository(db);
+            const storedFills = new SwapFillRepository(db);
+            const storedAdvances = new AdvanceRepository(db);
+            const reservations = new ReservationRepository(db);
+            const operatorCoin = fundingCoin({
+                txid: TAXI_0.txid,
+                vout: TAXI_0.vout,
+                value: 20_000,
+            });
+            const depositCoin = fundingCoin({
+                txid: DEP.txid,
+                vout: DEP.vout,
+                value: 10_000,
+            });
+            const makerKey = new Uint8Array(32).fill(9);
+            const params = {
+                receiverKey,
+                senderKey: makerKey,
+                operatorKey: cfg.operatorKey,
+                dust: 330n,
+                topup: 329n,
+                assetId: wantedAsset,
+                locktime: 899_856n,
+                claimMode: "recycle" as const,
+                recoveryRecipient: "receiver" as const,
+            };
+            const covenant = new DustCovenantScript({
+                serverKey: cfg.serverPubkey,
+                emulatorKey: cfg.emulatorPubkey,
+                vtxoMinAmount: cfg.vtxoMinAmount,
+                params,
+            });
+            quotes.insert({
+                quote: {
+                    id: "receive-1",
+                    state: "quoted",
+                    receiverAddress: new ArkAddress(
+                        cfg.serverPubkey,
+                        receiverKey,
+                        cfg.addressHrp,
+                    ).encode(),
+                    makerPublicKey: hex.encode(makerKey),
+                    params,
+                    covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
+                    fare: { currency: "sats", units: 4n },
+                    batchExpiry: { kind: "height", value: 900_000n },
+                    inputExpiryFloor: { kind: "height", value: 900_000n },
+                    recoveryLocktime: { kind: "height", value: 899_856n },
+                    loanSats: 329n,
+                    createdAt: NOW,
+                    expiresAt: NOW + 60,
+                    policyRevision: revision,
+                    operatorInputs: [operatorFundingInput(operatorCoin)],
+                },
+                expectedPolicyRevision: revision,
+                recoveryExecutionBudget: { kind: "height", value: 72n },
+            });
+            builder = new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
+                id: FARE_SWAP_ID,
+                amount: 5n,
+            });
+            const d = deps({
+                policy: policies,
+                advances: storedAdvances,
+                reservations,
+                swapFills: storedFills,
+                receiveQuotes: quotes,
+                inventory: {
+                    getSpendableVtxos: async () => [operatorCoin],
+                    getLockedVtxoOutpoints: async () => [],
+                },
+                config: cfg,
+                getServerUnroll: () => serverUnroll,
+                offerCodec: {
+                    decodeOffer: () =>
+                        fakeOfferTerms({
+                            covenantScript: hex.decode(depositCoin.script),
+                            makerProceedsScript: covenant.pkScript,
+                            makerPublicKey: makerKey,
+                            wantAsset: wantedAsset,
+                            wantAmount: 5n,
+                        }),
+                },
+            });
+            indexerCoins.set(key(DEP), depositCoin);
+            indexerCoins.set(
+                key(SOLVER_COIN),
+                fundingCoin({
+                    txid: SOLVER_COIN.txid,
+                    vout: SOLVER_COIN.vout,
+                    value: SOLVER_VALUE,
+                    assets: [{ assetId: FARE_SWAP_ID, amount: 5n }],
+                }),
+            );
+            const result = await createSwapFillQuote(
+                d,
+                body({
+                    receiveQuoteId: "receive-1",
+                    contributionSats: "329",
+                    maxFare: { currency: "sats", units: "30" },
+                    solverInputs: [
+                        {
+                            txid: SOLVER_COIN.txid,
+                            vout: SOLVER_COIN.vout,
+                            value: String(SOLVER_VALUE),
+                            assets: [{ assetId: FARE_ASSET, amount: "5" }],
+                        },
+                    ],
+                }),
+            );
+            expect(result.fare).toEqual({ currency: "sats", units: "4" });
+            expect(result.graph.outputs.some((output) => output.role === "sponsor-fare")).toBe(
+                false,
+            );
+            expect(
+                result.graph.outputs.find((output) => output.role === "sponsor-change")?.sats,
+            ).toBe("19675");
+            expect(builder.built[0]!.sponsor).toMatchObject({
+                netContributionSats: 329n,
+                combineSatsFareWithChange: true,
+                fare: { sats: 4n },
+            });
+            const fill = storedFills.get(result.fillId)!;
+            const advance = storedAdvances.get("receive-1")!;
+            expect(fill.receiveQuoteId).toBe("receive-1");
+            expect(quotes.get("receive-1")).toMatchObject({ state: "bound", boundFillId: fill.id });
+            expect(advance).toMatchObject({ state: "locking", topup: 329n, assetUnits: 5n });
+            expect(advance.outpoint).toBeUndefined();
+            expect(reservations.listForAdvance("receive-1")).toEqual([TAXI_0]);
+            expect(readFundingSource(advance.unsignedLockupTx)).toMatchObject({
+                kind: "joint-fill",
+                source: {
+                    fillId: fill.id,
+                    recoveryPreflight: { expectedTxid: expect.any(String) },
+                },
+            });
+            await expect(revalidateBoundSwapFill(d, fill)).resolves.toBeUndefined();
+            indexerCoins.set(key(SOLVER_COIN), {
+                ...indexerCoins.get(key(SOLVER_COIN))!,
+                isSpent: true,
+            });
+            await expect(revalidateBoundSwapFill(d, fill)).rejects.toThrow(/bound input/);
+        } finally {
+            db.close();
+        }
+    });
+
     it("quotes a sponsored fill, persists the reservation and replays identical retries", async () => {
         const d = deps();
         const first = await createSwapFillQuote(d, body());

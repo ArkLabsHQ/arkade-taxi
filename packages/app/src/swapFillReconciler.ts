@@ -39,6 +39,7 @@ const TXID = /^[0-9a-f]{64}$/i;
 const NEVER_INVOKED_CODE = "swap_fill_submit_never_invoked";
 const OFFER_SPENT_CODE = "swap_fill_offer_cancelled";
 const UNEXPECTED_SPEND = "swap_fill_unexpected_spend";
+const JOINT_LIABILITY_UNRESOLVED = "joint_fill_liability_unresolved";
 
 const key = (txid: string, vout: number): string => `${txid}:${vout}`;
 
@@ -202,10 +203,20 @@ export function createSwapFillReconciler(deps: SwapFillReconcilerDeps): SwapFill
                 });
             return pending;
         },
-        status: () => ({
-            lastTickAt,
-            submitting: deps.swapFills.listByState("submitting").length,
-            blockers: unexpected.size ? [UNEXPECTED_SPEND] : [],
-        }),
+        status: () => {
+            const submitting = deps.swapFills.listByState("submitting");
+            return {
+                lastTickAt,
+                submitting: submitting.length,
+                blockers: [
+                    ...(unexpected.size ? [UNEXPECTED_SPEND] : []),
+                    ...(submitting.some(
+                        (fill) => fill.receiveQuoteId && fill.failureCode !== undefined,
+                    )
+                        ? [JOINT_LIABILITY_UNRESOLVED]
+                        : []),
+                ],
+            };
+        },
     };
 }

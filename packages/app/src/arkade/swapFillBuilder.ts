@@ -41,6 +41,7 @@ export interface SwapFillSponsorRequest {
     netContributionSats: bigint;
     changeScript: Uint8Array;
     fare?: SwapFillSponsorFare;
+    combineSatsFareWithChange?: boolean;
 }
 
 export interface SwapFillBuildRequest {
@@ -143,7 +144,15 @@ const mapSponsor = (sponsor: SwapFillSponsorRequest): FillSponsor => {
         fund: mapSponsorFund(sponsor.coins),
         netContributionSats: sponsor.netContributionSats,
         changeScript: sponsor.changeScript,
+        ...(sponsor.combineSatsFareWithChange === undefined
+            ? {}
+            : { combineSatsFareWithChange: sponsor.combineSatsFareWithChange }),
     };
+    if (
+        sponsor.combineSatsFareWithChange !== undefined &&
+        typeof sponsor.combineSatsFareWithChange !== "boolean"
+    )
+        throw new SwapFillBuilderError("sponsor.combineSatsFareWithChange must be a boolean");
     if (sponsor.fare) {
         const { assetId, amount, sats } = sponsor.fare;
         if ((assetId === undefined) !== (amount === undefined))

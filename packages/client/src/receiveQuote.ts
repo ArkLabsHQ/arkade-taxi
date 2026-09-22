@@ -259,10 +259,10 @@ function verifyPolicy(
         reject(VerificationErrorCode.Fee, "advertised receive fare is missing or not in sats");
     if (!option.pricing || typeof option.pricing !== "object")
         reject(VerificationErrorCode.MalformedInfo, "advertised receive pricing is invalid");
-    let expectedFare: bigint;
+    let expectedFare = 0n;
     if (option.pricing.kind === "flat") {
         expectedFare = parseAmount(option.pricing.units, "flat fare");
-    } else {
+    } else if (option.pricing.kind === "proportional") {
         const { bps } = option.pricing;
         if (!Number.isInteger(bps) || bps < 0 || bps > 10_000)
             reject(VerificationErrorCode.Fee, "advertised proportional fare is invalid");
@@ -274,6 +274,8 @@ function verifyPolicy(
         const raw = (loan * BigInt(bps)) / 10_000n;
         expectedFare = raw < min ? min : raw;
         if (max !== null && expectedFare > max) expectedFare = max;
+    } else {
+        reject(VerificationErrorCode.MalformedInfo, "advertised receive pricing is invalid");
     }
     if (fare !== expectedFare)
         reject(VerificationErrorCode.Fee, "receive quote fare differs from advertised policy");

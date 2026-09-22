@@ -1,5 +1,8 @@
 import {
     ArkAddress,
+    CSVMultisigTapscript,
+    Transaction,
+    scriptFromTapLeafScript,
     canSpendOffchain,
     type ExtendedVirtualCoin,
     type IWallet,
@@ -10,8 +13,8 @@ import {
     ASSET_CARRIER_SATS,
     type FillFunding,
 } from "@arkade-os/swap";
-import { hex } from "@scure/base";
-import { ruleFor } from "@arkade-taxi/core";
+import { base64, hex } from "@scure/base";
+import { ruleFor, type Advance } from "@arkade-taxi/core";
 import type { Outpoint } from "@arkade-taxi/core";
 import {
     bytesToHex,
@@ -26,6 +29,7 @@ import {
 } from "@arkade-taxi/protocol";
 import type {
     ReceiveQuoteRepository,
+    ReceiveQuote,
     ReservationRepository,
     SwapFill,
     SwapFillRepository,
@@ -46,10 +50,19 @@ import {
     JointGraphDerivationError,
 } from "./arkade/jointGraphDerivation.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
+import { operatorFundingInput } from "./arkade/lockupBuilder.js";
+import { normalizeExpiry } from "./arkade/providers.js";
+import {
+    encodeJointFillSource,
+    readFundingSource,
+    type JointFillFundingSource,
+} from "./arkade/fundingSource.js";
+import { buildRecoveryIntent } from "./arkade/recovery.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import type { AdvanceStore, QuoteDeps } from "./quotes.js";
 import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
+import { createHash } from "node:crypto";
 
 export interface SwapFillStore extends Pick<
     SwapFillRepository,
@@ -124,12 +137,12 @@ export function createSwapOfferCodec(serverPubkey: Uint8Array): OfferCodec {
 export interface SwapFillQuoteDeps {
     runtime: QuoteDeps["runtime"];
     policy: QuoteDeps["policy"];
-    advances: Pick<AdvanceStore, "exposureTotals">;
+    advances: Pick<AdvanceStore, "exposureTotals" | "get">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints" | "expireQuotes">;
     swapFills: SwapFillStore;
     receiveQuotes?: Pick<
         ReceiveQuoteRepository,
-        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
+        "listReservedOutpoints" | "exposureTotals" | "expireQuotes" | "get" | "bind"
     >;
     inventory: QuoteDeps["inventory"];
     senderInventory: QuoteDeps["senderInventory"];
@@ -140,11 +153,13 @@ export interface SwapFillQuoteDeps {
     swapFillBuilder: SwapFillGraphBuilder;
     offerCodec?: OfferCodec;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;
+    getServerUnroll?: () => CSVMultisigTapscript.Type;
 }
 
 const key = (o: Outpoint): string => `${o.txid}:${o.vout}`;
 
 const termsOf = (t: {
+    receiveQuoteId?: string;
     offerHex: string;
     solverInputs: SwapFillQuoteRequest["solverInputs"];
     solverProceedsScript: Uint8Array;
@@ -156,6 +171,7 @@ const termsOf = (t: {
     swapAddress?: string;
 }): string =>
     JSON.stringify({
+        receiveQuoteId: t.receiveQuoteId ?? null,
         offerHex: t.offerHex.toLowerCase(),
         solverInputs: t.solverInputs
             .map((i) => ({
@@ -192,6 +208,7 @@ const termsOf = (t: {
 
 const storedTermsOf = (fill: SwapFill): string =>
     termsOf({
+        ...(fill.receiveQuoteId !== undefined ? { receiveQuoteId: fill.receiveQuoteId } : {}),
         offerHex: fill.offerHex,
         solverInputs: fill.solverInputs,
         solverProceedsScript: fill.solverProceedsScript,
@@ -213,7 +230,10 @@ function fillToResponse(fill: SwapFill, scripts: SwapFillWireScripts): SwapFillQ
         fare: fareToWire(fill.fare),
         graph: toWireGraph(storedGraphToJoint(fill.graph), {
             ...scripts,
-            expectSatsFare: fill.fare.currency === "sats" && fill.fare.units > 0n,
+            expectSatsFare:
+                fill.receiveQuoteId === undefined &&
+                fill.fare.currency === "sats" &&
+                fill.fare.units > 0n,
         }),
     };
 }
@@ -280,6 +300,27 @@ async function createAdmittedSwapFillQuote(
             sponsorScript: existing.sponsorScript,
         });
     }
+    let receiveQuote: ReceiveQuote | undefined;
+    if (req.contributionSats > 0n && deps.receiveQuotes) {
+        if (!req.receiveQuoteId)
+            throw new ServiceError(
+                "receive_quote_required",
+                400,
+                "receiveQuoteId is required for an operator-sponsored joint fill",
+            );
+        receiveQuote = deps.receiveQuotes.get(req.receiveQuoteId);
+        if (
+            !receiveQuote ||
+            receiveQuote.state !== "quoted" ||
+            receiveQuote.expiresAt <= now ||
+            receiveQuote.policyRevision !== revision
+        )
+            throw new ServiceError(
+                "receive_quote_unavailable",
+                409,
+                "receive quote is missing, expired, bound, or stale",
+            );
+    }
     if (policy.paused) throw admissionError("paused");
     if (req.fundingTxid === undefined || req.fundingVout === undefined)
         throw new ServiceError(
@@ -301,6 +342,38 @@ async function createAdmittedSwapFillQuote(
             throw new ServiceError("swap_fill_swap_address_invalid", 400, "swapAddress is invalid");
     }
     const offer = offerOf(req.offerHex);
+    if (receiveQuote) {
+        let covenantScript: Uint8Array;
+        try {
+            covenantScript = ArkAddress.decode(receiveQuote.covenantAddress).pkScript;
+        } catch (cause) {
+            throw new ServiceError(
+                "receive_quote_invalid",
+                500,
+                "receive quote covenant is invalid",
+                {
+                    cause,
+                },
+            );
+        }
+        const wantedAsset = offer.wantAsset;
+        if (
+            bytesToHex(offer.makerPublicKey) !== receiveQuote.makerPublicKey ||
+            bytesToHex(offer.makerProceedsScript) !== bytesToHex(covenantScript) ||
+            !wantedAsset ||
+            bytesToHex(wantedAsset.txid) !== bytesToHex(receiveQuote.params.assetId.txid) ||
+            wantedAsset.groupIndex !== receiveQuote.params.assetId.groupIndex ||
+            offer.wantAmount <= 0n ||
+            req.contributionSats !== receiveQuote.loanSats ||
+            req.maxFare.currency !== "sats" ||
+            req.maxFare.units < receiveQuote.fare.units
+        )
+            throw new ServiceError(
+                "receive_quote_mismatch",
+                400,
+                "offer, contribution, or fare cap differs from the receive quote",
+            );
+    }
     if (
         offer.emulatorPubkey.length !== config.emulatorPubkey.length ||
         !offer.emulatorPubkey.every((byte, i) => byte === config.emulatorPubkey[i])
@@ -320,6 +393,12 @@ async function createAdmittedSwapFillQuote(
     );
     if (deposit.isSpent)
         throw new ServiceError("swap_fill_deposit_spent", 400, "swap offer deposit is spent");
+    if (!deposit.tapTree || !(deposit.forfeitTapLeafScript ?? deposit.intentTapLeafScript))
+        throw new ServiceError(
+            "swap_fill_deposit_evidence_missing",
+            400,
+            "swap offer deposit lacks taproot evidence",
+        );
     if (deposit.script.toLowerCase() !== bytesToHex(offer.covenantScript).toLowerCase())
         throw new ServiceError(
             "swap_fill_deposit_mismatch",
@@ -347,7 +426,7 @@ async function createAdmittedSwapFillQuote(
             400,
             "solver funding must not spend the offer deposit",
         );
-    const solverFund = await enrichSolverFund(deps, req, offer);
+    const { fund: solverFund, coins: solverCoins } = await enrichSolverFund(deps, req, offer);
     const bitcoinRule = ruleFor(policy.assetRules, undefined);
     if (!bitcoinRule) throw admissionError("asset_not_served");
     if (!bitcoinRule.enabled) throw admissionError("asset_disabled");
@@ -364,12 +443,15 @@ async function createAdmittedSwapFillQuote(
         advancesExposure.outstandingSats +
             fillsExposure.outstandingSats +
             receiveExposure.outstandingSats +
-            req.contributionSats >
+            (receiveQuote ? 0n : req.contributionSats) >
         policy.maxOutstandingSats
     )
         throw admissionError("exceeds_max_outstanding");
     if (
-        advancesExposure.lockedCount + fillsExposure.activeCount + receiveExposure.activeCount >=
+        advancesExposure.lockedCount +
+            fillsExposure.activeCount +
+            receiveExposure.activeCount +
+            (receiveQuote ? 0 : 1) >
         policy.maxConcurrentAdvances
     )
         throw admissionError("max_concurrent_advances");
@@ -387,19 +469,44 @@ async function createAdmittedSwapFillQuote(
         );
     }
     const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
-    let selection;
+    let selection: ReturnType<typeof selectOperatorFunding>;
     try {
-        selection = selectOperatorFunding({
-            spendable,
-            reserved: [...reserved, ...intentLocks],
-            requiredSats: req.contributionSats,
-            safety: deps.runtime.safety(),
-            nowMs: deps.nowMs(),
-            maxSnapshotAgeMs: config.reconcileIntervalMs,
-            minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
-            minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
-            minReserveSats: config.operatorMinReserveSats,
-        });
+        if (receiveQuote) {
+            const byKey = new Map(spendable.map((coin) => [key(coin), coin]));
+            const inputs = receiveQuote.operatorInputs.map((expected) => {
+                const coin = byKey.get(key(expected));
+                if (!coin || !sameFundingSnapshot(operatorFundingInput(coin), expected))
+                    throw new ServiceError(
+                        "receive_quote_funding_changed",
+                        409,
+                        "receive quote operator funding changed or is unavailable",
+                    );
+                return coin;
+            });
+            if (intentLocks.some((locked) => inputs.some((coin) => key(coin) === key(locked))))
+                throw new ServiceError(
+                    "receive_quote_funding_changed",
+                    409,
+                    "receive quote operator funding is locked by another intent",
+                );
+            selection = {
+                inputs,
+                totalValue: inputs.reduce((sum, coin) => sum + BigInt(coin.value), 0n),
+                batchExpiry: { ...receiveQuote.batchExpiry },
+            };
+        } else {
+            selection = selectOperatorFunding({
+                spendable,
+                reserved: [...reserved, ...intentLocks],
+                requiredSats: req.contributionSats,
+                safety: deps.runtime.safety(),
+                nowMs: deps.nowMs(),
+                maxSnapshotAgeMs: config.reconcileIntervalMs,
+                minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
+                minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
+                minReserveSats: config.operatorMinReserveSats,
+            });
+        }
     } catch (error) {
         if (
             error instanceof ServiceError &&
@@ -427,12 +534,12 @@ async function createAdmittedSwapFillQuote(
                 503,
                 `sponsor input ${i} carries assets; Taxi sponsor inputs are bitcoin-only`,
             );
-    // Charged in the asset when the solver authorised one, otherwise in sats.
+    const actualFare = receiveQuote?.fare ?? req.maxFare;
     const sponsorFare =
-        req.maxFare.units > 0n
-            ? req.maxFare.currency === "asset"
-                ? { assetId: req.maxFare.assetId, amount: req.maxFare.units, script: taxiScript }
-                : { script: taxiScript, sats: req.maxFare.units }
+        actualFare.units > 0n
+            ? actualFare.currency === "asset"
+                ? { assetId: actualFare.assetId, amount: actualFare.units, script: taxiScript }
+                : { script: taxiScript, sats: actualFare.units }
             : undefined;
     let graph: JointGraph;
     try {
@@ -448,6 +555,7 @@ async function createAdmittedSwapFillQuote(
                 netContributionSats: req.contributionSats,
                 changeScript: taxiScript,
                 ...(sponsorFare ? { fare: sponsorFare } : {}),
+                ...(receiveQuote ? { combineSatsFareWithChange: true } : {}),
             },
         });
     } catch (cause) {
@@ -460,7 +568,7 @@ async function createAdmittedSwapFillQuote(
         receiverScript: offer.makerProceedsScript,
         solverScript: req.solverProceedsScript,
         sponsorScript: taxiScript,
-        expectSatsFare: req.maxFare.currency === "sats" && req.maxFare.units > 0n,
+        expectSatsFare: !receiveQuote && req.maxFare.currency === "sats" && req.maxFare.units > 0n,
     });
     const domain = swapFillGraphFromWire(wire);
     assertTrustedGraph({
@@ -483,13 +591,40 @@ async function createAdmittedSwapFillQuote(
         limits: await optionalLimits(deps),
         dust: config.dust,
         vtxoMinAmount: config.vtxoMinAmount,
+        actualFare,
     });
-    await reverifyFreshness(deps, req, fundingOutpoint, selection, intentLocks);
+    const expiries = [deposit, ...solverCoins, ...selection.inputs].map((coin, index) => {
+        try {
+            return normalizeExpiry(coin);
+        } catch (cause) {
+            throw new ServiceError(
+                "swap_fill_expiry_unknown",
+                400,
+                `swap fill input ${index} has unknown or ambiguous expiry`,
+                { cause },
+            );
+        }
+    });
+    if (
+        receiveQuote &&
+        expiries.some(
+            (expiry) =>
+                expiry.kind !== receiveQuote!.inputExpiryFloor.kind ||
+                expiry.value < receiveQuote!.inputExpiryFloor.value,
+        )
+    )
+        throw new ServiceError(
+            "receive_quote_expiry_mismatch",
+            409,
+            "swap fill input expiry is below the receive quote floor",
+        );
+    await reverifyFreshness(deps, req, fundingOutpoint, selection, intentLocks, receiveQuote);
     if (deps.policy.getSnapshot().revision !== revision)
         throw new ServiceError("policy_changed", 409, "policy changed during construction");
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     const fill: SwapFill = {
         id: deps.randomId(),
+        ...(receiveQuote ? { receiveQuoteId: receiveQuote.id } : {}),
         operationId: req.operationId,
         state: "quoted",
         offerHex: req.offerHex,
@@ -502,7 +637,7 @@ async function createAdmittedSwapFillQuote(
         taxiInputs,
         contributionSats: req.contributionSats,
         sponsorScript: taxiScript,
-        fare: fareOf(domain),
+        fare: receiveQuote ? receiveQuote.fare : fareOf(domain),
         maxFare: req.maxFare,
         graph: jointGraphToStored(graph),
         graphId: domain.graphId,
@@ -510,10 +645,125 @@ async function createAdmittedSwapFillQuote(
         attempts: 0,
         createdAt: now,
         updatedAt: now,
-        expiresAt: now + policy.quoteTtlSeconds,
+        expiresAt: receiveQuote ? receiveQuote.expiresAt : now + policy.quoteTtlSeconds,
     };
     try {
-        deps.swapFills.insert(fill, revision);
+        if (receiveQuote) {
+            if (!deps.getServerUnroll)
+                throw new ServiceError(
+                    "runtime_unsafe",
+                    503,
+                    "server unroll data is unavailable for joint recovery",
+                );
+            const batchExpiry = expiries.reduce((minimum, expiry) =>
+                expiry.value < minimum.value ? expiry : minimum,
+            );
+            const inputs = [deposit, ...solverCoins, ...selection.inputs];
+            const roles = [
+                "offer-covenant",
+                ...solverCoins.map(() => "solver" as const),
+                ...selection.inputs.map(() => "sponsor" as const),
+            ] as const;
+            const operatorPayouts = deriveJointOutputs(graph)
+                .filter(
+                    (output) =>
+                        output.script.every((byte, index) => byte === taxiScript[index]) &&
+                        output.script.length === taxiScript.length &&
+                        output.assets.length === 0,
+                )
+                .map((output) => ({
+                    vout: output.vout,
+                    sats: output.sats.toString(10),
+                    fareSats: receiveQuote!.fare.units.toString(10),
+                }));
+            const tx = Transaction.fromPSBT(base64.decode(graph.arkTx));
+            const source: JointFillFundingSource = {
+                tag: "joint-fill",
+                version: 1,
+                receiveQuoteId: receiveQuote.id,
+                fillId: fill.id,
+                operationId: fill.operationId,
+                offerHex: fill.offerHex,
+                offerOutpoint: fundingOutpoint,
+                graph,
+                covenantOutputIndex: 0,
+                covenantSats: receiveQuote.params.dust.toString(10),
+                assetId: {
+                    txid: bytesToHex(receiveQuote.params.assetId.txid),
+                    groupIndex: receiveQuote.params.assetId.groupIndex,
+                },
+                assetUnits: offer.wantAmount.toString(10),
+                inputExpiryFloor: {
+                    kind: receiveQuote.inputExpiryFloor.kind,
+                    value: receiveQuote.inputExpiryFloor.value.toString(10),
+                },
+                inputs: inputs.map((coin, index) => ({
+                    role: roles[index]!,
+                    txid: coin.txid,
+                    vout: coin.vout,
+                    value: BigInt(coin.value).toString(10),
+                    script: coin.script.toLowerCase(),
+                    tapTree: bytesToHex(coin.tapTree!),
+                    spendLeaf: bytesToHex(
+                        scriptFromTapLeafScript(
+                            coin.forfeitTapLeafScript ?? coin.intentTapLeafScript!,
+                        ),
+                    ),
+                    assets: (coin.assets ?? []).map((asset) => ({
+                        assetId: asset.assetId,
+                        amount: BigInt(asset.amount).toString(10),
+                    })),
+                    expiry: {
+                        kind: expiries[index]!.kind,
+                        value: expiries[index]!.value.toString(10),
+                    },
+                })),
+                serverUnrollScript: hex.encode(deps.getServerUnroll().script),
+                operatorScript: bytesToHex(taxiScript),
+                operatorPayouts,
+                recoveryPreflight: {
+                    digest: createHash("sha256")
+                        .update(
+                            JSON.stringify({
+                                arkTx: graph.arkTx,
+                                checkpoints: graph.checkpoints,
+                            }),
+                        )
+                        .digest("hex"),
+                    expectedTxid: tx.id.toLowerCase(),
+                    arkTx: graph.arkTx,
+                    checkpoints: [...graph.checkpoints],
+                },
+            };
+            const advance: Advance = {
+                id: receiveQuote.id,
+                state: "locking",
+                ...receiveQuote.params,
+                assetUnits: offer.wantAmount,
+                covenantAddress: receiveQuote.covenantAddress,
+                fare: receiveQuote.fare,
+                createdAt: now,
+                updatedAt: now,
+                expiresAt: receiveQuote.expiresAt,
+                batchExpiry,
+                recoveryLocktime: receiveQuote.recoveryLocktime,
+                operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),
+                unsignedLockupTx: encodeJointFillSource(source),
+                unsignedLockupId: graph.graphId,
+            };
+            source.recoveryPreflight = buildRecoveryIntent(
+                { ...advance, outpoint: { txid: tx.id.toLowerCase(), vout: 0 } },
+                config,
+            );
+            advance.unsignedLockupTx = encodeJointFillSource(source);
+            deps.receiveQuotes!.bind({
+                quoteId: receiveQuote.id,
+                fill,
+                advance,
+                expectedPolicyRevision: revision,
+                now,
+            });
+        } else deps.swapFills.insert(fill, revision);
     } catch (cause) {
         const raced = deps.swapFills.getByOperation(req.operationId);
         if (!raced) throw cause;
@@ -541,7 +791,7 @@ async function observedCoin(
     outpoint: Outpoint,
     code: string,
     message: string,
-) {
+): Promise<ExtendedVirtualCoin> {
     let response;
     try {
         response = await indexer.getVtxos({ outpoints: [outpoint] });
@@ -554,14 +804,14 @@ async function observedCoin(
         (coin) => coin.txid === outpoint.txid && coin.vout === outpoint.vout,
     );
     if (matches.length !== 1) throw new ServiceError(code, 400, message);
-    return matches[0]!;
+    return matches[0]! as ExtendedVirtualCoin;
 }
 
 async function enrichSolverFund(
     deps: SwapFillQuoteDeps,
     req: SwapFillQuoteRequest,
     offer: DecodedOfferTerms,
-): Promise<FillFunding[]> {
+): Promise<{ fund: FillFunding[]; coins: ExtendedVirtualCoin[] }> {
     const safety = deps.runtime.safety();
     const clock = {
         height: Number(safety.chainHeight),
@@ -579,6 +829,7 @@ async function enrichSolverFund(
     }
     const byKey = new Map(response.vtxos.map((c) => [key(c), c as ExtendedVirtualCoin]));
     const fund: FillFunding[] = [];
+    const coins: ExtendedVirtualCoin[] = [];
     for (const [i, input] of req.solverInputs.entries()) {
         const coin = byKey.get(key(input));
         if (!coin || coin.isSpent)
@@ -628,6 +879,7 @@ async function enrichSolverFund(
             tapLeafScript,
             ...(coin.assets?.length ? { assets: [...coin.assets] } : {}),
         } as FillFunding);
+        coins.push(coin);
     }
     const totals = solverTotals(fund);
     if (offer.wantAsset) {
@@ -644,7 +896,7 @@ async function enrichSolverFund(
             400,
             "solver funding does not cover the wanted sats amount",
         );
-    return fund;
+    return { fund, coins };
 }
 
 function solverTotals(fund: FillFunding[]): { sats: bigint; assets: Map<string, bigint> } {
@@ -691,6 +943,7 @@ function assertTrustedGraph(args: {
     limits: { vtxoMaxAmount: bigint } | undefined;
     dust: bigint;
     vtxoMinAmount: bigint;
+    actualFare: SwapFill["fare"];
 }): void {
     const { graph, req, offer } = args;
     const mismatch = (detail: string): never => {
@@ -749,7 +1002,6 @@ function assertTrustedGraph(args: {
     const outputAssets = new Map<string, bigint>();
     for (const a of receiver!.assets) {
         receiverAssets.set(a.assetId, (receiverAssets.get(a.assetId) ?? 0n) + a.units);
-        outputAssets.set(a.assetId, (outputAssets.get(a.assetId) ?? 0n) + a.units);
     }
     const checkOutput = (sats: bigint, assets: readonly { assetId: string; units: bigint }[]) => {
         if (sats < 0n) mismatch("output carries negative sats");
@@ -786,7 +1038,10 @@ function assertTrustedGraph(args: {
     for (const { assetId, amount } of args.inputAssets)
         held.set(assetId, (held.get(assetId) ?? 0n) + amount);
     for (const [id, amount] of held)
-        if ((outputAssets.get(id) ?? 0n) !== amount) mismatch(`asset ${id} is not conserved`);
+        if ((outputAssets.get(id) ?? 0n) !== amount)
+            mismatch(
+                `asset ${id} is not conserved: inputs ${amount}, outputs ${outputAssets.get(id) ?? 0n}`,
+            );
     for (const [id] of outputAssets)
         if (!held.has(id)) mismatch(`asset ${id} appears from nowhere`);
     if (offer.wantAsset) {
@@ -795,16 +1050,16 @@ function assertTrustedGraph(args: {
         if (got !== offer.wantAmount) mismatch("receiver asset amount differs from the offer want");
     } else if (receiverSats !== offer.wantAmount)
         mismatch("receiver sats differ from the offer want");
-    if (req.maxFare.currency === "asset" && req.maxFare.units > 0n) {
+    if (args.actualFare.currency === "asset" && args.actualFare.units > 0n) {
         if (fareSeen === undefined)
             throw new ServiceError(
                 "swap_fill_graph_mismatch",
                 503,
                 "fill graph fare output is missing",
             );
-        const allowed = taxiAssetIdToSwapId(req.maxFare.assetId);
+        const allowed = taxiAssetIdToSwapId(args.actualFare.assetId);
         if (fareSeen.assetId !== allowed) mismatch("fare asset differs from maxFare");
-        if (fareSeen.units !== req.maxFare.units) mismatch("fare units differ from maxFare");
+        if (fareSeen.units !== args.actualFare.units) mismatch("fare units differ from quote");
         if (!args.inputAssets.some((a) => a.assetId === allowed && a.amount >= fareSeen.units))
             throw new ServiceError(
                 "swap_fill_fare_provenance",
@@ -815,7 +1070,7 @@ function assertTrustedGraph(args: {
     // A sats fare pays the taxi script carrying no assets, exactly as change
     // does, so the two are indistinguishable per-output. What is checkable is
     // the total: Taxi receives its change plus the fare it quoted, no more.
-    const satsFare = req.maxFare.currency === "sats" ? req.maxFare.units : 0n;
+    const satsFare = args.actualFare.currency === "sats" ? args.actualFare.units : 0n;
     if (changeSum !== change + satsFare) mismatch("taxi change differs from the reservation");
 }
 
@@ -838,6 +1093,7 @@ async function reverifyFreshness(
     fundingOutpoint: Outpoint,
     selection: { inputs: { txid: string; vout: number }[]; totalValue: bigint },
     intentLocks: Outpoint[],
+    receiveQuote?: ReceiveQuote,
 ): Promise<void> {
     let currentSpendable;
     let currentLocks;
@@ -855,18 +1111,36 @@ async function reverifyFreshness(
             { cause },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
-    const latest = selectOperatorFunding({
-        spendable: currentSpendable,
-        reserved: [...reserved, ...currentLocks],
-        requiredSats: req.contributionSats,
-        safety: deps.runtime.safety(),
-        nowMs: deps.nowMs(),
-        maxSnapshotAgeMs: deps.config.reconcileIntervalMs,
-        minExpiryHeadroomBlocks: deps.config.minExpiryHeadroomBlocks,
-        minExpiryHeadroomSeconds: deps.config.minExpiryHeadroomSeconds,
-        minReserveSats: deps.config.operatorMinReserveSats,
-    });
+    const latest = receiveQuote
+        ? {
+              inputs: receiveQuote.operatorInputs.map((expected) => {
+                  const coin = currentSpendable.find(
+                      (candidate) => key(candidate) === key(expected),
+                  );
+                  if (!coin || !sameFundingSnapshot(operatorFundingInput(coin), expected))
+                      throw new ServiceError(
+                          "receive_quote_funding_changed",
+                          409,
+                          "receive quote operator funding changed during construction",
+                      );
+                  return coin;
+              }),
+              totalValue: receiveQuote.operatorInputs.reduce((sum, input) => sum + input.value, 0n),
+          }
+        : selectOperatorFunding({
+              spendable: currentSpendable,
+              reserved: [
+                  ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+                  ...currentLocks,
+              ],
+              requiredSats: req.contributionSats,
+              safety: deps.runtime.safety(),
+              nowMs: deps.nowMs(),
+              maxSnapshotAgeMs: deps.config.reconcileIntervalMs,
+              minExpiryHeadroomBlocks: deps.config.minExpiryHeadroomBlocks,
+              minExpiryHeadroomSeconds: deps.config.minExpiryHeadroomSeconds,
+              minReserveSats: deps.config.operatorMinReserveSats,
+          });
     const wanted = selection.inputs.map(key).sort();
     const got = latest.inputs.map(key).sort();
     if (
@@ -889,6 +1163,91 @@ async function reverifyFreshness(
             "solver funding is not served by the indexer",
         );
 }
+
+export async function revalidateBoundSwapFill(
+    deps: SwapFillQuoteDeps,
+    fill: SwapFill,
+): Promise<void> {
+    if (!fill.receiveQuoteId) return;
+    const quote = deps.receiveQuotes?.get(fill.receiveQuoteId);
+    const snapshot = deps.policy.getSnapshot();
+    if (
+        !quote ||
+        quote.state !== "bound" ||
+        quote.boundFillId !== fill.id ||
+        quote.policyRevision !== snapshot.revision ||
+        snapshot.policy.paused
+    )
+        throw new Error("bound receive quote is missing, stale, or paused");
+    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+    const source = readFundingSource(
+        deps.advances.get(fill.receiveQuoteId)?.unsignedLockupTx ?? "",
+    );
+    if (
+        source.kind !== "joint-fill" ||
+        source.source.fillId !== fill.id ||
+        source.source.operationId !== fill.operationId ||
+        source.source.offerHex.toLowerCase() !== fill.offerHex.toLowerCase()
+    )
+        throw new Error("bound funding source differs from the fill");
+    const [spendable, locks, indexed] = await Promise.all([
+        deps.inventory.getSpendableVtxos(),
+        deps.inventory.getLockedVtxoOutpoints(),
+        deps.senderInventory.getVtxos({
+            outpoints: source.source.inputs
+                .filter((input) => input.role !== "sponsor")
+                .map(({ txid, vout }) => ({ txid, vout })),
+        }),
+    ]);
+    const current = new Map([
+        ...spendable.map((coin) => [key(coin), coin] as const),
+        ...indexed.vtxos.map((coin) => [key(coin), coin as ExtendedVirtualCoin] as const),
+    ]);
+    if (locks.some((locked) => fill.taxiInputs.some((input) => key(input) === key(locked))))
+        throw new Error("bound operator input is locked by another intent");
+    for (const input of source.source.inputs) {
+        const coin = current.get(key(input));
+        const leaf = coin?.forfeitTapLeafScript ?? coin?.intentTapLeafScript;
+        if (
+            !coin ||
+            coin.isSpent ||
+            BigInt(coin.value).toString(10) !== input.value ||
+            coin.script.toLowerCase() !== input.script ||
+            !coin.tapTree ||
+            bytesToHex(coin.tapTree) !== input.tapTree ||
+            !leaf ||
+            bytesToHex(scriptFromTapLeafScript(leaf)) !== input.spendLeaf ||
+            JSON.stringify(
+                (coin.assets ?? [])
+                    .map((asset) => ({
+                        assetId: asset.assetId,
+                        amount: BigInt(asset.amount).toString(10),
+                    }))
+                    .sort((a, b) => a.assetId.localeCompare(b.assetId)),
+            ) !==
+                JSON.stringify([...input.assets].sort((a, b) => a.assetId.localeCompare(b.assetId)))
+        )
+            throw new Error(`bound input ${input.txid}:${input.vout} changed`);
+        const expiry = normalizeExpiry(coin);
+        if (
+            expiry.kind !== input.expiry.kind ||
+            expiry.value.toString(10) !== input.expiry.value ||
+            expiry.kind !== quote.inputExpiryFloor.kind ||
+            expiry.value < quote.inputExpiryFloor.value
+        )
+            throw new Error(`bound input ${input.txid}:${input.vout} expiry changed`);
+    }
+    if (deps.policy.getSnapshot().revision !== snapshot.revision)
+        throw new Error("policy changed during bound fill revalidation");
+    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+}
+
+const sameFundingSnapshot = (
+    actual: ReturnType<typeof operatorFundingInput>,
+    expected: ReturnType<typeof operatorFundingInput>,
+): boolean =>
+    JSON.stringify(actual, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
+    JSON.stringify(expected, (_, value) => (typeof value === "bigint" ? value.toString() : value));
 
 export function getSwapFill(
     deps: Pick<SwapFillQuoteDeps, "swapFills" | "now">,

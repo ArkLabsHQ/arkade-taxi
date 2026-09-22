@@ -19,7 +19,7 @@
         "vectors": "node scripts/gen-vectors.mjs"
     },
     "devDependencies": {
-        "@arkade-os/sdk": "0.4.72",
+        "@arkade-os/sdk": "0.4.74",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
@@ -33,7 +33,7 @@
             "esbuild"
         ],
         "overrides": {
-            "@arkade-os/sdk": "file:./.reference/vendor/arkade-os-sdk-0.4.72.tgz"
+            "@arkade-os/sdk": "file:./.reference/vendor/arkade-os-sdk-0.4.74.tgz"
         }
     }
 }

@@ -32,6 +32,7 @@ import type { RuntimeConfig } from "../config.js";
 import { sanitizeOperationalError } from "../errors.js";
 import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt.js";
 import { validatePersistedLockupGraph } from "./submit.js";
+import { readFundingSource } from "./fundingSource.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -107,6 +108,8 @@ function assertTaggedLocktime(advance: Advance): NonNullable<Advance["recoveryLo
 function startupRecoveryAdvance(advance: Advance): Advance {
     if (advance.outpoint || advance.state !== "locking") return advance;
     try {
+        const tagged = readFundingSource(advance.unsignedLockupTx);
+        if (tagged.kind === "joint-fill") return { ...advance, outpoint: tagged.covenantOutpoint };
         const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
         const source = exactBase64(envelope.arkTx);
         return {
@@ -263,13 +266,26 @@ export function assertRecoveryStartupInvariants(
                 `advance ${advance.id}: recovery locktime plus execution budget must be strictly before batch expiry`,
             );
         try {
-            validatePersistedLockupGraph(advance, config);
+            const source = readFundingSource(advance.unsignedLockupTx);
+            if (source.kind === "legacy") validatePersistedLockupGraph(advance, config);
         } catch (cause) {
             fail(
                 `advance ${advance.id}: persisted lockup graph is invalid: ${cause instanceof Error ? cause.message : "validation failed"}`,
             );
         }
-        buildRecoveryIntent(startupRecoveryAdvance(advance), config);
+        const preflight = buildRecoveryIntent(startupRecoveryAdvance(advance), config);
+        const source = readFundingSource(advance.unsignedLockupTx);
+        if (
+            source.kind === "joint-fill" &&
+            (source.source.recoveryPreflight.digest !== preflight.digest ||
+                source.source.recoveryPreflight.expectedTxid !== preflight.expectedTxid ||
+                source.source.recoveryPreflight.arkTx !== preflight.arkTx ||
+                !isDeepStrictEqual(
+                    source.source.recoveryPreflight.checkpoints,
+                    preflight.checkpoints,
+                ))
+        )
+            fail(`advance ${advance.id}: joint recovery preflight drifted from persisted facts`);
         assertRecoveryPhaseMatrix(advance);
         if (advance.state !== "recovering") {
             continue;
@@ -310,26 +326,52 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     assertTaggedLocktime(advance);
     if (!advance.outpoint) fail(`advance ${advance.id}: covenant outpoint is missing`);
     const outpoint = advance.outpoint;
-    const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
-    let operatorOutpoints: Advance["operatorInputs"];
-    try {
-        operatorOutpoints = envelope.operatorInputs
-            .map((input) => fundingInputFromWire(input))
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    let source: Transaction;
+    let serverUnrollScript: string;
+    let units: bigint | undefined;
+    if (tagged.kind === "joint-fill") {
+        if (
+            tagged.source.receiveQuoteId !== advance.id ||
+            tagged.source.graph.graphId !== advance.unsignedLockupId ||
+            tagged.covenantOutpoint.txid !== outpoint.txid ||
+            tagged.covenantOutpoint.vout !== outpoint.vout ||
+            tagged.source.covenantSats !== advance.dust.toString(10) ||
+            tagged.assetUnits !== advance.assetUnits
+        )
+            fail(`advance ${advance.id}: persisted joint-fill commitments are inconsistent`);
+        const operatorOutpoints = tagged.source.inputs
+            .filter((input) => input.role === "sponsor")
             .map(({ txid, vout }) => ({ txid, vout }));
-    } catch {
-        return fail(`advance ${advance.id}: persisted operator funding is malformed`);
+        if (!isDeepStrictEqual(operatorOutpoints, advance.operatorInputs))
+            fail(`advance ${advance.id}: persisted operator funding mismatch`);
+        source = exactBase64(tagged.source.graph.arkTx);
+        serverUnrollScript = tagged.source.serverUnrollScript;
+        units = tagged.assetUnits;
+    } else {
+        const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
+        let operatorOutpoints: Advance["operatorInputs"];
+        try {
+            operatorOutpoints = envelope.operatorInputs
+                .map((input) => fundingInputFromWire(input))
+                .map(({ txid, vout }) => ({ txid, vout }));
+        } catch {
+            return fail(`advance ${advance.id}: persisted operator funding is malformed`);
+        }
+        if (!isDeepStrictEqual(operatorOutpoints, advance.operatorInputs))
+            fail(`advance ${advance.id}: persisted operator funding mismatch`);
+        if (
+            envelope.unsignedTxId !== advance.unsignedLockupId ||
+            envelope.covenantOutputIndex !== outpoint.vout
+        )
+            fail(`advance ${advance.id}: persisted lockup commitments are inconsistent`);
+        source = exactBase64(envelope.arkTx);
+        const sourceCheckpoints = envelope.checkpoints.map(exactBase64);
+        if (unsignedGraphId(source, sourceCheckpoints) !== envelope.unsignedTxId)
+            fail(`advance ${advance.id}: persisted unsigned graph id mismatch`);
+        serverUnrollScript = envelope.serverUnrollScript;
+        units = envelope.assetUnits === undefined ? undefined : BigInt(envelope.assetUnits);
     }
-    if (!isDeepStrictEqual(operatorOutpoints, advance.operatorInputs))
-        fail(`advance ${advance.id}: persisted operator funding mismatch`);
-    if (
-        envelope.unsignedTxId !== advance.unsignedLockupId ||
-        envelope.covenantOutputIndex !== outpoint.vout
-    )
-        fail(`advance ${advance.id}: persisted lockup commitments are inconsistent`);
-    const source = exactBase64(envelope.arkTx);
-    const sourceCheckpoints = envelope.checkpoints.map(exactBase64);
-    if (unsignedGraphId(source, sourceCheckpoints) !== envelope.unsignedTxId)
-        fail(`advance ${advance.id}: persisted unsigned graph id mismatch`);
     if (source.id !== outpoint.txid || source.outputsLength <= outpoint.vout)
         fail(`advance ${advance.id}: covenant outpoint differs from the lockup graph`);
     const script = covenantScript(advance, config);
@@ -349,7 +391,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
               ? advance.fare.units
               : config.vtxoMinAmount;
     if (advance.fare.units < 0n) fail(`advance ${advance.id}: persisted fare is negative`);
-    if (fareHosting > 0n) {
+    if (tagged.kind === "legacy" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;
         if (
             !fareOutput ||
@@ -364,7 +406,6 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     }
 
     const id = assetId(advance);
-    const units = envelope.assetUnits === undefined ? undefined : BigInt(envelope.assetUnits);
     if ((id === undefined) !== (units === undefined) || (units !== undefined && units <= 0n))
         fail(`advance ${advance.id}: persisted covenant asset facts mismatch`);
     let sourceHoldings: { id: string; amount: bigint }[];
@@ -383,7 +424,11 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                       })),
               ) ?? [])
             : [];
-        if (advance.fare.currency === "asset" && advance.fare.units > 0n) {
+        if (
+            tagged.kind === "legacy" &&
+            advance.fare.currency === "asset" &&
+            advance.fare.units > 0n
+        ) {
             const fareId = AssetId.create(
                 hex.encode(Uint8Array.from(advance.fare.assetId.txid).reverse()),
                 advance.fare.assetId.groupIndex,
@@ -453,7 +498,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     ];
     let unroll: CSVMultisigTapscript.Type;
     try {
-        unroll = CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript));
+        unroll = CSVMultisigTapscript.decode(hex.decode(serverUnrollScript));
     } catch {
         return fail(`advance ${advance.id}: server unroll script is malformed`);
     }

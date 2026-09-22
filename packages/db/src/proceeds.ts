@@ -133,7 +133,7 @@ export class ProceedsRepository {
             .transaction(() => {
                 this.db
                     .prepare(
-                        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
+                        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
                     )
                     .run(at, at);
                 this.db

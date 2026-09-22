@@ -8,6 +8,7 @@ import {
     PolicyRepository,
     type InsertReceiveQuoteRequest,
     type ReceiveQuote,
+    type ReceiveQuoteRepository,
 } from "@arkade-taxi/db";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
@@ -173,6 +174,13 @@ class MemoryReceiveQuotes {
     get(id: string): ReceiveQuote | undefined {
         const row = this.rows.get(id);
         return row && structuredClone(row);
+    }
+    bind(request: Parameters<ReceiveQuoteRepository["bind"]>[0]): void {
+        const row = this.rows.get(request.quoteId);
+        if (!row || row.state !== "quoted") throw new Error("receive quote is not bindable");
+        this.rows.set(row.id, { ...row, state: "bound", boundFillId: request.fill.id });
+        swapFills.insert(request.fill);
+        advances.insert(request.advance);
     }
     expireQuotes(at: number): number {
         let count = 0;
@@ -1215,9 +1223,22 @@ describe("swap-fill routes", () => {
             ...over,
         };
     };
+    const legacySwapApp = () => createRoutes({ ...deps(), receiveQuotes: undefined as never });
+    const legacySwapPost = (path: string, body: unknown) =>
+        legacySwapApp().request(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
 
-    it("quotes a sponsored fill on POST /v1/swap-fills and replays the operation id", async () => {
-        const first = await post("/v1/swap-fills", swapBody());
+    it("requires a receive quote for a new public positive-contribution fill", async () => {
+        const response = await post("/v1/swap-fills", swapBody());
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as ErrorResponse).code).toBe("receive_quote_required");
+    });
+
+    it("keeps the legacy unbound fill harness readable and replayable", async () => {
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
         expect(first.status).toBe(200);
         const quote = (await first.json()) as SwapFillQuoteResponse;
         expect(quote.operationId).toBe("op-1");
@@ -1227,12 +1248,15 @@ describe("swap-fill routes", () => {
             { owner: "solver", txid: "ee".repeat(32), vout: 1 },
             { owner: "sponsor", txid: "bb".repeat(32), vout: 0 },
         ]);
-        const replay = await post("/v1/swap-fills", swapBody());
+        const replay = await legacySwapPost("/v1/swap-fills", swapBody());
         expect(replay.status).toBe(200);
         expect(await replay.json()).toEqual(quote);
-        const conflict = await post("/v1/swap-fills", swapBody({ contributionSats: "331" }));
+        const conflict = await legacySwapPost(
+            "/v1/swap-fills",
+            swapBody({ contributionSats: "331" }),
+        );
         expect(conflict.status).toBe(409);
-        const status = await app().request(`/v1/swap-fills/${quote.fillId}`);
+        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
         expect(status.status).toBe(200);
         expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
     });
@@ -1244,9 +1268,9 @@ describe("swap-fill routes", () => {
     });
 
     it("submits a quoted fill with 202 and fences a replay", async () => {
-        const first = await post("/v1/swap-fills", swapBody());
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
         const quote = (await first.json()) as SwapFillQuoteResponse;
-        const submit = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+        const submit = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
             solverGraph: quote.graph,
         });
         expect(submit.status).toBe(202);
@@ -1257,7 +1281,7 @@ describe("swap-fill routes", () => {
             state: "submitting",
         });
         expect(typeof status.txid).toBe("string");
-        const replay = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+        const replay = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
             solverGraph: quote.graph,
         });
         expect(replay.status).toBe(409);
@@ -1266,32 +1290,32 @@ describe("swap-fill routes", () => {
 
     it("returns 404 for an unknown fill submit and 400 for a malformed solver graph", async () => {
         const quoted = (await (
-            await post("/v1/swap-fills", swapBody())
+            await legacySwapPost("/v1/swap-fills", swapBody())
         ).json()) as SwapFillQuoteResponse;
-        const missing = await post("/v1/swap-fills/nope/submit", {
+        const missing = await legacySwapPost("/v1/swap-fills/nope/submit", {
             solverGraph: quoted.graph,
         });
         expect(missing.status).toBe(404);
-        const first = await post("/v1/swap-fills", swapBody({ operationId: "op-2" }));
+        const first = await legacySwapPost("/v1/swap-fills", swapBody({ operationId: "op-2" }));
         const quote = (await first.json()) as SwapFillQuoteResponse;
-        const malformed = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+        const malformed = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
             solverGraph: { template: "taxi-fill/9" },
         });
         expect(malformed.status).toBe(400);
     });
 
     it("returns 409 when the solver graph differs from the quoted fill", async () => {
-        const first = await post("/v1/swap-fills", swapBody());
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
         const quote = (await first.json()) as SwapFillQuoteResponse;
         const diverted = structuredClone(quote.graph);
         const change = diverted.outputs.find((o) => o.role === "sponsor-change")!;
         change.script = "dd".repeat(34);
-        const rejected = await post(`/v1/swap-fills/${quote.fillId}/submit`, {
+        const rejected = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
             solverGraph: diverted,
         });
         expect(rejected.status).toBe(409);
         expect(((await rejected.json()) as ErrorResponse).code).toBe("swap_fill_graph_conflict");
-        const status = await app().request(`/v1/swap-fills/${quote.fillId}`);
+        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
         expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
     });
 });

@@ -3,13 +3,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+    AdvanceRepository,
     openDatabase,
     PolicyRepository,
     ReceiveQuoteRepository,
     ReceiveQuoteReservationConflictError,
+    ReservationRepository,
+    SwapFillRepository,
     type Database,
     type ReceiveQuote,
+    type SwapFill,
 } from "../src/index.js";
+import type { Advance } from "@arkade-taxi/core";
 
 const NOW = 1_757_000_000;
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
@@ -83,6 +88,63 @@ const insert = (repo: ReceiveQuoteRepository, policy: PolicyRepository, value = 
         recoveryExecutionBudget: { kind: "height", value: 72n },
     });
 
+const graph = {
+    arkTx: "aGVsbG8=",
+    checkpoints: ["d29ybGQ="],
+    graphId: new Uint8Array(32).fill(0xab),
+    inputOwners: [null, "solver", "sponsor"] as (string | null)[],
+};
+
+const boundFill = (): SwapFill => ({
+    id: "fill-1",
+    receiveQuoteId: "receive-1",
+    operationId: "op-1",
+    state: "quoted",
+    offerHex: "deadbeef",
+    offerTxid: "bb".repeat(32),
+    offerVout: 0,
+    solverInputs: [{ txid: "cc".repeat(32), vout: 0, value: 1n }],
+    solverProceedsScript: new Uint8Array([0x51]),
+    solverKeys: ["44".repeat(32)],
+    taxiInputs: [INPUT],
+    contributionSats: 329n,
+    sponsorScript: new Uint8Array([0x52]),
+    fare: { currency: "sats", units: 3n },
+    maxFare: { currency: "sats", units: 30n },
+    graph: structuredClone(graph),
+    graphId: new Uint8Array(32).fill(0xab),
+    submitInvoked: false,
+    attempts: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    expiresAt: NOW + 60,
+});
+
+const boundAdvance = (): Advance => ({
+    id: "receive-1",
+    state: "locking",
+    receiverKey: quote().params.receiverKey,
+    senderKey: quote().params.senderKey,
+    operatorKey: quote().params.operatorKey,
+    dust: 330n,
+    topup: 329n,
+    assetId: ASSET,
+    assetUnits: 5n,
+    claimMode: "recycle",
+    recoveryRecipient: "receiver",
+    locktime: 899_856n,
+    covenantAddress: quote().covenantAddress,
+    fare: { currency: "sats", units: 3n },
+    createdAt: NOW,
+    updatedAt: NOW,
+    expiresAt: NOW + 60,
+    batchExpiry: { kind: "height", value: 900_000n },
+    recoveryLocktime: { kind: "height", value: 899_856n },
+    operatorInputs: [INPUT],
+    unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":1}',
+    unsignedLockupId: "ab".repeat(32),
+});
+
 let cleanup: (() => void) | undefined;
 afterEach(() => {
     cleanup?.();
@@ -136,23 +198,28 @@ describe("receive quote repository", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);
         const repo = new ReceiveQuoteRepository(db);
-        insert(repo, policy, quote({ id: "unbound" }));
         insert(
             repo,
             policy,
             quote({
-                id: "bound",
-                operatorInputs: [{ ...quote().operatorInputs[0]!, txid: "bb".repeat(32), vout: 2 }],
+                id: "unbound",
+                operatorInputs: [{ ...quote().operatorInputs[0]!, txid: "dd".repeat(32), vout: 4 }],
             }),
         );
-        db.prepare(
-            "UPDATE receive_quotes SET state = 'bound', bound_fill_id = 'fill-1' WHERE id = 'bound'",
-        ).run();
+        insert(repo, policy);
+        repo.bind({
+            quoteId: "receive-1",
+            fill: boundFill(),
+            advance: boundAdvance(),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            now: NOW,
+        });
 
         expect(repo.expireQuotes(NOW + 60)).toBe(1);
         expect(repo.get("unbound")?.state).toBe("expired");
-        expect(repo.get("bound")?.state).toBe("bound");
-        expect(repo.listReservedOutpoints()).toEqual([{ txid: "bb".repeat(32), vout: 2 }]);
+        expect(repo.get("receive-1")?.state).toBe("bound");
+        expect(repo.listReservedOutpoints()).toEqual([]);
+        expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
         db.close();
     });
 
@@ -202,6 +269,81 @@ describe("receive quote repository", () => {
                 expectedReservedOutpoints: [],
             }),
         ).toThrow(ReceiveQuoteReservationConflictError);
+        db.close();
+    });
+
+    it("atomically transfers one receive obligation into a bound fill and advance", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        const revision = policy.getSnapshot().revision;
+        repo.bind({
+            quoteId: "receive-1",
+            fill: boundFill(),
+            advance: boundAdvance(),
+            expectedPolicyRevision: revision,
+            now: NOW,
+        });
+        expect(repo.get("receive-1")).toMatchObject({ state: "bound", boundFillId: "fill-1" });
+        expect(new SwapFillRepository(db).get("fill-1")?.receiveQuoteId).toBe("receive-1");
+        expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("locking");
+        expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
+        expect(new AdvanceRepository(db).exposureTotals()).toEqual({
+            outstandingSats: 329n,
+            lockedCount: 1,
+        });
+        expect(new SwapFillRepository(db).exposureTotals()).toEqual({
+            outstandingSats: 0n,
+            activeCount: 0,
+        });
+        expect(() =>
+            repo.bind({
+                quoteId: "receive-1",
+                fill: { ...boundFill(), id: "fill-2", operationId: "op-2" },
+                advance: boundAdvance(),
+                expectedPolicyRevision: revision,
+                now: NOW,
+            }),
+        ).toThrow(/bound|state/);
+        expect(new SwapFillRepository(db).expireQuotes(NOW + 60)).toBe(1);
+        expect(repo.get("receive-1")?.state).toBe("expired");
+        expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("expired");
+        expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([]);
+        db.close();
+    });
+
+    it("marks the linked advance locked only when the trusted fill is observed", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const quotes = new ReceiveQuoteRepository(db);
+        insert(quotes, policy);
+        quotes.bind({
+            quoteId: "receive-1",
+            fill: boundFill(),
+            advance: boundAdvance(),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            now: NOW,
+        });
+        db.prepare(
+            "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = 'fill-1'",
+        ).run();
+        const fills = new SwapFillRepository(db);
+        expect(
+            fills.reconcileSettled(
+                "fill-1",
+                "ab".repeat(32),
+                { txid: "ab".repeat(32), vout: 0 },
+                NOW + 1,
+            ),
+        ).toBe(true);
+        expect(new AdvanceRepository(db).get("receive-1")).toMatchObject({
+            state: "locked",
+            arkTxid: "ab".repeat(32),
+            outpoint: { txid: "ab".repeat(32), vout: 0 },
+        });
+        expect(quotes.get("receive-1")?.state).toBe("bound");
+        expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
         db.close();
     });
 });

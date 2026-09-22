@@ -95,6 +95,7 @@ export interface SwapFillSolverInput {
 
 export interface SwapFillQuoteRequestBody {
     operationId: string;
+    receiveQuoteId?: string;
     offerHex: string;
     solverInputs: SwapFillSolverInputWire[];
     solverProceedsScript: string;
@@ -108,6 +109,7 @@ export interface SwapFillQuoteRequestBody {
 
 export interface SwapFillQuoteRequest {
     operationId: string;
+    receiveQuoteId?: string;
     offerHex: string;
     solverInputs: SwapFillSolverInput[];
     solverProceedsScript: Uint8Array;
@@ -334,6 +336,8 @@ export function swapFillQuoteRequestFromWire(body: unknown): SwapFillQuoteReques
         contributionSats,
         maxFare,
     };
+    if (b.receiveQuoteId !== undefined)
+        out.receiveQuoteId = nonEmpty(b.receiveQuoteId, "receiveQuoteId");
     if (b.fundingTxid !== undefined) out.fundingTxid = txid(b.fundingTxid, "fundingTxid");
     if (b.fundingVout !== undefined) out.fundingVout = vout(b.fundingVout, "fundingVout");
     if ((b.fundingTxid === undefined) !== (b.fundingVout === undefined))

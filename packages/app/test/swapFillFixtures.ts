@@ -47,7 +47,10 @@ export class MemorySwapFills implements SwapFillStore {
         let outstandingSats = 0n;
         let activeCount = 0;
         for (const row of this.rows.values())
-            if (row.state === "quoted" || row.state === "submitting") {
+            if (
+                (row.state === "quoted" || row.state === "submitting") &&
+                row.receiveQuoteId === undefined
+            ) {
                 outstandingSats += row.contributionSats;
                 activeCount++;
             }
@@ -282,18 +285,23 @@ export class FakeSwapFillGraphBuilder {
     constructor(
         private readonly makerScript: string,
         private readonly want: bigint,
+        private readonly wantedAsset?: { id: string; amount: bigint },
     ) {}
     async buildSwapFillGraph(req: SwapFillBuildRequest): Promise<JointGraph> {
         this.built.push(req);
         const taxiTotal = req.sponsor!.coins.reduce((sum, c) => sum + BigInt(c.value), 0n);
         const solverTotal = req.solverFund.reduce((sum, c) => sum + BigInt(c.value), 0n);
-        const change = taxiTotal - req.sponsor!.netContributionSats;
+        const combinedFare =
+            req.sponsor!.combineSatsFareWithChange && req.sponsor!.fare?.assetId === undefined
+                ? (req.sponsor!.fare?.sats ?? 0n)
+                : 0n;
+        const change = taxiTotal - req.sponsor!.netContributionSats + combinedFare;
         const outputs: { script: Uint8Array; sats: bigint }[] = [
             { script: hex.decode(this.makerScript), sats: this.want },
             { script: req.payoutScript!, sats: solverTotal - this.want },
         ];
         let fareVout = -1;
-        if (req.sponsor!.fare) {
+        if (req.sponsor!.fare && combinedFare === 0n) {
             fareVout = outputs.length;
             const fare = req.sponsor!.fare;
             outputs.push({ script: fare.script, sats: BigInt(fare.sats ?? 330n) });
@@ -333,12 +341,19 @@ export class FakeSwapFillGraphBuilder {
         }
         for (const [id, entry] of held) {
             if (entry.total <= 0n) continue;
+            const receiver = this.wantedAsset?.id === id ? this.wantedAsset.amount : 0n;
+            const outs = [
+                ...(receiver > 0n ? [{ vout: 0, amount: receiver }] : []),
+                ...(entry.total > receiver
+                    ? [{ vout: solverVout, amount: entry.total - receiver }]
+                    : []),
+            ];
             groups.push(
                 asset.AssetGroup.create(
                     asset.AssetId.fromString(id),
                     null,
                     entry.vins.map(({ vin, amount }) => asset.AssetInput.create(vin, amount)),
-                    [asset.AssetOutput.create(solverVout, entry.total)],
+                    outs.map(({ vout, amount }) => asset.AssetOutput.create(vout, amount)),
                     [],
                 ),
             );
