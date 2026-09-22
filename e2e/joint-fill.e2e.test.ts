@@ -15,7 +15,6 @@ import {
     Wallet,
     asset,
     canSpendOffchain,
-    tapScriptSigEntries,
     toXOnly,
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
@@ -26,6 +25,7 @@ import {
     providerCosignerKey,
     signJointGraphForOwner,
     submitJointFill,
+    tapScriptSigEntries,
 } from "../packages/client/src/index.js";
 
 const live = (name: string): string => {
