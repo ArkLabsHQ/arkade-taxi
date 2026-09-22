@@ -81,6 +81,7 @@ function covenantScript(advance: Advance, config: RuntimeConfig): DustCovenantSc
             topup: advance.topup,
             locktime: advance.locktime,
             ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
+            ...(advance.recoveryRecipient ? { recoveryRecipient: advance.recoveryRecipient } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
     });
@@ -434,6 +435,8 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         sourceAssets?.serialize(),
     );
     const topup = refundTopup(script.options.params, config.vtxoMinAmount);
+    const recoveryKey =
+        advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey;
     const outputs = [
         {
             amount: topup,
@@ -441,7 +444,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         },
         {
             amount: advance.dust - topup,
-            script: payoutPkScript(advance.senderKey, advance.dust - topup, advance.dust),
+            script: payoutPkScript(recoveryKey, advance.dust - topup, advance.dust),
         },
         Extension.create([
             ...(transferAssets ? [transferAssets] : []),

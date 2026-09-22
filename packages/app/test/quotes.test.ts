@@ -934,6 +934,16 @@ describe("quote reservation integration", () => {
 });
 
 describe("createQuote request validation", () => {
+    it("rejects recovery ownership on the generic sender quote endpoint", async () => {
+        const body = quoteBody() as Record<string, unknown>;
+        body.recoveryRecipient = "receiver";
+        await expect(createQuote(deps(), body)).rejects.toMatchObject({
+            code: "invalid_request",
+            status: 400,
+        });
+        expect(advances.rows.size).toBe(0);
+    });
+
     it.each(["missing", "duplicate", "sum"])(
         "rejects %s sender funding before admission",
         async (kind) => {

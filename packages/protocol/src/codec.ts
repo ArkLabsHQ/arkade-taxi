@@ -100,6 +100,7 @@ export interface CovenantParamsValue {
     topup: bigint;
     assetId?: AssetIdValue;
     locktime: bigint;
+    recoveryRecipient?: "sender" | "receiver";
     claimMode?: "recycle" | "purchase";
 }
 
@@ -293,6 +294,11 @@ export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantP
         locktime: satsFromWire(p.locktime, `${label}.locktime`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    if (p.recoveryRecipient !== undefined) {
+        if (p.recoveryRecipient !== "sender" && p.recoveryRecipient !== "receiver")
+            fail(`${label}.recoveryRecipient`, "must be sender or receiver");
+        out.recoveryRecipient = p.recoveryRecipient;
+    }
     if (p.claimMode !== undefined) {
         if (p.claimMode !== "recycle" && p.claimMode !== "purchase")
             fail(`${label}.claimMode`, "must be recycle or purchase");
@@ -311,6 +317,7 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         locktime: satsToWire(p.locktime),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    if (p.recoveryRecipient !== undefined) out.recoveryRecipient = p.recoveryRecipient;
     if (p.claimMode !== undefined) out.claimMode = p.claimMode;
     return out;
 }

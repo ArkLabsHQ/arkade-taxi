@@ -18,6 +18,9 @@ const assetUnits = 9_007_199_254_740_993n;
 function persisted(over: Partial<Advance> = {}, withAsset = false): Advance {
     const request = buildRequest();
     request.advanceId = over.id ?? "transfer-1";
+    if (over.claimMode !== undefined) request.params.claimMode = over.claimMode;
+    if (over.recoveryRecipient !== undefined)
+        request.params.recoveryRecipient = over.recoveryRecipient;
     if (withAsset) {
         const id = asset.AssetId.create("12".repeat(32), 7);
         request.params.assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: 7 };
@@ -171,6 +174,18 @@ describe("listReceiverClaims", () => {
         );
         expect(claim?.claim?.assetUnits).toBe("9007199254740993");
         expect(claim?.claim?.params.assetId).toEqual({ txid: "12".repeat(32), groupIndex: 7 });
+    });
+
+    it("projects receiver-owned recovery and claim mode as verified descriptor terms", () => {
+        const [claim] = listReceiverClaims(
+            deps(persisted({ recoveryRecipient: "receiver", claimMode: "recycle" }, true)),
+            receivers,
+            ACTIVE_CLAIM_STATES,
+        );
+        expect(claim?.claim?.params).toMatchObject({
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
     });
 
     it.each(TERMINAL_STATES)("projects %s only when requested, without a descriptor", (state) => {

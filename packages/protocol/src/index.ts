@@ -141,6 +141,7 @@ export interface QuoteParams {
     topup: string;
     assetId?: AssetIdWire;
     locktime: string;
+    recoveryRecipient?: "sender" | "receiver";
     /** Absent is the historical four-leaf tree; present pins which claim leaf
      * the covenant actually commits to. */
     claimMode?: "recycle" | "purchase";

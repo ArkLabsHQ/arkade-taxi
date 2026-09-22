@@ -9,6 +9,7 @@ import {
     SingleKey,
     Transaction,
     VtxoTaprootTree,
+    asset,
     verifyTapscriptSignatures,
     type ArkProvider,
     type Identity,
@@ -127,6 +128,47 @@ const provider = () => {
 };
 
 describe("persisted-fact submission validation", () => {
+    it("reconstructs receiver-owned asset recovery terms", async () => {
+        const request = buildRequest();
+        const sdkAsset = asset.AssetId.create("12".repeat(32), 7);
+        const assetId = {
+            txid: Uint8Array.from(sdkAsset.txid).reverse(),
+            groupIndex: sdkAsset.groupIndex,
+        };
+        request.params.assetId = assetId;
+        request.params.recoveryRecipient = "receiver";
+        request.assetUnits = 5n;
+        request.senderInputs[0]!.assetPacket = asset.Packet.create([
+            asset.AssetGroup.create(
+                sdkAsset,
+                null,
+                [],
+                [asset.AssetOutput.create(request.senderInputs[0]!.vout, 5n)],
+                [],
+            ),
+        ]).serialize();
+        request.covenantAddress = new DustCovenantScript({
+            params: request.params,
+            serverKey: config().serverPubkey,
+            emulatorKey: config().emulatorPubkey,
+            vtxoMinAmount: config().vtxoMinAmount,
+        })
+            .address(config().addressHrp, config().serverPubkey)
+            .encode();
+        const encoded = buildLockupEnvelope(request, config(), unroll);
+        const persisted = {
+            ...advance(),
+            assetId,
+            assetUnits: 5n,
+            recoveryRecipient: "receiver" as const,
+            covenantAddress: request.covenantAddress,
+            unsignedLockupTx: encoded,
+            unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
+        };
+        const signed = await signedEnvelope(encoded);
+        expect(() => validateLockupSubmission(persisted, signed, config())).not.toThrow();
+    });
+
     it("round-trips canonical payout facts while signing only with the separate operator identity", async () => {
         const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
         const request = buildRequest();

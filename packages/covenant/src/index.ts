@@ -1,9 +1,16 @@
-export { refundTopup, validateParams, type AssetIdRef, type DustCovenantParams } from "./params.js";
+export {
+    refundTopup,
+    unrecoveredTopup,
+    validateParams,
+    type AssetIdRef,
+    type DustCovenantParams,
+} from "./params.js";
 export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
 export { appendAssetLookup } from "./asset.js";
 export { artifactArgs, emitArtifact } from "./artifact.js";
 export {
     buildPurchase,
+    buildReclaim,
     buildRecycle,
     buildRefund,
     buildScripts,

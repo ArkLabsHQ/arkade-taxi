@@ -254,6 +254,11 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE advances ADD COLUMN claim_mode TEXT
             CHECK (claim_mode IS NULL OR claim_mode IN ('recycle', 'purchase'))`,
     },
+    {
+        id: 6,
+        up: `ALTER TABLE advances ADD COLUMN recovery_recipient TEXT
+            CHECK (recovery_recipient IS NULL OR recovery_recipient IN ('sender', 'receiver'))`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -329,6 +334,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'claim_mode' AND type = 'TEXT'",
             )
             .get();
+    const hasRecoveryRecipient =
+        hasClaimMode &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'recovery_recipient' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -337,7 +349,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 2 && !hasKind) ||
             (current === 3 && !hasSwapFills) ||
             (current === 4 && !hasSponsorScript) ||
-            (current === 5 && !hasClaimMode))
+            (current === 5 && !hasClaimMode) ||
+            (current === 6 && !hasRecoveryRecipient))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

@@ -47,6 +47,21 @@ beforeEach(() => {
 });
 
 describe("round-trip fidelity", () => {
+    it("preserves receiver recovery ownership while legacy rows remain absent", () => {
+        repo.insert(advance({ id: "legacy" }));
+        repo.insert(
+            advance({
+                id: "receiver",
+                recoveryRecipient: "receiver",
+                assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },
+                assetUnits: 7n,
+            }),
+        );
+
+        expect(repo.get("legacy")?.recoveryRecipient).toBeUndefined();
+        expect(repo.get("receiver")?.recoveryRecipient).toBe("receiver");
+    });
+
     it.each([undefined, 0n, -1n])("rejects asset quantity %s", (assetUnits) => {
         const row = advance({
             assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },

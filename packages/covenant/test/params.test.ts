@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { refundTopup, validateParams, type DustCovenantParams } from "../src/params.js";
+import {
+    refundTopup,
+    unrecoveredTopup,
+    validateParams,
+    type DustCovenantParams,
+} from "../src/params.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
+const assetId = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 
 const base = (): DustCovenantParams => ({
     receiverKey: key(1),
@@ -57,6 +63,30 @@ describe("validateParams", () => {
     it("rejects a zero locktime", () => {
         expect(() => validateParams({ ...base(), locktime: 0n }, MIN)).toThrow(/locktime/);
     });
+
+    it("rejects an unknown recovery recipient", () => {
+        const params = {
+            ...base(),
+            recoveryRecipient: "other",
+        } as unknown as DustCovenantParams;
+        expect(() => validateParams(params, MIN)).toThrow(/unknown recovery recipient/);
+    });
+
+    it("rejects receiver recovery without an asset", () => {
+        const params = { ...base(), recoveryRecipient: "receiver" } as DustCovenantParams;
+        expect(() => validateParams(params, MIN)).toThrow(/requires an asset id/);
+    });
+
+    it("rejects receiver recovery without a positive two-way split", () => {
+        const params = {
+            ...base(),
+            dust: 10n,
+            topup: 6n,
+            assetId,
+            recoveryRecipient: "receiver",
+        } as DustCovenantParams;
+        expect(() => validateParams(params, 6n)).toThrow(/needs at least 6 sats/);
+    });
 });
 
 describe("refundTopup", () => {
@@ -66,5 +96,14 @@ describe("refundTopup", () => {
 
     it("caps at dust minus vtxoMinAmount when the operator funded the whole unit", () => {
         expect(refundTopup({ ...base(), dust: 330n, topup: 330n }, 10n)).toBe(320n);
+    });
+
+    it("separates unrecovered operator allocation from the receipt value", () => {
+        const full = { ...base(), assetId, recoveryRecipient: "receiver" } as DustCovenantParams;
+        const precharged = { ...full, topup: 329n };
+
+        expect(unrecoveredTopup(full, 1n)).toBe(1n);
+        expect(unrecoveredTopup(precharged, 1n)).toBe(0n);
+        expect(precharged.dust - refundTopup(precharged, 1n)).toBe(1n);
     });
 });

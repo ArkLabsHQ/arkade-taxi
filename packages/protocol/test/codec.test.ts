@@ -192,6 +192,32 @@ describe("quoteParamsFromWire", () => {
             /params\.claimMode/,
         );
     });
+
+    it("omits recoveryRecipient rather than defaulting the legacy sender owner", () => {
+        expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty(
+            "recoveryRecipient",
+        );
+    });
+
+    it.each(["sender", "receiver"] as const)(
+        "round-trips recoveryRecipient %s",
+        (recoveryRecipient) => {
+            const w = { ...wire(), recoveryRecipient };
+            expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+        },
+    );
+
+    it.each(["seller", "Receiver", ""])(
+        "rejects recoveryRecipient %j, naming the field",
+        (recoveryRecipient) => {
+            expect(() =>
+                quoteParamsFromWire({
+                    ...wire(),
+                    recoveryRecipient: recoveryRecipient as "receiver",
+                }),
+            ).toThrow(/params\.recoveryRecipient/);
+        },
+    );
 });
 
 describe("sponsoredParamsFromWire", () => {

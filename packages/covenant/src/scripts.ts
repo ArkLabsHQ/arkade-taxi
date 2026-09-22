@@ -91,11 +91,11 @@ export function buildPurchase(p: DustCovenantParams): Uint8Array {
 
 /**
  * Shared by the sender-signed refund leaf and the timelocked recovery leaf. The
- * sender receives a sub-dust receipt, acceptable because the sender demonstrably
- * owns a funded account and can merge it later; it would not be acceptable for
- * the receiver, which is why no claim leaf pays sub-dust.
+ * The recovery owner receives the remainder. Receiver-owned recovery is only
+ * valid when both outputs meet the configured minimum.
  */
 export function buildRefund(p: DustCovenantParams, vtxoMinAmount: bigint): Uint8Array {
+    if (p.recoveryRecipient === "receiver") return buildReclaim(p, vtxoMinAmount);
     const topup = refundTopup(p, vtxoMinAmount);
     const out: arkade.ArkadeScriptType = [
         "PUSHCURRENTINPUTINDEX",
@@ -109,6 +109,28 @@ export function buildRefund(p: DustCovenantParams, vtxoMinAmount: bigint): Uint8
     pinOutput(out, 0, p.operatorKey, topup, p.dust);
     out.push(1, "INSPECTOUTPUTVALUE", p.dust - topup, "EQUALVERIFY");
     pinOutput(out, 1, p.senderKey, p.dust - topup, p.dust);
+    if (p.assetId) {
+        appendAssetLookup(out, 1, p.assetId, true, true);
+        appendAssetLookup(out, 0, p.assetId, false, true);
+        out.push("EQUAL");
+    }
+    return finish(out, p.assetId !== undefined);
+}
+
+export function buildReclaim(p: DustCovenantParams, vtxoMinAmount: bigint): Uint8Array {
+    const topup = refundTopup(p, vtxoMinAmount);
+    const out: arkade.ArkadeScriptType = [
+        "PUSHCURRENTINPUTINDEX",
+        0,
+        "EQUALVERIFY",
+        0,
+        "INSPECTOUTPUTVALUE",
+        topup,
+        "EQUALVERIFY",
+    ];
+    pinOutput(out, 0, p.operatorKey, topup, p.dust);
+    out.push(1, "INSPECTOUTPUTVALUE", p.dust - topup, "EQUALVERIFY");
+    pinOutput(out, 1, p.receiverKey, p.dust - topup, p.dust);
     if (p.assetId) {
         appendAssetLookup(out, 1, p.assetId, true, true);
         appendAssetLookup(out, 0, p.assetId, false, true);

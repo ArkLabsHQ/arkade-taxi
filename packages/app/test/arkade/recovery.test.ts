@@ -18,7 +18,12 @@ import {
 import { base64 } from "@scure/base";
 import { hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
-import { DustCovenantScript, payoutPkScript, refundTopup } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    payoutPkScript,
+    refundTopup,
+    type DustCovenantParams,
+} from "@arkade-taxi/covenant";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import { fundingInputToWire } from "@arkade-taxi/protocol";
 import type { Advance } from "@arkade-taxi/core";
@@ -54,7 +59,11 @@ afterEach(() => {
         rmSync(directory, { recursive: true, force: true });
 });
 
-const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) => {
+const sourceAdvance = (
+    kind: "height" | "time" = "height",
+    withAsset = false,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
     const cfg = config();
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
@@ -63,7 +72,8 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
         : undefined;
     const base = advance({
         fare: { currency: "sats", units: 10n },
-        ...(assetId ? { assetId } : {}),
+        ...terms,
+        ...(assetId ? { assetId, assetUnits: 9_007_199_254_740_993n } : {}),
     });
     const script = new DustCovenantScript({
         serverKey: cfg.serverPubkey,
@@ -76,6 +86,7 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
             dust: base.dust,
             topup: base.topup,
             locktime,
+            ...terms,
             ...(assetId ? { assetId } : {}),
         },
     });
@@ -126,6 +137,7 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
                     dust: base.dust,
                     topup: base.topup,
                     locktime,
+                    ...terms,
                     ...(assetId ? { assetId } : {}),
                 },
                 covenantAddress: script.address(cfg.addressHrp, cfg.serverPubkey).encode(),
@@ -177,8 +189,9 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
     const source = Transaction.fromPSBT(base64.decode(envelope.arkTx));
     return advance({
         id: `recovery-${kind}`,
-        ...(assetId ? { assetId } : {}),
+        ...(assetId ? { assetId, assetUnits: 9_007_199_254_740_993n } : {}),
         fare: base.fare,
+        ...terms,
         locktime,
         recoveryLocktime: { kind, value: locktime },
         batchExpiry: {
@@ -341,6 +354,58 @@ describe("recovery graph", () => {
         expect(packet.outputs.map((output) => [output.vout, output.amount])).toEqual([
             [1, 9_007_199_254_740_993n],
         ]);
+    });
+
+    it("rebuilds receiver-owned recycle recovery after restart", () => {
+        const path = dbFile();
+        const row = sourceAdvance("height", true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
+        const first = open(path);
+        new AdvanceRepository(first).insert(row);
+        first.close();
+        const persisted = new AdvanceRepository(open(path)).get(row.id)!;
+        const expected = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: config().vtxoMinAmount,
+            params: {
+                receiverKey: persisted.receiverKey,
+                senderKey: persisted.senderKey,
+                operatorKey: persisted.operatorKey,
+                dust: persisted.dust,
+                topup: persisted.topup,
+                locktime: persisted.locktime,
+                assetId: persisted.assetId,
+                recoveryRecipient: "receiver",
+                claimMode: "recycle",
+            },
+        });
+        expect(persisted).toMatchObject({
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+            covenantAddress: expected.address(config().addressHrp, serverKey).encode(),
+        });
+
+        const intent = buildRecoveryIntent(persisted, config());
+        const tx = Transaction.fromPSBT(base64.decode(intent.arkTx));
+        const topup = refundTopup(persisted, config().vtxoMinAmount);
+        const returned = persisted.dust - topup;
+        expect(tx.getOutput(1)).toEqual({
+            amount: returned,
+            script: payoutPkScript(persisted.receiverKey, returned, persisted.dust),
+        });
+        expect(tx.getOutput(1).script).not.toEqual(
+            payoutPkScript(persisted.senderKey, returned, persisted.dust),
+        );
+        expect(Extension.fromTx(tx).getAssetPacket()!.groups[0]!.outputs[0]).toMatchObject({
+            vout: 1,
+            amount: 9_007_199_254_740_993n,
+        });
+        expect(Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script).toEqual(
+            expected.covenant.refund,
+        );
     });
 
     it("rejects drift in persisted operator funding and fare facts", () => {

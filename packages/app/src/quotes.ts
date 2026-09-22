@@ -191,6 +191,8 @@ function decodeBody(body: unknown): {
         throw badRequest("request body must be a JSON object");
     }
     const b = body as QuoteRequestBody;
+    if (Object.prototype.hasOwnProperty.call(b, "recoveryRecipient"))
+        throw badRequest("recoveryRecipient is service-issued");
     if (!Array.isArray(b.senderInputs) || !b.senderInputs.length || b.senderInputs.length > 256)
         throw badRequest("senderInputs must contain 1 to 256 funding inputs");
 

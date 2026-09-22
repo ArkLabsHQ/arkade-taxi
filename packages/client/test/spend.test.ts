@@ -23,7 +23,7 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { base64, hex } from "@scure/base";
 import { verifyQuote } from "../src/verify.js";
 import { activeQuoteStateFor } from "../src/lockup.js";
-import { payoutPkScript, refundTopup } from "@arkade-taxi/covenant";
+import { payoutPkScript, refundTopup, type DustCovenantParams } from "@arkade-taxi/covenant";
 import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
 import { TaxiClient } from "../src/client.js";
 import {
@@ -300,8 +300,28 @@ const setup = async (
     };
 };
 
-const incomingFixture = async (withAsset = true) => {
-    const authorization = withAsset ? assetArgs() : args();
+const authorizationWithTerms = (
+    withAsset: boolean,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+) => {
+    const base = withAsset ? assetArgs() : args();
+    const p = { ...quoteParamsFromWire(base.quote.params), ...terms };
+    return {
+        ...base,
+        quote: quote(p, {
+            senderInputs: base.senderInputs,
+            senderSats: base.senderSats,
+            assetUnits: base.assetUnits,
+        }),
+        expect: { ...base.expect, ...terms },
+    };
+};
+
+const incomingFixture = async (
+    withAsset = true,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+) => {
+    const authorization = authorizationWithTerms(withAsset, terms);
     const base = await setup(
         authorization,
         withAsset
@@ -335,6 +355,7 @@ const incomingFixture = async (withAsset = true) => {
         claim,
         expect: {
             receiverAddress,
+            ...terms,
             ...(withAsset
                 ? {
                       assetId: structuredClone(authorization.expect.assetId!),
@@ -370,6 +391,39 @@ describe("incoming claim verification", () => {
             expect(base.submitted()).toBeDefined();
         },
     );
+
+    it("pins receiver-owned recovery and recycle mode independently", async () => {
+        const terms = { recoveryRecipient: "receiver" as const, claimMode: "recycle" as const };
+        await expect(
+            verifyIncomingClaim((await incomingFixture(true, terms)).incoming),
+        ).resolves.toBeDefined();
+
+        const wrongRecovery = await incomingFixture(true, terms);
+        wrongRecovery.incoming.expect.recoveryRecipient = "sender";
+        await expect(verifyIncomingClaim(wrongRecovery.incoming)).rejects.toThrow(
+            /recovery recipient/i,
+        );
+
+        const wrongMode = await incomingFixture(true, terms);
+        wrongMode.incoming.expect.claimMode = "purchase";
+        await expect(verifyIncomingClaim(wrongMode.incoming)).rejects.toThrow(/claim mode/i);
+    });
+
+    it("accepts resolved incoming recovery terms when expectations omit them", async () => {
+        const { incoming } = await incomingFixture(true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
+        delete incoming.expect.recoveryRecipient;
+        delete incoming.expect.claimMode;
+        await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
+    });
+
+    it("treats an absent incoming recovery term as sender-owned", async () => {
+        const { incoming } = await incomingFixture();
+        incoming.expect.recoveryRecipient = "sender";
+        await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
+    });
 
     const mutations: [string, (value: VerifyIncomingClaimArgs) => void][] = [
         [
@@ -1697,6 +1751,34 @@ describe("recycle", () => {
 });
 
 describe("refund", () => {
+    it("returns receiver-owned asset recovery to the receiver output", async () => {
+        const authorization = authorizationWithTerms(true, {
+            recoveryRecipient: "receiver",
+        });
+        const id = asset.AssetId.create(
+            hex.encode(Uint8Array.from(authorization.expect.assetId!.txid).reverse()),
+            authorization.expect.assetId!.groupIndex,
+        ).toString();
+        const { transfer, submitted } = await setup(authorization, [
+            { assetId: id, amount: authorization.assetUnits! },
+        ]);
+        await refund(transfer, senderIdentity);
+        const tx = submitted()!;
+        const p = quoteParamsFromWire(authorization.quote.params);
+        const topup = refundTopup(p, VTXO_MIN);
+        const returned = p.dust - topup;
+        expect(tx.getOutput(1)).toMatchObject({
+            amount: returned,
+            script: payoutPkScript(receiverKey, returned, p.dust),
+        });
+        expect(tx.getOutput(1).script).not.toEqual(payoutPkScript(p.senderKey, returned, p.dust));
+        expect(Extension.fromTx(tx).getAssetPacket()!.groups[0].outputs[0]).toMatchObject({
+            vout: 1,
+            amount: authorization.assetUnits,
+        });
+        expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
+    });
+
     it("works around the SDK two-OP_RETURN guard without changing asset vouts", async () => {
         const opReturn = { script: new Uint8Array([0x6a]), amount: 0n };
         expect(() => buildOffchainTx([], [opReturn, opReturn, opReturn], unroll)).toThrow(

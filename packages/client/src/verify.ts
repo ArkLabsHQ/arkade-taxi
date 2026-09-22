@@ -55,6 +55,7 @@ export interface QuoteExpectation {
      * what the CALLER named, so an operator cannot echo a swapped leaf back
      * self-consistently. Omitted accepts the operator's resolution. */
     claimMode?: "recycle" | "purchase";
+    recoveryRecipient?: "sender" | "receiver";
 }
 
 export interface VerifyQuoteArgs {
@@ -186,6 +187,15 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
         reject(
             VerificationErrorCode.ClaimMode,
             `quote commits to ${params.claimMode ?? "the legacy tree"}, you asked for ${expect.claimMode}`,
+        );
+    }
+    if (
+        expect.recoveryRecipient !== undefined &&
+        (params.recoveryRecipient ?? "sender") !== expect.recoveryRecipient
+    ) {
+        reject(
+            VerificationErrorCode.RecoveryRecipient,
+            `quote recovers to ${params.recoveryRecipient ?? "the legacy sender"}, you asked for ${expect.recoveryRecipient}`,
         );
     }
 

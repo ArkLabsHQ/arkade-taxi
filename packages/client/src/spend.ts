@@ -79,6 +79,8 @@ export interface IncomingClaimExpectation {
     receiverAddress: string;
     assetId?: AssetIdValue;
     assetUnits?: bigint;
+    recoveryRecipient?: "sender" | "receiver";
+    claimMode?: "recycle" | "purchase";
 }
 
 export interface IncomingClaimTrust {
@@ -670,7 +672,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
     exactObjectKeys(
         expect as unknown as Record<string, unknown>,
         ["receiverAddress"],
-        ["assetId", "assetUnits"],
+        ["assetId", "assetUnits", "recoveryRecipient", "claimMode"],
         "incoming claim expectation",
     );
     exactObjectKeys(
@@ -702,6 +704,25 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
     const params = quoteParamsFromWire(descriptor.params);
     exactBytes(receiver.vtxoTaprootKey, params.receiverKey, "incoming receiver key");
     exactBytes(params.operatorKey, trusted.operatorKey, "incoming operator key");
+    if (
+        expect.recoveryRecipient !== undefined &&
+        expect.recoveryRecipient !== "sender" &&
+        expect.recoveryRecipient !== "receiver"
+    )
+        reject("expected recovery recipient is invalid");
+    if (
+        expect.recoveryRecipient !== undefined &&
+        (params.recoveryRecipient ?? "sender") !== expect.recoveryRecipient
+    )
+        reject("incoming recovery recipient mismatch");
+    if (
+        expect.claimMode !== undefined &&
+        expect.claimMode !== "recycle" &&
+        expect.claimMode !== "purchase"
+    )
+        reject("expected claim mode is invalid");
+    if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode)
+        reject("incoming claim mode mismatch");
     if (expect.assetId !== undefined) {
         exactObjectKeys(
             expect.assetId as unknown as Record<string, unknown>,
@@ -1512,6 +1533,10 @@ export async function refund(
     const sender = await identityKey(senderIdentity, state.params.senderKey, "sender");
     const topup = refundTopup(state.params, state.vtxoMinAmount);
     const returned = state.params.dust - topup;
+    const recoveryKey =
+        state.params.recoveryRecipient === "receiver"
+            ? state.params.receiverKey
+            : state.params.senderKey;
     const input = covenantSpendInput(
         state.script,
         Leaf.RefundSender,
@@ -1528,7 +1553,7 @@ export async function refund(
                 amount: topup,
             },
             {
-                script: payoutPkScript(state.params.senderKey, returned, state.params.dust),
+                script: payoutPkScript(recoveryKey, returned, state.params.dust),
                 amount: returned,
             },
         ],

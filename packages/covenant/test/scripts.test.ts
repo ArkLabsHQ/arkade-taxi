@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { subDustScript } from "../src/pin.js";
 import { buildPurchase, buildRecycle, buildRefund, buildScripts } from "../src/scripts.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
 
@@ -20,6 +22,7 @@ const asm = (script: Uint8Array) => arkade.ArkadeScript.decode(script);
 // decode returns small values as numbers but anything wider as raw script-num
 // bytes, so a literal like 330n never appears in a decoded script.
 const num = (n: bigint) => arkade.BigNum.encode(n);
+const pinHash = (xonlyKey: Uint8Array) => sha256(subDustScript(xonlyKey));
 
 describe("buildRecycle", () => {
     it("pins the current input index to 0 and the input count to 2", () => {
@@ -95,6 +98,36 @@ describe("buildRefund", () => {
 
     it("pays the sender the remainder as a sub-dust output", () => {
         expect(asm(buildRefund(base(), 10n))).toContain(-1);
+    });
+
+    it("keeps explicit sender recovery byte-identical to the absent legacy term", () => {
+        const sender = { ...base(), assetId, recoveryRecipient: "sender" } as DustCovenantParams;
+        expect(buildRefund(sender, 1n)).toEqual(buildRefund({ ...base(), assetId }, 1n));
+    });
+
+    it("pays a receiver-owned refund to the receiver and never the sender", () => {
+        const params = {
+            ...base(),
+            assetId,
+            recoveryRecipient: "receiver",
+        } as DustCovenantParams;
+        const decoded = asm(buildRefund(params, 1n));
+        expect(decoded).toContainEqual(pinHash(key(1)));
+        expect(decoded).not.toContainEqual(pinHash(key(2)));
+        expect(decoded).toContainEqual(num(329n));
+    });
+
+    it("repays a precharged 329-sat advance in full while retaining a one-sat receipt", () => {
+        const params = {
+            ...base(),
+            topup: 329n,
+            assetId,
+            recoveryRecipient: "receiver",
+        } as DustCovenantParams;
+        const decoded = asm(buildRefund(params, 1n));
+        expect(decoded).toContainEqual(num(329n));
+        expect(decoded).toContainEqual(pinHash(key(1)));
+        expect(decoded).not.toContainEqual(pinHash(key(2)));
     });
 });
 

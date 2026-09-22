@@ -92,6 +92,7 @@ async function setup(
     receiverLeaf?: Uint8Array,
     receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
     claimMode?: "recycle" | "purchase",
+    recoveryRecipient?: "sender" | "receiver",
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
@@ -101,6 +102,7 @@ async function setup(
     request.params.claimMode = "purchase";
     if (kind === "recycled" || kind === "refunded") request.params.claimMode = "recycle";
     if (claimMode !== undefined) request.params.claimMode = claimMode;
+    if (recoveryRecipient !== undefined) request.params.recoveryRecipient = recoveryRecipient;
     if (locktime !== undefined) {
         request.params.locktime = locktime;
         if (locktime >= 500_000_000n) {
@@ -249,6 +251,10 @@ async function setup(
             ];
         } else {
             const topup = refundTopup(request.params, config().vtxoMinAmount);
+            const recoveryKey =
+                request.params.recoveryRecipient === "receiver"
+                    ? request.params.receiverKey
+                    : request.params.senderKey;
             outputs = [
                 {
                     script: payoutPkScript(request.params.operatorKey, topup, request.params.dust),
@@ -256,7 +262,7 @@ async function setup(
                 },
                 {
                     script: payoutPkScript(
-                        request.params.senderKey,
+                        recoveryKey,
                         request.params.dust - topup,
                         request.params.dust,
                     ),
@@ -750,6 +756,38 @@ describe("canonical covenant observation", () => {
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual([]);
         state.db.close();
     });
+
+    it.each(["refunded", "recovered"] as const)(
+        "proves receiver-owned %s without a sender output",
+        async (kind) => {
+            const state = await setup(
+                kind,
+                ":memory:",
+                true,
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                "recycle",
+                "receiver",
+            );
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({ state: kind });
+            const topup = refundTopup(state.advance, config().vtxoMinAmount);
+            const returned = state.advance.dust - topup;
+            expect(state.finalArk!.getOutput(1).script).toEqual(
+                payoutPkScript(state.advance.receiverKey, returned, state.advance.dust),
+            );
+            expect(state.finalArk!.getOutput(1).script).not.toEqual(
+                payoutPkScript(state.advance.senderKey, returned, state.advance.dust),
+            );
+            expect(
+                Extension.fromTx(state.finalArk!).getAssetPacket()!.groups[0]!.outputs[0],
+            ).toMatchObject({ vout: 1, amount: 9_007_199_254_740_993n });
+            state.db.close();
+        },
+    );
 
     it("proves a large asset purchase only when the extension conserves exact units", async () => {
         const state = await setup("purchased", ":memory:", true);

@@ -315,6 +315,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
             topup: advance.topup,
             locktime: advance.locktime,
             ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
+            ...(advance.recoveryRecipient ? { recoveryRecipient: advance.recoveryRecipient } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
     });
@@ -643,6 +644,9 @@ export async function classifyObservedSpend(
                 topup: advance.topup,
                 locktime: advance.locktime,
                 ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
+                ...(advance.recoveryRecipient
+                    ? { recoveryRecipient: advance.recoveryRecipient }
+                    : {}),
                 ...(advance.assetId ? { assetId: advance.assetId } : {}),
             },
             deps.config.vtxoMinAmount,
@@ -658,8 +662,12 @@ export async function classifyObservedSpend(
             arkTx,
             1,
             advance.dust - topup,
-            payoutPkScript(advance.senderKey, advance.dust - topup, advance.dust),
-            "refund sender output",
+            payoutPkScript(
+                advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
+                advance.dust - topup,
+                advance.dust,
+            ),
+            "refund recovery output",
         );
         exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
         exactAnchor(arkTx, 3);
