@@ -213,6 +213,9 @@ describe("installing-path scan", () => {
         expect(localWorkflowCalls(["        uses: ./.github/actions/elsewhere"])).toEqual([
             ".github/actions/elsewhere",
         ]);
+        expect(localWorkflowCalls(["        uses: ./elsewhere.yml # reusable"])).toEqual([
+            "elsewhere.yml",
+        ]);
         expect(localWorkflowCalls(["        uses: actions/checkout@v5"])).toEqual([]);
     });
 

@@ -202,7 +202,7 @@ export function workflowJobs(yaml) {
 export const localWorkflowCalls = (lines) =>
     lines
         .filter((line) => !isComment(line))
-        .map((line) => /^\s*-?\s*uses:\s*\.\/(\S+?)\/*\s*$/.exec(line)?.[1])
+        .map((line) => /^\s*-?\s*uses:\s*\.\/(\S+?)\/*\s*(?:#.*)?$/.exec(line)?.[1])
         .filter(Boolean);
 
 // An override resolves against the workspace root, a dependency against the
@@ -212,7 +212,9 @@ export const fileSpec = (from, filename) =>
 
 const yamlBlock = (yaml, key) => {
     const lines = yaml.split(/\r?\n/);
-    const start = lines.findIndex((line) => line === `${key}:`);
+    // A trailing comment on the key line must not hide the block beneath it.
+    const heading = new RegExp(`^${key}:\\s*(?:#.*)?$`);
+    const start = lines.findIndex((line) => heading.test(line));
     if (start === -1) return undefined;
     const body = [];
     for (const line of lines.slice(start + 1)) {
