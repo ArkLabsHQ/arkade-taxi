@@ -102,6 +102,7 @@ export interface CovenantParamsValue {
     locktime: bigint;
     recoveryRecipient?: "sender" | "receiver";
     claimMode?: "recycle" | "purchase";
+    receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
 }
 
 const fail = (label: string, reason: string): never => {
@@ -304,6 +305,16 @@ export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantP
             fail(`${label}.claimMode`, "must be recycle or purchase");
         out.claimMode = p.claimMode;
     }
+    if (p.receiverFare !== undefined) {
+        const { currency, units } = p.receiverFare;
+        if (currency !== "sats" && currency !== "asset")
+            fail(`${label}.receiverFare.currency`, "must be sats or asset");
+        const value = satsFromWire(units, `${label}.receiverFare.units`);
+        out.receiverFare =
+            currency === "sats"
+                ? { currency: "sats", units: value }
+                : { currency: "asset", units: value };
+    }
     return out;
 }
 
@@ -319,6 +330,11 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     if (p.recoveryRecipient !== undefined) out.recoveryRecipient = p.recoveryRecipient;
     if (p.claimMode !== undefined) out.claimMode = p.claimMode;
+    if (p.receiverFare !== undefined)
+        out.receiverFare = {
+            currency: p.receiverFare.currency,
+            units: satsToWire(p.receiverFare.units),
+        };
     return out;
 }
 

@@ -101,6 +101,9 @@ export interface DecodedReceiveQuote {
     createdAt: number;
     expiresAt: number;
     boundFillId?: string;
+    payer?: "receiver";
+    receiverFare?: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    unclaimedMode?: "reclaim";
 }
 
 export const causeMessage = (cause: unknown): string =>
@@ -133,6 +136,12 @@ const uint = (v: unknown, label: string): number =>
 
 const bool = (v: unknown, label: string): boolean =>
     typeof v === "boolean" ? v : invalid(`${label} must be a boolean`);
+
+// This build implements only the "reclaim" unclaimed-advance mode; a future
+// mode rides a sibling field rather than widening this string (spec ruling 9).
+const assertUnclaimedMode = (v: unknown, label: string): void => {
+    if (v !== undefined && v !== "reclaim") invalid(`${label}.unclaimedMode must be reclaim`);
+};
 
 const exactRecord = (
     value: unknown,
@@ -207,7 +216,7 @@ const quoteParams = (value: unknown, label: string): QuoteParams => {
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "topup", "locktime"],
-        ["assetId", "claimMode", "recoveryRecipient"],
+        ["assetId", "claimMode", "recoveryRecipient", "receiverFare"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
@@ -226,6 +235,17 @@ const quoteParams = (value: unknown, label: string): QuoteParams => {
         wire.recoveryRecipient !== "receiver"
     )
         invalid(`${label}.recoveryRecipient must be sender or receiver`);
+    if (wire.receiverFare !== undefined) {
+        const rf = exactRecord(
+            wire.receiverFare,
+            ["currency", "units"],
+            [],
+            `${label}.receiverFare`,
+        );
+        if (rf.currency !== "sats" && rf.currency !== "asset")
+            invalid(`${label}.receiverFare.currency must be sats or asset`);
+        satsFromWire(rf.units as string, `${label}.receiverFare.units`);
+    }
     quoteParamsFromWire(wire as unknown as QuoteParams, label);
     return wire as unknown as QuoteParams;
 };
@@ -303,7 +323,7 @@ const receiverClaimDescriptor = (value: unknown, label: string): ReceiverClaimDe
     const wire = exactRecord(
         value,
         ["params", "covenantAddress", "outpoint", "fare", "batchExpiry", "recoveryLocktime"],
-        ["assetUnits"],
+        ["assetUnits", "unclaimedMode"],
         label,
     );
     quoteParams(wire.params, `${label}.params`);
@@ -314,8 +334,17 @@ const receiverClaimDescriptor = (value: unknown, label: string): ReceiverClaimDe
     fare(wire.fare, `${label}.fare`);
     taggedLocktime(wire.batchExpiry, `${label}.batchExpiry`);
     taggedLocktime(wire.recoveryLocktime, `${label}.recoveryLocktime`);
+    assertUnclaimedMode(wire.unclaimedMode, label);
     return wire as unknown as ReceiverClaimDescriptorWire;
 };
+
+/** Public path onto the module-private descriptor decoder, for a claim seen
+ * outside a claims snapshot (e.g. a solo receiver-claim lookup). */
+export const decodeReceiverClaimDescriptor = (
+    value: unknown,
+    label = "claim",
+): ReceiverClaimDescriptorWire =>
+    wrap("claim descriptor", () => receiverClaimDescriptor(value, label));
 
 const claimStates = new Set<ReceiverClaimState>([
     "locking",
@@ -452,9 +481,15 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "createdAt",
                 "expiresAt",
             ],
-            ["boundFillId"],
+            ["boundFillId", "payer", "receiverFare", "unclaimedMode"],
             "receive quote",
         );
+        const trio = [quote.payer, quote.receiverFare, quote.unclaimedMode];
+        if (trio.some((v) => v !== undefined) && trio.some((v) => v === undefined))
+            invalid("receive quote.payer, .receiverFare and .unclaimedMode must appear together");
+        if (quote.payer !== undefined && quote.payer !== "receiver")
+            invalid("receive quote.payer must be 'receiver' when present");
+        assertUnclaimedMode(quote.unclaimedMode, "receive quote");
         if (quote.state !== "quoted" && quote.state !== "bound" && quote.state !== "expired")
             invalid("receive quote.state is invalid");
         const state = quote.state as "quoted" | "bound" | "expired";
@@ -492,6 +527,16 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             createdAt: uint(quote.createdAt, "receive quote.createdAt"),
             expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
             ...(boundFillId === undefined ? {} : { boundFillId }),
+            ...(quote.payer === undefined
+                ? {}
+                : {
+                      payer: quote.payer as "receiver",
+                      receiverFare: fareFromWire(
+                          fare(quote.receiverFare, "receive quote.receiverFare"),
+                          "receive quote.receiverFare",
+                      ),
+                      unclaimedMode: quote.unclaimedMode as "reclaim",
+                  }),
         };
     });
 }

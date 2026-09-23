@@ -114,6 +114,9 @@ export interface AssetRuleWire {
     fares: FareOfferWire[];
     claim: "recycle" | "purchase" | "either";
     maxTopupSats: string | null;
+    /** What happens to an unclaimed advance. Only "reclaim" is defined so far;
+     * a future mode rides a sibling field rather than widening this one. */
+    unclaimedMode: "reclaim";
 }
 
 export interface QuoteRequestBody {
@@ -145,6 +148,9 @@ export interface QuoteParams {
     /** Absent is the historical four-leaf tree; present pins which claim leaf
      * the covenant actually commits to. */
     claimMode?: "recycle" | "purchase";
+    /** Present only on a receiver-paid recycle leaf; the fared asset is
+     * `assetId` above, not restated here. */
+    receiverFare?: { currency: "sats" | "asset"; units: string };
 }
 
 export interface QuoteResponse {
@@ -299,6 +305,8 @@ export interface ReceiveQuoteRequestBody {
     assetId: AssetIdWire;
     fareId?: string;
     fundingExpiry?: TaggedLocktimeWire;
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "sender" | "receiver";
 }
 
 export interface ReceiveQuoteResponse {
@@ -317,6 +325,11 @@ export interface ReceiveQuoteResponse {
     /** Read-only: the fill this quote is bound to, present only while `bound`.
      * Recovers a lost quote-creation response; it authorises nothing. */
     boundFillId?: string;
+    /** These three appear together, only in answer to a request that opted in
+     * with `payer: "receiver"` — never on an old client's plain quote. */
+    payer?: "receiver";
+    receiverFare?: FareWire;
+    unclaimedMode?: "reclaim";
 }
 
 export interface ReceiverClaimDescriptorWire {
@@ -327,6 +340,7 @@ export interface ReceiverClaimDescriptorWire {
     fare: FareWire;
     batchExpiry: TaggedLocktimeWire;
     recoveryLocktime: TaggedLocktimeWire;
+    unclaimedMode?: "reclaim";
 }
 
 export interface ReceiverClaimWire {

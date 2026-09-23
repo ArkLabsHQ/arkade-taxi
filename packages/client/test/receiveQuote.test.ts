@@ -72,6 +72,7 @@ const info = (): InfoResponse => ({
             enabled: true,
             claim: "either",
             maxTopupSats: "329",
+            unclaimedMode: "reclaim",
             fares: [{ id: "receive", currency: "sats", pricing: { kind: "flat", units: "3" } }],
         },
     ],

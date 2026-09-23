@@ -877,6 +877,7 @@ describe("GET /v1/info", () => {
                     ],
                     claim: "either",
                     maxTopupSats: null,
+                    unclaimedMode: "reclaim",
                 },
             ],
             maxPerPaymentTopupSats: "1000",
