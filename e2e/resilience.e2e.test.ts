@@ -98,19 +98,26 @@ async function submitSame(
 
 liveScenario("restart-quoted-reservation", async () => {
     const live = await openLive();
-    const offered = await buys(live, await sizedSender(live));
+    const coin = await sizedSender(live);
+    const offered = await buys(live, coin);
     const before = await rowFor(offered.quote.transferId);
+    // A later sender send can select this quote's own input, so reuse one coin.
+    const quoted = [offered];
+    let refusal: unknown;
+    while (quoted.length < 8 && refusal === undefined)
+        await buys(live, coin).then(
+            (quote) => quoted.push(quote),
+            (error) => (refusal = error),
+        );
+    expect(refusal).toMatchObject({ code: "operator_inventory_insufficient" });
     const status = await admin("status");
-    const reservedValue = offered.verified.envelope.operatorInputs.reduce(
-        (sum, input) => sum + BigInt(input.value),
-        0n,
-    );
+    const reserved = quoted.flatMap((quote) => quote.verified.envelope.operatorInputs);
+    const reservedValue = reserved.reduce((sum, input) => sum + BigInt(input.value), 0n);
     const inventory = await poll(
         "verified reserved wallet inventory",
         async () => (await ready()).body.runtime.inventory,
         (value) =>
-            value.reservedSats === String(reservedValue) &&
-            value.reservedVtxos === offered.verified.envelope.operatorInputs.length,
+            value.reservedSats === String(reservedValue) && value.reservedVtxos === reserved.length,
     );
     await restart();
     await ready();
@@ -118,13 +125,15 @@ liveScenario("restart-quoted-reservation", async () => {
     expect(after.state).toBe("quoted");
     expect(after.expiresAt).toBe(before.expiresAt);
     expect((await admin("status")).exposure).toEqual(status.exposure);
-    expect((await ready()).body.runtime.inventory).toEqual(inventory);
-    const secondCoin = await sizedSender(live);
-    await expect(buys(live, secondCoin)).rejects.toMatchObject({
+    const restored = (await ready()).body.runtime.inventory;
+    expect(restored.reservedSats).toBe(String(reservedValue));
+    expect(restored.reservedVtxos).toBe(reserved.length);
+    expect(restored).toEqual(inventory);
+    await expect(buys(live, coin)).rejects.toMatchObject({
         code: "operator_inventory_insufficient",
     });
     await purchase(live, await lock(live, offered));
-    const second = await buys(live, secondCoin);
+    const second = await buys(live, await sizedSender(live));
     await purchase(live, await lock(live, second));
 });
 
