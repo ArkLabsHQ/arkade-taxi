@@ -30,6 +30,7 @@ import {
     readFlatMapping,
     readJson,
     sha256,
+    unprovenDefaultShell,
     unverifiedInstall,
     workflowJobs,
     workspaceManifests,
@@ -248,6 +249,11 @@ if (wholeCheckout) {
                 sources.some(([scannedName]) => scannedName === target),
                 `${name} delegates to ${target}, which this scan does not read`,
             );
+        // Outside every job, so the per-job scan cannot see it: refuse the file.
+        check(
+            !unprovenDefaultShell(lines.join("\n")),
+            `${name} defaults every run to a shell this scan cannot prove keeps a failure fatal`,
+        );
     }
     for (const [name, lines, offset = 0] of scanned) {
         const line = unverifiedInstall(lines);

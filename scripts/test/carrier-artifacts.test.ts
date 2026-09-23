@@ -16,6 +16,7 @@ import {
     installsDependencies,
     isOptOut,
     localWorkflowCalls,
+    unprovenDefaultShell,
     packageRootFrom,
     pinnedSourceMismatch,
     readJson,
@@ -456,6 +457,147 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             ],
             4,
         ],
+        [
+            "a comment ending in a backslash",
+            [
+                "RUN echo scripts/carrier-artifacts/verify.mjs",
+                "# see the note above \\",
+                "RUN pnpm install --frozen-lockfile",
+            ],
+            3,
+        ],
+        [
+            "the same as a workflow step",
+            [
+                "            - run: echo pnpm verify:artifacts",
+                "            # see the note above \\",
+                "            - run: pnpm install --frozen-lockfile",
+            ],
+            3,
+        ],
+        ...([">-2", ">2-", ">2", ">2+"] as const).map(
+            (header) =>
+                [
+                    `a folded scalar written ${header}`,
+                    [
+                        `            - run: ${header}`,
+                        "                  pnpm verify:artifacts",
+                        "                  || true",
+                        "            - run: pnpm i",
+                    ],
+                    4,
+                ] as [string, string[], number],
+        ),
+        [
+            "a verify inside if/then/fi",
+            [
+                "            - run: |",
+                '                  if [ "$SKIP" != "1" ]; then',
+                "                    pnpm verify:artifacts",
+                "                  fi",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a verify as a multi-line if condition",
+            [
+                "            - run: |",
+                "                  if",
+                "                    pnpm verify:artifacts",
+                "                  then :; fi",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a verify in a for/do body",
+            [
+                "            - run: |",
+                "                  for a in 1 2; do",
+                "                    pnpm verify:artifacts",
+                "                  done",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a verify in a function never called",
+            [
+                "            - run: |",
+                "                  gate() {",
+                "                    pnpm verify:artifacts",
+                "                  }",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        // A step label absorbs its own `run:` unless the body keeps its key.
+        [
+            "a folded step label that only names the verify",
+            [
+                "            - name: >-",
+                "                  pnpm verify:artifacts",
+                "              run: pnpm install --frozen-lockfile",
+            ],
+            3,
+        ],
+        [
+            "a folded env value that mentions it",
+            [
+                "            - env:",
+                "                  NOTE: >-",
+                "                      pnpm verify:artifacts runs first",
+                "              run: pnpm install --frozen-lockfile",
+            ],
+            4,
+        ],
+        // The same grammar axis as the two-line `uses:`, on every key read here.
+        [
+            "a shell template with its value on the next line",
+            [
+                "            - name: gate",
+                "              shell:",
+                "                  bash {0}",
+                "              run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a step continue-on-error with its value on the next line",
+            [
+                "            - name: gate",
+                "              continue-on-error:",
+                "                  true",
+                "              run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a job continue-on-error with its value on the next line",
+            [
+                "    gates:",
+                "        continue-on-error:",
+                "            true",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            6,
+        ],
+        [
+            "run_install with its value on the next line",
+            [
+                "            - uses: pnpm/action-setup@v4",
+                "              with:",
+                "                  run_install:",
+                "                      true",
+                "            - run: pnpm verify:artifacts",
+            ],
+            3,
+        ],
     ])("%s", (_case, source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
     });
@@ -513,6 +655,42 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
         ],
     ])("still counts %s", (_case, source) => {
         expect(unverifiedInstall(source)).toBeUndefined();
+    });
+});
+
+describe("a workflow-level defaults: block", () => {
+    // It sits outside every job, so the per-job scan cannot reach it. verify.mjs
+    // refuses the file rather than scanning it and reporting green.
+    it.each([
+        ["a shell template", ["defaults:", "    run:", "        shell: bash {0}"], true],
+        [
+            "its value on the next line",
+            ["defaults:", "    run:", "        shell:", "            bash {0}"],
+            true,
+        ],
+        ["another interpreter", ["defaults:", "    run:", "        shell: pwsh"], true],
+        ["a shell that keeps errexit", ["defaults:", "    run:", "        shell: bash"], false],
+        ["no defaults at all", ["name: ci", "jobs:", "    gates:"], false],
+        [
+            "a job-level defaults, which the unit scan does reach",
+            [
+                "jobs:",
+                "    gates:",
+                "        defaults:",
+                "            run:",
+                "                shell: bash {0}",
+            ],
+            false,
+        ],
+    ])("%s", (_case, source, refused) => {
+        expect(unprovenDefaultShell(source.join("\n"))).toBe(refused);
+    });
+
+    it("does not refuse any workflow this repository ships", () => {
+        for (const file of WORKFLOWS)
+            expect(
+                unprovenDefaultShell(readFileSync(at(".github", "workflows", file), "utf8")),
+            ).toBe(false);
     });
 });
 

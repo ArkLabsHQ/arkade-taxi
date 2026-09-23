@@ -169,6 +169,52 @@ const UNPROVEN_SHELL = /^\s*(?:-\s+)?shell:\s*(?!(['"]?)(?:bash|sh)\1\s*(?:#.*)?
 const RELAXES_SHELL = /^\s*set\s+\+(?:e\b|o\s+errexit\b)|^\s*trap\s.*\bERR\b|^\s*RUN\s.*<</;
 const OPENS_SHELL = /^\s*-\s|^\s*RUN\s/;
 
+// A command is a single UNCONDITIONAL command: errexit is suppressed for an `if`
+// condition, and a branch or loop body may never run at all, so a verify nested
+// in one cannot be what fails the step.
+const OPENS_BLOCK = /^(?:if|for|while|until|case)$|^\{$/;
+const CLOSES_BLOCK = /^(?:fi|done|esac|\})$/;
+const nesting = (line) =>
+    line
+        .trim()
+        .split(/\s+/)
+        .reduce(
+            (depth, token) =>
+                depth + (OPENS_BLOCK.test(token) ? 1 : CLOSES_BLOCK.test(token) ? -1 : 0),
+            0,
+        );
+
+// YAML lets a scalar sit on the line beneath its key, and every reader here
+// wants the value. Pull it up once so each key regex stays a one-line match.
+const NEXT_LINE_KEY = /^\s*(?:-\s+)?(?:shell|continue-on-error|if|run_install|uses):\s*(?:#.*)?$/;
+
+export function withInlineValues(lines) {
+    const joined = [...lines];
+    joined.forEach((line, index) => {
+        if (!NEXT_LINE_KEY.test(line)) return;
+        const next = joined.findIndex((candidate, at) => at > index && candidate.trim());
+        const value = next === -1 ? "" : joined[next].trim();
+        if (!value || /^[-#]/.test(value) || value.endsWith(":")) return;
+        joined[index] = `${line.replace(/\s+$/, "")} ${value}`;
+        joined[next] = "";
+    });
+    return joined;
+}
+
+/** A workflow-level `defaults:` sits outside `jobs:`, where a per-job scan cannot
+ * reach it, so `verify.mjs` refuses the file rather than pretending to scan it. */
+export function unprovenDefaultShell(yaml) {
+    const lines = withInlineValues(yaml.split(/\r?\n/));
+    const start = lines.findIndex((line) => /^defaults:\s*(?:#.*)?$/.test(line));
+    if (start === -1) return false;
+    for (const line of lines.slice(start + 1)) {
+        if (!line.trim() || isComment(line)) continue;
+        if (!/^\s/.test(line)) break;
+        if (/^\s*shell:/.test(line)) return UNPROVEN_SHELL.test(line);
+    }
+    return false;
+}
+
 // A `- ` line belongs to whatever list it is under, and `needs:` and
 // `strategy.matrix` write them too, so position cannot say whether a key is the
 // job's or a step's. Indentation can: a job key is never deeper than that list.
@@ -189,7 +235,8 @@ const jobWideGuard = (lines) => {
 };
 
 /** Indices whose verify must not count towards a later install. */
-export function guardedLines(lines) {
+export function guardedLines(source) {
+    const lines = withInlineValues(source);
     const guarded = new Set();
     if (jobWideGuard(lines)) return new Set(lines.keys());
     let start = 0;
@@ -212,10 +259,16 @@ export function guardedLines(lines) {
     });
     close(lines.length);
     let relaxed = false;
+    let depth = 0;
     lines.forEach((line, index) => {
-        if (OPENS_SHELL.test(line)) relaxed = false;
+        if (OPENS_SHELL.test(line)) {
+            relaxed = false;
+            depth = 0;
+        }
         if (RELAXES_SHELL.test(line)) relaxed = true;
-        if (relaxed) guarded.add(index);
+        const entering = depth;
+        depth = Math.max(0, depth + nesting(line));
+        if (relaxed || entering > 0 || depth > 0) guarded.add(index);
     });
     return guarded;
 }
@@ -224,35 +277,53 @@ export function guardedLines(lines) {
 // backslash and a YAML folded scalar is one command across its whole block, so
 // reading the physical line lets `…verify.mjs \` and `|| true` pass as two
 // harmless halves. Fold first; every other reader here stays physical.
-const FOLDED_SCALAR = /^( *)(?:-\s+)?[A-Za-z_][\w-]*:\s*>[-+]?\d*\s*(?:#.*)?$/;
+// YAML 1.2 allows the indentation and chomping indicators in either order, and a
+// parser folds every spelling alike. The prefix capture spans the dash so a
+// folded step key cannot absorb its own sibling `run:`.
+const FOLDED_SCALAR = /^( *(?:-\s+)?)([A-Za-z_][\w-]*):\s*>[-+\d]*\s*(?:#.*)?$/;
 
 export function logicalLines(lines) {
     const folded = [];
     let open;
     let blockAt;
+    let blockKey;
     const close = () => {
-        if (open) folded.push({ text: open.parts.join(" "), at: open.at, span: open.span });
+        if (open)
+            folded.push({
+                text: `${open.prefix}${open.parts.join(" ")}`,
+                at: open.at,
+                span: open.span,
+            });
         open = undefined;
     };
-    const add = (index, line) => {
+    const add = (index, line, prefix = "") => {
         const part = line.trim().replace(/\\$/, "");
         if (open) {
             open.parts.push(part);
             open.span.push(index);
-        } else open = { parts: [part], at: index, span: [index] };
+        } else open = { parts: [part], at: index, span: [index], prefix };
     };
     lines.forEach((line, index) => {
         const indent = /^ */.exec(line)[0].length;
         if (blockAt !== undefined) {
-            if (line.trim() && indent > blockAt) return add(index, line);
+            // The body keeps its key, or a value that merely NAMES the verify
+            // reads as an invocation of it.
+            if (line.trim() && indent > blockAt) return add(index, line, `${blockKey}: `);
             close();
             blockAt = undefined;
+        }
+        // Neither Docker nor YAML continues a comment — Docker drops one inside a
+        // continuation — so joining it would let `# note \` hide the install below.
+        if (isComment(line)) {
+            if (open) return;
+            folded.push({ text: line.trim(), at: index, span: [index] });
+            return;
         }
         const scalar = FOLDED_SCALAR.exec(line);
         if (scalar) {
             close();
             folded.push({ text: line.trim(), at: index, span: [index] });
-            blockAt = scalar[1].length;
+            [blockAt, blockKey] = [scalar[1].length, scalar[2]];
             return;
         }
         add(index, line);
@@ -263,7 +334,8 @@ export function logicalLines(lines) {
 }
 
 /** 1-based line of the first install no executable verify precedes, or `undefined`. */
-export function unverifiedInstall(lines) {
+export function unverifiedInstall(source) {
+    const lines = withInlineValues(source);
     const guarded = guardedLines(lines);
     let verified = false;
     for (const { text, at, span } of logicalLines(lines)) {
