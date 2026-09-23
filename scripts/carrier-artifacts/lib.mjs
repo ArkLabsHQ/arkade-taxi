@@ -159,8 +159,10 @@ const KEPT_FROM_RUNNING = /^\s*(?:-\s+)?if:\s/;
 const NON_FATAL = /^\s*(?:-\s+)?continue-on-error:\s*(?!false\b|'false'|"false")\S/;
 const JOB_NON_FATAL = /^( *)continue-on-error:\s*(?!false\b|'false'|"false")\S/;
 
-// Actions' default `run` shell carries `-e`; a custom template drops it.
-const UNSAFE_SHELL = /^\s*(?:-\s+)?shell:\s*(?!(?:bash|sh)\s*(?:#.*)?$)\S/;
+// Actions' default `run` shell carries `-e`; a custom template drops it. The two
+// named are the ones PROVABLY fatal, and everything else — template, other
+// interpreter, anything unread — disqualifies rather than being enumerated.
+const UNPROVEN_SHELL = /^\s*(?:-\s+)?shell:\s*(?!(['"]?)(?:bash|sh)\1\s*(?:#.*)?$)\S/;
 
 // `set +e`, an ERR trap and a heredoc RUN (whose status is its last command) all
 // discard failures from the lines below them in that same shell.
@@ -182,7 +184,7 @@ const jobWideGuard = (lines) => {
     // nothing; the job declaring one is what makes an unsafe shell job-wide.
     return (
         lines.some(jobLevel(JOB_NON_FATAL)) ||
-        (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some((line) => UNSAFE_SHELL.test(line)))
+        (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some((line) => UNPROVEN_SHELL.test(line)))
     );
 };
 
@@ -196,7 +198,9 @@ export function guardedLines(lines) {
         if (
             block.some(
                 (line) =>
-                    KEPT_FROM_RUNNING.test(line) || NON_FATAL.test(line) || UNSAFE_SHELL.test(line),
+                    KEPT_FROM_RUNNING.test(line) ||
+                    NON_FATAL.test(line) ||
+                    UNPROVEN_SHELL.test(line),
             )
         )
             for (let index = start; index < end; index++) guarded.add(index);
@@ -216,15 +220,56 @@ export function guardedLines(lines) {
     return guarded;
 }
 
+// A command is a LOGICAL line. A Dockerfile continues one past a trailing
+// backslash and a YAML folded scalar is one command across its whole block, so
+// reading the physical line lets `…verify.mjs \` and `|| true` pass as two
+// harmless halves. Fold first; every other reader here stays physical.
+const FOLDED_SCALAR = /^( *)(?:-\s+)?[A-Za-z_][\w-]*:\s*>[-+]?\d*\s*(?:#.*)?$/;
+
+export function logicalLines(lines) {
+    const folded = [];
+    let open;
+    let blockAt;
+    const close = () => {
+        if (open) folded.push({ text: open.parts.join(" "), at: open.at, span: open.span });
+        open = undefined;
+    };
+    const add = (index, line) => {
+        const part = line.trim().replace(/\\$/, "");
+        if (open) {
+            open.parts.push(part);
+            open.span.push(index);
+        } else open = { parts: [part], at: index, span: [index] };
+    };
+    lines.forEach((line, index) => {
+        const indent = /^ */.exec(line)[0].length;
+        if (blockAt !== undefined) {
+            if (line.trim() && indent > blockAt) return add(index, line);
+            close();
+            blockAt = undefined;
+        }
+        const scalar = FOLDED_SCALAR.exec(line);
+        if (scalar) {
+            close();
+            folded.push({ text: line.trim(), at: index, span: [index] });
+            blockAt = scalar[1].length;
+            return;
+        }
+        add(index, line);
+        if (!/\\$/.test(line.trim())) close();
+    });
+    close();
+    return folded;
+}
+
 /** 1-based line of the first install no executable verify precedes, or `undefined`. */
 export function unverifiedInstall(lines) {
     const guarded = guardedLines(lines);
     let verified = false;
-    for (const [index, line] of lines.entries()) {
-        if (isComment(line)) continue;
-        if (invokesVerify(line)) verified ||= !guarded.has(index);
-        else if (installsDependencies(line) && !verified && !isOptOut(lines[index - 1]))
-            return index + 1;
+    for (const { text, at, span } of logicalLines(lines)) {
+        if (isComment(text)) continue;
+        if (invokesVerify(text)) verified ||= !span.some((index) => guarded.has(index));
+        else if (installsDependencies(text) && !verified && !isOptOut(lines[at - 1])) return at + 1;
     }
     return undefined;
 }

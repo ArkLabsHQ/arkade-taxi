@@ -419,6 +419,43 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             ["RUN <<EOF", "pnpm verify:artifacts", "pnpm install", "EOF"],
             3,
         ],
+        // A command is a logical line: a backslash carries the swallow onto the
+        // next physical one, and a folded scalar is one command per block.
+        [
+            "a backslash carrying the swallow to the next line",
+            ["RUN pnpm verify:artifacts \\", "    || true", "RUN pnpm i"],
+            3,
+        ],
+        [
+            "the same carrying a pipe",
+            ["RUN pnpm verify:artifacts \\", "    | tee v", "RUN pnpm i"],
+            3,
+        ],
+        [
+            "the same carrying a trailing semicolon group",
+            ["RUN pnpm verify:artifacts \\", "    ; true", "RUN pnpm i"],
+            3,
+        ],
+        [
+            "a folded scalar whose block swallows it",
+            [
+                "            - run: >-",
+                "                  pnpm verify:artifacts",
+                "                  || true",
+                "            - run: pnpm i",
+            ],
+            4,
+        ],
+        [
+            "a backslash inside a literal block",
+            [
+                "            - run: |",
+                "                  pnpm verify:artifacts \\",
+                "                    || true",
+                "            - run: pnpm i",
+            ],
+            4,
+        ],
     ])("%s", (_case, source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
     });
@@ -440,6 +477,27 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
         [
             "a shell that keeps errexit",
             ["- name: gate", "  shell: bash", "  run: pnpm verify:artifacts", "- run: pnpm i"],
+        ],
+        [
+            "the same quoted or commented",
+            [
+                "- name: gate",
+                "  shell: 'sh' # posix",
+                "  run: pnpm verify:artifacts",
+                "- run: pnpm i",
+            ],
+        ],
+        [
+            "a backslash carrying only a flag",
+            ["RUN pnpm verify:artifacts \\", "    --strict", "RUN pnpm i"],
+        ],
+        [
+            "separate commands in a literal block",
+            [
+                "            - run: |",
+                "                  pnpm verify:artifacts",
+                "                  pnpm install --frozen-lockfile",
+            ],
         ],
         [
             "a job-level if:, which skips the install with it",
