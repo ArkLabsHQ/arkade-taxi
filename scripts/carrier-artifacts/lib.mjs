@@ -1,5 +1,14 @@
 // Built-in Node only: `verify.mjs` runs in the Docker layer BEFORE
 // `pnpm install`, so there is no node_modules for it to import from.
+//
+// WHAT THIS DOES NOT MODEL. Every rule below is a text reader, not a parser, and
+// the honest boundaries are:
+//   - a workflow-level `env:` is outside `jobs:` and so outside the unit scan;
+//     only `defaults:` is reached, and only in the one file that declares it.
+//   - `installsDependencies` knows four package managers; a Makefile target or a
+//     wrapper script that installs is invisible.
+//   - `scripts/carrier-artifacts/fault-battery.mjs` is what proves these rules
+//     can fail. Run it after changing anything here.
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -159,60 +168,66 @@ const KEPT_FROM_RUNNING = /^\s*(?:-\s+)?if:\s/;
 const NON_FATAL = /^\s*(?:-\s+)?continue-on-error:\s*(?!false\b|'false'|"false")\S/;
 const JOB_NON_FATAL = /^( *)continue-on-error:\s*(?!false\b|'false'|"false")\S/;
 
-// Actions' default `run` shell carries `-e`; a custom template drops it. The two
-// named are the ones PROVABLY fatal, and everything else — template, other
-// interpreter, anything unread — disqualifies rather than being enumerated.
-const UNPROVEN_SHELL = /^\s*(?:-\s+)?shell:\s*(?!(['"]?)(?:bash|sh)\1\s*(?:#.*)?$)\S/;
+// Actions' default `run` shell carries `-e`; a custom template drops it. Flow
+// style puts the mapping on one line and prettier preserves it, so the value is
+// read wherever it sits. `bash` and `sh` are the spellings PROVABLY fatal;
+// everything else — template, other interpreter, unread — disqualifies.
+const SHELL_VALUE = /shell:\s*(?:"([^"]*)"|'([^']*)'|([^,}]*))/;
+const unprovenShell = (text) => {
+    const found = SHELL_VALUE.exec(text);
+    if (!found) return false;
+    const value = (found[1] ?? found[2] ?? found[3] ?? "").replace(/\s+#.*$/, "").trim();
+    return value !== "bash" && value !== "sh";
+};
 
-// `set +e`, an ERR trap and a heredoc RUN (whose status is its last command) all
-// discard failures from the lines below them in that same shell.
-const RELAXES_SHELL = /^\s*set\s+\+(?:e\b|o\s+errexit\b)|^\s*trap\s.*\bERR\b|^\s*RUN\s.*<</;
 const OPENS_SHELL = /^\s*-\s|^\s*RUN\s/;
 
-// A command is a single UNCONDITIONAL command: errexit is suppressed for an `if`
-// condition, and a branch or loop body may never run at all, so a verify nested
-// in one cannot be what fails the step.
-const OPENS_BLOCK = /^(?:if|for|while|until|case)$|^\{$/;
-const CLOSES_BLOCK = /^(?:fi|done|esac|\})$/;
-const nesting = (line) =>
-    line
-        .trim()
-        .split(/\s+/)
-        .reduce(
-            (depth, token) =>
-                depth + (OPENS_BLOCK.test(token) ? 1 : CLOSES_BLOCK.test(token) ? -1 : 0),
-            0,
-        );
+// A verify counts only as an UNCONDITIONAL top-level command, and rather than
+// enumerate the constructs that nest one — the list is what let `( )` through —
+// this allows only what may precede a verify in its own shell. Anything else,
+// known or not, stops the verify counting. Measured cost on this tree: none,
+// because all nine live verifies are a step's whole command.
+const ARMS_SHELL = /^\s*set\s+[-+]|^\s*shopt\s+-s\b/;
+const DISARMS_ERREXIT = /^\s*set\s+\+(?:[A-Za-z]*e|o\s+errexit\b)|^\s*trap\s.*\bERR\b/;
+const YAML_KEY = /^\s*(?:-\s+)?[A-Za-z_][\w-]*:/;
+
+const mayPrecedeVerify = (line) =>
+    !line.trim() ||
+    isComment(line) ||
+    (ARMS_SHELL.test(line) && !DISARMS_ERREXIT.test(line)) ||
+    (YAML_KEY.test(line) && !unprovenShell(line)) ||
+    invokesVerify(line);
 
 // YAML lets a scalar sit on the line beneath its key, and every reader here
-// wants the value. Pull it up once so each key regex stays a one-line match.
+// wants the value. COPY it onto the key rather than move it: consuming the line
+// ate block-scalar headers and installs, and left the pass non-idempotent.
 const NEXT_LINE_KEY = /^\s*(?:-\s+)?(?:shell|continue-on-error|if|run_install|uses):\s*(?:#.*)?$/;
 
 export function withInlineValues(lines) {
-    const joined = [...lines];
-    joined.forEach((line, index) => {
-        if (!NEXT_LINE_KEY.test(line)) return;
-        const next = joined.findIndex((candidate, at) => at > index && candidate.trim());
-        const value = next === -1 ? "" : joined[next].trim();
-        if (!value || /^[-#]/.test(value) || value.endsWith(":")) return;
-        joined[index] = `${line.replace(/\s+$/, "")} ${value}`;
-        joined[next] = "";
+    return lines.map((line, index) => {
+        if (!NEXT_LINE_KEY.test(line)) return line;
+        const value =
+            lines
+                .slice(index + 1)
+                .find((candidate) => candidate.trim())
+                ?.trim() ?? "";
+        if (!value || /^[-#]/.test(value) || value.endsWith(":")) return line;
+        return `${line.replace(/\s+$/, "")} ${value}`;
     });
-    return joined;
 }
 
 /** A workflow-level `defaults:` sits outside `jobs:`, where a per-job scan cannot
  * reach it, so `verify.mjs` refuses the file rather than pretending to scan it. */
 export function unprovenDefaultShell(yaml) {
     const lines = withInlineValues(yaml.split(/\r?\n/));
-    const start = lines.findIndex((line) => /^defaults:\s*(?:#.*)?$/.test(line));
+    const start = lines.findIndex((line) => /^defaults:/.test(line));
     if (start === -1) return false;
+    const block = [lines[start]];
     for (const line of lines.slice(start + 1)) {
-        if (!line.trim() || isComment(line)) continue;
-        if (!/^\s/.test(line)) break;
-        if (/^\s*shell:/.test(line)) return UNPROVEN_SHELL.test(line);
+        if (line.trim() && !/^\s/.test(line)) break;
+        block.push(line);
     }
-    return false;
+    return unprovenShell(block.join(" "));
 }
 
 // A `- ` line belongs to whatever list it is under, and `needs:` and
@@ -230,7 +245,7 @@ const jobWideGuard = (lines) => {
     // nothing; the job declaring one is what makes an unsafe shell job-wide.
     return (
         lines.some(jobLevel(JOB_NON_FATAL)) ||
-        (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some((line) => UNPROVEN_SHELL.test(line)))
+        (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some(unprovenShell))
     );
 };
 
@@ -245,9 +260,7 @@ export function guardedLines(source) {
         if (
             block.some(
                 (line) =>
-                    KEPT_FROM_RUNNING.test(line) ||
-                    NON_FATAL.test(line) ||
-                    UNPROVEN_SHELL.test(line),
+                    KEPT_FROM_RUNNING.test(line) || NON_FATAL.test(line) || unprovenShell(line),
             )
         )
             for (let index = start; index < end; index++) guarded.add(index);
@@ -258,17 +271,14 @@ export function guardedLines(source) {
         start = index;
     });
     close(lines.length);
-    let relaxed = false;
-    let depth = 0;
+    // Within one shell, a verify counts only while everything above it is
+    // something that may accompany one. The first line that is not resets
+    // nothing — it disqualifies every verify below it until the shell reopens.
+    let refusing = false;
     lines.forEach((line, index) => {
-        if (OPENS_SHELL.test(line)) {
-            relaxed = false;
-            depth = 0;
-        }
-        if (RELAXES_SHELL.test(line)) relaxed = true;
-        const entering = depth;
-        depth = Math.max(0, depth + nesting(line));
-        if (relaxed || entering > 0 || depth > 0) guarded.add(index);
+        if (OPENS_SHELL.test(line)) refusing = false;
+        if (refusing) guarded.add(index);
+        if (!mayPrecedeVerify(line)) refusing = true;
     });
     return guarded;
 }

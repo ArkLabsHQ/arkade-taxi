@@ -598,6 +598,82 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             ],
             3,
         ],
+        // A verify counts only as an unconditional top-level command. Nothing
+        // here enumerates openers: anything that may not precede a verify in its
+        // own shell stops it counting, so `( )` needs no rule of its own.
+        ...(
+            [
+                ["a conditional", "if [ x ]; then", "fi"],
+                ["a loop", "for a in 1 2; do", "done"],
+                ["a subshell", "(", ") || true"],
+                ["a brace group", "{", "} || true"],
+            ] as const
+        ).map(
+            ([label, open, close]) =>
+                [
+                    `a verify inside ${label}`,
+                    [
+                        "            - run: |",
+                        `                  ${open}`,
+                        "                    pnpm verify:artifacts",
+                        `                  ${close}`,
+                        "            - run: pnpm i",
+                    ],
+                    5,
+                ] as [string, string[], number],
+        ),
+        // The old model counted whitespace tokens, so a bare `echo done` undid
+        // the guard. Nothing counts tokens now.
+        ...(["echo done", "# done", "echo fi", "printf esac", "- bullet"] as const).map(
+            (noise) =>
+                [
+                    `a verify below ${JSON.stringify(noise)} in a conditional`,
+                    [
+                        "            - run: |",
+                        "                  if [ x ]; then",
+                        `                    ${noise}`,
+                        "                    pnpm verify:artifacts",
+                        "                  fi",
+                        "            - run: pnpm i",
+                    ],
+                    6,
+                ] as [string, string[], number],
+        ),
+        // Every spelling that clears errexit, including the compound flags.
+        ...(
+            [
+                "set +eu",
+                "set +eo pipefail",
+                "set +ex",
+                "set +xe",
+                "set +ue",
+                "set +Ee",
+                "shopt -u inherit_errexit",
+            ] as const
+        ).map(
+            (disarm) =>
+                [
+                    `a verify below ${JSON.stringify(disarm)}`,
+                    [
+                        "            - run: |",
+                        `                  ${disarm}`,
+                        "                    pnpm verify:artifacts",
+                        "            - run: pnpm i",
+                    ],
+                    4,
+                ] as [string, string[], number],
+        ),
+        [
+            "a job defaulting its shell in flow style",
+            [
+                "    gates:",
+                '        defaults: { run: { shell: "bash {0}" } }',
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
     ])("%s", (_case, source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
     });
@@ -653,6 +729,28 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
                 "            - run: pnpm i",
             ],
         ],
+        // These clear a flag errexit does not depend on, so the verify stays
+        // fatal; the refusal must not swallow them.
+        ...(["set +o pipefail", "set +E", "set +u", "set +x", "shopt -s globstar"] as const).map(
+            (harmless) =>
+                [
+                    JSON.stringify(harmless),
+                    [
+                        "            - run: |",
+                        `                  ${harmless}`,
+                        "                    pnpm verify:artifacts",
+                        "            - run: pnpm i",
+                    ],
+                ] as [string, string[]],
+        ),
+        [
+            "a step whose NAME reads like a loop terminator",
+            [
+                "            - name: Verify packages for the release tarballs",
+                "              run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+        ],
     ])("still counts %s", (_case, source) => {
         expect(unverifiedInstall(source)).toBeUndefined();
     });
@@ -669,6 +767,12 @@ describe("a workflow-level defaults: block", () => {
             true,
         ],
         ["another interpreter", ["defaults:", "    run:", "        shell: pwsh"], true],
+        [
+            "flow style, which prettier preserves",
+            ["defaults:", '    run: { shell: "bash --noprofile --norc {0}" }'],
+            true,
+        ],
+        ["flow style naming a proven shell", ["defaults:", "    run: { shell: bash }"], false],
         ["a shell that keeps errexit", ["defaults:", "    run:", "        shell: bash"], false],
         ["no defaults at all", ["name: ci", "jobs:", "    gates:"], false],
         [

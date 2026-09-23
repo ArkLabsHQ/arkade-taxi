@@ -249,9 +249,10 @@ if (wholeCheckout) {
                 sources.some(([scannedName]) => scannedName === target),
                 `${name} delegates to ${target}, which this scan does not read`,
             );
-        // Outside every job, so the per-job scan cannot see it: refuse the file.
+        // Outside every job, so the per-job scan cannot see it: refuse the file —
+        // but only where it installs, since a workflow with none has no gate.
         check(
-            !unprovenDefaultShell(lines.join("\n")),
+            installs(lines) === 0 || !unprovenDefaultShell(lines.join("\n")),
             `${name} defaults every run to a shell this scan cannot prove keeps a failure fatal`,
         );
     }

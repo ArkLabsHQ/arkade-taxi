@@ -17,7 +17,8 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "vectors": "node scripts/gen-vectors.mjs",
-        "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs"
+        "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs",
+        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs"
     },
     "devDependencies": {
         "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",
