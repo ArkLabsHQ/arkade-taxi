@@ -691,7 +691,7 @@ const faults = [
                 [
                     "            - run: |",
                     '                  if [ -n "$CI" ]; then',
-                    "                    - item",
+                    "                    - item: value",
                     "                    node scripts/carrier-artifacts/verify.mjs",
                     "                  fi",
                 ].join("\n"),

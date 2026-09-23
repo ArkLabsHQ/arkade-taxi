@@ -688,7 +688,7 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             [
                 "            - run: |",
                 '                  if [ -n "$CI" ]; then',
-                "                    - item",
+                "                    - item: value",
                 "                    pnpm verify:artifacts",
                 "                  fi",
                 "            - run: pnpm i",
