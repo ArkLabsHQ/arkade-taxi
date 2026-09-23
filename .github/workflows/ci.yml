@@ -26,8 +26,7 @@ jobs:
             - run: pnpm typecheck
             - run: pnpm test
             - run: pnpm format:check
-            # What proves the verifier can fail. It injects into tracked files,
-            # so it runs last and refuses a tree that is not already clean.
+            # What proves the verifier can fail; it refuses an unclean tree.
             - run: pnpm verify:artifacts:battery
 
     vectors:

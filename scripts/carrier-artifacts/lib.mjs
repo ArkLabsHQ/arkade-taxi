@@ -178,8 +178,7 @@ const unprovenShell = (text) => {
 
 const OPENS_SHELL = /^\s*-\s|^\s*RUN\s/;
 
-// A body's lines are text, not structure: counting a `- ` there as both a shell
-// boundary and inert metadata re-armed the refusal from inside its own cause.
+// A body's lines are text, not structure, so nothing in one opens a shell.
 const BLOCK_SCALAR_KEY = /^( *)(?:-\s+)?[A-Za-z_][\w-]*:\s*[|>][-+\d]*\s*(?:#.*)?$/;
 const HEREDOC_OPEN = /<<-?\s*['"]?([A-Za-z_]\w*)/;
 
@@ -191,7 +190,6 @@ const HEREDOC_OPEN = /<<-?\s*['"]?([A-Za-z_]\w*)/;
 const ARMS_SHELL = /^\s*set\s+[-+]|^\s*shopt\s+(?!-\S*o)/;
 const DISARMS_ERREXIT = /^\s*set\s+\+(?:[A-Za-z]*e|o\s+errexit\b)/;
 const YAML_KEY = /^\s*(?:-\s+)?[A-Za-z_][\w-]*:/;
-// Either one re-points the shell for every command under it.
 const HOSTILE_ENV = /\b(?:SHELLOPTS|BASH_ENV)\b/;
 
 const mayPrecedeVerify = (line) =>

@@ -762,9 +762,7 @@ const assertMutated = (id, saved) => {
 // Exit != 0 proves the run failed, not that the INTENDED check fired. A fault
 // that trips an unrelated assertion is a false CAUGHT — the same cannot-fail
 // shape, moved into the instrument.
-// The line number is already in the message and is the only token separating
-// two faults on the same unit, so it is pinned too. It takes the largest
-// collision group from 10 to 4; unit+line is the finest grain the scan reports.
+// The line number is pinned too; unit+line is the finest grain the scan reports.
 const EXPECTED = {
     A: "manifest says",
     B: "which is not a frozen archive",
