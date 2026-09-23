@@ -85,6 +85,11 @@ jobs:
                     [ "$V" = "$TAG" ] || { echo "::error::$p is $V, tag is $TAG"; exit 1; }
                   done
 
+            - name: Refuse registry coordinates the vendored candidates claim
+              run: node scripts/carrier-artifacts/release-gate.mjs
+              env:
+                  CARRIER_RELEASE_ACK: ${{ vars.CARRIER_RELEASE_ACK }}
+
             - run: pnpm publish -r --access public --no-git-checks
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
