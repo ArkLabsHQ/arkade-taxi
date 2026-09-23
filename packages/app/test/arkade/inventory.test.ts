@@ -16,6 +16,7 @@ const select = (over: Partial<Parameters<typeof selectOperatorFunding>[0]> = {})
         minExpiryHeadroomBlocks: 144n,
         minExpiryHeadroomSeconds: 86400n,
         minReserveSats: 10000n,
+        dustSats: 330n,
         ...over,
     });
 
@@ -36,7 +37,7 @@ describe("selectOperatorFunding", () => {
             fundingCoin({ value: 50 }),
         ];
         const before = [...coins];
-        const selection = select({ spendable: coins, minReserveSats: 0n });
+        const selection = select({ spendable: coins, requiredSats: 350n, minReserveSats: 0n });
         expect(selection.inputs.map((c) => [c.value, c.txid.slice(0, 2), c.vout])).toEqual([
             [50, "bb", 0],
             [100, "aa", 0],
@@ -123,6 +124,27 @@ describe("selectOperatorFunding", () => {
         const height = fundingCoin();
         expect(select({ spendable: [timed, height], minReserveSats: 0n }).inputs).toEqual([height]);
         expect(select({ spendable: [height, timed], minReserveSats: 0n }).inputs).toEqual([height]);
+    });
+    it("combines coins rather than paying itself change below dust", () => {
+        const selection = select({
+            spendable: [
+                fundingCoin({ txid: "cc".repeat(32), value: 330 }),
+                fundingCoin({ value: 660 }),
+                fundingCoin({ vout: 1, value: 20000 }),
+            ],
+            requiredSats: 1n,
+        });
+        expect(selection.inputs.map((coin) => coin.value)).toEqual([330, 660]);
+        expect(selection.totalValue).toBe(990n);
+    });
+    it("refuses funding whose only change would be stranded below dust", () => {
+        expect(() =>
+            select({
+                spendable: [fundingCoin({ txid: "cc".repeat(32), value: 330 })],
+                requiredSats: 1n,
+                minReserveSats: 0n,
+            }),
+        ).toThrow(/inventory/);
     });
     it("rejects duplicate outpoints rather than counting value twice", () => {
         const coin = fundingCoin({ value: 200 });

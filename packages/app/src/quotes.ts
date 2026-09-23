@@ -402,6 +402,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
         minReserveSats: config.operatorMinReserveSats,
+        dustSats: config.dust,
     };
     const selection = structuredClone(selectOperatorFunding(selectionOptions));
     const expiry = { ...selection.batchExpiry };

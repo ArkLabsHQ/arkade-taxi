@@ -150,6 +150,7 @@ describe("cross-flow reservations", () => {
             minExpiryHeadroomBlocks: cfg.minExpiryHeadroomBlocks,
             minExpiryHeadroomSeconds: cfg.minExpiryHeadroomSeconds,
             minReserveSats: 0n,
+            dustSats: cfg.dust,
         });
         expect(selection.inputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([COIN_C]);
     });

@@ -440,7 +440,7 @@ describe("createQuote admission", () => {
         ).rejects.toThrow(/minimum/);
         expect(advances.rows.size).toBe(0);
     });
-    it("refuses a residual below minimum even with a valid fare", async () => {
+    it("refuses a residual below dust even with a valid fare", async () => {
         const d = deps({ policy: satsFareRule(ASSET, 10n) });
         d.inventory.getSpendableVtxos = async () => [
             fundingCoin({ value: 339 }),
@@ -448,7 +448,7 @@ describe("createQuote admission", () => {
         ];
         await expect(
             createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" })),
-        ).rejects.toThrow(/operator-change.*minimum/);
+        ).rejects.toMatchObject({ code: "operator_inventory_insufficient" });
         expect(advances.rows.size).toBe(0);
     });
     it("refuses an unrepresentable OP_RETURN shape before reserving", async () => {
@@ -810,8 +810,8 @@ describe("quote reservation integration", () => {
             d.inventory.getSpendableVtxos = async () => {
                 reads++;
                 return [
-                    fundingCoin({ value: 340, isSpent: built }),
-                    fundingCoin({ vout: 1, value: 340, expiresAtHeight: 900001 }),
+                    fundingCoin({ value: 1000, isSpent: built }),
+                    fundingCoin({ vout: 1, value: 1000, expiresAtHeight: 900001 }),
                     fundingCoin({ vout: 2, value: 10000, expiresAtHeight: 900002 }),
                 ];
             };
@@ -847,7 +847,7 @@ describe("quote reservation integration", () => {
                 d.inventory.getSpendableVtxos = async () => {
                     reads++;
                     return [
-                        fundingCoin({ value: 340, isSpent: built && spent === "selected" }),
+                        fundingCoin({ value: 1000, isSpent: built && spent === "selected" }),
                         fundingCoin({
                             vout: 1,
                             value: 10000,
@@ -925,7 +925,7 @@ describe("quote reservation integration", () => {
                             [0, 1, 2, 3, 4].map((vout) =>
                                 fundingCoin({
                                     vout,
-                                    value: vout === 4 ? 10000 : 340,
+                                    value: vout === 4 ? 10000 : 1000,
                                     expiresAtHeight: 900000 + vout,
                                 }),
                             ),

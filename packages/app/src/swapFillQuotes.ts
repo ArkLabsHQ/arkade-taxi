@@ -515,6 +515,7 @@ async function createAdmittedSwapFillQuote(
                 minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
                 minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
                 minReserveSats: config.operatorMinReserveSats,
+                dustSats: config.dust,
             });
         }
     } catch (error) {
@@ -1158,6 +1159,7 @@ async function reverifyFreshness(
               minExpiryHeadroomBlocks: deps.config.minExpiryHeadroomBlocks,
               minExpiryHeadroomSeconds: deps.config.minExpiryHeadroomSeconds,
               minReserveSats: deps.config.operatorMinReserveSats,
+              dustSats: deps.config.dust,
           });
     const wanted = selection.inputs.map(key).sort();
     const got = latest.inputs.map(key).sort();

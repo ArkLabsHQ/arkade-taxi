@@ -43,10 +43,13 @@ export function selectOperatorFunding(options: {
     minExpiryHeadroomBlocks: bigint;
     minExpiryHeadroomSeconds: bigint;
     minReserveSats: bigint;
+    /** The floor the change this caller derives from `totalValue - requiredSats`
+     * must clear; omitted where the operator's output is not that difference. */
+    dustSats?: bigint;
 }): FundingSelection {
-    const { safety, requiredSats, minReserveSats } = options;
+    const { safety, requiredSats, minReserveSats, dustSats } = options;
     assertFreshSafety(safety, options.nowMs, options.maxSnapshotAgeMs);
-    if (requiredSats <= 0n || minReserveSats < 0n)
+    if (requiredSats <= 0n || minReserveSats < 0n || (dustSats !== undefined && dustSats <= 0n))
         throw new Error("inventory: invalid funding requirement");
     const reserved = new Set(options.reserved.map(outpointKey));
     const seen = new Set<string>();
@@ -87,6 +90,13 @@ export function selectOperatorFunding(options: {
         candidates.push({ coin, expiry });
     }
     const available = candidates.reduce((sum, { coin }) => sum + BigInt(coin.value), 0n);
+    // Change below dust pays a sub-dust script no collector of ours reaches, so
+    // a selection settles the requirement exactly or leaves change worth keeping.
+    const fundable = (totalValue: bigint) =>
+        totalValue >= requiredSats &&
+        (dustSats === undefined ||
+            totalValue === requiredSats ||
+            totalValue - requiredSats >= dustSats);
     // Expiry domains have no shared ordering; use a stable domain preference.
     for (const kind of ["height", "time"] as const) {
         const group = candidates
@@ -103,9 +113,9 @@ export function selectOperatorFunding(options: {
         for (const { coin } of group) {
             inputs.push(coin);
             totalValue += BigInt(coin.value);
-            if (totalValue >= requiredSats) break;
+            if (fundable(totalValue)) break;
         }
-        if (totalValue >= requiredSats && available - totalValue >= minReserveSats)
+        if (fundable(totalValue) && available - totalValue >= minReserveSats)
             return { inputs, totalValue, batchExpiry: group[0].expiry };
     }
     throw new ServiceError(
