@@ -106,6 +106,9 @@ describe("receiverFare", () => {
         expect(() =>
             validateParams(receiverPaid({ assetId: undefined, recoveryRecipient: "sender" }), 1n),
         ).toThrow(/receiver fare requires an asset id/);
+        expect(() => validateParams(receiverPaid({ assetId: undefined }), 1n)).toThrow(
+            /receiver fare requires an asset id/,
+        );
     });
     it("requires a recycle claim mode and receiver recovery", () => {
         expect(() => validateParams(receiverPaid({ claimMode: "purchase" }), 1n)).toThrow(
