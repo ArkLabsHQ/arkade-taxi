@@ -17,6 +17,8 @@ type Vector = {
         locktime: number;
         recoveryRecipient?: "sender" | "receiver";
         claimMode?: "recycle" | "purchase";
+        receiverFareCurrency?: "sats" | "asset";
+        receiverFareUnits?: number;
     };
     vtxoMinAmount: number;
     recycle: string;
@@ -41,6 +43,12 @@ const toParams = (v: Vector): DustCovenantParams => ({
         : undefined,
     recoveryRecipient: v.params.recoveryRecipient,
     claimMode: v.params.claimMode,
+    receiverFare: v.params.receiverFareCurrency
+        ? {
+              currency: v.params.receiverFareCurrency as "sats" | "asset",
+              units: BigInt(v.params.receiverFareUnits ?? 0),
+          }
+        : undefined,
 });
 
 const carrier = JSON.parse(
@@ -70,7 +78,7 @@ describe(`golden vectors from Go reference ${reference.slice(0, 8)}`, () => {
 describe(`additive receiver vectors from Go reference ${carrier.reference.slice(0, 8)}`, () => {
     it("keeps the original fixture intact and pins the accepted semantic source", () => {
         expect(reference).toBe("49ae96d0241e7672e40b25543875538d4373fb80");
-        expect(carrier.reference).toBe("7e071515cd1bfb35154448f6ad88a63bef3793a1");
+        expect(carrier.reference).toBe("d4771c80982e77a55a6f8863155f45cec1dd12e5");
     });
 
     it.each(carrier.cases.map((c) => [c.name, c] as const))(

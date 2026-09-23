@@ -2,8 +2,15 @@ import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { subDustScript } from "../src/pin.js";
-import { buildPurchase, buildRecycle, buildRefund, buildScripts } from "../src/scripts.js";
+import {
+    buildPurchase,
+    buildReclaim,
+    buildRecycle,
+    buildRefund,
+    buildScripts,
+} from "../src/scripts.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
+import { receiverPaid } from "./fixtures.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
@@ -60,6 +67,27 @@ describe("buildRecycle", () => {
         expect(decoded.filter((o) => o === "DROP")).toHaveLength(1);
         expect(decoded.filter((o) => o === "VERIFY")).toHaveLength(2);
     });
+
+    it("a zero fare builds the recycle leaf a fareless covenant builds", () => {
+        expect(
+            buildRecycle(receiverPaid({ receiverFare: { currency: "sats", units: 0n } })),
+        ).toEqual(buildRecycle(receiverPaid({ receiverFare: undefined })));
+    });
+
+    it.each([
+        ["sats", { currency: "sats", units: 7n }],
+        ["asset", { currency: "asset", units: 9n }],
+    ] as const)(
+        "a %s fare leaves purchase, refund and reclaim byte-identical",
+        (_label, receiverFare) => {
+            const bare = receiverPaid({ receiverFare: undefined });
+            const withFare = receiverPaid({ receiverFare });
+            expect(buildPurchase(withFare)).toEqual(buildPurchase(bare));
+            expect(buildRefund(withFare, 1n)).toEqual(buildRefund(bare, 1n));
+            expect(buildReclaim(withFare, 1n)).toEqual(buildReclaim(bare, 1n));
+            expect(buildRecycle(withFare)).not.toEqual(buildRecycle(bare));
+        },
+    );
 });
 
 describe("buildPurchase", () => {

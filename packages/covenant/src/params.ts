@@ -107,3 +107,15 @@ export function refundTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigin
 export function unrecoveredTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigint {
     return p.topup - refundTopup(p, vtxoMinAmount);
 }
+
+export type RecycleFare = { operatorSats: bigint; assetFare: bigint };
+
+/** What the recycle leaf repays: operatorSats folds a sats fare into the topup
+ * repayment, assetFare is what the receiver pays out of the asset side. */
+export function recycleFare(p: DustCovenantParams): RecycleFare {
+    const fare = p.receiverFare;
+    return {
+        operatorSats: fare?.currency === "sats" ? p.topup + fare.units : p.topup,
+        assetFare: fare?.currency === "asset" ? fare.units : 0n,
+    };
+}

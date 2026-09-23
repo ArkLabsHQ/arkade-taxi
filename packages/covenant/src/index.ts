@@ -1,9 +1,11 @@
 export {
+    recycleFare,
     refundTopup,
     unrecoveredTopup,
     validateParams,
     type AssetIdRef,
     type DustCovenantParams,
+    type RecycleFare,
 } from "./params.js";
 export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
 export { appendAssetLookup } from "./asset.js";
