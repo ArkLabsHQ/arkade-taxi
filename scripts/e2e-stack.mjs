@@ -53,7 +53,12 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
-import { VENDOR_DIR, assertFrozenResolutions } from "./carrier-artifacts/lib.mjs";
+import {
+    VENDOR_DIR,
+    assertFrozenResolutions,
+    distMismatch,
+    workspaceManifests,
+} from "./carrier-artifacts/lib.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REGTEST_REPOSITORY = "https://github.com/ArkLabsHQ/arkade-regtest.git";
@@ -607,9 +612,15 @@ export const packClient = async (root, env) => {
         npmUserConfig,
         "registry=https://registry.npmjs.org/\n@arkade-taxi:registry=http://127.0.0.1:9/\nalways-auth=false\n",
     );
+    // A build only adds, so an unmerged branch's output survives and ships.
+    for (const relative of workspaceManifests(REPO).filter((p) => p.startsWith("packages/")))
+        rmSync(join(REPO, dirname(relative), "dist"), { recursive: true, force: true });
     await runPnpm(["-r", "build"], { cwd: REPO, env, npmUserConfig });
     const tarballs = [];
-    for (const name of ["@arkade-taxi/covenant", "@arkade-taxi/protocol", "@arkade-taxi/client"])
+    for (const name of ["@arkade-taxi/covenant", "@arkade-taxi/protocol", "@arkade-taxi/client"]) {
+        // Clearing it is only a claim; this is what makes the claim checkable.
+        const mismatch = distMismatch(join(REPO, "packages", name.split("/")[1]));
+        if (mismatch) throw new Error(`${name} packs output it cannot account for: ${mismatch}`);
         tarballs.push(
             assertPackResult(
                 (
@@ -626,6 +637,7 @@ export const packClient = async (root, env) => {
                 { name, packDir },
             ),
         );
+    }
     if (readdirSync(packDir).filter((name) => name.endsWith(".tgz")).length !== 3)
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);

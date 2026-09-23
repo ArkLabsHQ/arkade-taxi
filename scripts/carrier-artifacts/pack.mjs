@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * MAINTAINER COMMAND. Nothing installs, builds or ships it, and the source
- * checkout stays read-only.
+ * MAINTAINER COMMAND. Nothing installs, builds or ships it, and it writes no
+ * tracked file in the source checkout — `prepack` already rebuilds `dist/`.
  *
  *   node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout> [--out <dir>]
  *
@@ -91,6 +91,13 @@ const archiveName = (name, version, commit) =>
 
 try {
     assertPinnedSource(sdkRoot, SDK_SOURCE, "ts-sdk checkout");
+
+    // `git status` cannot see `dist/`, and tsup leaves no module map to assert.
+    for (const name of SDK_PACKAGES)
+        rmSync(join(sdkRoot, PINNED_SOURCES[name].directory, "dist"), {
+            recursive: true,
+            force: true,
+        });
 
     const npmUserConfig = join(scratch, "pack.npmrc");
     writeFileSync(npmUserConfig, "registry=https://registry.npmjs.org/\n");
