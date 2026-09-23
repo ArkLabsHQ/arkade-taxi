@@ -14,7 +14,7 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/db/package.json packages/db/
 COPY packages/client/package.json packages/client/
 COPY packages/app/package.json packages/app/
-# The lockfile pins pre-release Arkade packages to these tracked archives, so
+# The lockfile pins the candidate Arkade builds to these tracked archives, so
 # they must reach the layer that installs, not merely the build context.
 COPY vendor/carrier/ vendor/carrier/
 COPY scripts/carrier-artifacts/ scripts/carrier-artifacts/

@@ -275,6 +275,7 @@ describe("installing-path scan", () => {
         ]);
         expect(localWorkflowCalls(["        uses: './x.yml'"])).toEqual(["x.yml"]);
         expect(localWorkflowCalls(['        uses: "./x.yml" # reusable'])).toEqual(["x.yml"]);
+        expect(localWorkflowCalls(["        uses:", "            ./x.yml"])).toEqual(["x.yml"]);
         expect(localWorkflowCalls(["        uses: actions/checkout@v5"])).toEqual([]);
     });
 
@@ -339,6 +340,85 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             2,
         ],
         ["an install chained ahead of it", ["RUN pnpm i && pnpm verify:artifacts"], 1],
+        [
+            "a job told to continue on error below its steps",
+            [
+                "    gates:",
+                "        runs-on: ubuntu-latest",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+                "        continue-on-error: true",
+            ],
+            5,
+        ],
+        [
+            "the same below a block-style needs: list",
+            [
+                "    packages:",
+                "        needs:",
+                "            - e2e",
+                "        continue-on-error: true",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            7,
+        ],
+        [
+            "the same below a strategy.matrix list",
+            [
+                "    vectors:",
+                "        strategy:",
+                "            matrix:",
+                "                node:",
+                "                    - 22",
+                "        continue-on-error: true",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            9,
+        ],
+        [
+            "a shell template that drops errexit",
+            [
+                "- name: gate",
+                "  shell: bash {0}",
+                "  run: |",
+                "      pnpm verify:artifacts",
+                "- run: pnpm i",
+            ],
+            5,
+        ],
+        [
+            "a job whose defaults name one",
+            [
+                "    gates:",
+                "        defaults:",
+                "            run:",
+                "                shell: bash {0}",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            7,
+        ],
+        [
+            "errexit switched off above the verify",
+            ["- run: |", "      set +e", "      pnpm verify:artifacts", "- run: pnpm i"],
+            4,
+        ],
+        [
+            "an ERR trap above it",
+            ["- run: |", "      trap 'exit 0' ERR", "      pnpm verify:artifacts", "- run: pnpm i"],
+            4,
+        ],
+        [
+            "a heredoc RUN, whose status is its last command",
+            ["RUN <<EOF", "pnpm verify:artifacts", "pnpm install", "EOF"],
+            3,
+        ],
     ])("%s", (_case, source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
     });
@@ -350,6 +430,29 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
         ],
         ["a chain that propagates", ["RUN pnpm verify:artifacts && pnpm i"]],
         ["an unguarded step", ["- run: pnpm verify:artifacts", "- run: pnpm i"]],
+        ["a directory change ahead of it", ["RUN cd /app && pnpm verify:artifacts", "RUN pnpm i"]],
+        ["corepack ahead of it", ["RUN corepack enable && pnpm verify:artifacts", "RUN pnpm i"]],
+        [
+            "an export ahead of it",
+            ["- run: export FOO=1 && pnpm verify:artifacts", "- run: pnpm i"],
+        ],
+        ["errexit set in an earlier group", ["RUN set -e; pnpm verify:artifacts", "RUN pnpm i"]],
+        [
+            "a shell that keeps errexit",
+            ["- name: gate", "  shell: bash", "  run: pnpm verify:artifacts", "- run: pnpm i"],
+        ],
+        [
+            "a job-level if:, which skips the install with it",
+            [
+                "    packages:",
+                "        if: ${{ inputs.dry_run != true }}",
+                "        needs:",
+                "            - e2e",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+        ],
     ])("still counts %s", (_case, source) => {
         expect(unverifiedInstall(source)).toBeUndefined();
     });

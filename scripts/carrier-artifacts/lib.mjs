@@ -127,18 +127,29 @@ const commandBody = (line) =>
         .replace(/^\s*run:\s*/, "")
         .trim();
 
-// `|| true`, `;`, `|| :` and a pipe leave the job green; `&&` is the one that does not.
-const swallowsStatus = (command) => /[|;&]/.test(command.replaceAll("&&", " "));
+// A pipe's status is its last stage's and a bare `&` discards one; `;` and `&&` are read below.
+const swallowsStatus = (command) => /[|&]/.test(command.replaceAll("&&", " "));
 
-// `echo …verify.mjs` names the command without running it, and a verify must lead
-// the line: an install chained ahead of it has already run.
+const VERIFY_COMMAND = /carrier-artifacts\/verify\.mjs|verify:artifacts/;
+
+// `echo …verify.mjs` names the command without running it; only the last `;` group's
+// status survives; and a prefix disqualifies only if it INSTALLED, not if it was `cd`.
 export const invokesVerify = (line) => {
     const command = commandBody(line);
     if (swallowsStatus(command)) return false;
-    const leading = command.split("&&")[0].trim();
+    const groups = command.split(";");
+    const parts = groups.flatMap((group, index) =>
+        group
+            .split("&&")
+            .map((part) => ({ part: part.trim(), fatal: index === groups.length - 1 })),
+    );
+    const at = parts.findIndex(
+        ({ part }) => VERIFY_COMMAND.test(part) && INVOKERS.has(part.split(/\s+/)[0]),
+    );
     return (
-        /carrier-artifacts\/verify\.mjs|verify:artifacts/.test(leading) &&
-        INVOKERS.has(leading.split(/\s+/)[0])
+        at !== -1 &&
+        parts[at].fatal &&
+        !parts.slice(0, at).some(({ part }) => installsDependencies(part))
     );
 };
 
@@ -146,32 +157,62 @@ export const invokesVerify = (line) => {
 // both ways.
 const KEPT_FROM_RUNNING = /^\s*(?:-\s+)?if:\s/;
 const NON_FATAL = /^\s*(?:-\s+)?continue-on-error:\s*(?!false\b|'false'|"false")\S/;
+const JOB_NON_FATAL = /^( *)continue-on-error:\s*(?!false\b|'false'|"false")\S/;
+
+// Actions' default `run` shell carries `-e`; a custom template drops it.
+const UNSAFE_SHELL = /^\s*(?:-\s+)?shell:\s*(?!(?:bash|sh)\s*(?:#.*)?$)\S/;
+
+// `set +e`, an ERR trap and a heredoc RUN (whose status is its last command) all
+// discard failures from the lines below them in that same shell.
+const RELAXES_SHELL = /^\s*set\s+\+(?:e\b|o\s+errexit\b)|^\s*trap\s.*\bERR\b|^\s*RUN\s.*<</;
+const OPENS_SHELL = /^\s*-\s|^\s*RUN\s/;
+
+// A `- ` line belongs to whatever list it is under, and `needs:` and
+// `strategy.matrix` write them too, so position cannot say whether a key is the
+// job's or a step's. Indentation can: a job key is never deeper than that list.
+const JOB_DEFAULTS = /^( *)defaults:/;
+const jobWideGuard = (lines) => {
+    const listAt = lines.reduce(
+        (found, line) => found ?? /^( *)-\s/.exec(line)?.[1].length,
+        undefined,
+    );
+    if (listAt === undefined) return false;
+    const jobLevel = (pattern) => (line) => pattern.exec(line)?.[1].length <= listAt;
+    // `defaults.run.shell` sits deeper than the job's keys, so its own indent says
+    // nothing; the job declaring one is what makes an unsafe shell job-wide.
+    return (
+        lines.some(jobLevel(JOB_NON_FATAL)) ||
+        (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some((line) => UNSAFE_SHELL.test(line)))
+    );
+};
 
 /** Indices whose verify must not count towards a later install. */
 export function guardedLines(lines) {
     const guarded = new Set();
+    if (jobWideGuard(lines)) return new Set(lines.keys());
     let start = 0;
-    let stepped = false;
     const close = (end) => {
         const block = lines.slice(start, end);
-        // Actions takes `continue-on-error` on a job too, and one above the first
-        // step leaves the workflow green after a failed gate.
-        const unitWide = !stepped && block.some((line) => NON_FATAL.test(line));
         if (
-            !unitWide &&
-            !block.some((line) => KEPT_FROM_RUNNING.test(line) || NON_FATAL.test(line))
+            block.some(
+                (line) =>
+                    KEPT_FROM_RUNNING.test(line) || NON_FATAL.test(line) || UNSAFE_SHELL.test(line),
+            )
         )
-            return;
-        for (let index = start; index < (unitWide ? lines.length : end); index++)
-            guarded.add(index);
+            for (let index = start; index < end; index++) guarded.add(index);
     };
     lines.forEach((line, index) => {
         if (!/^\s*-\s/.test(line)) return;
         close(index);
-        stepped = true;
         start = index;
     });
     close(lines.length);
+    let relaxed = false;
+    lines.forEach((line, index) => {
+        if (OPENS_SHELL.test(line)) relaxed = false;
+        if (RELAXES_SHELL.test(line)) relaxed = true;
+        if (relaxed) guarded.add(index);
+    });
     return guarded;
 }
 
@@ -230,12 +271,20 @@ export function workflowJobs(yaml) {
 
 // Anything local a job delegates to selects the file that installs, so match any
 // `./` target rather than only the ones already scanned — a check that can only
-// fail for what it already accepts cannot fail at all — quoted or bare.
-export const localWorkflowCalls = (lines) =>
-    lines
-        .filter((line) => !isComment(line))
-        .map((line) => /^\s*-?\s*uses:\s*(['"]?)\.\/(\S+?)\/*\1\s*(?:#.*)?$/.exec(line)?.[2])
-        .filter(Boolean);
+// fail for what it already accepts cannot fail at all. Quoted, bare, or on the
+// line beneath the key: none of those is a reason not to read it.
+export const localWorkflowCalls = (lines) => {
+    const targets = [];
+    lines.forEach((line, index) => {
+        if (isComment(line)) return;
+        const key = /^\s*-?\s*uses:\s*(\S.*)?$/.exec(line);
+        if (!key) return;
+        const value = key[1] ?? lines.slice(index + 1).find((next) => next.trim()) ?? "";
+        const target = /^\s*(['"]?)\.\/(\S+?)\/*\1\s*(?:#.*)?$/.exec(value)?.[2];
+        if (target) targets.push(target);
+    });
+    return targets;
+};
 
 // An override resolves against the workspace root, a dependency against the
 // declaring directory, so callers pass the one they write in.
