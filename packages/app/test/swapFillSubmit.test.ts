@@ -20,6 +20,7 @@ import {
     SWAP_FILL_SUBMIT_LEASE_OWNER,
     assertSolverAuthorised,
     assertSolverGraphMatchesTrusted,
+    productionSwapFillJointOps,
     submitSwapFill,
     type SwapFillJointOps,
     type SwapFillSubmitDeps,
@@ -55,6 +56,8 @@ import type { SwapFillGraphWire, SwapFillQuoteResponse } from "@arkade-taxi/prot
 import {
     JointSigningError,
     JointSubmissionAmbiguousError,
+    setTapScriptSigEntries,
+    tapLeavesOfInput,
     verifyOfferFillPlan,
     type JointGraph,
 } from "@arkade-taxi/client";
@@ -389,6 +392,20 @@ describe("submitSwapFill", () => {
         expect(joint.calls).toEqual(["verify", "sign", "prepare", "covenant", "submit"]);
         expect(authCalls).toHaveLength(1);
         expect(taxiIdentity.signCalls).toBe(0);
+    });
+
+    it("authorises the solver graph before Taxi signs, and signs that same graph", async () => {
+        const q = await quote();
+        let authorised: JointGraph | undefined;
+        await submitQuoted(swapFills.get(q.fillId)!, q.graph, {
+            assertSolverAuthorised: ({ solver }) => {
+                joint.calls.push("auth");
+                authorised = solver;
+            },
+        });
+        expect(joint.calls).toEqual(["verify", "auth", "sign", "prepare", "covenant", "submit"]);
+        expect(authorised).toBeDefined();
+        expect(joint.signArgs?.partial).toBe(authorised);
     });
 
     it("pins both solver and sponsor owner keys for prepare and submit", async () => {
@@ -1077,5 +1094,94 @@ describe("assertSolverAuthorised accepts a properly signed solver graph", () => 
                 solverKeys: [solverHex],
             }),
         ).toThrow(/no pinned solver signature/);
+    });
+
+    it("passes a pinned signature on another trusted leaf, which signForTaxi refuses unsigned", async () => {
+        const sponsorSeed = new Uint8Array(32).fill(24);
+        const sponsorTree = new VtxoScript([
+            MultisigTapscript.encode({ pubkeys: [schnorr.getPublicKey(sponsorSeed), serverX] })
+                .script,
+        ]);
+        const offLeaf = MultisigTapscript.encode({
+            pubkeys: [schnorr.getPublicKey(new Uint8Array(32).fill(23)), serverX],
+        }).script;
+        const { arkTx, checkpoints } = buildOffchainTx(
+            [
+                coin("aa".repeat(32)),
+                coin("bb".repeat(32)),
+                {
+                    ...coin("cc".repeat(32)),
+                    tapLeafScript: sponsorTree.leaves[0],
+                    tapTree: sponsorTree.encode(),
+                },
+            ],
+            [{ script: new Uint8Array([0x51, 0x20, ...solverX]), amount: BigInt(14_000) }],
+            unroll,
+        );
+        const ownLeaf = MultisigTapscript.encode({ pubkeys: [solverX, serverX] }).script;
+        const twin = new VtxoScript([ownLeaf, offLeaf]);
+        arkTx.updateInput(1, {
+            tapLeafScript: [...arkTx.getInput(1).tapLeafScript!, twin.leaves[1]],
+        });
+        const trusted = sealGraph({
+            arkTx: base64.encode(arkTx.toPSBT()),
+            checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
+            graphId: "",
+            inputOwners: [null, "solver", "sponsor"],
+        });
+
+        const off = tapLeavesOfInput(arkTx, 1).find(
+            (l) => hex.encode(l.script) === hex.encode(offLeaf),
+        )!;
+        const prevouts = [0, 1, 2].map((i) => arkTx.getInput(i).witnessUtxo!);
+        const message = arkTx.preimageWitnessV1(
+            1,
+            prevouts.map((p) => p.script),
+            0,
+            prevouts.map((p) => p.amount),
+            undefined,
+            off.script,
+            off.version,
+        );
+        const signedArk = arkTx.clone();
+        setTapScriptSigEntries(signedArk, 1, [
+            {
+                pubKey: solverX,
+                leafHash: hex.decode(off.leafHashHex),
+                signature: schnorr.sign(message, SOLVER_SEED),
+            },
+        ]);
+        const solverCp = await SingleKey.fromPrivateKey(SOLVER_SEED).sign(
+            checkpoints[1]!.clone(),
+            [0],
+        );
+        const solver: JointGraph = {
+            ...trusted,
+            arkTx: base64.encode(signedArk.toPSBT()),
+            checkpoints: trusted.checkpoints.map((cp, i) =>
+                i === 1 ? base64.encode(solverCp.toPSBT()) : cp,
+            ),
+        };
+
+        expect(() =>
+            assertSolverAuthorised({ solver, trusted, solverKeys: [solverHex] }),
+        ).not.toThrow();
+        const sponsor = SingleKey.fromPrivateKey(sponsorSeed);
+        let taxiSigned = 0;
+        const identity = {
+            xOnlyPublicKey: () => sponsor.xOnlyPublicKey(),
+            sign: (tx: Transaction, indexes?: number[]) => {
+                taxiSigned++;
+                return sponsor.sign(tx, indexes);
+            },
+        } as unknown as Identity;
+        await expect(
+            productionSwapFillJointOps.signForTaxi({
+                expected: trusted,
+                partial: solver,
+                bindings: [{ inputIndex: 2, identity }],
+            }),
+        ).rejects.toThrow(/input 1 signature is not on its selected leaf/);
+        expect(taxiSigned).toBe(0);
     });
 });

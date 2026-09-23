@@ -374,6 +374,9 @@ export async function submitSwapFill(
     } catch (cause) {
         failSigning(deps, id, leaseToken, now, "swap_fill_graph_conflict", 409, cause);
     }
+    // Pins keys and checks signatures, not the leaf each one commits to: that is
+    // signForTaxi's (signJointGraphForOwner -> assertAccumulatedSigs), before Taxi
+    // signs. Keep it after this call and on this same `solver` graph.
     try {
         (deps.assertSolverAuthorised ?? assertSolverAuthorised)({
             solver: solver!,
