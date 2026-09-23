@@ -180,6 +180,18 @@ describe("installing-path scan", () => {
         ["            - run: pnpm -r build", false],
         ["            - run: pnpm vectors", false],
         ["            - run: node scripts/carrier-artifacts/verify.mjs", false],
+        ["RUN pnpm install; echo ok", true],
+        ['            - run: sh -c "pnpm install"', true],
+        ["pnpm i&&pnpm build", true],
+        ["pnpm install>/dev/null", true],
+        ["`npm ci`", true],
+        ["yarn; pnpm build", true],
+        ["yarn 2>&1", true],
+        ['echo "use npm"; yarn', true],
+        ["yarn --cwd app", true],
+        ["yarn --cwd app build", false],
+        ["yarn build", false],
+        ['        echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV', false],
     ])("reads %j as an install: %s", (line, expected) => {
         expect(installsDependencies(line)).toBe(expected);
     });
@@ -219,6 +231,16 @@ describe("installing-path scan", () => {
         ],
     ])("locates the first unverified install in %j", (source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
+    });
+
+    it.each([
+        ["RUN pnpm install; echo ok"],
+        ['            - run: sh -c "pnpm install"'],
+        ["RUN pnpm i&&pnpm build"],
+        ["RUN pnpm install>/dev/null"],
+        ["RUN `npm ci`"],
+    ])("hold %j to a verify, however the shell punctuates it", (line) => {
+        expect(unverifiedInstall([line])).toBe(1);
     });
 
     it("treats a later Dockerfile stage as its own filesystem", () => {
@@ -720,8 +742,37 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             ],
             5,
         ],
+        [
+            "errexit switched off on the verify's own line",
+            [
+                "            - run: |",
+                "                  set +e && pnpm verify:artifacts",
+                "                  pnpm install --frozen-lockfile",
+            ],
+            3,
+        ],
     ])("%s", (_case, source, expected) => {
         expect(unverifiedInstall(source)).toBe(expected);
+    });
+
+    it.each([
+        ['sh -c "pnpm install"', 1],
+        ["make deps", 2],
+        ["pnpm fetch", 2],
+        [". ./setup.sh", 2],
+        ["source ./setup.sh", 2],
+        ["bash ./setup.sh", 2],
+        ["export X=$(pnpm install)", 1],
+        ["cd $(pnpm install)", 1],
+        ["cd /app", undefined],
+        ["corepack enable", undefined],
+        ["export CI=1", undefined],
+        ["mkdir -p /app", undefined],
+        ["set -e", undefined],
+    ])("count a verify chained behind %j: line %s", (prefix, expected) => {
+        expect(unverifiedInstall([`RUN ${prefix} && pnpm verify:artifacts`, "RUN pnpm i"])).toBe(
+            expected,
+        );
     });
 
     it.each([

@@ -2,8 +2,10 @@
 // `pnpm install`, so there is no node_modules for it to import from.
 //
 // WHAT THIS DOES NOT MODEL. Every rule below is a text reader, not a parser:
-//   - `installsDependencies` knows four package managers, so a Makefile target
-//     or a wrapper script that installs is invisible.
+//   - `installsDependencies` knows four package managers by name, so a Makefile
+//     target, a wrapper script or `$PM install` that installs is invisible.
+//   - after a bare `yarn`, a word following an option is taken as its value, so
+//     `yarn --cwd app` installs and so, falsely, does `yarn --silent build`.
 //   - a `shopt` without `-o` is taken not to reach errexit.
 //   - `fault-battery.mjs` is what proves these rules can fail. Run it.
 
@@ -138,16 +140,30 @@ export const EXEMPT_INSTALLS = 0;
 // `pnpm/action-setup` installs with no command line at all when its step says so.
 const ACTION_INSTALL = /^\s*run_install:\s*(?!false\b|'false'|"false")\S/;
 
+const REDIRECT = /\d*[<>]+&?\s*[^\s<>;&|()`]*/g;
+const words = (text) => text.split(/\s+/).filter(Boolean);
+
 // Any spelling a drifting edit might reach for. `pnpm exec playwright install`
 // matches too: an exemption is written with OPT_OUT, not guessed at here.
 export function installsDependencies(line) {
     if (ACTION_INSTALL.test(line)) return true;
-    const tokens = line.trim().split(/\s+/);
+    const unquoted = line.replace(/['"\\]/g, "");
+    const tokens = words(unquoted.replace(/[;&|()<>`]/g, " "));
     const at = tokens.findIndex((token) => PACKAGE_MANAGERS.has(token));
-    if (at === -1) return false;
-    const rest = tokens.slice(at + 1);
-    if (!rest.some((token) => !token.startsWith("-"))) return tokens[at] === "yarn";
-    return rest.some((token) => INSTALL_SUBCOMMANDS.has(token));
+    if (at !== -1 && tokens.slice(at + 1).some((token) => INSTALL_SUBCOMMANDS.has(token)))
+        return true;
+    // Bare `yarn` installs, so it is read per command: what follows on the line is not its argument.
+    return unquoted
+        .replace(REDIRECT, " ")
+        .split(/[;&|()`]/)
+        .some((command) => {
+            const parts = words(command);
+            const yarn = parts.indexOf("yarn");
+            const rest = parts.slice(yarn + 1);
+            const optionOrValue = (token, index) =>
+                token.startsWith("-") || /^-[^=]*$/.test(rest[index - 1] ?? "");
+            return yarn !== -1 && rest.every(optionOrValue);
+        });
 }
 
 export const isOptOut = (line) => line !== undefined && isComment(line) && line.includes(OPT_OUT);
@@ -163,8 +179,15 @@ const swallowsStatus = (command) => /[|&]/.test(command.replaceAll("&&", " "));
 
 const VERIFY_COMMAND = /carrier-artifacts\/verify\.mjs|verify:artifacts/;
 
-// `echo …verify.mjs` names the command without running it; only the last `;` group's
-// status survives; and a prefix disqualifies only if it INSTALLED, not if it was `cd`.
+// Asking instead whether a prefix INSTALLED made `installsDependencies` a negative gate,
+// where every miss it already had became a false green. Enumerate the provably harmless;
+// a `set +e` is not, since unlike the wallet nothing else here guards its own line.
+const BENIGN_PREFIX = /^(?:cd|set|export|mkdir|umask)\b|^corepack\s+(?:enable|prepare)\b/;
+const benignPrefix = (part) =>
+    BENIGN_PREFIX.test(part) && !/\$\(|`/.test(part) && !DISARMS_ERREXIT.test(part);
+
+// `echo …verify.mjs` names the command without running it, and only the last `;` group's
+// status survives.
 export const invokesVerify = (line) => {
     const command = commandBody(line);
     if (swallowsStatus(command)) return false;
@@ -178,9 +201,7 @@ export const invokesVerify = (line) => {
         ({ part }) => VERIFY_COMMAND.test(part) && INVOKERS.has(part.split(/\s+/)[0]),
     );
     return (
-        at !== -1 &&
-        parts[at].fatal &&
-        !parts.slice(0, at).some(({ part }) => installsDependencies(part))
+        at !== -1 && parts[at].fatal && parts.slice(0, at).every(({ part }) => benignPrefix(part))
     );
 };
 

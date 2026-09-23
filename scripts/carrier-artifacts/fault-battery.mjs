@@ -721,6 +721,96 @@ const faults = [
             sub(CI, "\njobs:\n", ["", "env:", "    SHELLOPTS: noexec", "", "jobs:", ""].join("\n")),
     ],
 
+    // --- round 7: an install the tokenizer cannot see, and a prefix it cannot clear ---
+    [
+        "BH",
+        "an install glued to a semicolon, verify gone",
+        [DF],
+        () => {
+            sub(DF, `${VERIFY_DF}\n`, "");
+            sub(DF, "RUN pnpm install --frozen-lockfile", "RUN pnpm install; echo ok");
+        },
+    ],
+    [
+        "BI",
+        "an install inside sh -c, verify gone",
+        [CI],
+        () => {
+            sub(CI, `${VERIFY_CI}\n`, "");
+            sub(
+                CI,
+                "            - run: pnpm install --frozen-lockfile",
+                '            - run: sh -c "pnpm install --frozen-lockfile"',
+            );
+        },
+    ],
+    [
+        "BJ",
+        "an install glued to &&, verify gone",
+        [REL],
+        () => {
+            sub(REL, "            - run: node scripts/carrier-artifacts/verify.mjs\n", "");
+            sub(
+                REL,
+                "            - run: pnpm install --frozen-lockfile",
+                "            - run: pnpm i&&pnpm -r build",
+            );
+        },
+    ],
+    [
+        "BK",
+        "an install glued to a redirect, verify gone",
+        [E2E],
+        () => {
+            sub(E2E, "            - run: node scripts/carrier-artifacts/verify.mjs\n", "");
+            sub(E2E, "if pnpm install --frozen-lockfile;", "if pnpm install>/dev/null;");
+        },
+    ],
+    [
+        "BL",
+        "an install inside backticks, verify gone",
+        [DF],
+        () => {
+            sub(DF, `${VERIFY_DF}\n`, "");
+            sub(
+                DF,
+                "RUN pnpm install --frozen-lockfile",
+                "RUN echo `pnpm install --frozen-lockfile`",
+            );
+        },
+    ],
+    [
+        "BM",
+        "an sh -c install ahead of the verify on its line",
+        [DF],
+        () =>
+            sub(
+                DF,
+                VERIFY_DF,
+                'RUN sh -c "pnpm install" && node scripts/carrier-artifacts/verify.mjs',
+            ),
+    ],
+    [
+        "BN",
+        "a sourced script ahead of the verify on its line",
+        [DF],
+        () =>
+            sub(
+                DF,
+                VERIFY_DF,
+                "RUN . ./scripts/setup.sh && node scripts/carrier-artifacts/verify.mjs",
+            ),
+    ],
+    [
+        "BO",
+        "errexit switched off on the verify's own line",
+        [E2E],
+        () => {
+            sub(E2E, "            - run: node scripts/carrier-artifacts/verify.mjs\n", "");
+            sub(E2E, "set -eu", "set +e && node scripts/carrier-artifacts/verify.mjs");
+        },
+    ],
+
     [
         "AH",
         "one install opt-out marker, the former free bypass",
@@ -825,6 +915,14 @@ const EXPECTED = {
     BE: "job gates installs at line 26",
     BF: "job gates installs at line 24",
     BG: "defaults every run to a shell or environment",
+    BH: "stage build installs at line 21",
+    BI: "job gates installs at line 21",
+    BJ: "job packages installs at line 75",
+    BK: "job e2e installs at line 63",
+    BL: "stage build installs at line 21",
+    BM: "stage build installs at line 21",
+    BN: "stage build installs at line 22",
+    BO: "job e2e installs at line 63",
 };
 
 const dirty = execFileSync("git", ["-C", REPO, "status", "--porcelain", "--", ...TOUCHED], {
