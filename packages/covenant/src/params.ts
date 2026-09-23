@@ -4,6 +4,9 @@ export type AssetIdRef = {
     groupIndex: number;
 };
 
+export type ReceiverFare =
+    { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
+
 export interface DustCovenantParams {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
@@ -17,10 +20,13 @@ export interface DustCovenantParams {
      * four-leaf tree; a mode disables the forbidden closure in place, so the
      * tree height and every control proof are unchanged. */
     claimMode?: "recycle" | "purchase";
+    receiverFare?: ReceiverFare;
 }
 
 const equalKeys = (a: Uint8Array, b: Uint8Array) =>
     a.length === b.length && a.every((byte, i) => byte === b[i]);
+
+const MAX_I64 = 2n ** 63n - 1n;
 
 export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): void {
     for (const [name, k] of [
@@ -60,6 +66,23 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     }
     if (p.claimMode !== undefined && p.claimMode !== "recycle" && p.claimMode !== "purchase") {
         throw new Error(`covenant: unknown claimMode ${String(p.claimMode)}`);
+    }
+    if (p.receiverFare !== undefined) {
+        const { currency, units } = p.receiverFare;
+        if (currency !== "sats" && currency !== "asset")
+            throw new Error(`covenant: receiver fare currency ${String(currency)} is unknown`);
+        if (p.assetId === undefined)
+            throw new Error("covenant: receiver fare requires an asset id");
+        if (p.topup !== p.dust)
+            throw new Error("covenant: receiver fare requires the operator to fund the whole dust");
+        if (p.claimMode !== "recycle")
+            throw new Error("covenant: receiver fare is only defined for a recycle claim");
+        if (p.recoveryRecipient !== "receiver")
+            throw new Error("covenant: receiver fare requires receiver-owned recovery");
+        if (typeof units !== "bigint" || units < 0n)
+            throw new Error("covenant: receiver fare units must not be negative");
+        if (units > MAX_I64)
+            throw new Error("covenant: receiver fare units exceed a signed 64-bit integer");
     }
     if (p.recoveryRecipient === "receiver" && p.assetId === undefined) {
         throw new Error("covenant: receiver recovery requires an asset id");

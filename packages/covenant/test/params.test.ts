@@ -5,6 +5,7 @@ import {
     validateParams,
     type DustCovenantParams,
 } from "../src/params.js";
+import { receiverPaid } from "./fixtures.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
@@ -86,6 +87,44 @@ describe("validateParams", () => {
             recoveryRecipient: "receiver",
         } as DustCovenantParams;
         expect(() => validateParams(params, 6n)).toThrow(/needs at least 6 sats/);
+    });
+});
+
+describe("receiverFare", () => {
+    it("accepts a sats fare and an asset fare", () => {
+        expect(() => validateParams(receiverPaid(), 1n)).not.toThrow();
+        expect(() =>
+            validateParams(receiverPaid({ receiverFare: { currency: "asset", units: 9n } }), 1n),
+        ).not.toThrow();
+    });
+    it("requires the operator to fund the whole dust", () => {
+        expect(() => validateParams(receiverPaid({ topup: 329n }), 1n)).toThrow(
+            /fund the whole dust/,
+        );
+    });
+    it("requires an asset id, and says so as a fare problem", () => {
+        expect(() =>
+            validateParams(receiverPaid({ assetId: undefined, recoveryRecipient: "sender" }), 1n),
+        ).toThrow(/receiver fare requires an asset id/);
+    });
+    it("requires a recycle claim mode and receiver recovery", () => {
+        expect(() => validateParams(receiverPaid({ claimMode: "purchase" }), 1n)).toThrow(
+            /only defined for a recycle/,
+        );
+        expect(() => validateParams(receiverPaid({ recoveryRecipient: "sender" }), 1n)).toThrow(
+            /receiver-owned recovery/,
+        );
+    });
+    it("refuses negative units and units past a signed 64-bit integer", () => {
+        expect(() =>
+            validateParams(receiverPaid({ receiverFare: { currency: "sats", units: -1n } }), 1n),
+        ).toThrow(/must not be negative/);
+        expect(() =>
+            validateParams(
+                receiverPaid({ receiverFare: { currency: "asset", units: 2n ** 63n } }),
+                1n,
+            ),
+        ).toThrow(/signed 64-bit/);
     });
 });
 
