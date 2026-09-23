@@ -666,6 +666,61 @@ const faults = [
             ),
     ],
 
+    // --- round 6: two correct rules that composed, and the env that re-points ---
+    [
+        "BD",
+        "a verify that is only heredoc text",
+        [DF],
+        () =>
+            sub(
+                DF,
+                VERIFY_DF,
+                ["RUN cat <<EOF", "- run: node scripts/carrier-artifacts/verify.mjs", "EOF"].join(
+                    "\n",
+                ),
+            ),
+    ],
+    [
+        "BE",
+        "a bullet re-arming from inside a conditional",
+        [CI],
+        () =>
+            sub(
+                CI,
+                VERIFY_CI,
+                [
+                    "            - run: |",
+                    '                  if [ -n "$CI" ]; then',
+                    "                    - item",
+                    "                    node scripts/carrier-artifacts/verify.mjs",
+                    "                  fi",
+                ].join("\n"),
+            ),
+    ],
+    [
+        "BF",
+        "a job re-pointing the shell through SHELLOPTS",
+        [CI],
+        () =>
+            sub(
+                CI,
+                "    gates:\n        runs-on: ubuntu-latest",
+                [
+                    "    gates:",
+                    "        runs-on: ubuntu-latest",
+                    "        env:",
+                    "            SHELLOPTS: noexec",
+                ].join("\n"),
+            ),
+    ],
+    [
+        "BG",
+        "a workflow-level env that re-points it",
+        [CI],
+        () =>
+            sub(CI, "\njobs:\n", ["", "env:", "    SHELLOPTS: noexec", "", "jobs:", ""].join("\n")),
+    ],
+
     [
         "AH",
         "one install opt-out marker, the former free bypass",
@@ -709,7 +764,7 @@ const assertMutated = (id, saved) => {
 // shape, moved into the instrument.
 // The line number is already in the message and is the only token separating
 // two faults on the same unit, so it is pinned too. It takes the largest
-// collision group from 10 to 3; unit+line is the finest grain the scan reports.
+// collision group from 10 to 4; unit+line is the finest grain the scan reports.
 const EXPECTED = {
     A: "manifest says",
     B: "which is not a frozen archive",
@@ -737,7 +792,7 @@ const EXPECTED = {
     V: "declared candidate resolutions were confirmed",
     W: "job gates installs at line 24",
     X: "job gates installs at line 23",
-    Y: "job vectors installs at line 44",
+    Y: "job vectors installs at line 47",
     Z: "stage build installs at line 22",
     AA: "stage build installs at line 22",
     AB: "stage build installs at line 22",
@@ -749,7 +804,7 @@ const EXPECTED = {
     AH: "1 install exemptions",
     AI: "job gates installs at line 22",
     AJ: "job packages installs at line 79",
-    AK: "job vectors installs at line 48",
+    AK: "job vectors installs at line 51",
     AL: "job e2e installs at line 66",
     AM: "stage build installs at line 23",
     AN: "job gates installs at line 25",
@@ -760,14 +815,18 @@ const EXPECTED = {
     AS: "stage build installs at line 23",
     AT: "job gates installs at line 24",
     AU: "job gates installs at line 25",
-    AV: "defaults every run to a shell",
+    AV: "defaults every run to a shell or environment",
     AW: "job gates installs at line 25",
     AX: "job gates installs at line 24",
     AY: "job gates installs at line 26",
     AZ: "job gates installs at line 24",
     BA: "job gates installs at line 25",
-    BB: "defaults every run to a shell",
+    BB: "defaults every run to a shell or environment",
     BC: "job gates installs at line 19",
+    BD: "stage build installs at line 24",
+    BE: "job gates installs at line 26",
+    BF: "job gates installs at line 24",
+    BG: "defaults every run to a shell or environment",
 };
 
 const dirty = execFileSync("git", ["-C", REPO, "status", "--porcelain", "--", ...TOUCHED], {

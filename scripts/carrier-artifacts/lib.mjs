@@ -1,14 +1,11 @@
 // Built-in Node only: `verify.mjs` runs in the Docker layer BEFORE
 // `pnpm install`, so there is no node_modules for it to import from.
 //
-// WHAT THIS DOES NOT MODEL. Every rule below is a text reader, not a parser, and
-// the honest boundaries are:
-//   - a workflow-level `env:` is outside `jobs:` and so outside the unit scan;
-//     only `defaults:` is reached, and only in the one file that declares it.
-//   - `installsDependencies` knows four package managers; a Makefile target or a
-//     wrapper script that installs is invisible.
-//   - `scripts/carrier-artifacts/fault-battery.mjs` is what proves these rules
-//     can fail. Run it after changing anything here.
+// WHAT THIS DOES NOT MODEL. Every rule below is a text reader, not a parser:
+//   - `installsDependencies` knows four package managers, so a Makefile target
+//     or a wrapper script that installs is invisible.
+//   - a `shopt` without `-o` is taken not to reach errexit.
+//   - `fault-battery.mjs` is what proves these rules can fail. Run it.
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -170,8 +167,7 @@ const JOB_NON_FATAL = /^( *)continue-on-error:\s*(?!false\b|'false'|"false")\S/;
 
 // Actions' default `run` shell carries `-e`; a custom template drops it. Flow
 // style puts the mapping on one line and prettier preserves it, so the value is
-// read wherever it sits. `bash` and `sh` are the spellings PROVABLY fatal;
-// everything else — template, other interpreter, unread — disqualifies.
+// read wherever it sits.
 const SHELL_VALUE = /shell:\s*(?:"([^"]*)"|'([^']*)'|([^,}]*))/;
 const unprovenShell = (text) => {
     const found = SHELL_VALUE.exec(text);
@@ -182,25 +178,31 @@ const unprovenShell = (text) => {
 
 const OPENS_SHELL = /^\s*-\s|^\s*RUN\s/;
 
+// A body's lines are text, not structure: counting a `- ` there as both a shell
+// boundary and inert metadata re-armed the refusal from inside its own cause.
+const BLOCK_SCALAR_KEY = /^( *)(?:-\s+)?[A-Za-z_][\w-]*:\s*[|>][-+\d]*\s*(?:#.*)?$/;
+const HEREDOC_OPEN = /<<-?\s*['"]?([A-Za-z_]\w*)/;
+
 // A verify counts only as an UNCONDITIONAL top-level command, and rather than
 // enumerate the constructs that nest one — the list is what let `( )` through —
 // this allows only what may precede a verify in its own shell. Anything else,
-// known or not, stops the verify counting. Measured cost on this tree: none,
-// because all nine live verifies are a step's whole command.
-const ARMS_SHELL = /^\s*set\s+[-+]|^\s*shopt\s+-s\b/;
-const DISARMS_ERREXIT = /^\s*set\s+\+(?:[A-Za-z]*e|o\s+errexit\b)|^\s*trap\s.*\bERR\b/;
+// known or not, stops the verify counting.
+// `shopt` reaches errexit only through its documented `-o` alias for `set`.
+const ARMS_SHELL = /^\s*set\s+[-+]|^\s*shopt\s+(?!-\S*o)/;
+const DISARMS_ERREXIT = /^\s*set\s+\+(?:[A-Za-z]*e|o\s+errexit\b)/;
 const YAML_KEY = /^\s*(?:-\s+)?[A-Za-z_][\w-]*:/;
+// Either one re-points the shell for every command under it.
+const HOSTILE_ENV = /\b(?:SHELLOPTS|BASH_ENV)\b/;
 
 const mayPrecedeVerify = (line) =>
     !line.trim() ||
     isComment(line) ||
     (ARMS_SHELL.test(line) && !DISARMS_ERREXIT.test(line)) ||
-    (YAML_KEY.test(line) && !unprovenShell(line)) ||
+    (YAML_KEY.test(line) && !unprovenShell(line) && !HOSTILE_ENV.test(line)) ||
     invokesVerify(line);
 
 // YAML lets a scalar sit on the line beneath its key, and every reader here
-// wants the value. COPY it onto the key rather than move it: consuming the line
-// ate block-scalar headers and installs, and left the pass non-idempotent.
+// wants it, so it is COPIED onto the key and a key-shaped successor never is.
 const NEXT_LINE_KEY = /^\s*(?:-\s+)?(?:shell|continue-on-error|if|run_install|uses):\s*(?:#.*)?$/;
 
 export function withInlineValues(lines) {
@@ -211,23 +213,25 @@ export function withInlineValues(lines) {
                 .slice(index + 1)
                 .find((candidate) => candidate.trim())
                 ?.trim() ?? "";
-        if (!value || /^[-#]/.test(value) || value.endsWith(":")) return line;
+        if (!value || /^[-#]/.test(value) || /^[A-Za-z_][\w-]*:/.test(value)) return line;
         return `${line.replace(/\s+$/, "")} ${value}`;
     });
 }
 
-/** A workflow-level `defaults:` sits outside `jobs:`, where a per-job scan cannot
- * reach it, so `verify.mjs` refuses the file rather than pretending to scan it. */
-export function unprovenDefaultShell(yaml) {
+/** A workflow-level `defaults:` or `env:` sits outside `jobs:`, where a per-job
+ * scan cannot reach it, so `verify.mjs` refuses the file rather than scan it. */
+export function unprovenWorkflowPreamble(yaml) {
     const lines = withInlineValues(yaml.split(/\r?\n/));
-    const start = lines.findIndex((line) => /^defaults:/.test(line));
-    if (start === -1) return false;
-    const block = [lines[start]];
-    for (const line of lines.slice(start + 1)) {
-        if (line.trim() && !/^\s/.test(line)) break;
-        block.push(line);
-    }
-    return unprovenShell(block.join(" "));
+    return lines.some((line, index) => {
+        if (!/^(?:defaults|env):/.test(line)) return false;
+        const block = [line];
+        for (const next of lines.slice(index + 1)) {
+            if (next.trim() && !/^\s/.test(next)) break;
+            block.push(next);
+        }
+        const text = block.join(" ");
+        return unprovenShell(text) || HOSTILE_ENV.test(text);
+    });
 }
 
 // A `- ` line belongs to whatever list it is under, and `needs:` and
@@ -245,6 +249,8 @@ const jobWideGuard = (lines) => {
     // nothing; the job declaring one is what makes an unsafe shell job-wide.
     return (
         lines.some(jobLevel(JOB_NON_FATAL)) ||
+        // An env that re-points the shell outlives the step that sets it.
+        lines.some((line) => HOSTILE_ENV.test(line)) ||
         (lines.some(jobLevel(JOB_DEFAULTS)) && lines.some(unprovenShell))
     );
 };
@@ -271,14 +277,21 @@ export function guardedLines(source) {
         start = index;
     });
     close(lines.length);
-    // Within one shell, a verify counts only while everything above it is
-    // something that may accompany one. The first line that is not resets
-    // nothing — it disqualifies every verify below it until the shell reopens.
     let refusing = false;
+    let bodyAt;
+    let heredoc;
     lines.forEach((line, index) => {
-        if (OPENS_SHELL.test(line)) refusing = false;
+        const indent = /^ */.exec(line)[0].length;
+        if (heredoc !== undefined) {
+            if (line.trim() === heredoc) heredoc = undefined;
+        } else if (bodyAt !== undefined && line.trim() && indent <= bodyAt) bodyAt = undefined;
+        const inBody = heredoc !== undefined || bodyAt !== undefined;
+        if (!inBody && OPENS_SHELL.test(line)) refusing = false;
         if (refusing) guarded.add(index);
         if (!mayPrecedeVerify(line)) refusing = true;
+        if (inBody) return;
+        bodyAt = BLOCK_SCALAR_KEY.exec(line)?.[1].length ?? bodyAt;
+        heredoc = HEREDOC_OPEN.exec(line)?.[1] ?? heredoc;
     });
     return guarded;
 }

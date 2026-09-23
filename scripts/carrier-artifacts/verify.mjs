@@ -30,7 +30,7 @@ import {
     readFlatMapping,
     readJson,
     sha256,
-    unprovenDefaultShell,
+    unprovenWorkflowPreamble,
     unverifiedInstall,
     workflowJobs,
     workspaceManifests,
@@ -252,8 +252,8 @@ if (wholeCheckout) {
         // Outside every job, so the per-job scan cannot see it: refuse the file —
         // but only where it installs, since a workflow with none has no gate.
         check(
-            installs(lines) === 0 || !unprovenDefaultShell(lines.join("\n")),
-            `${name} defaults every run to a shell this scan cannot prove keeps a failure fatal`,
+            installs(lines) === 0 || !unprovenWorkflowPreamble(lines.join("\n")),
+            `${name} defaults every run to a shell or environment this scan cannot prove keeps a failure fatal`,
         );
     }
     for (const [name, lines, offset = 0] of scanned) {

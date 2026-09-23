@@ -16,7 +16,8 @@ import {
     installsDependencies,
     isOptOut,
     localWorkflowCalls,
-    unprovenDefaultShell,
+    withInlineValues,
+    unprovenWorkflowPreamble,
     packageRootFrom,
     pinnedSourceMismatch,
     readJson,
@@ -598,9 +599,7 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
             ],
             3,
         ],
-        // A verify counts only as an unconditional top-level command. Nothing
-        // here enumerates openers: anything that may not precede a verify in its
-        // own shell stops it counting, so `( )` needs no rule of its own.
+        // Nothing here enumerates openers, so `( )` needs no rule of its own.
         ...(
             [
                 ["a conditional", "if [ x ]; then", "fi"],
@@ -622,8 +621,7 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
                     5,
                 ] as [string, string[], number],
         ),
-        // The old model counted whitespace tokens, so a bare `echo done` undid
-        // the guard. Nothing counts tokens now.
+        // Nothing counts tokens now, so a bare `echo done` undoes no guard.
         ...(["echo done", "# done", "echo fi", "printf esac", "- bullet"] as const).map(
             (noise) =>
                 [
@@ -648,7 +646,7 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
                 "set +xe",
                 "set +ue",
                 "set +Ee",
-                "shopt -u inherit_errexit",
+                "shopt -o -u errexit",
             ] as const
         ).map(
             (disarm) =>
@@ -670,6 +668,52 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
                 '        defaults: { run: { shell: "bash {0}" } }',
                 "        steps:",
                 "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            5,
+        ],
+        // A body's lines are text, not structure, so a `- ` in one is no step.
+        [
+            "a verify that is only heredoc text",
+            [
+                "RUN cat <<EOF",
+                "- run: pnpm verify:artifacts",
+                "EOF",
+                "RUN pnpm install --frozen-lockfile",
+            ],
+            4,
+        ],
+        [
+            "a bullet re-arming from inside a conditional",
+            [
+                "            - run: |",
+                '                  if [ -n "$CI" ]; then',
+                "                    - item",
+                "                    pnpm verify:artifacts",
+                "                  fi",
+                "            - run: pnpm i",
+            ],
+            6,
+        ],
+        [
+            "a job re-pointing the shell through SHELLOPTS",
+            [
+                "    gates:",
+                "        env:",
+                "            SHELLOPTS: noexec",
+                "        steps:",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+            6,
+        ],
+        [
+            "a step re-pointing it through BASH_ENV",
+            [
+                "            - name: gate",
+                "              env:",
+                "                  BASH_ENV: /tmp/x",
+                "              run: pnpm verify:artifacts",
                 "            - run: pnpm i",
             ],
             5,
@@ -731,7 +775,17 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
         ],
         // These clear a flag errexit does not depend on, so the verify stays
         // fatal; the refusal must not swallow them.
-        ...(["set +o pipefail", "set +E", "set +u", "set +x", "shopt -s globstar"] as const).map(
+        ...(
+            [
+                "set +o pipefail",
+                "set +E",
+                "set +u",
+                "set +x",
+                "shopt -s globstar",
+                "shopt -u nullglob",
+                "shopt -u inherit_errexit",
+            ] as const
+        ).map(
             (harmless) =>
                 [
                     JSON.stringify(harmless),
@@ -751,8 +805,56 @@ describe("a verify only counts where its failure is fatal (both shapes are live 
                 "            - run: pnpm i",
             ],
         ],
+        [
+            "a step after one that was refused",
+            [
+                "            - run: |",
+                "                  for a in 1 2; do",
+                "                    echo x",
+                "                  done",
+                "            - run: pnpm verify:artifacts",
+                "            - run: pnpm i",
+            ],
+        ],
     ])("still counts %s", (_case, source) => {
         expect(unverifiedInstall(source)).toBeUndefined();
+    });
+});
+
+describe("pulling a next-line scalar onto its key", () => {
+    // `guardedLines` runs it twice, so agreeing with itself is load-bearing.
+    it.each([
+        [
+            "two bare keys in a row",
+            ["              shell:", "              continue-on-error:", "                  true"],
+        ],
+        ["a bare key above another key", ["              if:", "              run: pnpm install"]],
+        [
+            "a bare key above a block scalar",
+            [
+                "            - continue-on-error:",
+                "                  true",
+                "              run: >-",
+                "                  node x",
+            ],
+        ],
+        ["nothing to pull", ["            - run: pnpm i"]],
+    ])("is idempotent on %s", (_case, source) => {
+        const once = withInlineValues(source);
+        expect(withInlineValues(once)).toEqual(once);
+    });
+
+    it("is idempotent on every file this repository ships", () => {
+        for (const file of ["Dockerfile", ...WORKFLOWS.map((w) => `.github/workflows/${w}`)]) {
+            const once = withInlineValues(lines(...file.split("/")));
+            expect(withInlineValues(once)).toEqual(once);
+        }
+    });
+
+    it("consumes nothing, so no reader loses a line", () => {
+        const source = ["              if:", "              run: >-", "                  node x"];
+        expect(withInlineValues(source)).toHaveLength(source.length);
+        expect(withInlineValues(source).filter((line) => line.trim())).toHaveLength(3);
     });
 });
 
@@ -773,6 +875,9 @@ describe("a workflow-level defaults: block", () => {
             true,
         ],
         ["flow style naming a proven shell", ["defaults:", "    run: { shell: bash }"], false],
+        ["an env that re-points the shell", ["env:", "    SHELLOPTS: noexec"], true],
+        ["an env that names BASH_ENV", ["env:", "    BASH_ENV: /tmp/x"], true],
+        ["an ordinary env", ["env:", "    REGISTRY: ghcr.io"], false],
         ["a shell that keeps errexit", ["defaults:", "    run:", "        shell: bash"], false],
         ["no defaults at all", ["name: ci", "jobs:", "    gates:"], false],
         [
@@ -787,13 +892,13 @@ describe("a workflow-level defaults: block", () => {
             false,
         ],
     ])("%s", (_case, source, refused) => {
-        expect(unprovenDefaultShell(source.join("\n"))).toBe(refused);
+        expect(unprovenWorkflowPreamble(source.join("\n"))).toBe(refused);
     });
 
     it("does not refuse any workflow this repository ships", () => {
         for (const file of WORKFLOWS)
             expect(
-                unprovenDefaultShell(readFileSync(at(".github", "workflows", file), "utf8")),
+                unprovenWorkflowPreamble(readFileSync(at(".github", "workflows", file), "utf8")),
             ).toBe(false);
     });
 });
