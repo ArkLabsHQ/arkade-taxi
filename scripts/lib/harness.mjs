@@ -159,15 +159,16 @@ export function eventSourceNodeEnvironment(environment) {
 }
 
 export function resolveTask12Tests(args) {
+    const refusal = `Task 12 requires exactly the ${TASK12_TESTS.length} approved test paths`;
     if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
-        throw new Error("Task 12 requires exactly the two approved test paths");
+        throw new Error(refusal);
     if (args.length === 0) return [...TASK12_TESTS];
     if (
         args.length !== TASK12_TESTS.length ||
         new Set(args).size !== TASK12_TESTS.length ||
         args.some((arg) => !TASK12_TESTS.includes(arg))
     )
-        throw new Error("Task 12 requires exactly the two approved test paths");
+        throw new Error(refusal);
     return [...TASK12_TESTS];
 }
 

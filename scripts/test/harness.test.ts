@@ -404,7 +404,9 @@ describe("package manager process boundary", () => {
         [[...task12Tests, "/tmp/outside.test.ts"], "POSIX absolute"],
         [[...task12Tests, "C:\\outside.test.ts"], "Windows absolute"],
     ])("rejects %s Task 12 test arguments", (args) => {
-        expect(() => resolveTask12Tests(args)).toThrow("exactly the two approved test paths");
+        expect(() => resolveTask12Tests(args)).toThrow(
+            `exactly the ${task12Tests.length} approved test paths`,
+        );
     });
 
     it("invokes pnpm's JavaScript entrypoint directly on win32", () => {

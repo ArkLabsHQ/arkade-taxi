@@ -155,6 +155,10 @@ async function releaseBound(live: Live, id: string, unlock: () => Promise<unknow
     let { state } = await live.client.status(id);
     if (state === "locking") {
         const row = (await admin("advances")).advances.find((item: any) => item.id === id);
+        if (!row)
+            throw new Error(
+                `bound advance ${id} (receive quote ${id}) reports locking but is missing from /admin/api/advances`,
+            );
         state = (
             await poll(
                 `bound fill ${id} settles or expires`,
