@@ -59,6 +59,7 @@ import {
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     MemorySwapFills,
+    solverCoin,
     solverTaproot,
 } from "./swapFillFixtures.js";
 
@@ -1194,7 +1195,7 @@ describe("swap-fill routes", () => {
             "ee".repeat(32),
             1,
             asIndexed(
-                fundingCoin({
+                solverCoin({
                     txid: "ee".repeat(32),
                     vout: 1,
                     value: 6000,

@@ -32,6 +32,7 @@ import {
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     offerTaprootOf,
+    solverCoin,
     solverTaproot,
 } from "./swapFillFixtures.js";
 
@@ -219,14 +220,14 @@ export async function createBoundJointFill(
         receiverPaid,
     } = insertReceiveQuote({ wantAmount: WANT_UNITS, receiverFare: over.receiverFare });
     try {
-        const solverCoin = fundingCoin({
+        const solverFunding = solverCoin({
             ...BOUND_SOLVER,
             value: 6_000,
             assets: [{ assetId: WANTED_SWAP_ID, amount: WANT_UNITS }],
         });
         const indexed = new Map<string, ExtendedVirtualCoin>([
             [key(depositCoin), depositCoin],
-            [key(solverCoin), solverCoin],
+            [key(solverFunding), solverFunding],
         ]);
         const quote = await createSwapFillQuote(
             {

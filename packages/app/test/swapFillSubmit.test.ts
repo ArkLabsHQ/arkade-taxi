@@ -45,6 +45,7 @@ import {
     fakeOfferTerms,
     MemorySwapFills,
     sealGraph,
+    solverCoin,
     solverTaproot,
 } from "./swapFillFixtures.js";
 import {
@@ -350,7 +351,7 @@ beforeEach(() => {
         ],
         [
             key(SOLVER_COIN),
-            fundingCoin({
+            solverCoin({
                 txid: SOLVER_COIN.txid,
                 vout: SOLVER_COIN.vout,
                 value: SOLVER_VALUE,

@@ -78,6 +78,19 @@ export function inputAssets(input: FundingInputValue): Map<string, bigint> {
     return result;
 }
 
+/** A collaborative spend: a multisig of exactly the owner and the Arkade Service. A
+ * unilateral CSV exit leaf does not decode as one and throws. */
+export function assertOwnerServerLeaf(
+    spendLeaf: Uint8Array,
+    owner: Uint8Array,
+    server: Uint8Array,
+): void {
+    const closure = MultisigTapscript.decode(spendLeaf);
+    const keys = closure.params.pubkeys.map((key) => hex.encode(key)).sort();
+    if (JSON.stringify(keys) !== JSON.stringify([hex.encode(owner), hex.encode(server)].sort()))
+        throw new LockupShapeError("funding leaf must require exactly owner and Arkade Service");
+}
+
 export function toArkInput(
     input: FundingInputValue,
     owner: Uint8Array,
@@ -86,10 +99,7 @@ export function toArkInput(
     fundingInputToWire(input);
     const tree = VtxoScript.decode(input.tapTree);
     const leaf = tree.findLeaf(hex.encode(input.spendLeaf));
-    const closure = MultisigTapscript.decode(input.spendLeaf);
-    const keys = closure.params.pubkeys.map((key) => hex.encode(key)).sort();
-    if (JSON.stringify(keys) !== JSON.stringify([hex.encode(owner), hex.encode(server)].sort()))
-        throw new LockupShapeError("funding leaf must require exactly owner and Arkade Service");
+    assertOwnerServerLeaf(input.spendLeaf, owner, server);
     return {
         txid: input.txid,
         vout: input.vout,

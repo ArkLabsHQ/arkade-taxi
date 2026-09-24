@@ -1,6 +1,7 @@
 import { base64, hex } from "@scure/base";
 import {
     asset,
+    DefaultVtxo,
     Extension,
     MultisigTapscript,
     scriptFromTapLeafScript,
@@ -18,7 +19,7 @@ import {
 import type { SwapFillBuildRequest } from "../src/arkade/swapFillBuilder.js";
 import { taxiAssetIdToSwapId } from "../src/arkade/swapFillBuilder.js";
 import type { DecodedOfferTerms, SwapFillStore } from "../src/swapFillQuotes.js";
-import { config, operatorTree, receiverKey, serverKey } from "./fixtures.js";
+import { config, fundingCoin, receiverKey, serverKey } from "./fixtures.js";
 import { digestJointGraph, OFFER_FILL_TEMPLATE, type JointGraph } from "@arkade-taxi/client";
 
 // Any valid curve point; the fake builds transactions but never signs them.
@@ -46,8 +47,31 @@ export const offerTaprootOf = (
     covenantSpendLeaf: scriptFromTapLeafScript(coin.forfeitTapLeafScript),
 });
 
-/** Wire taproot data for a solver input built by `fundingCoin`. */
-export const solverTaproot = (tree: VtxoScript = operatorTree) => ({
+/** The key the fixtures' requests name in `solverKeys`. */
+export const SOLVER_KEY = hex.decode("ab".repeat(32));
+export const solverTreeOf = (blocks = 144n) =>
+    new DefaultVtxo.Script({
+        pubKey: SOLVER_KEY,
+        serverPubKey: serverKey,
+        csvTimelock: { type: "blocks", value: blocks },
+    });
+/** Leaf 0 is the collaborative {solver, server} spend, leaf 1 the solver's CSV exit. */
+export const SOLVER_TREE = solverTreeOf();
+
+export const solverCoin = (
+    over: Partial<ExtendedVirtualCoin> = {},
+    tree: DefaultVtxo.Script = SOLVER_TREE,
+): ExtendedVirtualCoin =>
+    fundingCoin({
+        script: hex.encode(tree.pkScript),
+        tapTree: tree.encode(),
+        forfeitTapLeafScript: tree.forfeit(),
+        intentTapLeafScript: tree.forfeit(),
+        ...over,
+    });
+
+/** Wire taproot data for a solver input: its tree and collaborative leaf. */
+export const solverTaproot = (tree: VtxoScript = SOLVER_TREE) => ({
     tapTree: hex.encode(tree.encode()),
     spendLeaf: hex.encode(tree.scripts[0]!),
 });

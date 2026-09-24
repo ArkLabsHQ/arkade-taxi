@@ -31,7 +31,7 @@ import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
 import { classifyObservedSpend } from "./watcher.js";
-import { normalizeExpiry, verifyProviders } from "./arkade/providers.js";
+import { normalizeExpiry, verifyProviders, withinVtxoMaxAmount } from "./arkade/providers.js";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
 const intentDigest = (proof: string, message: string) =>
@@ -46,7 +46,7 @@ const total = (coins: readonly VirtualCoin[]) =>
     coins.reduce((sum, c) => sum + BigInt(c.value), 0n);
 const withinOutputLimit = (amount: bigint, maxAmount: bigint) => {
     if (typeof maxAmount !== "bigint") fail("proceeds_output_limit_invalid");
-    return maxAmount < 0n || amount <= maxAmount;
+    return withinVtxoMaxAmount(amount, maxAmount);
 };
 const holdings = (coins: readonly VirtualCoin[]) => {
     const values = new Map<string, bigint>();

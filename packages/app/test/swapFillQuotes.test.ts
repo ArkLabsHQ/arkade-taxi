@@ -24,14 +24,16 @@ import {
 } from "./fixtures.js";
 import {
     asIndexed,
-    FAKE_COVENANT,
     FAKE_COVENANT_SCRIPT,
     FAKE_MAKER_SCRIPT,
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     MemorySwapFills,
     offerTaprootOf,
+    SOLVER_TREE,
+    solverCoin,
     solverTaproot,
+    solverTreeOf,
 } from "./swapFillFixtures.js";
 import {
     createBoundJointFill,
@@ -187,7 +189,7 @@ function quotedReceiverPaid(
     indexerCoins.set(key(DEP), depositCoin);
     indexerCoins.set(
         key(SOLVER_COIN),
-        fundingCoin({
+        solverCoin({
             txid: SOLVER_COIN.txid,
             vout: SOLVER_COIN.vout,
             value: SOLVER_VALUE,
@@ -213,7 +215,7 @@ beforeEach(() => {
         ],
         [
             key(SOLVER_COIN),
-            fundingCoin({
+            solverCoin({
                 txid: SOLVER_COIN.txid,
                 vout: SOLVER_COIN.vout,
                 value: SOLVER_VALUE,
@@ -277,7 +279,7 @@ describe("createSwapFillQuote", () => {
             indexerCoins.set(key(DEP), depositCoin);
             indexerCoins.set(
                 key(SOLVER_COIN),
-                fundingCoin({
+                solverCoin({
                     txid: SOLVER_COIN.txid,
                     vout: SOLVER_COIN.vout,
                     value: SOLVER_VALUE,
@@ -400,7 +402,7 @@ describe("createSwapFillQuote", () => {
         const d = deps();
         indexerCoins.set(
             key(SOLVER_COIN),
-            fundingCoin({ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: SOLVER_VALUE }),
+            solverCoin({ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: SOLVER_VALUE }),
         );
         const quote = await createSwapFillQuote(
             d,
@@ -645,10 +647,16 @@ describe("createSwapFillQuote", () => {
         it("hands the builder the solver's tree and leaf once the tree rebuilds the indexed script", async () => {
             await createSwapFillQuote(deps(), body());
             const [fund] = builder.built[0]!.solverFund;
-            expect(fund!.tapTree).toEqual(operatorTree.encode());
-            expect(fund!.tapLeafScript).toEqual(
-                operatorTree.findLeaf(hex.encode(operatorTree.scripts[0]!)),
+            expect(fund!.tapTree).toEqual(SOLVER_TREE.encode());
+            expect(fund!.tapLeafScript).toEqual(SOLVER_TREE.forfeit());
+        });
+
+        it("accepts the collaborative leaf for a solver key named in compressed form", async () => {
+            const quote = await createSwapFillQuote(
+                deps(),
+                body({ solverKeys: [`02${"ab".repeat(32)}`] }),
             );
+            expect(quote.fillId).toBe("fill-1");
         });
 
         const refusals: [string, Record<string, unknown>, number, string, RegExp][] = [
@@ -664,6 +672,13 @@ describe("createSwapFillQuote", () => {
                 { ...solverTaproot(), spendLeaf: solverTaproot(senderTree).spendLeaf },
                 400,
                 "swap_fill_solver_leaf_unknown",
+                /solver input 0/,
+            ],
+            [
+                "the solver's unilateral CSV exit leaf",
+                { ...solverTaproot(), spendLeaf: hex.encode(SOLVER_TREE.scripts[1]!) },
+                400,
+                "swap_fill_solver_leaf_not_collaborative",
                 /solver input 0/,
             ],
             [
@@ -701,32 +716,57 @@ describe("createSwapFillQuote", () => {
             });
 
         it("checks the solver tree against the indexed coin, never against the request", async () => {
-            indexerCoins.set(
-                key(SOLVER_COIN),
-                fundingCoin({
-                    ...indexerCoins.get(key(SOLVER_COIN))!,
-                    script: FAKE_COVENANT_SCRIPT,
-                }),
-            );
+            const other = solverTreeOf(288n);
+            const { txid, vout, value, assets } = indexerCoins.get(key(SOLVER_COIN))!;
+            indexerCoins.set(key(SOLVER_COIN), solverCoin({ txid, vout, value, assets }, other));
             const refused = await caught(() => createSwapFillQuote(deps(), body()));
             expect(refused.code).toBe("swap_fill_solver_taproot_mismatch");
             const accepted = await createSwapFillQuote(
                 deps(),
-                withSolverTaproot(solverTaproot(FAKE_COVENANT)),
+                withSolverTaproot(solverTaproot(other)),
             );
             expect(accepted.fillId).toBe("fill-1");
+        });
+
+        it("refuses a collaborative leaf whose owner the request does not name", async () => {
+            const refused = await caught(() =>
+                createSwapFillQuote(deps(), body({ solverKeys: ["cd".repeat(32)] })),
+            );
+            expect(refused.status).toBe(400);
+            expect(refused.code).toBe("swap_fill_solver_leaf_not_collaborative");
+            expect(builder.built).toHaveLength(0);
         });
     });
 
     it("rejects solver funding whose value differs from the claim", async () => {
         indexerCoins.set(
             key(SOLVER_COIN),
-            fundingCoin({ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 1 }),
+            solverCoin({ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 1 }),
         );
         const mismatch = await caught(() => createSwapFillQuote(deps(), body()));
         expect(mismatch.status).toBe(400);
         expect(mismatch.code).toBe("swap_fill_solver_mismatch");
         expect(builder.built).toHaveLength(0);
+    });
+
+    it("admits any output under a provider that reports no maximum (-1)", async () => {
+        const quote = await createSwapFillQuote(
+            deps({ providerLimits: async () => ({ vtxoMaxAmount: -1n }) }),
+            body(),
+        );
+        expect(quote.fillId).toBe("fill-1");
+    });
+
+    it("refuses an output above a finite provider maximum", async () => {
+        const refused = await caught(() =>
+            createSwapFillQuote(
+                deps({ providerLimits: async () => ({ vtxoMaxAmount: 999n }) }),
+                body(),
+            ),
+        );
+        expect(refused.status).toBe(409);
+        expect(refused.code).toBe("swap_fill_output_limit_exceeded");
+        expect(swapFills.rows.size).toBe(0);
     });
 
     it("refuses a graph whose sponsor change differs from the reservation", async () => {

@@ -53,8 +53,8 @@ import {
     JointGraphDerivationError,
 } from "./arkade/jointGraphDerivation.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
-import { operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { normalizeExpiry } from "./arkade/providers.js";
+import { assertOwnerServerLeaf, operatorFundingInput } from "./arkade/lockupBuilder.js";
+import { normalizeExpiry, normalizeSigner, withinVtxoMaxAmount } from "./arkade/providers.js";
 import {
     encodeJointFillSource,
     readFundingSource,
@@ -882,6 +882,17 @@ function checkedTaprootSpend(
     return { tapTree: tree.encode(), spendLeaf: given.spendLeaf, tapLeafScript };
 }
 
+/** toArkInput's rule for a client-supplied spend: a CSV exit leaf would reserve
+ * sponsor coins for a graph arkd then refuses. */
+const isOwnerServerLeaf = (leaf: Uint8Array, owner: Uint8Array, server: Uint8Array): boolean => {
+    try {
+        assertOwnerServerLeaf(leaf, owner, server);
+        return true;
+    } catch {
+        return false;
+    }
+};
+
 async function observedCoin(
     indexer: SwapFillQuoteDeps["senderInventory"],
     outpoint: Outpoint,
@@ -924,6 +935,8 @@ async function enrichSolverFund(
         });
     }
     const byKey = new Map(response.vtxos.map((c) => [key(c), c]));
+    const solverOwners = req.solverKeys.map((solverKey) => hex.decode(normalizeSigner(solverKey)));
+    const server = deps.config.serverPubkey;
     const fund: FillFunding[] = [];
     const coins: VirtualCoin[] = [];
     const spends: TaprootSpend[] = [];
@@ -952,6 +965,12 @@ async function enrichSolverFund(
             `solver input ${i}`,
             "its taproot tree",
         );
+        if (!solverOwners.some((owner) => isOwnerServerLeaf(spend.spendLeaf, owner, server)))
+            throw new ServiceError(
+                "swap_fill_solver_leaf_not_collaborative",
+                400,
+                `solver input ${i} spend leaf must require exactly a solver key and the Arkade Service`,
+            );
         const actual = new Map((coin.assets ?? []).map((a) => [a.assetId, a.amount]));
         const claimed = new Map(
             (input.assets ?? []).map((a) => [taxiAssetIdToSwapId(a.assetId), a.amount]),
@@ -1107,7 +1126,7 @@ function assertTrustedGraph(args: {
     }
     const checkOutput = (sats: bigint, assets: readonly { assetId: string; units: bigint }[]) => {
         if (sats < 0n) mismatch("output carries negative sats");
-        if (args.limits && sats > args.limits.vtxoMaxAmount)
+        if (args.limits && !withinVtxoMaxAmount(sats, args.limits.vtxoMaxAmount))
             throw new ServiceError(
                 "swap_fill_output_limit_exceeded",
                 409,
