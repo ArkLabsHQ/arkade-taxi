@@ -398,31 +398,66 @@ describe("migrations", () => {
         // The columns round-trip at the SQL layer above; these two also prove the
         // *repository* decode path — decodeRow's economics checks and the
         // payer/receiverFare pairing invariant — accepts a genuinely pre-migration row.
+        // toStrictEqual against a complete object (every field, no receiverFare/payer):
+        // toMatchObject would silently ignore an extra, missing or shifted field outside
+        // the keys it's given.
         const advance = new AdvanceRepository(db).get("a1");
-        expect(advance?.receiverFare).toBeUndefined();
-        expect(advance).toMatchObject({
+        expect(advance).toStrictEqual({
             id: "a1",
+            state: "quoted",
+            receiverKey: new Uint8Array(32).fill(1),
+            senderKey: new Uint8Array(32).fill(2),
+            operatorKey: new Uint8Array(32).fill(3),
             dust: 330n,
             topup: 300n,
+            locktime: 100n,
             covenantAddress: "tark1qexample",
             fare: { currency: "sats", units: 10n },
+            createdAt: 1,
+            updatedAt: 1,
+            expiresAt: 2,
+            batchExpiry: { kind: "height", value: 900_000n },
+            operatorInputs: [{ txid: hex32(8), vout: 0 }],
+            unsignedLockupTx: "unsigned",
+            unsignedLockupId: hex32(4),
         });
 
         const quote = new ReceiveQuoteRepository(db).get("q1");
-        expect(quote && "payer" in quote).toBe(false);
-        expect(quote?.receiverFare).toBeUndefined();
-        expect(quote).toMatchObject({
+        expect(quote).toStrictEqual({
             id: "q1",
             state: "expired",
-            covenantAddress: "tark1qcovenantexample",
-            loanSats: 300n,
-            fare: { currency: "sats", units: 5n },
+            receiverAddress: "tark1qreceiverexample",
+            makerPublicKey: hex32(2),
             params: {
+                receiverKey: new Uint8Array(32).fill(1),
+                senderKey: new Uint8Array(32).fill(2),
+                operatorKey: new Uint8Array(32).fill(3),
                 dust: 330n,
                 topup: 300n,
+                assetId: { txid: new Uint8Array(32).fill(9), groupIndex: 0 },
+                locktime: 899_856n,
                 claimMode: "recycle",
                 recoveryRecipient: "receiver",
             },
+            covenantAddress: "tark1qcovenantexample",
+            fare: { currency: "sats", units: 5n },
+            batchExpiry: { kind: "height", value: 900_000n },
+            inputExpiryFloor: { kind: "height", value: 900_000n },
+            recoveryLocktime: { kind: "height", value: 899_856n },
+            loanSats: 300n,
+            createdAt: 1,
+            expiresAt: 2,
+            policyRevision: 1n,
+            operatorInputs: [
+                {
+                    txid: hex32(5),
+                    vout: 0,
+                    value: 1000n,
+                    tapTree: new Uint8Array(32).fill(6),
+                    spendLeaf: new Uint8Array(32).fill(7),
+                    expiry: { kind: "height", value: 900_000n },
+                },
+            ],
         });
         db.close();
     });
