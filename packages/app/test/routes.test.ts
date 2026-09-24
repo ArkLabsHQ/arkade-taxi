@@ -1635,6 +1635,17 @@ describe("CORS", () => {
         expect(res.headers.get("access-control-allow-origin")).toBe("*");
     });
 
+    it("stamps the header on the /v1/claims/events stream a browser EventSource opens", async () => {
+        const res = await corsApp().request(claimsUrl("/v1/claims/events"), { headers: wallet });
+        try {
+            expect(res.status).toBe(200);
+            expect(res.headers.get("content-type")).toContain("text/event-stream");
+            expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        } finally {
+            await res.body?.cancel();
+        }
+    });
+
     it("gives /admin no CORS headers and does not answer its preflight", async () => {
         const app = corsApp();
         const get = await app.request("/admin", { headers: wallet });
