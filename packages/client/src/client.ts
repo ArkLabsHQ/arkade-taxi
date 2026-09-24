@@ -177,7 +177,7 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     payer?: "receiver";
     expect: Omit<
         ReceiveQuoteExpectation,
-        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry"
+        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
     >;
 }
 
@@ -300,6 +300,7 @@ export class TaxiClient {
                     ...(request.fundingExpiry === undefined
                         ? {}
                         : { fundingExpiry: request.fundingExpiry }),
+                    ...(request.payer === undefined ? {} : { payer: request.payer }),
                 },
             }),
         };

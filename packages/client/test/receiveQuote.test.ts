@@ -102,24 +102,17 @@ const args = () => ({
 
 // The receiver pays their own fare: the operator funds the whole dust (topup
 // === dust), so the covenant tree differs from the sender-paid one above.
-const receiverParams = {
-    ...params,
-    topup: 330n,
-    receiverFare: { currency: "sats" as const, units: 7n },
-};
-const receiverPaidCovenantAddress = new DustCovenantScript({
-    serverKey,
-    emulatorKey,
-    params: receiverParams,
-    vtxoMinAmount: 1n,
-})
-    .address(HRP, serverKey)
-    .encode();
+const receiverParams = { ...params, topup: 330n };
 
-const senderPaidArgs = (over: { topup?: bigint; advertisedCurrency?: "sameAsset" } = {}) => {
+const senderPaidArgs = (
+    over: { topup?: bigint; advertisedCurrency?: "sameAsset"; requestedReceiver?: boolean } = {},
+) => {
     const baseArgs = args();
     return {
         ...baseArgs,
+        expect: over.requestedReceiver
+            ? { ...baseArgs.expect, payer: "receiver" as const }
+            : baseArgs.expect,
         quote:
             over.topup === undefined
                 ? baseArgs.quote
@@ -150,23 +143,37 @@ const receiverPaidArgs = (
         paramsUnits?: bigint;
         advertisedFlatUnits?: bigint;
         advertisedCurrency?: "sameAsset";
+        receiverFareCurrency?: "sats" | "asset";
+        unrequested?: boolean;
     } = {},
 ) => {
     const baseArgs = args();
-    const quoteParams =
-        over.paramsUnits === undefined
-            ? receiverParams
-            : {
-                  ...receiverParams,
-                  receiverFare: { currency: "sats" as const, units: over.paramsUnits },
-              };
+    const currency: "sats" | "asset" = over.receiverFareCurrency ?? "sats";
+    const quoteParams = {
+        ...receiverParams,
+        receiverFare: { currency, units: over.paramsUnits ?? 7n },
+    };
+    const covenantAddress = new DustCovenantScript({
+        serverKey,
+        emulatorKey,
+        params: quoteParams,
+        vtxoMinAmount: 1n,
+    })
+        .address(HRP, serverKey)
+        .encode();
     return {
         ...baseArgs,
+        expect: over.unrequested
+            ? baseArgs.expect
+            : { ...baseArgs.expect, payer: "receiver" as const },
         quote: quote({
             params: quoteParamsToWire(quoteParams),
-            covenantAddress: receiverPaidCovenantAddress,
+            covenantAddress,
             fare: over.fare ?? { currency: "sats", units: "0" },
-            receiverFare: { currency: "sats", units: "7" },
+            receiverFare:
+                currency === "asset"
+                    ? { currency, units: "7", assetId: assetIdToWire(ASSET) }
+                    : { currency, units: "7" },
             payer: "receiver",
             unclaimedMode: "reclaim",
         }),
@@ -291,13 +298,33 @@ describe("verifyReceiveQuote", () => {
     });
     it("accepts a same-asset advertised fare on a receiver-paid quote", () => {
         expect(() =>
-            verifyReceiveQuote(receiverPaidArgs({ advertisedCurrency: "sameAsset" })),
+            verifyReceiveQuote(
+                receiverPaidArgs({
+                    advertisedCurrency: "sameAsset",
+                    receiverFareCurrency: "asset",
+                }),
+            ),
         ).not.toThrow();
     });
     it("still refuses a same-asset advertised fare on a sender-paid quote", () => {
         expect(() =>
             verifyReceiveQuote(senderPaidArgs({ advertisedCurrency: "sameAsset" })),
         ).toThrow(/not in sats/);
+    });
+    it("refuses a receiver fare whose currency differs from the advertised policy", () => {
+        expect(() =>
+            verifyReceiveQuote(receiverPaidArgs({ receiverFareCurrency: "asset" })),
+        ).toThrow(/receiver fare currency differs/);
+    });
+    it("refuses a sender-paid answer to a receiver-paid request", () => {
+        expect(() => verifyReceiveQuote(senderPaidArgs({ requestedReceiver: true }))).toThrow(
+            /payer is sender, but the request named receiver/,
+        );
+    });
+    it("refuses a receiver-paid answer to an unrequested (sender-paid) request", () => {
+        expect(() => verifyReceiveQuote(receiverPaidArgs({ unrequested: true }))).toThrow(
+            /payer is receiver, but the request named sender/,
+        );
     });
 });
 
@@ -330,6 +357,36 @@ describe("TaxiClient receive quotes", () => {
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
         expect(await taxi.getReceiveQuote("receive-1")).toEqual(bound);
         expect(() => verifyReceiveQuote({ ...args(), quote: bound })).toThrow(/bound, not usable/);
+    });
+
+    it("sends the payer opt-in, and refuses a downgraded sender-paid answer", async () => {
+        const fetch = recordingFetch((_url, init) =>
+            jsonResponse(200, init.method === "GET" ? info() : quote()),
+        );
+        const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        await expect(
+            taxi.requestVerifiedReceiveQuote({
+                receiverAddress,
+                makerPublicKey: senderKey,
+                assetId: ASSET,
+                fareId: "receive",
+                fundingExpiry: { kind: "height", value: 850_000n },
+                payer: "receiver",
+                trustedServerKey: serverKey,
+                trustedEmulatorKey: emulatorKey,
+                dust: 330n,
+                vtxoMinAmount: 1n,
+                hrp: HRP,
+                expect: {
+                    maxServiceFareSats: 3n,
+                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minInputExpiryFloor: { kind: "height", value: 850_000n },
+                },
+            }),
+        ).rejects.toThrow(/payer is sender, but the request named receiver/);
+        expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({
+            payer: "receiver",
+        });
     });
 
     it("refuses an invalid maker before any HTTP request", async () => {

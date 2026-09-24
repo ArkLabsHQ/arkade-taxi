@@ -33,6 +33,8 @@ export interface ReceiveQuoteExpectation {
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    /** Opt-in: the request that produced this quote asked the receiver to pay. */
+    payer?: "receiver";
     maxServiceFareSats: bigint;
     minRecoveryLocktime: { kind: "height" | "time"; value: bigint };
     minInputExpiryFloor: { kind: "height" | "time"; value: bigint };
@@ -127,6 +129,12 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     if (receipt <= 0n || senderLoan < receipt || senderLoan + receipt !== args.dust)
         reject(VerificationErrorCode.Topup, "trusted limits do not form a positive carrier split");
     const receiverPaid = quote.payer === "receiver";
+    const requestedReceiverPaid = expect.payer === "receiver";
+    if (requestedReceiverPaid !== receiverPaid)
+        reject(
+            VerificationErrorCode.Fee,
+            `receive quote payer is ${receiverPaid ? "receiver" : "sender"}, but the request named ${requestedReceiverPaid ? "receiver" : "sender"}`,
+        );
     const loan = receiverPaid ? args.dust : senderLoan;
     if (quote.params.dust !== args.dust || quote.params.topup !== loan)
         reject(VerificationErrorCode.Topup, "receive quote substituted the carrier split");
@@ -155,6 +163,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         loan,
         receiverPaid ? quote.receiverFare!.units : quote.fare.units,
         receiverPaid,
+        receiverPaid ? quote.receiverFare!.currency : undefined,
     );
 
     const { batchExpiry: batch, inputExpiryFloor: floor, recoveryLocktime: recovery } = quote;
@@ -245,6 +254,7 @@ function verifyPolicy(
     loan: bigint,
     fare: bigint,
     receiverPaid: boolean,
+    fareCurrency: "sats" | "asset" | undefined,
 ): void {
     const foundRule = (rules as unknown[]).find((candidate) => {
         if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
@@ -296,7 +306,17 @@ function verifyPolicy(
             ? option.currency !== "sats" && option.currency !== "sameAsset"
             : option.currency !== "sats")
     )
-        reject(VerificationErrorCode.Fee, "advertised receive fare is missing or not in sats");
+        reject(
+            VerificationErrorCode.Fee,
+            receiverPaid
+                ? "advertised receive fare is missing or not sats/sameAsset"
+                : "advertised receive fare is missing or not in sats",
+        );
+    if (receiverPaid && fareCurrency !== (option.currency === "sats" ? "sats" : "asset"))
+        reject(
+            VerificationErrorCode.Fee,
+            "receive quote receiver fare currency differs from advertised policy",
+        );
     if (!option.pricing || typeof option.pricing !== "object")
         reject(VerificationErrorCode.MalformedInfo, "advertised receive pricing is invalid");
     let expectedFare = 0n;
