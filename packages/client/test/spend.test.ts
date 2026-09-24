@@ -4,6 +4,7 @@ import {
     ArkAddress,
     CSVMultisigTapscript,
     DefaultVtxo,
+    EmulatorPacket,
     Extension,
     MultisigTapscript,
     P2A,
@@ -23,8 +24,17 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { base64, hex } from "@scure/base";
 import { verifyQuote } from "../src/verify.js";
 import { activeQuoteStateFor } from "../src/lockup.js";
-import { payoutPkScript, refundTopup, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    Leaf,
+    covenantSpendInput,
+    payoutPkScript,
+    refundTopup,
+    type DustCovenantParams,
+    type ReceiverFare,
+} from "@arkade-taxi/covenant";
 import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
+import { classifyObservedSpend } from "../../app/src/watcher.js";
+import { config as serverConfig } from "../../app/test/fixtures.js";
 import { TaxiClient } from "../src/client.js";
 import {
     purchase,
@@ -896,6 +906,7 @@ describe("incoming claim verification", () => {
 const receiverFunding = async (
     leaf?: Uint8Array,
     identity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
+    value = 500n,
 ) => {
     const owner = await identity.xOnlyPublicKey();
     const tree = new VtxoScript([
@@ -905,14 +916,14 @@ const receiverFunding = async (
     const input = {
         txid: previous.id,
         vout: 0,
-        value: 500n,
+        value,
         tapTree: tree.encode(),
         tapLeafScript: tree.findLeaf(hex.encode(tree.scripts[0])),
     };
     const coin = {
         txid: previous.id,
         vout: 0,
-        value: 500,
+        value: Number(value),
         script: hex.encode(tree.pkScript),
         status: { confirmed: false },
         createdAt: new Date(NOW * 1000),
@@ -1747,6 +1758,240 @@ describe("recycle", () => {
             recycle(transfer, forged, new Uint8Array([0x51, 0x20, ...funding.receiverKey])),
         ).rejects.toThrow(/fields/i);
         expect(emulator.submitTx).not.toHaveBeenCalled();
+    });
+});
+
+const DELIVERED = 500n;
+
+const receiverPaidTransfer = async (
+    fare: { fareSats?: bigint; fareUnits?: bigint },
+    coinValue = 1000n,
+) => {
+    const funding = await receiverFunding(undefined, undefined, coinValue);
+    const a = assetArgs();
+    const receiverFare: ReceiverFare | undefined =
+        fare.fareSats !== undefined
+            ? { currency: "sats", units: fare.fareSats }
+            : fare.fareUnits !== undefined
+              ? { currency: "asset", units: fare.fareUnits }
+              : undefined;
+    const terms = { claimMode: "recycle", recoveryRecipient: "receiver" } as const;
+    const p: DustCovenantParams = {
+        ...quoteParamsFromWire(a.quote.params),
+        ...terms,
+        receiverKey: funding.receiverKey,
+        ...(receiverFare ? { receiverFare } : {}),
+    };
+    const id = asset.AssetId.create(
+        hex.encode(Uint8Array.from(a.expect.assetId!.txid).reverse()),
+        a.expect.assetId!.groupIndex,
+    );
+    const base = await setup(
+        {
+            ...a,
+            quote: quote(p, {
+                senderInputs: a.senderInputs,
+                senderSats: a.senderSats,
+                assetUnits: DELIVERED,
+            }),
+            expect: { ...a.expect, ...terms, receiverKey: funding.receiverKey },
+            assetUnits: DELIVERED,
+        },
+        [{ assetId: id.toString(), amount: DELIVERED }],
+        [funding],
+    );
+    const destination = new Uint8Array([0x51, 0x20, ...funding.receiverKey]);
+    return { ...base, funding, destination, assetId: id };
+};
+
+const assetUnitsAt = (tx: Transaction, vout: number): bigint =>
+    Extension.fromTx(tx)
+        .getAssetPacket()!
+        .groups.flatMap((group) => group.outputs)
+        .filter((output) => output.vout === vout)
+        .reduce((sum, output) => sum + output.amount, 0n);
+
+describe("receiver-paid recycle", () => {
+    it("refuses a claim whose coin cannot cover the sats fare, naming the floor", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 334n);
+        await expect(recycle(t.transfer, t.funding.walletInput, t.destination)).rejects.toThrow(
+            /below dust or the Ark operator minimum/,
+        );
+    });
+
+    it("accepts the smallest coin that can cover it", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 337n);
+        await expect(
+            recycle(t.transfer, t.funding.walletInput, t.destination),
+        ).resolves.toBeDefined();
+    });
+
+    it("pays the operator dust plus the sats fare and merges the rest", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n });
+        await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const tx = t.submitted()!;
+        expect(tx.getOutput(0).amount).toBe(337n);
+        expect(tx.getOutput(1).amount).toBe(993n);
+    });
+
+    it("moves an asset fare to the operator output and subtracts it from the merge", async () => {
+        const t = await receiverPaidTransfer({ fareUnits: 9n });
+        await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const tx = t.submitted()!;
+        expect(tx.getOutput(0).amount).toBe(330n);
+        expect(assetUnitsAt(tx, 0)).toBe(9n);
+        expect(assetUnitsAt(tx, 1)).toBe(491n);
+    });
+
+    it("reclaims a receiver-paid covenant with the same outputs as a fareless one", async () => {
+        const amounts = (tx: Transaction) =>
+            Array.from({ length: tx.outputsLength }, (_, index) => tx.getOutput(index).amount);
+        const withFare = await receiverPaidTransfer({ fareSats: 7n });
+        await refund(withFare.transfer, senderIdentity);
+        const without = await receiverPaidTransfer({});
+        await refund(without.transfer, senderIdentity);
+        expect(amounts(withFare.submitted()!)).toEqual(amounts(without.submitted()!));
+        expect(assetUnitsAt(withFare.submitted()!, 1)).toBe(DELIVERED);
+    });
+});
+
+describe("a client-built claim, classified by the server watcher", () => {
+    type Party = Awaited<ReturnType<typeof receiverPaidTransfer>>;
+    type Graph = { signedArkTx: string; signedCheckpointTxs: string[] };
+    type Deps = Parameters<typeof classifyObservedSpend>[2];
+
+    const classify = (t: Party, graph: Graph) => {
+        const ark = Transaction.fromPSBT(base64.decode(graph.signedArkTx));
+        const [covenantCheckpoint, receiverCheckpoint] = graph.signedCheckpointTxs.map((encoded) =>
+            Transaction.fromPSBT(base64.decode(encoded)),
+        );
+        const txs = new Map([ark, covenantCheckpoint, receiverCheckpoint].map((tx) => [tx.id, tx]));
+        const coins: VirtualCoin[] = [
+            { ...t.coin, isSpent: true, spentBy: covenantCheckpoint.id, arkTxId: ark.id },
+            {
+                ...t.funding.coin,
+                isSpent: true,
+                spentBy: receiverCheckpoint.id,
+                arkTxId: ark.id,
+                status: { confirmed: false, isLeaf: false },
+            },
+        ];
+        const indexer: Deps["indexer"] = {
+            getVtxos: async (options) => ({
+                vtxos: (options && "outpoints" in options ? options.outpoints : [])!.flatMap(
+                    ({ txid, vout }) =>
+                        coins.filter((coin) => coin.txid === txid && coin.vout === vout),
+                ),
+            }),
+            getVirtualTxs: async (ids) => ({
+                txs: ids.flatMap((id) =>
+                    txs.has(id) ? [base64.encode(txs.get(id)!.toPSBT())] : [],
+                ),
+            }),
+        };
+        const { quote: q, params: p } = t.verified;
+        return classifyObservedSpend(
+            {
+                id: q.transferId,
+                state: "locked",
+                ...p,
+                assetUnits: DELIVERED,
+                batchExpiry: { kind: "height", value: 900_000n },
+                operatorInputs: [],
+                unsignedLockupTx: q.unsignedLockupTx,
+                unsignedLockupId: q.lockup.unsignedTxId,
+                covenantAddress: q.covenantAddress,
+                fare: fareFromWire(q.fare),
+                outpoint: { ...t.status.outpoint },
+                createdAt: NOW,
+                updatedAt: NOW,
+                expiresAt: NOW + 60,
+            },
+            coins[0],
+            { indexer, config: serverConfig() },
+            { height: 700_000, time: NOW },
+        );
+    };
+
+    const handBuilt = async (t: Party, operatorSats: bigint, assetOutputs: [number, bigint][]) => {
+        const program = t.verified.script.covenant.recycle;
+        const group = (inputs: asset.AssetInput[], outputs: asset.AssetOutput[]) =>
+            asset.Packet.create([asset.AssetGroup.create(t.assetId, null, inputs, outputs, [])]);
+        const covenantPacket = group(
+            [],
+            [asset.AssetOutput.create(t.status.outpoint.vout, DELIVERED)],
+        );
+        const inputs = [
+            covenantSpendInput(
+                t.verified.script,
+                Leaf.Recycle,
+                t.status.outpoint,
+                330n,
+                covenantPacket.serialize(),
+            ),
+            t.funding.walletInput.input,
+        ];
+        const spendPacket = group(
+            [asset.AssetInput.create(0, DELIVERED)],
+            assetOutputs.map(([vout, amount]) => asset.AssetOutput.create(vout, amount)),
+        );
+        const graph = buildOffchainTx(
+            inputs.map((input) => ({ ...input, value: Number(input.value) })),
+            [
+                { script: payoutPkScript(operatorKey, operatorSats, 330n), amount: operatorSats },
+                {
+                    script: t.destination,
+                    amount: 330n + t.funding.walletInput.input.value - operatorSats,
+                },
+                Extension.create([
+                    spendPacket,
+                    EmulatorPacket.create([{ vin: 0, script: program }]),
+                ]).txOut(),
+            ],
+            unroll,
+        );
+        const owner = t.funding.walletInput.identity;
+        const ark = await owner.sign(graph.arkTx, [1]);
+        const receiverCheckpoint = await owner.sign(graph.checkpoints[1], [0]);
+        return finalGraph(
+            base64.encode(ark.toPSBT()),
+            [graph.checkpoints[0], receiverCheckpoint].map((tx) => base64.encode(tx.toPSBT())),
+            program,
+        );
+    };
+
+    it.each([
+        ["sats", { fareSats: 7n }],
+        ["asset", { fareUnits: 9n }],
+    ] as const)("classifies the client's %s-fare claim as recycled", async (_, fare) => {
+        const t = await receiverPaidTransfer(fare);
+        const txid = await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const graph = await t.emulator.submitTx.mock.results[0]!.value;
+        await expect(classify(t, graph)).resolves.toEqual({ kind: "recycled", txid });
+    });
+
+    it.each([
+        ["sats", { fareSats: 7n }, /recycle repayment/],
+        ["asset", { fareUnits: 9n }, /extension packet set/],
+    ] as const)("refuses a claim that skips its %s fare", async (_, fare, reason) => {
+        const t = await receiverPaidTransfer(fare);
+        const graph = await handBuilt(t, 330n, [[1, DELIVERED]]);
+        await expect(classify(t, graph)).resolves.toMatchObject({
+            kind: "unknown",
+            reason: expect.stringMatching(reason),
+        });
+    });
+
+    it("refuses, on both sides, a coin that cannot cover the sats fare", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 334n);
+        await expect(recycle(t.transfer, t.funding.walletInput, t.destination)).rejects.toThrow(
+            /below dust/,
+        );
+        const graph = await handBuilt(t, 337n, [[1, DELIVERED]]);
+        await expect(classify(t, graph)).resolves.toMatchObject({
+            kind: "unknown",
+            reason: expect.stringMatching(/below dust/),
+        });
     });
 });
 

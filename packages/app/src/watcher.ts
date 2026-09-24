@@ -3,6 +3,7 @@ import {
     Leaf,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
 } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
@@ -194,7 +195,13 @@ const assetId = (advance: Advance): string | undefined =>
           ).toString()
         : undefined;
 
-const expectedAssetPacket = (sources: Holding[][], destination: number): asset.Packet | null => {
+type AssetFare = { id: string; vout: number; units: bigint };
+
+const expectedAssetPacket = (
+    sources: Holding[][],
+    destination: number,
+    fare?: AssetFare,
+): asset.Packet | null => {
     const totals = new Map<string, bigint>();
     sources.forEach((source) =>
         source.forEach(({ id, amount }) => totals.set(id, (totals.get(id) ?? 0n) + amount)),
@@ -217,7 +224,12 @@ const expectedAssetPacket = (sources: Holding[][], destination: number): asset.P
                               ]
                             : [],
                     ),
-                    [AssetOutput.create(destination, amount)],
+                    fare?.id === id
+                        ? [
+                              AssetOutput.create(fare.vout, fare.units),
+                              AssetOutput.create(destination, amount - fare.units),
+                          ]
+                        : [AssetOutput.create(destination, amount)],
                     [],
                 ),
             ),
@@ -230,12 +242,13 @@ const exactExtension = (
     covenantScript: Uint8Array,
     sources: Holding[][],
     destination: number,
+    fare?: AssetFare,
 ): void => {
     const output = tx.getOutput(index);
     const script = output.script ?? fail("covenant extension output is missing or misplaced");
     if (output.amount !== 0n || !Extension.isExtension(script))
         fail("covenant extension output is missing or misplaced");
-    const assets = expectedAssetPacket(sources, destination);
+    const assets = expectedAssetPacket(sources, destination, fare);
     const expected = Extension.create([
         ...(assets ? [assets] : []),
         EmulatorPacket.create([{ vin: 0, script: covenantScript }]),
@@ -624,14 +637,15 @@ export async function classifyObservedSpend(
                 receiverSigners,
                 "receiver Arkade input",
             );
-            const merged = advance.dust + BigInt(exactReceiverCoin.value) - advance.topup;
+            const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
+            const merged = advance.dust + BigInt(exactReceiverCoin.value) - operatorSats;
             if (merged < advance.dust || merged < deps.config.vtxoMinAmount)
                 fail("recycle receiver output is below dust or provider minimum");
             exactOutput(
                 arkTx,
                 0,
-                advance.topup,
-                payoutPkScript(advance.operatorKey, advance.topup, advance.dust),
+                operatorSats,
+                payoutPkScript(advance.operatorKey, operatorSats, advance.dust),
                 "recycle repayment",
             );
             exactOutput(
@@ -642,7 +656,14 @@ export async function classifyObservedSpend(
                 "recycle receiver output",
             );
             const receiverHoldings = holdings(exactReceiverCoin, "receiver funding outpoint");
-            exactExtension(arkTx, 2, covenantProgram, [covenantHoldings, receiverHoldings], 1);
+            exactExtension(
+                arkTx,
+                2,
+                covenantProgram,
+                [covenantHoldings, receiverHoldings],
+                1,
+                assetFare > 0n ? { id: assetId(advance)!, vout: 0, units: assetFare } : undefined,
+            );
             exactAnchor(arkTx, 3);
             return { kind: "recycled", txid: arkTx.id };
         }

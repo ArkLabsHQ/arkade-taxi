@@ -4,6 +4,7 @@ import {
     copyByteView,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
     signerTransaction,
     type CovenantSpendInput,
@@ -1146,6 +1147,7 @@ const exactFundingInput = async (
 const packetForSpend = (
     sources: readonly Holding[][],
     destinationVout: number,
+    fare?: { id: string; vout: number; units: bigint },
 ): AssetPacket | undefined => {
     const totals = new Map<string, bigint>();
     sources.forEach((holdings) =>
@@ -1169,7 +1171,12 @@ const packetForSpend = (
                               ]
                             : [],
                     ),
-                    [AssetOutput.create(destinationVout, amount)],
+                    fare?.id === id
+                        ? [
+                              AssetOutput.create(fare.vout, fare.units),
+                              AssetOutput.create(destinationVout, amount - fare.units),
+                          ]
+                        : [AssetOutput.create(destinationVout, amount)],
                     [],
                 ),
             ),
@@ -1492,7 +1499,8 @@ export async function recycle(
     receiverWalletInput = receiverInputSnapshot(receiverWalletInput);
     const output = exactDestination(destination, state);
     const funding = await exactFundingInput(receiverWalletInput, state);
-    const merged = state.params.dust + receiverWalletInput.input.value - state.params.topup;
+    const { operatorSats, assetFare } = recycleFare(state.params);
+    const merged = state.params.dust + receiverWalletInput.input.value - operatorSats;
     if (merged < state.params.dust || merged < state.vtxoMinAmount)
         reject("recycle receiver output is below dust or the Ark operator minimum");
     const covenant = covenantSpendInput(
@@ -1511,14 +1519,20 @@ export async function recycle(
                 {
                     script: payoutPkScript(
                         state.params.operatorKey,
-                        state.params.topup,
+                        operatorSats,
                         state.params.dust,
                     ),
-                    amount: state.params.topup,
+                    amount: operatorSats,
                 },
                 { script: output, amount: merged },
             ],
-            assetPacket: packetForSpend([state.holdings, funding.holdings], 1),
+            assetPacket: packetForSpend(
+                [state.holdings, funding.holdings],
+                1,
+                assetFare > 0n
+                    ? { id: assetId(state.params)!, vout: 0, units: assetFare }
+                    : undefined,
+            ),
             human: { identity: receiverWalletInput.identity, key: funding.key, indexes: [1] },
         },
         receiverWalletInput,

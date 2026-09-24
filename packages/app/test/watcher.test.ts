@@ -24,6 +24,7 @@ import {
     Leaf,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
@@ -225,6 +226,7 @@ async function setup(
             covenantSpendInput(covenant, leaf, outpoint, request.params.dust, covenantPacket),
         ];
         const destination = new Uint8Array([0x51, 0x20, ...request.params.receiverKey]);
+        const { operatorSats, assetFare } = recycleFare(request.params);
         let outputs: { script: Uint8Array; amount: bigint }[];
         let receiverSource: Transaction | undefined;
         if (kind === "purchased") {
@@ -242,14 +244,14 @@ async function setup(
                 {
                     script: payoutPkScript(
                         request.params.operatorKey,
-                        request.params.topup,
+                        operatorSats,
                         request.params.dust,
                     ),
-                    amount: request.params.topup,
+                    amount: operatorSats,
                 },
                 {
                     script: destination,
-                    amount: request.params.dust + 500n - request.params.topup,
+                    amount: request.params.dust + 500n - operatorSats,
                 },
             ];
         } else {
@@ -283,7 +285,12 @@ async function setup(
                       paymentAsset,
                       null,
                       [asset.AssetInput.create(0, paymentUnits)],
-                      [asset.AssetOutput.create(kind === "purchased" ? 0 : 1, paymentUnits)],
+                      kind === "recycled" && assetFare > 0n
+                          ? [
+                                asset.AssetOutput.create(0, assetFare),
+                                asset.AssetOutput.create(1, paymentUnits - assetFare),
+                            ]
+                          : [asset.AssetOutput.create(kind === "purchased" ? 0 : 1, paymentUnits)],
                       [],
                   ),
               ])
@@ -825,6 +832,31 @@ describe("canonical covenant observation", () => {
         } finally {
             state.db.close();
         }
+    });
+
+    it.each([
+        ["sats", { currency: "sats", units: 7n }],
+        ["asset", { currency: "asset", units: 9n }],
+    ] as const)("proves a receiver-paid recycle paying its %s fare", async (_, fare) => {
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+            fare,
+        );
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recycled",
+            spentTxid: state.finalArk!.id,
+        });
+        state.db.close();
     });
 
     it("proves a large asset purchase only when the extension conserves exact units", async () => {
