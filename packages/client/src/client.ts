@@ -160,6 +160,8 @@ export interface ReceiveQuoteRequest {
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "receiver";
 }
 
 export interface RequestVerifiedReceiveQuoteArgs extends Omit<
@@ -171,6 +173,8 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "receiver";
     expect: Omit<
         ReceiveQuoteExpectation,
         "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry"
@@ -256,6 +260,7 @@ export class TaxiClient {
                 kind: req.fundingExpiry.kind,
                 value: satsToWire(req.fundingExpiry.value),
             };
+        if (req.payer !== undefined) wire.payer = req.payer;
         const body = await this.request("POST", "/v1/receive-quotes", wire);
         decodeReceiveQuote(body);
         return body as ReceiveQuoteResponse;

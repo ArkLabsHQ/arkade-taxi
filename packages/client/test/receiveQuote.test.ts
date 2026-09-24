@@ -100,6 +100,98 @@ const args = () => ({
     now: 1_000_000_001,
 });
 
+// The receiver pays their own fare: the operator funds the whole dust (topup
+// === dust), so the covenant tree differs from the sender-paid one above.
+const receiverParams = {
+    ...params,
+    topup: 330n,
+    receiverFare: { currency: "sats" as const, units: 7n },
+};
+const receiverPaidCovenantAddress = new DustCovenantScript({
+    serverKey,
+    emulatorKey,
+    params: receiverParams,
+    vtxoMinAmount: 1n,
+})
+    .address(HRP, serverKey)
+    .encode();
+
+const senderPaidArgs = (over: { topup?: bigint; advertisedCurrency?: "sameAsset" } = {}) => {
+    const baseArgs = args();
+    return {
+        ...baseArgs,
+        quote:
+            over.topup === undefined
+                ? baseArgs.quote
+                : quote({ params: quoteParamsToWire({ ...params, topup: over.topup }) }),
+        info:
+            over.advertisedCurrency === undefined
+                ? baseArgs.info
+                : {
+                      ...baseArgs.info,
+                      assetRules: [
+                          {
+                              ...baseArgs.info.assetRules[0]!,
+                              fares: [
+                                  {
+                                      ...baseArgs.info.assetRules[0]!.fares[0]!,
+                                      currency: over.advertisedCurrency,
+                                  },
+                              ],
+                          },
+                      ],
+                  },
+    };
+};
+
+const receiverPaidArgs = (
+    over: {
+        fare?: { currency: "sats"; units: string };
+        paramsUnits?: bigint;
+        advertisedFlatUnits?: bigint;
+        advertisedCurrency?: "sameAsset";
+    } = {},
+) => {
+    const baseArgs = args();
+    const quoteParams =
+        over.paramsUnits === undefined
+            ? receiverParams
+            : {
+                  ...receiverParams,
+                  receiverFare: { currency: "sats" as const, units: over.paramsUnits },
+              };
+    return {
+        ...baseArgs,
+        quote: quote({
+            params: quoteParamsToWire(quoteParams),
+            covenantAddress: receiverPaidCovenantAddress,
+            fare: over.fare ?? { currency: "sats", units: "0" },
+            receiverFare: { currency: "sats", units: "7" },
+            payer: "receiver",
+            unclaimedMode: "reclaim",
+        }),
+        info: {
+            ...baseArgs.info,
+            assetRules: [
+                {
+                    ...baseArgs.info.assetRules[0]!,
+                    maxTopupSats: "330",
+                    fares: [
+                        {
+                            ...baseArgs.info.assetRules[0]!.fares[0]!,
+                            currency: over.advertisedCurrency ?? ("sats" as const),
+                            pricing: {
+                                kind: "flat" as const,
+                                units: String(over.advertisedFlatUnits ?? 7n),
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+};
+
 describe("verifyReceiveQuote", () => {
     it("rebuilds the covenant and returns immutable SDK carrier terms", () => {
         const verified = verifyReceiveQuote(args());
@@ -166,6 +258,46 @@ describe("verifyReceiveQuote", () => {
         ["state", { state: "expired" as const }],
     ])("rejects immutable %s substitution", (_name, change) => {
         expect(() => verifyReceiveQuote({ ...args(), quote: quote(change) })).toThrow();
+    });
+
+    it("verifies a receiver-paid quote whose topup is the whole dust", () => {
+        const verified = verifyReceiveQuote(receiverPaidArgs());
+        expect(verified.descriptor.loanSats).toBe(330n);
+        expect(verified.descriptor.receiptSats).toBe(0n);
+        expect(verified.receiverFare?.units).toBe(7n);
+        expect(verified.unclaimedMode).toBe("reclaim");
+    });
+    it("still refuses a sender-paid quote whose topup is not dust minus the receipt", () => {
+        expect(() => verifyReceiveQuote(senderPaidArgs({ topup: 330n }))).toThrow(/carrier split/);
+    });
+    it("refuses a receiver-paid quote whose fill fare is not zero", () => {
+        expect(() =>
+            verifyReceiveQuote(receiverPaidArgs({ fare: { currency: "sats", units: "1" } })),
+        ).toThrow(/receiver-paid quote charges the fill/);
+    });
+    it("refuses a quote whose params.receiverFare differs from its receiverFare field", () => {
+        expect(() => verifyReceiveQuote(receiverPaidArgs({ paramsUnits: 8n }))).toThrow(
+            /substituted the receiver fare/,
+        );
+    });
+    // The policy comparison: the advertised fare is the RECEIVER's, not the fill's zero.
+    it("compares the advertised fare against the receiver fare, not the fill fare", () => {
+        expect(() =>
+            verifyReceiveQuote(receiverPaidArgs({ advertisedFlatUnits: 7n })),
+        ).not.toThrow();
+        expect(() => verifyReceiveQuote(receiverPaidArgs({ advertisedFlatUnits: 8n }))).toThrow(
+            /differs from advertised policy/,
+        );
+    });
+    it("accepts a same-asset advertised fare on a receiver-paid quote", () => {
+        expect(() =>
+            verifyReceiveQuote(receiverPaidArgs({ advertisedCurrency: "sameAsset" })),
+        ).not.toThrow();
+    });
+    it("still refuses a same-asset advertised fare on a sender-paid quote", () => {
+        expect(() =>
+            verifyReceiveQuote(senderPaidArgs({ advertisedCurrency: "sameAsset" })),
+        ).toThrow(/not in sats/);
     });
 });
 
