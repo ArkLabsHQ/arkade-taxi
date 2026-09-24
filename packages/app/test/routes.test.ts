@@ -1588,3 +1588,64 @@ describe("GET /ready", () => {
         expect(body).toContain("[redacted]");
     });
 });
+
+describe("CORS", () => {
+    const wallet = { origin: "https://wallet.example" };
+
+    // createApp, not createRoutes, so /admin is reachable too.
+    const corsApp = () => {
+        const db = openDatabase(":memory:");
+        return createApp({
+            ...deps(),
+            advances: new AdvanceRepository(db),
+            policy: new PolicyRepository(db),
+            sweeperIntervalMs: 1_000,
+            sweeperRunning: () => true,
+            rescan: async () => {},
+        });
+    };
+
+    it("stamps Access-Control-Allow-Origin on a /v1 GET, with no credentials header", async () => {
+        const res = await corsApp().request("/v1/info", { headers: wallet });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+
+    it("answers a /v1 preflight with 204 and the CORS headers, not 404", async () => {
+        const res = await corsApp().request("/v1/receive-quotes", {
+            method: "OPTIONS",
+            headers: {
+                ...wallet,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        });
+        expect(res.status).toBe(204);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+        expect(res.headers.get("access-control-allow-headers")).toContain("content-type");
+        expect(res.headers.get("access-control-max-age")).toBeTruthy();
+        expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+
+    it("stamps the header on a /v1 error response, so the browser doesn't hide it", async () => {
+        const res = await corsApp().request("/v1/transfers/nope", { headers: wallet });
+        expect(res.status).toBe(404);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    });
+
+    it("gives /admin no CORS headers and does not answer its preflight", async () => {
+        const app = corsApp();
+        const get = await app.request("/admin", { headers: wallet });
+        expect(get.headers.get("access-control-allow-origin")).toBeNull();
+
+        const preflight = await app.request("/admin", {
+            method: "OPTIONS",
+            headers: { ...wallet, "Access-Control-Request-Method": "GET" },
+        });
+        expect(preflight.status).not.toBe(204);
+        expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+        expect(preflight.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+});
