@@ -77,9 +77,21 @@ export const SCENARIOS = [
         id: "joint-fill-two-owner",
         title: "two owners fill one offer and only the provider signs the covenant",
     },
+    {
+        id: "receiver-paid-sats-fare-claim",
+        title: "receiver-paid joint fill through Taxi, claimed with a sats fare",
+    },
+    {
+        id: "receiver-paid-asset-fare-claim",
+        title: "receiver-paid joint fill through Taxi, claimed with a same-asset fare",
+    },
+    {
+        id: "receiver-paid-mode1-reclaim",
+        title: "unclaimed receiver-paid covenant reclaimed at its locktime without a fare",
+    },
 ] as const;
 
-export const EXPECTED_TOTAL = 21;
+export const EXPECTED_TOTAL = 24;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

@@ -43,8 +43,8 @@ for (const file of readdirSync(here).filter(
     visit(source);
 }
 
-it("registers all twenty-one live scenarios exactly once", () => {
-    expect(EXPECTED_TOTAL).toBe(21);
+it("registers all twenty-four live scenarios exactly once", () => {
+    expect(EXPECTED_TOTAL).toBe(24);
     expect(SCENARIOS).toHaveLength(EXPECTED_TOTAL);
     expect(new Set(SCENARIOS.map(({ id }) => id)).size).toBe(EXPECTED_TOTAL);
     expect(registrations.sort()).toEqual(SCENARIOS.map(({ id }) => id).sort());

@@ -11,6 +11,7 @@ class LiveSequencer extends BaseSequencer {
             // After the scenarios that pin fixture inventory, before the ones
             // that jump chain time past every wallet's expiry headroom.
             "joint-fill",
+            "receiver-paid",
             "exposure",
             "verify-quote",
             "refund-recovery",

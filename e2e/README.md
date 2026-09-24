@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-one live scenarios and two integrity assertions must all pass. Skips,
+Twenty-four live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
@@ -82,7 +82,7 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-one
+- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-four
   scenarios and both integrity assertions must pass with zero failures, skips,
   or todos.
 
@@ -143,7 +143,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The registry's stable/latest version on 2026-09-13 is 0.4.72. The harness always
 clones master afresh; read the tested SHA from the current `stack.json` and
-retain it with all 23 passing assertions. Capture the existing default project's
+retain it with all 26 passing assertions. Capture the existing default project's
 container, volume and network inventory before and after, and verify that no
 resources with the run's exact ownership labels remain after successful cleanup.
 
