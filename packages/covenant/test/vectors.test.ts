@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { hex } from "@scure/base";
 import { describe, expect, it } from "vitest";
-import { buildScripts } from "../src/scripts.js";
+import { buildReclaim, buildScripts } from "../src/scripts.js";
 import type { DustCovenantParams } from "../src/params.js";
 
 type Vector = {
@@ -88,7 +88,10 @@ describe(`additive receiver vectors from Go reference ${carrier.reference.slice(
             expect(hex.encode(built.recycle)).toBe(v.recycle);
             expect(hex.encode(built.purchase)).toBe(v.purchase);
             expect(hex.encode(built.refund)).toBe(v.refund);
-            if (v.reclaim !== undefined) expect(hex.encode(built.refund)).toBe(v.reclaim);
+            if (v.reclaim !== undefined)
+                expect(hex.encode(buildReclaim(toParams(v), BigInt(v.vtxoMinAmount)))).toBe(
+                    v.reclaim,
+                );
         },
     );
 });
