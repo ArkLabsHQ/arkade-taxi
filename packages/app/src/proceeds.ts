@@ -15,8 +15,8 @@ import {
     type TimeHeight,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { refundTopup } from "@arkade-taxi/covenant";
-import type { Outpoint } from "@arkade-taxi/core";
+import { recycleFare, refundTopup, type AssetIdRef } from "@arkade-taxi/covenant";
+import { covenantParamsOf, type Outpoint } from "@arkade-taxi/core";
 import type {
     AdvanceRepository,
     ProceedsRepository,
@@ -59,6 +59,8 @@ const holdings = (coins: readonly VirtualCoin[]) => {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([assetId, amount]) => ({ assetId, amount: amount.toString() }));
 };
+const swapAssetId = ({ txid, groupIndex }: AssetIdRef) =>
+    asset.AssetId.create(hex.encode(Uint8Array.from(txid).reverse()), groupIndex).toString();
 const facts = (c: VirtualCoin) => ({
     ...outpoint(c),
     value: c.value,
@@ -381,10 +383,7 @@ export async function discoverProceeds(
                 advance.fare.currency === "asset"
                     ? [
                           {
-                              assetId: asset.AssetId.create(
-                                  hex.encode(Uint8Array.from(advance.fare.assetId.txid).reverse()),
-                                  advance.fare.assetId.groupIndex,
-                              ).toString(),
+                              assetId: swapAssetId(advance.fare.assetId),
                               amount: advance.fare.units.toString(),
                           },
                       ]
@@ -395,14 +394,17 @@ export async function discoverProceeds(
                 fareAssets,
             );
         }
-        if (advance.state !== "purchased")
+        if (advance.state === "recycled") {
+            const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
                 repayment,
-                advance.state === "recycled"
-                    ? advance.topup
-                    : refundTopup(advance, config.vtxoMinAmount),
-                [],
+                operatorSats,
+                assetFare > 0n
+                    ? [{ assetId: swapAssetId(advance.assetId!), amount: assetFare.toString() }]
+                    : [],
             );
+        } else if (advance.state !== "purchased")
+            await check(repayment, refundTopup(advance, config.vtxoMinAmount), []);
         if (found.size >= 32) break;
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
