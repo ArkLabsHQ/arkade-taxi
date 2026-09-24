@@ -1286,28 +1286,35 @@ async function reverifyFreshness(
         );
 }
 
+/** Runs `work` under one runtime admission, handing it the admitted bound-fill
+ * revalidation. `work` must not take admission itself: that would wait on this one. */
+export function admitBoundSwapFill<T>(
+    deps: SwapFillQuoteDeps,
+    work: (revalidate: (fill: SwapFill) => Promise<void>) => Promise<T>,
+): Promise<T> {
+    // A runtime check in flight publishes `runtime_checking`; admission awaits it
+    // and keeps the next one from starting before the final freshness read.
+    return deps.runtime.withAdmission((assertCurrent) => {
+        const admitted: SwapFillQuoteDeps = {
+            ...deps,
+            runtime: {
+                ...deps.runtime,
+                safety: () => {
+                    assertCurrent();
+                    return deps.runtime.safety();
+                },
+            },
+        };
+        return work((fill) => revalidateAdmittedBoundSwapFill(admitted, fill));
+    });
+}
+
 export async function revalidateBoundSwapFill(
     deps: SwapFillQuoteDeps,
     fill: SwapFill,
 ): Promise<void> {
     if (!fill.receiveQuoteId) return;
-    // A runtime check in flight publishes `runtime_checking`; admission awaits it
-    // and keeps the next one from starting before the final freshness read.
-    return deps.runtime.withAdmission((assertCurrent) =>
-        revalidateAdmittedBoundSwapFill(
-            {
-                ...deps,
-                runtime: {
-                    ...deps.runtime,
-                    safety: () => {
-                        assertCurrent();
-                        return deps.runtime.safety();
-                    },
-                },
-            },
-            fill,
-        ),
-    );
+    return admitBoundSwapFill(deps, (revalidate) => revalidate(fill));
 }
 
 async function revalidateAdmittedBoundSwapFill(

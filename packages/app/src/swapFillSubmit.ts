@@ -110,8 +110,14 @@ export interface SwapFillSubmitDeps {
     joint?: SwapFillJointOps;
     assertSolverAuthorised?: SolverAuthFn;
     advances?: Pick<AdvanceRepository, "get">;
-    assertBoundFresh?: (fill: SwapFill) => Promise<void>;
+    withBoundAdmission?: BoundAdmission;
 }
+
+/** Runs `work` under one runtime admission, handing it the admitted bound-fill
+ * freshness check. `work` must not take admission itself. */
+export type BoundAdmission = <T>(
+    work: (assertBoundFresh: (fill: SwapFill) => Promise<void>) => Promise<T>,
+) => Promise<T>;
 
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
     a.length === b.length && a.every((value, index) => value === b[index]);
@@ -295,12 +301,40 @@ const failSigning = (
     throw new ServiceError(code, status, message, { cause });
 };
 
-export async function submitSwapFill(
+interface SubmitEntry {
+    now: number;
+    joint: SwapFillJointOps;
+    leaseToken: string;
+    claimed: SwapFill;
+    trusted: JointGraph;
+    solver: JointGraph;
+}
+
+const enterAdmitted = async (
+    admit: BoundAdmission,
+    enter: (assertBoundFresh: (fill: SwapFill) => Promise<void>) => Promise<SubmitEntry>,
+): Promise<SubmitEntry> => {
+    let entered = false;
+    try {
+        return await admit((assertBoundFresh) => {
+            entered = true;
+            return enter(assertBoundFresh);
+        });
+    } catch (cause) {
+        if (entered) throw cause;
+        // The admission's own runtime check refused: readiness would have, and no lease exists.
+        const message = cause instanceof Error ? cause.message : "runtime is not ready";
+        throw new ServiceError("not_ready", 503, message, { cause });
+    }
+};
+
+async function enterSubmit(
     deps: SwapFillSubmitDeps,
     id: string,
     body: unknown,
-    assertReady?: () => void,
-): Promise<SwapFillStatusResponse> {
+    assertReady: (() => void) | undefined,
+    assertBoundFresh?: (fill: SwapFill) => Promise<void>,
+): Promise<SubmitEntry> {
     assertReady?.();
     const now = deps.now();
     const joint = deps.joint ?? productionSwapFillJointOps;
@@ -403,12 +437,28 @@ export async function submitSwapFill(
             );
             if (!isDeepStrictEqual(source.source.recoveryPreflight, exact))
                 throw new Error("bound recovery preflight differs from reconstructed recovery");
-            if (!deps.assertBoundFresh) throw new Error("bound freshness verifier is unavailable");
-            await deps.assertBoundFresh(claimed);
+            if (!assertBoundFresh) throw new Error("bound freshness verifier is unavailable");
+            await assertBoundFresh(claimed);
         } catch (cause) {
             failSigning(deps, id, leaseToken, now, "swap_fill_bound_unsafe", 409, cause);
         }
     }
+    return { now, joint, leaseToken, claimed, trusted, solver: solver! };
+}
+
+export async function submitSwapFill(
+    deps: SwapFillSubmitDeps,
+    id: string,
+    body: unknown,
+    assertReady?: () => void,
+): Promise<SwapFillStatusResponse> {
+    // A bound fill's readiness, lease and first freshness check share one admission,
+    // so a runtime check in flight is waited out rather than read as not ready.
+    const admit =
+        deps.swapFills.get(id)?.receiveQuoteId === undefined ? undefined : deps.withBoundAdmission;
+    const { now, joint, leaseToken, claimed, trusted, solver } = admit
+        ? await enterAdmitted(admit, (fresh) => enterSubmit(deps, id, body, assertReady, fresh))
+        : await enterSubmit(deps, id, body, assertReady);
     let taxiIdentity: Identity;
     try {
         taxiIdentity = deps.taxiIdentity();
@@ -475,7 +525,7 @@ export async function submitSwapFill(
         );
     if (claimed.receiveQuoteId) {
         try {
-            await deps.assertBoundFresh!(claimed);
+            await deps.withBoundAdmission!((assertBoundFresh) => assertBoundFresh(claimed));
         } catch (cause) {
             failSigning(deps, id, leaseToken, now, "swap_fill_bound_unsafe", 409, cause);
         }

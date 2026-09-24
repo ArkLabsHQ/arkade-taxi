@@ -18,7 +18,7 @@ import type { SwapFill } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
     createSwapFillQuote,
-    revalidateBoundSwapFill,
+    admitBoundSwapFill,
     type SwapFillQuoteDeps,
 } from "../src/swapFillQuotes.js";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
@@ -32,7 +32,9 @@ import {
     type SwapFillJointOps,
     type SwapFillSubmitDeps,
 } from "../src/swapFillSubmit.js";
-import type { ServiceError } from "../src/errors.js";
+import { ServiceError } from "../src/errors.js";
+import { operationalSnapshot } from "../src/routes.js";
+import type { RuntimeSafety } from "../src/arkade/types.js";
 import { base64, hex } from "@scure/base";
 import {
     config,
@@ -732,17 +734,18 @@ describe("submitSwapFill bound freshness gate", () => {
         if (failure) throw failure;
     };
 
-    const submitBound = (over: Partial<SwapFillSubmitDeps> = {}) =>
+    const submitBound = (over: Partial<SwapFillSubmitDeps> = {}, assertReady?: () => void) =>
         submitSwapFill(
             deps({
                 swapFills: world.swapFills,
                 config: world.config,
                 advances: world.advances,
-                assertBoundFresh: boundFresh,
+                withBoundAdmission: (work) => work(boundFresh),
                 ...over,
             }),
             world.fill.id,
             { solverGraph: world.quote.graph },
+            assertReady,
         );
 
     beforeEach(async () => {
@@ -812,7 +815,7 @@ describe("submitSwapFill bound freshness gate", () => {
     });
 
     it("refuses a bound fill when no freshness verifier is wired", async () => {
-        const rejected = await caught(() => submitBound({ assertBoundFresh: undefined }));
+        const rejected = await caught(() => submitBound({ withBoundAdmission: undefined }));
         expect(rejected.code).toBe("swap_fill_bound_unsafe");
         expect(rejected.message).toMatch(/freshness verifier is unavailable/);
         expect(joint.calls).not.toContain("sign");
@@ -857,6 +860,9 @@ describe("submitSwapFill bound freshness gate", () => {
         let held: { entered: () => void; released: Promise<void> } | undefined;
         let online: boolean;
         let clockMs: number;
+        let infoCalls: number;
+        let admissions: number;
+        let admitted: ((count: number) => void) | undefined;
 
         const gate = () => {
             let open!: () => void;
@@ -877,23 +883,69 @@ describe("submitSwapFill bound freshness gate", () => {
             };
         };
 
-        const revalidating = (over: Partial<SwapFillQuoteDeps> = {}) => ({
-            assertBoundFresh: (fill: SwapFill) =>
-                revalidateBoundSwapFill(
-                    { ...world.deps, runtime, nowMs: () => clockMs, ...over },
-                    fill,
-                ),
-        });
+        const admission = (count: number) =>
+            new Promise<void>((resolve) => {
+                admitted = (n) => {
+                    if (n === count) resolve();
+                };
+            });
 
-        const expectRefusedUnsubmitted = (rejected: ServiceError) => {
-            expect(rejected).toMatchObject({ status: 409, code: "swap_fill_bound_unsafe" });
-            expect(rejected.message).toContain("(not submitted)");
-            expect(joint.calls).not.toContain("sign");
+        const wire = (over: Partial<SwapFillQuoteDeps> = {}): Partial<SwapFillSubmitDeps> => {
+            const revalidation: SwapFillQuoteDeps = {
+                ...world.deps,
+                runtime: {
+                    ...runtime,
+                    withAdmission: (work) => {
+                        admitted?.(++admissions);
+                        return runtime.withAdmission(work);
+                    },
+                },
+                nowMs: () => clockMs,
+                ...over,
+            };
+            return { withBoundAdmission: (work) => admitBoundSwapFill(revalidation, work) };
+        };
+
+        const ready = () => {
+            const state = operationalSnapshot(
+                {
+                    now: () => NOW,
+                    policy: world.deps.policy,
+                    runtime,
+                    reconciler: { status: () => ({ lastTickAt: NOW, locking: 0, blockers: [] }) },
+                    sweeper: {
+                        status: () => ({
+                            lastTickAt: NOW,
+                            lastTickHeight: 700000n,
+                            lastTickMedianTime: BigInt(NOW),
+                            recoverySubmittedTotal: 0,
+                            failedTotal: 0,
+                            lastError: null,
+                            lastRecoveryError: null,
+                            lockedCount: 0,
+                            recoveringCount: 0,
+                            lastSuccessfulObservationAt: NOW,
+                            lastSuccessfulRecoveryAt: null,
+                            nearestDeadline: { height: null, time: null },
+                            oldestUnsweptLocktime: { height: null, time: null },
+                            blockers: [],
+                            deadlines: [],
+                        }),
+                    },
+                    sweeperStaleAfterSeconds: 3,
+                },
+                { ignoreManualPause: true },
+            );
+            if (!state.ready)
+                throw new ServiceError("not_ready", 503, state.body.reason ?? "not ready");
+        };
+
+        const expectRefused = (rejected: ServiceError, status: number, code: string) => {
+            expect(rejected).toMatchObject({ status, code });
             expect(emulator.calls).toHaveLength(0);
             expect(world.swapFills.get(world.fill.id)).toMatchObject({
                 state: "quoted",
                 submitInvoked: false,
-                failureCode: "swap_fill_bound_unsafe",
             });
         };
 
@@ -901,6 +953,9 @@ describe("submitSwapFill bound freshness gate", () => {
             held = undefined;
             online = true;
             clockMs = NOW * 1000;
+            infoCalls = 0;
+            admissions = 0;
+            admitted = undefined;
             const cfg = { ...world.config, addressHrp: "tark" };
             const coins = await world.deps.inventory.getSpendableVtxos();
             const info = arkInfo({
@@ -912,6 +967,7 @@ describe("submitSwapFill bound freshness gate", () => {
                 providers: {
                     arkProvider: {
                         getInfo: async () => {
+                            infoCalls++;
                             const hold = held;
                             held = undefined;
                             if (hold) {
@@ -957,38 +1013,70 @@ describe("submitSwapFill bound freshness gate", () => {
         });
         afterEach(() => runtime.dispose());
 
-        it.each(["before", "after"])(
-            "waits out a runtime check in flight %s Taxi signing, then submits",
-            async (when) => {
-                const check = holdNextCheck();
-                let checking: Promise<unknown> | undefined;
-                if (when === "before") checking = check.start();
-                else joint.onSign = () => void (checking = check.start());
-                const outcome = submitBound(revalidating()).catch((e: unknown) => e);
-                await check.entered;
-                expect(runtime.safety().blockers).toContain("runtime_checking");
-                check.release();
-                await checking;
+        // The held check is released only once the admission meant to join it is
+        // requested, so joining, not a fresh check, is what the getInfo count pins.
+        const holdCheck = (at: "entry" | "after signing", onStart = () => {}) => {
+            const check = holdNextCheck();
+            let checking: Promise<RuntimeSafety> | undefined;
+            const start = () => {
+                onStart();
+                checking = check.start();
+            };
+            if (at === "entry") start();
+            else joint.onSign = start;
+            const joining = admission(at === "entry" ? 1 : 2);
+            return {
+                async settle(outcome: Promise<unknown>) {
+                    await Promise.race([joining, outcome]);
+                    expect(runtime.safety().blockers).toContain("runtime_checking");
+                    check.release();
+                    return (await checking)!;
+                },
+            };
+        };
+
+        it.each(["entry", "after signing"] as const)(
+            "waits out a runtime check in flight at %s, then submits",
+            async (at) => {
+                const check = holdCheck(at);
+                const outcome = submitBound(wire(), ready).catch((e: unknown) => e);
+                await check.settle(outcome);
                 expect(await outcome).toMatchObject({ state: "submitting" });
                 expect(emulator.calls).toHaveLength(1);
+                expect(infoCalls).toBe(3);
             },
         );
 
-        it("still refuses when the check it waited for finds the runtime unsafe", async () => {
-            const check = holdNextCheck();
-            online = false;
-            const checking = check.start();
-            const outcome = caught(() => submitBound(revalidating()));
-            await check.entered;
-            check.release();
-            expect((await checking).blockers).toContain("wallet_unsynced");
-            expectRefusedUnsubmitted(await outcome);
+        it("refuses at entry, before any lease, when the awaited check finds the runtime unsafe", async () => {
+            const check = holdCheck("entry", () => (online = false));
+            const outcome = caught(() => submitBound(wire(), ready));
+            expect((await check.settle(outcome)).blockers).toContain("wallet_unsynced");
+            const rejected = await outcome;
+            expectRefused(rejected, 503, "not_ready");
+            expect(rejected.message).toContain("wallet_unsynced");
+            expect(joint.calls).toEqual([]);
+            const row = world.swapFills.get(world.fill.id)!;
+            expect([row.leaseToken, row.solverGraph, row.failureCode]).toEqual([
+                undefined,
+                undefined,
+                undefined,
+            ]);
+        });
+
+        it("refuses after signing when the awaited check finds the runtime unsafe", async () => {
+            const check = holdCheck("after signing", () => (online = false));
+            const outcome = caught(() => submitBound(wire(), ready));
+            expect((await check.settle(outcome)).blockers).toContain("wallet_unsynced");
+            const rejected = await outcome;
+            expectRefused(rejected, 409, "swap_fill_bound_unsafe");
+            expect(rejected.message).toContain("wallet_unsynced (not submitted)");
+            expect(world.swapFills.get(world.fill.id)!.failureCode).toBe("swap_fill_bound_unsafe");
         });
 
         it("still refuses when the verified window lapses during revalidation", async () => {
             const rejected = await caught(() =>
                 submitBound(
-                    revalidating({
+                    wire({
                         senderInventory: {
                             getVtxos: async (opts) => {
                                 clockMs += world.config.reconcileIntervalMs;
@@ -996,9 +1084,13 @@ describe("submitSwapFill bound freshness gate", () => {
                             },
                         },
                     }),
+                    ready,
                 ),
             );
-            expectRefusedUnsubmitted(rejected);
+            expectRefused(rejected, 409, "swap_fill_bound_unsafe");
+            expect(rejected.message).toContain("runtime_stale (not submitted)");
+            expect(joint.calls).not.toContain("sign");
+            expect(world.swapFills.get(world.fill.id)!.failureCode).toBe("swap_fill_bound_unsafe");
         });
     });
 });

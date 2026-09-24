@@ -17,9 +17,9 @@ import { sanitizeOperationalError, ServiceError } from "./errors.js";
 import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
 import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
 import {
+    admitBoundSwapFill,
     createSwapOfferCodec,
     ProductionSwapFillGraphBuilder,
-    revalidateBoundSwapFill,
 } from "./swapFillQuotes.js";
 import { createSweeper } from "./sweeper.js";
 import { createApp } from "./server.js";
@@ -196,8 +196,8 @@ async function runServe(): Promise<void> {
             randomId: () => randomUUID(),
             leaseSeconds: Math.max(30, intervalSeconds * 2),
             advances,
-            assertBoundFresh: (fill) =>
-                revalidateBoundSwapFill(
+            withBoundAdmission: (work) =>
+                admitBoundSwapFill(
                     {
                         runtime,
                         policy,
@@ -216,7 +216,7 @@ async function runServe(): Promise<void> {
                         providerLimits,
                         getServerUnroll: runtime.getServerUnroll,
                     },
-                    fill,
+                    work,
                 ),
         },
         offerCodec,
