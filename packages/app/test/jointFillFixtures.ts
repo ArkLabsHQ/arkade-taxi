@@ -17,7 +17,7 @@ import type { SwapFillQuoteResponse } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
 import { encodeJointFillSource, type JointFillFundingSource } from "../src/arkade/fundingSource.js";
-import { createSwapFillQuote } from "../src/swapFillQuotes.js";
+import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
 import {
     config,
     fundingCoin,
@@ -53,6 +53,8 @@ const FARE = 4n;
 export interface BoundJointFill {
     db: Database;
     config: RuntimeConfig;
+    /** The deps that quoted the fill, so a test can revalidate it with another runtime. */
+    deps: SwapFillQuoteDeps;
     quote: SwapFillQuoteResponse;
     fill: SwapFill;
     advance: Advance;
@@ -229,85 +231,84 @@ export async function createBoundJointFill(
             [key(depositCoin), depositCoin],
             [key(solverFunding), solverFunding],
         ]);
-        const quote = await createSwapFillQuote(
-            {
-                runtime: {
-                    assertAdmission: async () => {},
-                    withAdmission: async (work) => work(() => {}),
-                    safety: () => runtimeSafety(),
-                },
-                policy: policies,
-                advances,
-                reservations,
-                swapFills,
-                receiveQuotes: quotes,
-                inventory: {
-                    getSpendableVtxos: async () => [operatorCoin],
-                    getLockedVtxoOutpoints: async () => [],
-                },
-                senderInventory: {
-                    getVtxos: async (opts) => ({
-                        vtxos:
-                            opts?.outpoints
-                                ?.map((o) => indexed.get(key(o))!)
-                                .filter(Boolean)
-                                .map(asIndexed) ?? [],
-                    }),
-                },
-                config: cfg,
-                now: () => NOW,
-                nowMs: () => NOW * 1000,
-                randomId: () => "fill-1",
-                swapFillBuilder: new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
-                    id: WANTED_SWAP_ID,
-                    amount: WANT_UNITS,
+        const deps: SwapFillQuoteDeps = {
+            runtime: {
+                assertAdmission: async () => {},
+                withAdmission: async (work) => work(() => {}),
+                safety: () => runtimeSafety(),
+            },
+            policy: policies,
+            advances,
+            reservations,
+            swapFills,
+            receiveQuotes: quotes,
+            inventory: {
+                getSpendableVtxos: async () => [operatorCoin],
+                getLockedVtxoOutpoints: async () => [],
+            },
+            senderInventory: {
+                getVtxos: async (opts) => ({
+                    vtxos:
+                        opts?.outpoints
+                            ?.map((o) => indexed.get(key(o))!)
+                            .filter(Boolean)
+                            .map(asIndexed) ?? [],
                 }),
-                offerCodec: {
-                    decodeOffer: () =>
-                        fakeOfferTerms({
-                            ...offerTaprootOf(depositCoin),
-                            makerProceedsScript: covenant.pkScript,
-                            makerPublicKey: makerKey,
-                            wantAsset: WANTED_ASSET,
-                            wantAmount: WANT_UNITS,
-                        }),
-                },
-                providerLimits: async () => ({ vtxoMaxAmount: 10_000_000n }),
-                getServerUnroll: () => serverUnroll,
             },
-            {
-                operationId: "op-1",
-                offerHex: "ab12",
-                receiveQuoteId: quoteId,
-                solverInputs: [
-                    {
-                        txid: BOUND_SOLVER.txid,
-                        vout: BOUND_SOLVER.vout,
-                        value: "6000",
-                        ...solverTaproot(),
-                        assets: [
-                            {
-                                assetId: {
-                                    txid: hex.encode(WANTED_ASSET.txid),
-                                    groupIndex: WANTED_ASSET.groupIndex,
-                                },
-                                amount: WANT_UNITS.toString(10),
+            config: cfg,
+            now: () => NOW,
+            nowMs: () => NOW * 1000,
+            randomId: () => "fill-1",
+            swapFillBuilder: new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
+                id: WANTED_SWAP_ID,
+                amount: WANT_UNITS,
+            }),
+            offerCodec: {
+                decodeOffer: () =>
+                    fakeOfferTerms({
+                        ...offerTaprootOf(depositCoin),
+                        makerProceedsScript: covenant.pkScript,
+                        makerPublicKey: makerKey,
+                        wantAsset: WANTED_ASSET,
+                        wantAmount: WANT_UNITS,
+                    }),
+            },
+            providerLimits: async () => ({ vtxoMaxAmount: 10_000_000n }),
+            getServerUnroll: () => serverUnroll,
+        };
+        const quote = await createSwapFillQuote(deps, {
+            operationId: "op-1",
+            offerHex: "ab12",
+            receiveQuoteId: quoteId,
+            solverInputs: [
+                {
+                    txid: BOUND_SOLVER.txid,
+                    vout: BOUND_SOLVER.vout,
+                    value: "6000",
+                    ...solverTaproot(),
+                    assets: [
+                        {
+                            assetId: {
+                                txid: hex.encode(WANTED_ASSET.txid),
+                                groupIndex: WANTED_ASSET.groupIndex,
                             },
-                        ],
-                    },
-                ],
-                solverProceedsScript: "51",
-                solverKeys: ["ab".repeat(32)],
-                contributionSats: loan.toString(10),
-                maxFare: { currency: "sats", units: receiverPaid ? "0" : "30" },
-                fundingTxid: BOUND_DEPOSIT.txid,
-                fundingVout: BOUND_DEPOSIT.vout,
-                ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),
-            },
-        );
+                            amount: WANT_UNITS.toString(10),
+                        },
+                    ],
+                },
+            ],
+            solverProceedsScript: "51",
+            solverKeys: ["ab".repeat(32)],
+            contributionSats: loan.toString(10),
+            maxFare: { currency: "sats", units: receiverPaid ? "0" : "30" },
+            fundingTxid: BOUND_DEPOSIT.txid,
+            fundingVout: BOUND_DEPOSIT.vout,
+            ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),
+        });
         return {
             db,
             config: cfg,
+            deps,
             quote,
             fill: swapFills.get(quote.fillId)!,
             advance: advances.get(quoteId)!,

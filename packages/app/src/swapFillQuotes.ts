@@ -1291,6 +1291,30 @@ export async function revalidateBoundSwapFill(
     fill: SwapFill,
 ): Promise<void> {
     if (!fill.receiveQuoteId) return;
+    // A runtime check in flight publishes `runtime_checking`; admission awaits it
+    // and keeps the next one from starting before the final freshness read.
+    return deps.runtime.withAdmission((assertCurrent) =>
+        revalidateAdmittedBoundSwapFill(
+            {
+                ...deps,
+                runtime: {
+                    ...deps.runtime,
+                    safety: () => {
+                        assertCurrent();
+                        return deps.runtime.safety();
+                    },
+                },
+            },
+            fill,
+        ),
+    );
+}
+
+async function revalidateAdmittedBoundSwapFill(
+    deps: SwapFillQuoteDeps,
+    fill: SwapFill,
+): Promise<void> {
+    if (!fill.receiveQuoteId) return;
     const quote = deps.receiveQuotes?.get(fill.receiveQuoteId);
     const snapshot = deps.policy.getSnapshot();
     if (

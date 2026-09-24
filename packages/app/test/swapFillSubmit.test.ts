@@ -11,11 +11,18 @@ import {
     Transaction,
     type ExtendedVirtualCoin,
     type Identity,
+    type Wallet,
 } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import type { SwapFill } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
+import {
+    createSwapFillQuote,
+    revalidateBoundSwapFill,
+    type SwapFillQuoteDeps,
+} from "../src/swapFillQuotes.js";
+import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
+import { arkInfo } from "./arkade/fixtures.js";
 import {
     SWAP_FILL_SUBMIT_LEASE_OWNER,
     assertSolverAuthorised,
@@ -34,7 +41,9 @@ import {
     NOW,
     operatorKey,
     policy as basePolicy,
+    providerEmulatorKey,
     runtimeSafety,
+    serverUnroll,
 } from "./fixtures.js";
 import {
     asIndexed,
@@ -841,6 +850,156 @@ describe("submitSwapFill bound freshness gate", () => {
         expect(freshAt).toHaveLength(0);
         expect(joint.calls).not.toContain("sign");
         expect(emulator.calls).toHaveLength(0);
+    });
+
+    describe("against the runtime's own checks", () => {
+        let runtime: ReturnType<typeof createOperatorRuntime>;
+        let held: { entered: () => void; released: Promise<void> } | undefined;
+        let online: boolean;
+        let clockMs: number;
+
+        const gate = () => {
+            let open!: () => void;
+            const pending = new Promise<void>((resolve) => (open = resolve));
+            return { pending, open };
+        };
+
+        const holdNextCheck = () => {
+            const entered = gate();
+            const released = gate();
+            return {
+                entered: entered.pending,
+                release: released.open,
+                start: () => {
+                    held = { entered: entered.open, released: released.pending };
+                    return runtime.refresh();
+                },
+            };
+        };
+
+        const revalidating = (over: Partial<SwapFillQuoteDeps> = {}) => ({
+            assertBoundFresh: (fill: SwapFill) =>
+                revalidateBoundSwapFill(
+                    { ...world.deps, runtime, nowMs: () => clockMs, ...over },
+                    fill,
+                ),
+        });
+
+        const expectRefusedUnsubmitted = (rejected: ServiceError) => {
+            expect(rejected).toMatchObject({ status: 409, code: "swap_fill_bound_unsafe" });
+            expect(rejected.message).toContain("(not submitted)");
+            expect(joint.calls).not.toContain("sign");
+            expect(emulator.calls).toHaveLength(0);
+            expect(world.swapFills.get(world.fill.id)).toMatchObject({
+                state: "quoted",
+                submitInvoked: false,
+                failureCode: "swap_fill_bound_unsafe",
+            });
+        };
+
+        beforeEach(async () => {
+            held = undefined;
+            online = true;
+            clockMs = NOW * 1000;
+            const cfg = { ...world.config, addressHrp: "tark" };
+            const coins = await world.deps.inventory.getSpendableVtxos();
+            const info = arkInfo({
+                checkpointTapscript: bytesToHex(serverUnroll.script),
+                vtxoMinAmount: cfg.vtxoMinAmount,
+            });
+            runtime = createOperatorRuntime(cfg, world.db, {
+                now: () => clockMs,
+                providers: {
+                    arkProvider: {
+                        getInfo: async () => {
+                            const hold = held;
+                            held = undefined;
+                            if (hold) {
+                                hold.entered();
+                                await hold.released;
+                            }
+                            return info;
+                        },
+                    },
+                    emulatorProvider: {
+                        getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+                    },
+                },
+                walletFactory: async () =>
+                    ({
+                        getAddress: async () =>
+                            new ArkAddress(
+                                cfg.serverPubkey,
+                                cfg.operatorKey,
+                                cfg.addressHrp,
+                            ).encode(),
+                        getSpendableVtxos: async () => coins,
+                        getContractManager: async () => ({
+                            getSyncState: () => ({
+                                mode: online ? "online" : "degraded",
+                                lastSyncedAt: clockMs,
+                            }),
+                        }),
+                        getProviderConnectionState: () => ({
+                            mode: online ? "online" : "degraded",
+                        }),
+                        onchainProvider: {
+                            getChainTip: async () => ({
+                                height: 700000,
+                                time: NOW,
+                                hash: "aa".repeat(32),
+                            }),
+                        },
+                        dispose: async () => {},
+                    }) as unknown as Wallet,
+            });
+            expect((await runtime.refresh()).blockers).toEqual([]);
+        });
+        afterEach(() => runtime.dispose());
+
+        it.each(["before", "after"])(
+            "waits out a runtime check in flight %s Taxi signing, then submits",
+            async (when) => {
+                const check = holdNextCheck();
+                let checking: Promise<unknown> | undefined;
+                if (when === "before") checking = check.start();
+                else joint.onSign = () => void (checking = check.start());
+                const outcome = submitBound(revalidating()).catch((e: unknown) => e);
+                await check.entered;
+                expect(runtime.safety().blockers).toContain("runtime_checking");
+                check.release();
+                await checking;
+                expect(await outcome).toMatchObject({ state: "submitting" });
+                expect(emulator.calls).toHaveLength(1);
+            },
+        );
+
+        it("still refuses when the check it waited for finds the runtime unsafe", async () => {
+            const check = holdNextCheck();
+            online = false;
+            const checking = check.start();
+            const outcome = caught(() => submitBound(revalidating()));
+            await check.entered;
+            check.release();
+            expect((await checking).blockers).toContain("wallet_unsynced");
+            expectRefusedUnsubmitted(await outcome);
+        });
+
+        it("still refuses when the verified window lapses during revalidation", async () => {
+            const rejected = await caught(() =>
+                submitBound(
+                    revalidating({
+                        senderInventory: {
+                            getVtxos: async (opts) => {
+                                clockMs += world.config.reconcileIntervalMs;
+                                return world.deps.senderInventory.getVtxos(opts);
+                            },
+                        },
+                    }),
+                ),
+            );
+            expectRefusedUnsubmitted(rejected);
+        });
     });
 });
 
