@@ -96,7 +96,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(9);
+            expect(userVersion(reopened)).toBe(10);
             expect(
                 reopened
                     .prepare(
@@ -119,10 +119,10 @@ describe("migrations", () => {
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -158,6 +158,7 @@ describe("migrations", () => {
             recovery_prepared_ark_tx recovery_prepared_checkpoints_json recovery_response_ark_tx
             recovery_response_checkpoints_json recovery_lease_owner recovery_lease_token recovery_lease_until
             recovery_attempts recovery_last_attempt_at recovery_next_attempt_at
+            receiver_fare_currency receiver_fare_units
         `
                 .trim()
                 .split(/\s+/)
@@ -189,7 +190,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -223,7 +224,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
@@ -237,7 +238,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
@@ -254,7 +255,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -273,7 +274,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -291,7 +292,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(8);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
@@ -303,6 +304,39 @@ describe("migrations", () => {
     it("rejects a v9 stamp without the swap-fill deadline column", () => {
         const db = migrated();
         db.exec("ALTER TABLE swap_fills DROP COLUMN valid_until");
+        const before = db.serialize();
+        expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+        expect(db.serialize()).toEqual(before);
+        db.close();
+    });
+    it("migrates a v9 database forward adding a nullable receiver fare, pre-migration rows unchanged", () => {
+        const db = fresh();
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 9),
+        );
+        expect(userVersion(db)).toBe(9);
+        insertRaw(db);
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(10);
+        expect(
+            db
+                .prepare<
+                    [],
+                    { receiver_fare_currency: string | null; receiver_fare_units: string | null }
+                >(
+                    "SELECT receiver_fare_currency, receiver_fare_units FROM advances WHERE id = 'a1'",
+                )
+                .get(),
+        ).toEqual({ receiver_fare_currency: null, receiver_fare_units: null });
+        expect(db.prepare("SELECT topup FROM advances WHERE id = 'a1'").get()).toEqual({
+            topup: 300n,
+        });
+        db.close();
+    });
+    it("rejects a v10 stamp without the receiver-paid advances column", () => {
+        const db = migrated();
+        db.exec("ALTER TABLE advances DROP COLUMN receiver_fare_currency");
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
@@ -327,7 +361,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(9);
+        expect(userVersion(db)).toBe(10);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

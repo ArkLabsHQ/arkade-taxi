@@ -1,4 +1,4 @@
-import type { AssetIdRef } from "@arkade-taxi/covenant";
+import type { AssetIdRef, ReceiverFare } from "@arkade-taxi/covenant";
 import type { AssetRule, ClaimMode, FareSpec, ResolvedClaimMode } from "./fares.js";
 
 /**
@@ -125,6 +125,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
      * covenant removes the need for.
      */
     fare: FareSpec;
+
+    /** What the receiver owes at claim, charged out of the covenant itself.
+     * Persisted because the claim feed and every recovery rebuild read the
+     * advance, and the fare is part of the covenant address. */
+    receiverFare?: ReceiverFare;
 
     outpoint?: Outpoint;
     spentTxid?: string;

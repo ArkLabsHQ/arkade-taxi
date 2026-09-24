@@ -24,6 +24,8 @@ const COLUMNS = [
     "fare_units",
     "fare_asset_txid",
     "fare_asset_group_index",
+    "receiver_fare_currency",
+    "receiver_fare_units",
     "outpoint_txid",
     "outpoint_vout",
     "spent_txid",
@@ -100,6 +102,8 @@ interface AdvanceRow {
     fare_units: bigint;
     fare_asset_txid: Uint8Array | null;
     fare_asset_group_index: bigint | null;
+    receiver_fare_currency: string | null;
+    receiver_fare_units: string | null;
     outpoint_txid: string | null;
     outpoint_vout: bigint | null;
     spent_txid: string | null;
@@ -214,6 +218,9 @@ function toParams(a: Advance): AdvanceParams {
         fare_units: a.fare.units,
         fare_asset_txid: a.fare.currency === "asset" ? a.fare.assetId.txid : null,
         fare_asset_group_index: a.fare.currency === "asset" ? a.fare.assetId.groupIndex : null,
+        receiver_fare_currency: a.receiverFare?.currency ?? null,
+        receiver_fare_units:
+            a.receiverFare === undefined ? null : a.receiverFare.units.toString(10),
         outpoint_txid: a.outpoint?.txid ?? null,
         outpoint_vout: a.outpoint?.vout ?? null,
         spent_txid: a.spentTxid ?? null,
@@ -350,6 +357,15 @@ function fromRow(r: AdvanceRow): Advance {
         a.assetId = { txid: bytes(r.asset_txid), groupIndex: Number(r.asset_group_index) };
     }
     if (r.asset_units !== null) a.assetUnits = r.asset_units;
+    if (r.receiver_fare_currency !== null) {
+        if (r.receiver_fare_units === null)
+            throw new Error(`advance ${r.id}: receiver fare missing units`);
+        const units = BigInt(r.receiver_fare_units);
+        if (r.receiver_fare_currency === "sats") a.receiverFare = { currency: "sats", units };
+        else if (r.receiver_fare_currency === "asset")
+            a.receiverFare = { currency: "asset", units };
+        else throw new Error(`advance ${r.id}: unknown receiver fare currency`);
+    }
     if (r.claim_mode !== null) a.claimMode = r.claim_mode;
     if (r.recovery_recipient !== null) a.recoveryRecipient = r.recovery_recipient;
     if (r.outpoint_txid !== null) {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import {
+    AdvanceRepository,
     openDatabase,
     PolicyRepository,
     ReceiveQuoteRepository,
@@ -8,6 +9,7 @@ import {
     SwapFillRepository,
     type Database,
 } from "@arkade-taxi/db";
+import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
 import {
@@ -15,7 +17,10 @@ import {
     getReceiveQuote,
     type ReceiveQuoteDeps,
 } from "../src/receiveQuotes.js";
+import { assetRuleToWire } from "../src/rulesWire.js";
+import { selectOperatorFunding } from "../src/arkade/inventory.js";
 import {
+    advance,
     config,
     fundingCoin,
     MemoryAdvances,
@@ -26,8 +31,15 @@ import {
     serverKey,
 } from "./fixtures.js";
 import { createBoundJointFill } from "./jointFillFixtures.js";
+import type { ServiceError } from "../src/errors.js";
+
+vi.mock("../src/arkade/inventory.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../src/arkade/inventory.js")>();
+    return { ...actual, selectOperatorFunding: vi.fn(actual.selectOperatorFunding) };
+});
 
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
+const TOKEN_ASSET = { txid: new Uint8Array(32).fill(0x77), groupIndex: 3 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const body = (over: Record<string, unknown> = {}) => ({
     receiverAddress,
@@ -102,6 +114,32 @@ beforeEach(() => {
     ids = 0;
 });
 afterEach(() => db.close());
+
+const sameAssetDeps = (pricing: FarePricing = { kind: "flat", units: 9n }) => {
+    configure({
+        assetRules: [
+            { ...rule(), fares: [{ id: "asset", currency: { kind: "sameAsset" }, pricing }] },
+        ],
+    });
+    return deps();
+};
+const tokenFareDeps = () => {
+    configure({
+        assetRules: [
+            {
+                ...rule(),
+                fares: [
+                    {
+                        id: "token",
+                        currency: { kind: "token", assetId: TOKEN_ASSET },
+                        pricing: { kind: "flat", units: 1n },
+                    },
+                ],
+            },
+        ],
+    });
+    return deps();
+};
 
 describe("createReceiveQuote", () => {
     it("issues and reserves an independently reconstructible 329+1 quote", async () => {
@@ -340,6 +378,102 @@ describe("createReceiveQuote", () => {
         });
         await expect(createReceiveQuote(changedLocks, body())).rejects.toThrow(/locks/);
         expect(quotes.get("receive-1")).toBeUndefined();
+    });
+});
+
+const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
+    try {
+        await fn();
+    } catch (e) {
+        return e as ServiceError;
+    }
+    throw new Error("expected a rejection");
+};
+
+describe("createReceiveQuote: payer receiver", () => {
+    it("refuses an unknown payer value", async () => {
+        await expect(createReceiveQuote(deps(), { ...body(), payer: "nonsense" })).rejects.toThrow(
+            /payer must be sender or receiver/,
+        );
+    });
+
+    it("fronts the whole dust and prices the fill at zero", async () => {
+        configure({ assetRules: [rule({ kind: "flat", units: 5n })] });
+        const quote = await createReceiveQuote(deps(), { ...body(), payer: "receiver" });
+        expect(quote.params.topup).toBe("330");
+        expect(quote.fare).toEqual({ currency: "sats", units: "0" });
+        expect(quote.payer).toBe("receiver");
+        expect(quote.unclaimedMode).toBe("reclaim");
+        expect(quote.receiverFare).toEqual({ currency: "sats", units: "5" });
+        expect(quotes.get(quote.quoteId)?.receiverFare).toEqual({ currency: "sats", units: 5n });
+    });
+
+    it("omits payer, receiverFare and unclaimedMode for a sender-paid request", async () => {
+        const quote = await createReceiveQuote(deps(), body());
+        expect(quote.params.topup).toBe("329");
+        for (const k of ["payer", "receiverFare", "unclaimedMode"]) expect(k in quote).toBe(false);
+    });
+
+    it("emits assetId on a same-asset receiver fare", async () => {
+        const quote = await createReceiveQuote(sameAssetDeps(), { ...body(), payer: "receiver" });
+        expect(quote.receiverFare).toMatchObject({
+            currency: "asset",
+            units: "9",
+            assetId: expect.any(Object),
+        });
+        expect(quote.params.receiverFare).toEqual({ currency: "asset", units: "9" });
+    });
+
+    it("refuses a proportional same-asset fare, which needs an amount this quote has not got", async () => {
+        const d = sameAssetDeps({ kind: "proportional", bps: 100, minUnits: 0n, maxUnits: null });
+        const error = await caught(() => createReceiveQuote(d, { ...body(), payer: "receiver" }));
+        expect(error.code).toBe("fare_unavailable");
+    });
+
+    it("refuses a token fare: the covenant can only charge the delivered asset", async () => {
+        const error = await caught(() =>
+            createReceiveQuote(tokenFareDeps(), { ...body(), payer: "receiver" }),
+        );
+        expect(error.code).toBe("fare_unavailable");
+    });
+
+    it("reserves the contribution plus a spendable change floor", async () => {
+        const selectSpy = vi.mocked(selectOperatorFunding);
+        selectSpy.mockClear();
+        await createReceiveQuote(deps(), { ...body(), payer: "receiver" });
+        expect(selectSpy.mock.calls[0]![0].requiredSats).toBe(660n);
+    });
+
+    it("advertises unclaimedMode on every asset rule", () => {
+        expect(assetRuleToWire(rule()).unclaimedMode).toBe("reclaim");
+    });
+
+    // The one that would catch a dropped column: without it, the re-derived
+    // address differs, because the fare is part of the taptree.
+    it("re-derives the same covenant address from a persisted receiver-paid advance", () => {
+        const cfg = config();
+        const built = advance({
+            assetId: ASSET,
+            claimMode: "recycle",
+            recoveryRecipient: "receiver",
+            receiverFare: { currency: "asset", units: 9n },
+            assetUnits: 20n,
+        });
+        const scriptOpts = {
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        };
+        const covenantAddress = new DustCovenantScript({ ...scriptOpts, params: built })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        const repo = new AdvanceRepository(db);
+        repo.insert({ ...built, covenantAddress });
+        const stored = repo.get(built.id)!;
+        const rederived = new DustCovenantScript({ ...scriptOpts, params: stored })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        expect(rederived).toBe(covenantAddress);
     });
 });
 

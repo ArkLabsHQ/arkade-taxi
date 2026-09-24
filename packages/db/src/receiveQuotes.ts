@@ -25,6 +25,9 @@ export interface ReceiveQuoteParams {
     locktime: bigint;
     claimMode: "recycle";
     recoveryRecipient: "receiver";
+    /** Present only on a receiver-paid quote; the fared asset is `assetId`
+     * above, not restated here. Mirrors `@arkade-taxi/covenant`'s `ReceiverFare`. */
+    receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
 }
 
 export interface ReceiveQuoteInputSnapshot extends Outpoint {
@@ -43,6 +46,10 @@ export interface ReceiveQuote {
     params: ReceiveQuoteParams;
     covenantAddress: string;
     fare: FareSpec;
+    /** Opt-in: the receiver fronts the whole dust and pays the fare at claim
+     * instead of the sender. These two appear together, never one alone. */
+    payer?: "receiver";
+    receiverFare?: FareSpec;
     batchExpiry: ExpiryDeadline;
     inputExpiryFloor: ExpiryDeadline;
     recoveryLocktime: ExpiryDeadline;
@@ -84,6 +91,8 @@ type Row = {
     params_json: string;
     covenant_address: string;
     fare_json: string;
+    payer: string | null;
+    receiver_fare_json: string | null;
     batch_expiry_kind: string;
     batch_expiry_value: bigint;
     input_expiry_floor_kind: string;
@@ -161,6 +170,14 @@ const encodeParams = (params: ReceiveQuoteParams): string =>
         locktime: params.locktime.toString(10),
         claimMode: params.claimMode,
         recoveryRecipient: params.recoveryRecipient,
+        ...(params.receiverFare === undefined
+            ? {}
+            : {
+                  receiverFare: {
+                      currency: params.receiverFare.currency,
+                      units: params.receiverFare.units.toString(10),
+                  },
+              }),
     });
 
 const decodeParams = (json: string): ReceiveQuoteParams => {
@@ -178,7 +195,7 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
             "claimMode",
             "recoveryRecipient",
         ],
-        [],
+        ["receiverFare"],
         "params",
     );
     const asset = object(value.assetId, "params.assetId");
@@ -186,6 +203,15 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
     if (!Number.isSafeInteger(asset.groupIndex) || Number(asset.groupIndex) < 0)
         fail("params.assetId");
     if (value.claimMode !== "recycle" || value.recoveryRecipient !== "receiver") fail("params");
+    let receiverFare: ReceiveQuoteParams["receiverFare"];
+    if (value.receiverFare !== undefined) {
+        const fare = object(value.receiverFare, "params.receiverFare");
+        exact(fare, ["currency", "units"], [], "params.receiverFare");
+        const units = amount(fare.units, "params.receiverFare.units");
+        if (fare.currency === "sats") receiverFare = { currency: "sats", units };
+        else if (fare.currency === "asset") receiverFare = { currency: "asset", units };
+        else fail("params.receiverFare");
+    }
     return {
         receiverKey: bytes(value.receiverKey, 32, "params.receiverKey"),
         senderKey: bytes(value.senderKey, 32, "params.senderKey"),
@@ -199,6 +225,7 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
         locktime: amount(value.locktime, "params.locktime"),
         claimMode: "recycle",
         recoveryRecipient: "receiver",
+        ...(receiverFare === undefined ? {} : { receiverFare }),
     };
 };
 
@@ -212,6 +239,41 @@ const decodeFare = (json: string): FareSpec => {
     exact(value, ["currency", "units"], [], "fare");
     if (value.currency !== "sats") fail("fare");
     return { currency: "sats", units: amount(value.units, "fare.units") };
+};
+
+// Unlike `fare`, may be asset-denominated: it is what the receiver owes at
+// claim, out of the same asset the covenant already moves.
+const encodeReceiverFare = (fare: FareSpec): string =>
+    JSON.stringify(
+        fare.currency === "asset"
+            ? {
+                  currency: "asset",
+                  units: fare.units.toString(10),
+                  assetId: { txid: hex(fare.assetId.txid), groupIndex: fare.assetId.groupIndex },
+              }
+            : { currency: "sats", units: fare.units.toString(10) },
+    );
+
+const decodeReceiverFare = (json: string): FareSpec => {
+    const value = object(JSON.parse(json), "receiverFare");
+    if (value.currency === "asset") {
+        exact(value, ["currency", "units", "assetId"], [], "receiverFare");
+        const asset = object(value.assetId, "receiverFare.assetId");
+        exact(asset, ["txid", "groupIndex"], [], "receiverFare.assetId");
+        if (!Number.isSafeInteger(asset.groupIndex) || Number(asset.groupIndex) < 0)
+            fail("receiverFare.assetId");
+        return {
+            currency: "asset",
+            units: amount(value.units, "receiverFare.units"),
+            assetId: {
+                txid: bytes(asset.txid, 32, "receiverFare.assetId.txid"),
+                groupIndex: Number(asset.groupIndex),
+            },
+        };
+    }
+    exact(value, ["currency", "units"], [], "receiverFare");
+    if (value.currency !== "sats") fail("receiverFare");
+    return { currency: "sats", units: amount(value.units, "receiverFare.units") };
 };
 
 const encodeInputs = (inputs: readonly ReceiveQuoteInputSnapshot[]): string =>
@@ -284,6 +346,14 @@ const decodeRow = (row: Row): ReceiveQuote => {
     if (!row.receiver_address || !/^[0-9a-f]{64}$/.test(row.maker_public_key)) fail("identity");
     const params = decodeParams(row.params_json);
     const fare = decodeFare(row.fare_json);
+    if (row.payer !== null && row.payer !== "receiver") fail("payer");
+    const receiverFare =
+        row.receiver_fare_json === null ? undefined : decodeReceiverFare(row.receiver_fare_json);
+    if (
+        (row.payer === null) !== (receiverFare === undefined) ||
+        (receiverFare === undefined) !== (params.receiverFare === undefined)
+    )
+        fail("payer");
     const batchExpiry = deadline(row.batch_expiry_kind, row.batch_expiry_value, "batch expiry");
     const inputExpiryFloor = deadline(
         row.input_expiry_floor_kind,
@@ -299,7 +369,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
     if (
         hex(params.senderKey) !== row.maker_public_key ||
         params.topup !== row.loan_sats ||
-        params.dust <= params.topup ||
+        (receiverFare === undefined ? params.dust <= params.topup : params.dust !== params.topup) ||
         params.locktime !== recoveryLocktime.value ||
         batchExpiry.kind !== inputExpiryFloor.kind ||
         inputExpiryFloor.kind !== recoveryLocktime.kind ||
@@ -327,6 +397,8 @@ const decodeRow = (row: Row): ReceiveQuote => {
         params,
         covenantAddress: row.covenant_address,
         fare,
+        ...(row.payer === null ? {} : { payer: "receiver" as const }),
+        ...(receiverFare === undefined ? {} : { receiverFare }),
         batchExpiry,
         inputExpiryFloor,
         recoveryLocktime,
@@ -357,6 +429,11 @@ export class ReceiveQuoteRepository {
             params_json: encodeParams(request.quote.params),
             covenant_address: request.quote.covenantAddress,
             fare_json: encodeFare(request.quote.fare),
+            payer: request.quote.payer ?? null,
+            receiver_fare_json:
+                request.quote.receiverFare === undefined
+                    ? null
+                    : encodeReceiverFare(request.quote.receiverFare),
             batch_expiry_kind: request.quote.batchExpiry.kind,
             batch_expiry_value: request.quote.batchExpiry.value,
             input_expiry_floor_kind: request.quote.inputExpiryFloor.kind,
@@ -428,11 +505,12 @@ export class ReceiveQuoteRepository {
                     .prepare(
                         `INSERT INTO receive_quotes (
                             id, state, receiver_address, maker_public_key, params_json,
-                            covenant_address, fare_json, batch_expiry_kind, batch_expiry_value,
+                            covenant_address, fare_json, payer, receiver_fare_json,
+                            batch_expiry_kind, batch_expiry_value,
                             input_expiry_floor_kind, input_expiry_floor_value,
                             recovery_locktime_kind, recovery_locktime_value, loan_sats, created_at,
                             expires_at, policy_revision, operator_inputs_json, bound_fill_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     )
                     .run(
                         q.id,
@@ -442,6 +520,8 @@ export class ReceiveQuoteRepository {
                         encodeParams(q.params),
                         q.covenantAddress,
                         encodeFare(q.fare),
+                        q.payer ?? null,
+                        q.receiverFare === undefined ? null : encodeReceiverFare(q.receiverFare),
                         q.batchExpiry.kind,
                         q.batchExpiry.value,
                         q.inputExpiryFloor.kind,

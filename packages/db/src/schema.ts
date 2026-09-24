@@ -315,6 +315,20 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE swap_fills ADD COLUMN valid_until INTEGER
             CHECK (valid_until IS NULL OR valid_until > 0)`,
     },
+    {
+        id: 10,
+        // Additive and nullable on both tables. NULL is a sender-paid transfer, which
+        // is every row written before this migration. `advances` matters as much as
+        // `receive_quotes`: the claim feed and every recovery rebuild read the advance,
+        // and the fare is part of the covenant address.
+        up: `ALTER TABLE receive_quotes ADD COLUMN payer TEXT
+                CHECK (payer IS NULL OR payer = 'receiver');
+             ALTER TABLE receive_quotes ADD COLUMN receiver_fare_json TEXT
+                CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json));
+             ALTER TABLE advances ADD COLUMN receiver_fare_currency TEXT
+                CHECK (receiver_fare_currency IS NULL OR receiver_fare_currency IN ('sats','asset'));
+             ALTER TABLE advances ADD COLUMN receiver_fare_units TEXT;`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -423,6 +437,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'valid_until' AND type = 'INTEGER'",
             )
             .get();
+    const hasReceiverPaid =
+        hasSwapFillDeadline &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'receiver_fare_currency' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -435,7 +456,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 6 && !hasRecoveryRecipient) ||
             (current === 7 && !hasReceiveQuotes) ||
             (current === 8 && !hasReceiveQuoteLink) ||
-            (current === 9 && !hasSwapFillDeadline))
+            (current === 9 && !hasSwapFillDeadline) ||
+            (current === 10 && !hasReceiverPaid))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

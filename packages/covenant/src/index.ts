@@ -6,6 +6,7 @@ export {
     type AssetIdRef,
     type DustCovenantParams,
     type RecycleFare,
+    type ReceiverFare,
 } from "./params.js";
 export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
 export { appendAssetLookup } from "./asset.js";

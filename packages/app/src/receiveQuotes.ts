@@ -4,8 +4,10 @@ import {
     resolveClaimMode,
     resolveFare,
     ruleFor,
+    sameAsset,
     selectFare,
     type ExpiryDeadline,
+    type FareSpec,
     type Outpoint,
     type Policy,
 } from "@arkade-taxi/core";
@@ -66,6 +68,7 @@ type DecodedRequest = {
     assetId: { txid: Uint8Array; groupIndex: number };
     fareId?: string;
     fundingExpiry?: ExpiryDeadline;
+    payer: "sender" | "receiver";
 };
 
 const badRequest = (message: string) => new ServiceError(ErrorCode.InvalidRequest, 400, message);
@@ -83,7 +86,14 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     if (prototype !== Object.prototype && prototype !== null)
         throw badRequest("request body must be a plain JSON object");
     const raw = body as Record<string, unknown>;
-    exactKeys(raw, ["receiverAddress", "makerPublicKey", "assetId", "fareId", "fundingExpiry"]);
+    exactKeys(raw, [
+        "receiverAddress",
+        "makerPublicKey",
+        "assetId",
+        "fareId",
+        "fundingExpiry",
+        "payer",
+    ]);
     for (const required of ["receiverAddress", "makerPublicKey", "assetId"])
         if (!Object.prototype.hasOwnProperty.call(raw, required))
             throw badRequest(`missing request field ${required}`);
@@ -151,16 +161,28 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
             throw badRequest("fundingExpiry.value is outside the supported range");
         fundingExpiry = { kind: expiry.kind, value };
     }
+    let payer: "sender" | "receiver" = "sender";
+    if (raw.payer !== undefined) {
+        if (raw.payer !== "sender" && raw.payer !== "receiver")
+            throw badRequest("payer must be sender or receiver");
+        payer = raw.payer;
+    }
     return {
         receiverAddress: raw.receiverAddress,
         receiverKey: receiver.vtxoTaprootKey,
         makerPublicKey: raw.makerPublicKey,
         makerKey,
         assetId,
+        payer,
         ...(fareId === undefined ? {} : { fareId }),
         ...(fundingExpiry === undefined ? {} : { fundingExpiry }),
     };
 }
+
+// The wire/domain FareSpec carries assetId; the covenant param does not — it
+// is implied by the params' own assetId, which the fare was checked against.
+const toCovenantFare = (fare: FareSpec): DustCovenantParams["receiverFare"] =>
+    fare.currency === "asset" ? { currency: "asset", units: fare.units } : fare;
 
 function deriveCovenant(config: RuntimeConfig, params: DustCovenantParams): string {
     try {
@@ -177,22 +199,53 @@ function deriveCovenant(config: RuntimeConfig, params: DustCovenantParams): stri
     }
 }
 
-function immutableTerms(
-    req: DecodedRequest,
-    policy: Policy,
-    config: RuntimeConfig,
-): { loan: bigint; fare: { currency: "sats"; units: bigint } } {
+type Terms =
+    | { payer: "sender"; loan: bigint; fare: { currency: "sats"; units: bigint } }
+    | {
+          payer: "receiver";
+          loan: bigint;
+          fare: { currency: "sats"; units: 0n };
+          receiverFare: FareSpec;
+      };
+
+function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConfig): Terms {
     const receipt = config.vtxoMinAmount;
-    const loan = config.dust - receipt;
-    if (receipt <= 0n || config.dust <= 0n || loan < receipt || loan + receipt !== config.dust)
+    const senderLoan = config.dust - receipt;
+    if (
+        receipt <= 0n ||
+        config.dust <= 0n ||
+        senderLoan < receipt ||
+        senderLoan + receipt !== config.dust
+    )
         throw badRequest("server limits cannot form a positive two-output split");
     const rule = ruleFor(policy.assetRules, req.assetId);
     if (!rule) throw admissionError("asset_not_served");
     if (!rule.enabled) throw admissionError("asset_disabled");
     if (resolveClaimMode(rule.claim, "recycle") !== "recycle")
         throw badRequest("asset policy does not allow recycle claims");
+    const loan = req.payer === "receiver" ? config.dust : senderLoan;
     const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (loan > cap) throw admissionError("topup_exceeds_max_per_payment");
+
+    if (req.payer === "receiver") {
+        // resolveFare collapses `token` into {currency:"asset", assetId}, so it
+        // must be refused before resolving, while it is still distinguishable.
+        const option = selectFare(rule, req.fareId);
+        if (option.currency.kind === "token")
+            throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable");
+        let receiverFare: FareSpec;
+        try {
+            receiverFare = resolveFare(option, { topupSats: loan, assetId: req.assetId });
+        } catch (cause) {
+            throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable", {
+                cause,
+            });
+        }
+        if (receiverFare.currency === "asset" && !sameAsset(receiverFare.assetId, req.assetId))
+            throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable");
+        return { payer: "receiver", loan, fare: { currency: "sats", units: 0n }, receiverFare };
+    }
+
     let fare;
     try {
         fare = resolveFare(selectFare(rule, req.fareId), {
@@ -204,7 +257,7 @@ function immutableTerms(
     }
     if (fare.currency !== "sats")
         throw new ServiceError("fare_unavailable", 409, "receive quotes require a sats fare");
-    return { loan, fare };
+    return { payer: "sender", loan, fare };
 }
 
 export async function createReceiveQuote(
@@ -253,6 +306,9 @@ async function createAdmitted(
             locktime: 1n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
+            ...(terms.payer === "receiver"
+                ? { receiverFare: toCovenantFare(terms.receiverFare) }
+                : {}),
         });
     } catch (cause) {
         throw badRequest("makerPublicKey or receiverAddress is not a valid covenant identity");
@@ -281,7 +337,7 @@ async function createReserved(
     deps: ReceiveQuoteDeps,
     req: DecodedRequest,
     initial: PolicySnapshot,
-    terms: { loan: bigint; fare: { currency: "sats"; units: bigint } },
+    terms: Terms,
 ): Promise<ReceiveQuoteResponse> {
     enforceExposure(deps, initial.policy, terms.loan);
     const firstSafety = deps.runtime.safety();
@@ -330,6 +386,7 @@ async function createReserved(
         locktime: recovery.value,
         claimMode: "recycle",
         recoveryRecipient: "receiver",
+        ...(terms.payer === "receiver" ? { receiverFare: toCovenantFare(terms.receiverFare) } : {}),
     };
     const covenantAddress = deriveCovenant(deps.config, params);
     let latestSpendable: ExtendedVirtualCoin[];
@@ -393,6 +450,9 @@ async function createReserved(
         expiresAt: now + initial.policy.quoteTtlSeconds,
         policyRevision: initial.revision,
         operatorInputs: selection.inputs.map(operatorFundingInput),
+        ...(terms.payer === "receiver"
+            ? { payer: "receiver" as const, receiverFare: terms.receiverFare }
+            : {}),
     };
     deps.receiveQuotes.insert({
         quote,
@@ -509,6 +569,13 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
         createdAt: quote.createdAt,
         expiresAt: quote.expiresAt,
         ...(quote.boundFillId === undefined ? {} : { boundFillId: quote.boundFillId }),
+        ...(quote.payer === "receiver"
+            ? {
+                  payer: quote.payer,
+                  receiverFare: fareToWire(quote.receiverFare!),
+                  unclaimedMode: "reclaim" as const,
+              }
+            : {}),
     };
 }
 
