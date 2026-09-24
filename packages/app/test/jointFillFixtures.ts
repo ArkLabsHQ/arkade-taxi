@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Advance, FareSpec } from "@arkade-taxi/core";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { DustCovenantScript, type ReceiverFare } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
     openDatabase,
@@ -34,11 +34,11 @@ export const BOUND_SOLVER = { txid: "ee".repeat(32), vout: 1 };
 export const BOUND_TAXI = { txid: "cc".repeat(32), vout: 0 };
 
 const DISPLAY_ASSET = "1234".repeat(16);
-const WANTED_ASSET = {
+export const WANTED_ASSET = {
     txid: Uint8Array.from(hex.decode(DISPLAY_ASSET)).reverse(),
     groupIndex: 0,
 };
-const WANTED_SWAP_ID = asset.AssetId.create(DISPLAY_ASSET, 0).toString();
+export const WANTED_SWAP_ID = asset.AssetId.create(DISPLAY_ASSET, 0).toString();
 const WANT_UNITS = 5n;
 const LOAN = 329n;
 const FARE = 4n;
@@ -57,6 +57,135 @@ export interface BoundJointFill {
 
 const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`;
 
+export interface InsertedReceiveQuote {
+    db: Database;
+    cfg: RuntimeConfig;
+    quoteId: string;
+    policies: PolicyRepository;
+    quotes: ReceiveQuoteRepository;
+    swapFills: SwapFillRepository;
+    advances: AdvanceRepository;
+    reservations: ReservationRepository;
+    covenant: DustCovenantScript;
+    operatorCoin: ExtendedVirtualCoin;
+    depositCoin: ExtendedVirtualCoin;
+    makerKey: Uint8Array;
+    loan: bigint;
+    receiverPaid: boolean;
+}
+
+/**
+ * Opens a fresh in-memory database and inserts a live "quoted" receive quote
+ * through the real repository — the setup every test that binds one, sender- or
+ * receiver-paid, shares.
+ */
+export function insertReceiveQuote(opts: {
+    wantAmount: bigint;
+    receiverFare?: ReceiverFare;
+}): InsertedReceiveQuote {
+    const db = openDatabase(":memory:");
+    const cfg = config({ vtxoMinAmount: 1n });
+    const policies = new PolicyRepository(db);
+    const base = basePolicy();
+    policies.update(
+        {
+            ...base,
+            assetRules: [
+                ...base.assetRules,
+                {
+                    assetId: WANTED_ASSET,
+                    enabled: true,
+                    claim: "either",
+                    maxTopupSats: null,
+                    fares: [
+                        {
+                            id: "receive",
+                            currency: { kind: "sats" },
+                            pricing: { kind: "flat", units: FARE },
+                        },
+                    ],
+                },
+            ],
+        },
+        "test",
+    );
+    const revision = policies.getSnapshot().revision;
+    const quotes = new ReceiveQuoteRepository(db);
+    const swapFills = new SwapFillRepository(db);
+    const advances = new AdvanceRepository(db);
+    const reservations = new ReservationRepository(db);
+    const operatorCoin = fundingCoin({ ...BOUND_TAXI, value: 20_000 });
+    const depositCoin = fundingCoin({ ...BOUND_DEPOSIT, value: 10_000 });
+    const makerKey = new Uint8Array(32).fill(9);
+    const receiverPaid = opts.receiverFare !== undefined;
+    const loan = receiverPaid ? 330n : LOAN;
+    const topLevelReceiverFare: FareSpec | undefined =
+        opts.receiverFare === undefined
+            ? undefined
+            : opts.receiverFare.currency === "asset"
+              ? { currency: "asset", assetId: WANTED_ASSET, units: opts.receiverFare.units }
+              : opts.receiverFare;
+    const params = {
+        receiverKey,
+        senderKey: makerKey,
+        operatorKey: cfg.operatorKey,
+        dust: 330n,
+        topup: loan,
+        assetId: WANTED_ASSET,
+        locktime: 899_856n,
+        claimMode: "recycle" as const,
+        recoveryRecipient: "receiver" as const,
+        ...(opts.receiverFare === undefined ? {} : { receiverFare: opts.receiverFare }),
+    };
+    const covenant = new DustCovenantScript({
+        serverKey: cfg.serverPubkey,
+        emulatorKey: cfg.emulatorPubkey,
+        vtxoMinAmount: cfg.vtxoMinAmount,
+        params,
+    });
+    const quoteId = "receive-1";
+    quotes.insert({
+        quote: {
+            id: quoteId,
+            state: "quoted",
+            receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
+            makerPublicKey: hex.encode(makerKey),
+            params,
+            covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
+            fare: { currency: "sats", units: receiverPaid ? 0n : FARE },
+            ...(receiverPaid
+                ? { payer: "receiver" as const, receiverFare: topLevelReceiverFare! }
+                : {}),
+            batchExpiry: { kind: "height", value: 900_000n },
+            inputExpiryFloor: { kind: "height", value: 900_000n },
+            recoveryLocktime: { kind: "height", value: 899_856n },
+            loanSats: loan,
+            createdAt: NOW,
+            expiresAt: NOW + 60,
+            policyRevision: revision,
+            operatorInputs: [operatorFundingInput(operatorCoin)],
+        },
+        expectedPolicyRevision: revision,
+        recoveryExecutionBudget: { kind: "height", value: 72n },
+    });
+    return {
+        db,
+        cfg,
+        quoteId,
+        policies,
+        quotes,
+        swapFills,
+        advances,
+        reservations,
+        covenant,
+        operatorCoin,
+        depositCoin,
+        makerKey,
+        loan,
+        receiverPaid,
+    };
+}
+
 /**
  * Drives the real quote path end to end so the bound advance carries a genuine
  * `taxi-source:` graph and recovery preflight. Nothing downstream of a bound
@@ -64,103 +193,29 @@ const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`
  * the startup invariant rebuild the recovery intent from these exact bytes.
  */
 export async function createBoundJointFill(
-    over: {
-        validUntil?: number;
-        receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
-    } = {},
+    over: { validUntil?: number; receiverFare?: ReceiverFare } = {},
 ): Promise<BoundJointFill> {
-    const db = openDatabase(":memory:");
+    const {
+        db,
+        cfg,
+        quoteId,
+        policies,
+        quotes,
+        swapFills,
+        advances,
+        reservations,
+        covenant,
+        operatorCoin,
+        depositCoin,
+        makerKey,
+        loan,
+        receiverPaid,
+    } = insertReceiveQuote({ wantAmount: WANT_UNITS, receiverFare: over.receiverFare });
     try {
-        const cfg = config({ vtxoMinAmount: 1n });
-        const policies = new PolicyRepository(db);
-        const base = basePolicy();
-        policies.update(
-            {
-                ...base,
-                assetRules: [
-                    ...base.assetRules,
-                    {
-                        assetId: WANTED_ASSET,
-                        enabled: true,
-                        claim: "either",
-                        maxTopupSats: null,
-                        fares: [
-                            {
-                                id: "receive",
-                                currency: { kind: "sats" },
-                                pricing: { kind: "flat", units: FARE },
-                            },
-                        ],
-                    },
-                ],
-            },
-            "test",
-        );
-        const revision = policies.getSnapshot().revision;
-        const quotes = new ReceiveQuoteRepository(db);
-        const swapFills = new SwapFillRepository(db);
-        const advances = new AdvanceRepository(db);
-        const operatorCoin = fundingCoin({ ...BOUND_TAXI, value: 20_000 });
-        const depositCoin = fundingCoin({ ...BOUND_DEPOSIT, value: 10_000 });
         const solverCoin = fundingCoin({
             ...BOUND_SOLVER,
             value: 6_000,
             assets: [{ assetId: WANTED_SWAP_ID, amount: WANT_UNITS }],
-        });
-        const makerKey = new Uint8Array(32).fill(9);
-        const receiverPaid = over.receiverFare !== undefined;
-        const loan = receiverPaid ? 330n : LOAN;
-        const topLevelReceiverFare: FareSpec | undefined =
-            over.receiverFare === undefined
-                ? undefined
-                : over.receiverFare.currency === "asset"
-                  ? { currency: "asset", assetId: WANTED_ASSET, units: over.receiverFare.units }
-                  : over.receiverFare;
-        const params = {
-            receiverKey,
-            senderKey: makerKey,
-            operatorKey: cfg.operatorKey,
-            dust: 330n,
-            topup: loan,
-            assetId: WANTED_ASSET,
-            locktime: 899_856n,
-            claimMode: "recycle" as const,
-            recoveryRecipient: "receiver" as const,
-            ...(over.receiverFare === undefined ? {} : { receiverFare: over.receiverFare }),
-        };
-        const covenant = new DustCovenantScript({
-            serverKey: cfg.serverPubkey,
-            emulatorKey: cfg.emulatorPubkey,
-            vtxoMinAmount: cfg.vtxoMinAmount,
-            params,
-        });
-        quotes.insert({
-            quote: {
-                id: "receive-1",
-                state: "quoted",
-                receiverAddress: new ArkAddress(
-                    cfg.serverPubkey,
-                    receiverKey,
-                    cfg.addressHrp,
-                ).encode(),
-                makerPublicKey: hex.encode(makerKey),
-                params,
-                covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
-                fare: { currency: "sats", units: receiverPaid ? 0n : FARE },
-                ...(receiverPaid
-                    ? { payer: "receiver" as const, receiverFare: topLevelReceiverFare! }
-                    : {}),
-                batchExpiry: { kind: "height", value: 900_000n },
-                inputExpiryFloor: { kind: "height", value: 900_000n },
-                recoveryLocktime: { kind: "height", value: 899_856n },
-                loanSats: loan,
-                createdAt: NOW,
-                expiresAt: NOW + 60,
-                policyRevision: revision,
-                operatorInputs: [operatorFundingInput(operatorCoin)],
-            },
-            expectedPolicyRevision: revision,
-            recoveryExecutionBudget: { kind: "height", value: 72n },
         });
         const indexed = new Map<string, ExtendedVirtualCoin>([
             [key(depositCoin), depositCoin],
@@ -175,7 +230,7 @@ export async function createBoundJointFill(
                 },
                 policy: policies,
                 advances,
-                reservations: new ReservationRepository(db),
+                reservations,
                 swapFills,
                 receiveQuotes: quotes,
                 inventory: {
@@ -192,11 +247,10 @@ export async function createBoundJointFill(
                 now: () => NOW,
                 nowMs: () => NOW * 1000,
                 randomId: () => "fill-1",
-                swapFillBuilder: new FakeSwapFillGraphBuilder(
-                    hex.encode(covenant.pkScript),
-                    params.dust,
-                    { id: WANTED_SWAP_ID, amount: WANT_UNITS },
-                ),
+                swapFillBuilder: new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
+                    id: WANTED_SWAP_ID,
+                    amount: WANT_UNITS,
+                }),
                 offerCodec: {
                     decodeOffer: () =>
                         fakeOfferTerms({
@@ -213,7 +267,7 @@ export async function createBoundJointFill(
             {
                 operationId: "op-1",
                 offerHex: "ab12",
-                receiveQuoteId: "receive-1",
+                receiveQuoteId: quoteId,
                 solverInputs: [
                     {
                         txid: BOUND_SOLVER.txid,
@@ -244,7 +298,7 @@ export async function createBoundJointFill(
             config: cfg,
             quote,
             fill: swapFills.get(quote.fillId)!,
-            advance: advances.get("receive-1")!,
+            advance: advances.get(quoteId)!,
             advances,
             swapFills,
             receiveQuotes: quotes,

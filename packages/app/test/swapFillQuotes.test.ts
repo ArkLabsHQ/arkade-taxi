@@ -1,16 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { ArkAddress, asset, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { asset, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import type { Policy } from "@arkade-taxi/core";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
-import {
-    AdvanceRepository,
-    openDatabase,
-    PolicyRepository,
-    ReceiveQuoteRepository,
-    ReservationRepository,
-    SwapFillRepository,
-} from "@arkade-taxi/db";
+import type { ReceiverFare } from "@arkade-taxi/covenant";
 import { hex } from "@scure/base";
 import {
     createSwapFillQuote,
@@ -26,7 +18,6 @@ import {
     NOW,
     policy as basePolicy,
     runtimeSafety,
-    receiverKey,
     serverUnroll,
 } from "./fixtures.js";
 import {
@@ -35,8 +26,12 @@ import {
     fakeOfferTerms,
     MemorySwapFills,
 } from "./swapFillFixtures.js";
-import { createBoundJointFill } from "./jointFillFixtures.js";
-import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
+import {
+    createBoundJointFill,
+    insertReceiveQuote,
+    WANTED_ASSET,
+    WANTED_SWAP_ID,
+} from "./jointFillFixtures.js";
 import { readFundingSource } from "../src/arkade/fundingSource.js";
 
 const DEP = { txid: "dd".repeat(32), vout: 3 };
@@ -56,8 +51,6 @@ const FARE_ASSET = {
 const FARE_SWAP_ID = asset.AssetId.create("1234".repeat(16), 0).toString();
 const FARE_UNITS = 5n;
 const SOLVER_ASSET_AMOUNT = 100n;
-const anyAsset = { txid: hex.decode(FARE_ASSET.txid), groupIndex: 0 };
-const MAKER_KEY = new Uint8Array(32).fill(9);
 
 let advances: MemoryAdvances;
 let swapFills: MemorySwapFills;
@@ -132,105 +125,35 @@ const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
     throw new Error("expected a rejection");
 };
 
-function receiverPaidParams(
-    cfg: ReturnType<typeof config>,
-    receiverFare: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint },
-) {
-    return {
-        receiverKey,
-        senderKey: MAKER_KEY,
-        operatorKey: cfg.operatorKey,
-        dust: 330n,
-        topup: 330n,
-        assetId: anyAsset,
-        locktime: 899_856n,
-        claimMode: "recycle" as const,
-        recoveryRecipient: "receiver" as const,
-        receiverFare,
-    };
-}
-
-/** Inserts a live receiver-paid receive quote through the real repository and
- * wires deps to bind it, mirroring "atomically binds a live receive quote". */
+/** Thin wrapper over `insertReceiveQuote`: adds the deps wiring and indexer
+ * coins a receiver-paid `createSwapFillQuote` guard test needs. */
 function quotedReceiverPaid(
-    receiverFare: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint },
+    receiverFare: ReceiverFare,
     wantAmount: bigint,
 ): { d: SwapFillQuoteDeps; quoteId: string; close: () => void } {
-    const db = openDatabase(":memory:");
-    const cfg = config({ vtxoMinAmount: 1n });
-    const policies = new PolicyRepository(db);
-    policies.update(
-        {
-            ...testPolicy,
-            assetRules: [
-                ...testPolicy.assetRules,
-                {
-                    assetId: anyAsset,
-                    enabled: true,
-                    claim: "either",
-                    maxTopupSats: null,
-                    fares: [
-                        {
-                            id: "receive",
-                            currency: { kind: "sats" },
-                            pricing: { kind: "flat", units: 0n },
-                        },
-                    ],
-                },
-            ],
-        },
-        "test",
-    );
-    const revision = policies.getSnapshot().revision;
-    const quotes = new ReceiveQuoteRepository(db);
-    const storedFills = new SwapFillRepository(db);
-    const storedAdvances = new AdvanceRepository(db);
-    const reservations = new ReservationRepository(db);
-    const operatorCoin = fundingCoin({ txid: TAXI_0.txid, vout: TAXI_0.vout, value: 20_000 });
-    const depositCoin = fundingCoin({ txid: DEP.txid, vout: DEP.vout, value: 10_000 });
-    const params = receiverPaidParams(cfg, receiverFare);
-    const covenant = new DustCovenantScript({
-        serverKey: cfg.serverPubkey,
-        emulatorKey: cfg.emulatorPubkey,
-        vtxoMinAmount: cfg.vtxoMinAmount,
-        params,
-    });
-    const quoteId = "receive-1";
-    quotes.insert({
-        quote: {
-            id: quoteId,
-            state: "quoted",
-            receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
-            makerPublicKey: hex.encode(MAKER_KEY),
-            params,
-            covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
-            fare: { currency: "sats", units: 0n },
-            payer: "receiver",
-            receiverFare:
-                receiverFare.currency === "asset"
-                    ? { ...receiverFare, assetId: anyAsset }
-                    : receiverFare,
-            batchExpiry: { kind: "height", value: 900_000n },
-            inputExpiryFloor: { kind: "height", value: 900_000n },
-            recoveryLocktime: { kind: "height", value: 899_856n },
-            loanSats: 330n,
-            createdAt: NOW,
-            expiresAt: NOW + 60,
-            policyRevision: revision,
-            operatorInputs: [operatorFundingInput(operatorCoin)],
-        },
-        expectedPolicyRevision: revision,
-        recoveryExecutionBudget: { kind: "height", value: 72n },
-    });
-    builder = new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), params.dust, {
-        id: FARE_SWAP_ID,
+    const {
+        db,
+        cfg,
+        quoteId,
+        policies,
+        quotes,
+        swapFills,
+        advances,
+        reservations,
+        covenant,
+        operatorCoin,
+        depositCoin,
+        makerKey,
+    } = insertReceiveQuote({ wantAmount, receiverFare });
+    builder = new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
+        id: WANTED_SWAP_ID,
         amount: wantAmount,
     });
     const d = deps({
         policy: policies,
-        advances: storedAdvances,
+        advances,
         reservations,
-        swapFills: storedFills,
+        swapFills,
         receiveQuotes: quotes,
         inventory: {
             getSpendableVtxos: async () => [operatorCoin],
@@ -243,8 +166,8 @@ function quotedReceiverPaid(
                 fakeOfferTerms({
                     covenantScript: hex.decode(depositCoin.script),
                     makerProceedsScript: covenant.pkScript,
-                    makerPublicKey: MAKER_KEY,
-                    wantAsset: anyAsset,
+                    makerPublicKey: makerKey,
+                    wantAsset: WANTED_ASSET,
                     wantAmount,
                 }),
         },
@@ -256,7 +179,7 @@ function quotedReceiverPaid(
             txid: SOLVER_COIN.txid,
             vout: SOLVER_COIN.vout,
             value: SOLVER_VALUE,
-            assets: [{ assetId: FARE_SWAP_ID, amount: wantAmount }],
+            assets: [{ assetId: WANTED_SWAP_ID, amount: wantAmount }],
         }),
     );
     return { d, quoteId, close: () => db.close() };
@@ -298,93 +221,22 @@ beforeEach(() => {
 
 describe("createSwapFillQuote", () => {
     it("atomically binds a live receive quote with its actual fare and recovery source", async () => {
-        const db = openDatabase(":memory:");
+        const {
+            db,
+            cfg,
+            policies,
+            quotes,
+            swapFills: storedFills,
+            advances: storedAdvances,
+            reservations,
+            covenant,
+            operatorCoin,
+            depositCoin,
+            makerKey,
+        } = insertReceiveQuote({ wantAmount: 5n });
         try {
-            const cfg = config({ vtxoMinAmount: 1n });
-            const wantedAsset = { txid: hex.decode(FARE_ASSET.txid), groupIndex: 0 };
-            const policies = new PolicyRepository(db);
-            policies.update(
-                {
-                    ...testPolicy,
-                    assetRules: [
-                        ...testPolicy.assetRules,
-                        {
-                            assetId: wantedAsset,
-                            enabled: true,
-                            claim: "either",
-                            maxTopupSats: null,
-                            fares: [
-                                {
-                                    id: "receive",
-                                    currency: { kind: "sats" },
-                                    pricing: { kind: "flat", units: 4n },
-                                },
-                            ],
-                        },
-                    ],
-                },
-                "test",
-            );
-            const revision = policies.getSnapshot().revision;
-            const quotes = new ReceiveQuoteRepository(db);
-            const storedFills = new SwapFillRepository(db);
-            const storedAdvances = new AdvanceRepository(db);
-            const reservations = new ReservationRepository(db);
-            const operatorCoin = fundingCoin({
-                txid: TAXI_0.txid,
-                vout: TAXI_0.vout,
-                value: 20_000,
-            });
-            const depositCoin = fundingCoin({
-                txid: DEP.txid,
-                vout: DEP.vout,
-                value: 10_000,
-            });
-            const makerKey = new Uint8Array(32).fill(9);
-            const params = {
-                receiverKey,
-                senderKey: makerKey,
-                operatorKey: cfg.operatorKey,
-                dust: 330n,
-                topup: 329n,
-                assetId: wantedAsset,
-                locktime: 899_856n,
-                claimMode: "recycle" as const,
-                recoveryRecipient: "receiver" as const,
-            };
-            const covenant = new DustCovenantScript({
-                serverKey: cfg.serverPubkey,
-                emulatorKey: cfg.emulatorPubkey,
-                vtxoMinAmount: cfg.vtxoMinAmount,
-                params,
-            });
-            quotes.insert({
-                quote: {
-                    id: "receive-1",
-                    state: "quoted",
-                    receiverAddress: new ArkAddress(
-                        cfg.serverPubkey,
-                        receiverKey,
-                        cfg.addressHrp,
-                    ).encode(),
-                    makerPublicKey: hex.encode(makerKey),
-                    params,
-                    covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
-                    fare: { currency: "sats", units: 4n },
-                    batchExpiry: { kind: "height", value: 900_000n },
-                    inputExpiryFloor: { kind: "height", value: 900_000n },
-                    recoveryLocktime: { kind: "height", value: 899_856n },
-                    loanSats: 329n,
-                    createdAt: NOW,
-                    expiresAt: NOW + 60,
-                    policyRevision: revision,
-                    operatorInputs: [operatorFundingInput(operatorCoin)],
-                },
-                expectedPolicyRevision: revision,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
-            });
             builder = new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
-                id: FARE_SWAP_ID,
+                id: WANTED_SWAP_ID,
                 amount: 5n,
             });
             const d = deps({
@@ -405,7 +257,7 @@ describe("createSwapFillQuote", () => {
                             covenantScript: hex.decode(depositCoin.script),
                             makerProceedsScript: covenant.pkScript,
                             makerPublicKey: makerKey,
-                            wantAsset: wantedAsset,
+                            wantAsset: WANTED_ASSET,
                             wantAmount: 5n,
                         }),
                 },
@@ -417,7 +269,7 @@ describe("createSwapFillQuote", () => {
                     txid: SOLVER_COIN.txid,
                     vout: SOLVER_COIN.vout,
                     value: SOLVER_VALUE,
-                    assets: [{ assetId: FARE_SWAP_ID, amount: 5n }],
+                    assets: [{ assetId: WANTED_SWAP_ID, amount: 5n }],
                 }),
             );
             const result = await createSwapFillQuote(
