@@ -228,13 +228,13 @@ function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConf
     if (loan > cap) throw admissionError("topup_exceeds_max_per_payment");
 
     if (req.payer === "receiver") {
-        // resolveFare collapses `token` into {currency:"asset", assetId}, so it
-        // must be refused before resolving, while it is still distinguishable.
-        const option = selectFare(rule, req.fareId);
-        if (option.currency.kind === "token")
-            throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable");
         let receiverFare: FareSpec;
         try {
+            const option = selectFare(rule, req.fareId);
+            // resolveFare collapses `token` into {currency:"asset", assetId}, so it
+            // must be refused before resolving, while it is still distinguishable.
+            if (option.currency.kind === "token")
+                throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable");
             receiverFare = resolveFare(option, { topupSats: loan, assetId: req.assetId });
         } catch (cause) {
             throw new ServiceError("fare_unavailable", 409, "requested fare is unavailable", {

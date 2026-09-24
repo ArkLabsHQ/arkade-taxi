@@ -397,6 +397,14 @@ describe("createReceiveQuote: payer receiver", () => {
         );
     });
 
+    it("refuses an unknown fareId with 409, not 500", async () => {
+        const error = await caught(() =>
+            createReceiveQuote(deps(), { ...body(), payer: "receiver", fareId: "nonsense" }),
+        );
+        expect(error.code).toBe("fare_unavailable");
+        expect(error.status).toBe(409);
+    });
+
     it("fronts the whole dust and prices the fill at zero", async () => {
         configure({ assetRules: [rule({ kind: "flat", units: 5n })] });
         const quote = await createReceiveQuote(deps(), { ...body(), payer: "receiver" });

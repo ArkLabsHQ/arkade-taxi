@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import { ADVANCE_STATES, applyMigrations, MIGRATIONS } from "../src/schema.js";
+import { AdvanceRepository } from "../src/advances.js";
+import { ReceiveQuoteRepository } from "../src/receiveQuotes.js";
 
 function fresh(): Database {
     const db = new DatabaseCtor(":memory:");
@@ -56,6 +58,59 @@ function insertRaw(db: Database, overrides: Record<string, unknown> = {}): void 
     const cols = Object.keys(row);
     db.prepare(
         `INSERT INTO advances (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`,
+    ).run(row);
+}
+
+// A single repeated byte, hex-encoded: matches every field's format check
+// without pulling in the app package's covenant-key machinery.
+const hex32 = (byte: number): string => byte.toString(16).padStart(2, "0").repeat(32);
+
+const RAW_RECEIVE_QUOTE = {
+    id: "q1",
+    state: "expired",
+    receiver_address: "tark1qreceiverexample",
+    maker_public_key: hex32(2),
+    params_json: JSON.stringify({
+        receiverKey: hex32(1),
+        senderKey: hex32(2),
+        operatorKey: hex32(3),
+        dust: "330",
+        topup: "300",
+        assetId: { txid: hex32(9), groupIndex: 0 },
+        locktime: "899856",
+        claimMode: "recycle",
+        recoveryRecipient: "receiver",
+    }),
+    covenant_address: "tark1qcovenantexample",
+    fare_json: JSON.stringify({ currency: "sats", units: "5" }),
+    batch_expiry_kind: "height",
+    batch_expiry_value: 900_000n,
+    input_expiry_floor_kind: "height",
+    input_expiry_floor_value: 900_000n,
+    recovery_locktime_kind: "height",
+    recovery_locktime_value: 899_856n,
+    loan_sats: 300n,
+    created_at: 1n,
+    expires_at: 2n,
+    policy_revision: 1n,
+    operator_inputs_json: JSON.stringify([
+        {
+            txid: hex32(5),
+            vout: 0,
+            value: "1000",
+            tapTree: hex32(6),
+            spendLeaf: hex32(7),
+            expiry: { kind: "height", value: "900000" },
+        },
+    ]),
+    bound_fill_id: null,
+};
+
+function insertRawReceiveQuote(db: Database, overrides: Record<string, unknown> = {}): void {
+    const row = { ...RAW_RECEIVE_QUOTE, ...overrides };
+    const cols = Object.keys(row);
+    db.prepare(
+        `INSERT INTO receive_quotes (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`,
     ).run(row);
 }
 
@@ -316,7 +371,14 @@ describe("migrations", () => {
             MIGRATIONS.filter((m) => m.id <= 9),
         );
         expect(userVersion(db)).toBe(9);
-        insertRaw(db);
+        insertRaw(db, {
+            batch_expiry_kind: "height",
+            batch_expiry_value: 900_000n,
+            operator_inputs_json: JSON.stringify([{ txid: hex32(8), vout: 0 }]),
+            unsigned_lockup_tx: "unsigned",
+            unsigned_lockup_id: hex32(4),
+        });
+        insertRawReceiveQuote(db);
         applyMigrations(db);
         expect(userVersion(db)).toBe(10);
         expect(
@@ -331,6 +393,36 @@ describe("migrations", () => {
         ).toEqual({ receiver_fare_currency: null, receiver_fare_units: null });
         expect(db.prepare("SELECT topup FROM advances WHERE id = 'a1'").get()).toEqual({
             topup: 300n,
+        });
+
+        // The columns round-trip at the SQL layer above; these two also prove the
+        // *repository* decode path — decodeRow's economics checks and the
+        // payer/receiverFare pairing invariant — accepts a genuinely pre-migration row.
+        const advance = new AdvanceRepository(db).get("a1");
+        expect(advance?.receiverFare).toBeUndefined();
+        expect(advance).toMatchObject({
+            id: "a1",
+            dust: 330n,
+            topup: 300n,
+            covenantAddress: "tark1qexample",
+            fare: { currency: "sats", units: 10n },
+        });
+
+        const quote = new ReceiveQuoteRepository(db).get("q1");
+        expect(quote && "payer" in quote).toBe(false);
+        expect(quote?.receiverFare).toBeUndefined();
+        expect(quote).toMatchObject({
+            id: "q1",
+            state: "expired",
+            covenantAddress: "tark1qcovenantexample",
+            loanSats: 300n,
+            fare: { currency: "sats", units: 5n },
+            params: {
+                dust: 330n,
+                topup: 300n,
+                claimMode: "recycle",
+                recoveryRecipient: "receiver",
+            },
         });
         db.close();
     });
