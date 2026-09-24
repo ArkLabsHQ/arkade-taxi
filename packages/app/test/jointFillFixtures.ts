@@ -27,7 +27,13 @@ import {
     runtimeSafety,
     serverUnroll,
 } from "./fixtures.js";
-import { FakeSwapFillGraphBuilder, fakeOfferTerms } from "./swapFillFixtures.js";
+import {
+    asIndexed,
+    FakeSwapFillGraphBuilder,
+    fakeOfferTerms,
+    offerTaprootOf,
+    solverTaproot,
+} from "./swapFillFixtures.js";
 
 export const BOUND_DEPOSIT = { txid: "dd".repeat(32), vout: 3 };
 export const BOUND_SOLVER = { txid: "ee".repeat(32), vout: 1 };
@@ -82,6 +88,7 @@ export interface InsertedReceiveQuote {
 export function insertReceiveQuote(opts: {
     wantAmount: bigint;
     receiverFare?: ReceiverFare;
+    operatorCoin?: ExtendedVirtualCoin;
 }): InsertedReceiveQuote {
     const db = openDatabase(":memory:");
     const cfg = config({ vtxoMinAmount: 1n });
@@ -114,7 +121,7 @@ export function insertReceiveQuote(opts: {
     const swapFills = new SwapFillRepository(db);
     const advances = new AdvanceRepository(db);
     const reservations = new ReservationRepository(db);
-    const operatorCoin = fundingCoin({ ...BOUND_TAXI, value: 20_000 });
+    const operatorCoin = opts.operatorCoin ?? fundingCoin({ ...BOUND_TAXI, value: 20_000 });
     const depositCoin = fundingCoin({ ...BOUND_DEPOSIT, value: 10_000 });
     const makerKey = new Uint8Array(32).fill(9);
     const receiverPaid = opts.receiverFare !== undefined;
@@ -240,7 +247,10 @@ export async function createBoundJointFill(
                 senderInventory: {
                     getVtxos: async (opts) => ({
                         vtxos:
-                            opts?.outpoints?.map((o) => indexed.get(key(o))!).filter(Boolean) ?? [],
+                            opts?.outpoints
+                                ?.map((o) => indexed.get(key(o))!)
+                                .filter(Boolean)
+                                .map(asIndexed) ?? [],
                     }),
                 },
                 config: cfg,
@@ -254,7 +264,7 @@ export async function createBoundJointFill(
                 offerCodec: {
                     decodeOffer: () =>
                         fakeOfferTerms({
-                            covenantScript: hex.decode(depositCoin.script),
+                            ...offerTaprootOf(depositCoin),
                             makerProceedsScript: covenant.pkScript,
                             makerPublicKey: makerKey,
                             wantAsset: WANTED_ASSET,
@@ -273,6 +283,7 @@ export async function createBoundJointFill(
                         txid: BOUND_SOLVER.txid,
                         vout: BOUND_SOLVER.vout,
                         value: "6000",
+                        ...solverTaproot(),
                         assets: [
                             {
                                 assetId: {

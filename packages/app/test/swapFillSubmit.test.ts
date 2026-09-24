@@ -37,11 +37,15 @@ import {
     runtimeSafety,
 } from "./fixtures.js";
 import {
+    asIndexed,
+    checkpointSpending,
+    FAKE_COVENANT_SCRIPT,
     FAKE_MAKER_SCRIPT,
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     MemorySwapFills,
     sealGraph,
+    solverTaproot,
 } from "./swapFillFixtures.js";
 import {
     createBoundJointFill,
@@ -104,6 +108,7 @@ const quoteBody = (over: Record<string, unknown> = {}) => ({
             txid: SOLVER_COIN.txid,
             vout: SOLVER_COIN.vout,
             value: String(SOLVER_VALUE),
+            ...solverTaproot(),
             assets: [{ assetId: FARE_ASSET, amount: String(SOLVER_ASSET_AMOUNT) }],
         },
     ],
@@ -135,7 +140,11 @@ const quoteDeps = (): SwapFillQuoteDeps => ({
     },
     senderInventory: {
         getVtxos: async (opts) => ({
-            vtxos: opts?.outpoints?.map((o) => indexerCoins.get(key(o))!).filter(Boolean) ?? [],
+            vtxos:
+                opts?.outpoints
+                    ?.map((o) => indexerCoins.get(key(o))!)
+                    .filter(Boolean)
+                    .map(asIndexed) ?? [],
         }),
     },
     config: config(),
@@ -302,21 +311,20 @@ const authGraph = (args: {
 }): JointGraph => {
     const outpoints =
         args.outpoints ?? args.owners.map((_, index) => ({ txid: "bb".repeat(32), vout: index }));
+    const checkpoints = args.checkpointSigs.map((sigs, i) => {
+        const cp = checkpointSpending(outpoints[i]!);
+        if (sigs.length) cp.updateInput(0, signEntry(sigs));
+        return cp;
+    });
     const tx = new Transaction({ version: 3, lockTime: 0 });
-    for (const o of outpoints) tx.addInput({ txid: o.txid, index: o.vout });
+    for (const cp of checkpoints) tx.addInput({ txid: cp.id, index: 0 });
     tx.addOutput({ amount: 1000n, script: new Uint8Array([0x51]) });
     args.arkSigs.forEach((pubKeys, index) => {
         if (pubKeys.length) tx.updateInput(index, signEntry(pubKeys));
     });
     return {
         arkTx: base64.encode(tx.toPSBT()),
-        checkpoints: args.checkpointSigs.map((sigs, i) => {
-            const cp = new Transaction({ version: 3, lockTime: 0 });
-            cp.addInput({ txid: outpoints[i]!.txid, index: outpoints[i]!.vout });
-            cp.addOutput({ amount: 1000n, script: new Uint8Array([0x51]) });
-            if (sigs.length) cp.updateInput(0, signEntry(sigs));
-            return base64.encode(cp.toPSBT());
-        }),
+        checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
         graphId: "ab".repeat(32),
         inputOwners: [...args.owners],
     };
@@ -333,7 +341,12 @@ beforeEach(() => {
     indexerCoins = new Map([
         [
             key(DEP),
-            fundingCoin({ txid: DEP.txid, vout: DEP.vout, value: 10000, script: "ac".repeat(34) }),
+            fundingCoin({
+                txid: DEP.txid,
+                vout: DEP.vout,
+                value: 10000,
+                script: FAKE_COVENANT_SCRIPT,
+            }),
         ],
         [
             key(SOLVER_COIN),

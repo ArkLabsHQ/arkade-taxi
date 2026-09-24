@@ -69,6 +69,9 @@ export interface RequestSwapFillQuoteArgs {
         txid: string;
         vout: number;
         value: bigint;
+        /** The coin's taproot tree and the leaf the fill spends it by. */
+        tapTree: Uint8Array;
+        spendLeaf: Uint8Array;
         assets?: { assetId: AssetIdValue; amount: bigint }[];
     }[];
     solverProceedsScript: Uint8Array;
@@ -202,6 +205,8 @@ export function encodeSwapFillQuoteBody(args: RequestSwapFillQuoteArgs): SwapFil
             txid: input.txid,
             vout: input.vout,
             value: satsToWire(input.value),
+            tapTree: bytesToHex(input.tapTree),
+            spendLeaf: bytesToHex(input.spendLeaf),
             ...(input.assets === undefined
                 ? {}
                 : {

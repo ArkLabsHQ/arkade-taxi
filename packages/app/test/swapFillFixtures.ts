@@ -1,5 +1,14 @@
 import { base64, hex } from "@scure/base";
-import { asset, Extension, Transaction } from "@arkade-os/sdk";
+import {
+    asset,
+    Extension,
+    MultisigTapscript,
+    scriptFromTapLeafScript,
+    Transaction,
+    VtxoScript,
+    type ExtendedVirtualCoin,
+    type VirtualCoin,
+} from "@arkade-os/sdk";
 import {
     SwapFillClaimError,
     type SwapFill,
@@ -9,11 +18,47 @@ import {
 import type { SwapFillBuildRequest } from "../src/arkade/swapFillBuilder.js";
 import { taxiAssetIdToSwapId } from "../src/arkade/swapFillBuilder.js";
 import type { DecodedOfferTerms, SwapFillStore } from "../src/swapFillQuotes.js";
-import { config, receiverKey } from "./fixtures.js";
+import { config, operatorTree, receiverKey, serverKey } from "./fixtures.js";
 import { digestJointGraph, OFFER_FILL_TEMPLATE, type JointGraph } from "@arkade-taxi/client";
 
 // Any valid curve point; the fake builds transactions but never signs them.
 export const FAKE_MAKER_SCRIPT = `5120${hex.encode(receiverKey)}`;
+
+export const FAKE_COVENANT = new VtxoScript([
+    MultisigTapscript.encode({ pubkeys: [serverKey, receiverKey] }).script,
+]);
+export const FAKE_COVENANT_SCRIPT = hex.encode(FAKE_COVENANT.pkScript);
+
+/** A coin as the indexer serves it: never a taproot tree or leaf. */
+export const asIndexed = (coin: ExtendedVirtualCoin): VirtualCoin => {
+    const indexed: Partial<ExtendedVirtualCoin> = { ...coin };
+    delete indexed.tapTree;
+    delete indexed.forfeitTapLeafScript;
+    delete indexed.intentTapLeafScript;
+    return indexed as VirtualCoin;
+};
+
+/** Offer terms whose derived covenant is this `fundingCoin`'s own tree. */
+export const offerTaprootOf = (
+    coin: ExtendedVirtualCoin,
+): Pick<DecodedOfferTerms, "covenantTapTree" | "covenantSpendLeaf"> => ({
+    covenantTapTree: coin.tapTree,
+    covenantSpendLeaf: scriptFromTapLeafScript(coin.forfeitTapLeafScript),
+});
+
+/** Wire taproot data for a solver input built by `fundingCoin`. */
+export const solverTaproot = (tree: VtxoScript = operatorTree) => ({
+    tapTree: hex.encode(tree.encode()),
+    spendLeaf: hex.encode(tree.scripts[0]!),
+});
+
+/** A real ark tx spends checkpoint outputs, and each checkpoint spends one coin. */
+export const checkpointSpending = (coin: { txid: string; vout: number }): Transaction => {
+    const cp = new Transaction({ version: 3, lockTime: 0 });
+    cp.addInput({ txid: coin.txid, index: coin.vout });
+    cp.addOutput({ script: new Uint8Array([0x51]), amount: 1000n });
+    return cp;
+};
 
 export const sealGraph = (graph: JointGraph): JointGraph => ({
     ...graph,
@@ -289,6 +334,8 @@ export class FakeSwapFillGraphBuilder {
     ) {}
     async buildSwapFillGraph(req: SwapFillBuildRequest): Promise<JointGraph> {
         this.built.push(req);
+        if (req.sponsor?.combineSatsFareWithChange && !req.sponsor.fare)
+            throw new Error("sponsor.combineSatsFareWithChange requires a fare");
         const taxiTotal = req.sponsor!.coins.reduce((sum, c) => sum + BigInt(c.value), 0n);
         const solverTotal = req.solverFund.reduce((sum, c) => sum + BigInt(c.value), 0n);
         const combinedFare =
@@ -364,7 +411,8 @@ export class FakeSwapFillGraphBuilder {
             ...req.solverFund.map(({ txid, vout }) => ({ txid, vout })),
             ...req.sponsor!.coins.map(({ txid, vout }) => ({ txid, vout })),
         ];
-        for (const o of inpoints) tx.addInput({ txid: o.txid, index: o.vout });
+        const checkpoints = inpoints.map(checkpointSpending);
+        for (const cp of checkpoints) tx.addInput({ txid: cp.id, index: 0 });
         for (const o of outputs) tx.addOutput({ script: o.script, amount: o.sats });
         if (groups.length) {
             const extOut = Extension.create([asset.Packet.create(groups)]).txOut();
@@ -372,12 +420,7 @@ export class FakeSwapFillGraphBuilder {
         }
         const graph: JointGraph = {
             arkTx: base64.encode(tx.toPSBT()),
-            checkpoints: inpoints.map((o) => {
-                const cp = new Transaction({ version: 3, lockTime: 0 });
-                cp.addInput({ txid: o.txid, index: o.vout });
-                cp.addOutput({ script: new Uint8Array([0x51]), amount: 1000n });
-                return base64.encode(cp.toPSBT());
-            }),
+            checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
             graphId: "",
             inputOwners: [
                 null,
@@ -391,7 +434,8 @@ export class FakeSwapFillGraphBuilder {
 }
 
 export const fakeOfferTerms = (over: Partial<DecodedOfferTerms> = {}): DecodedOfferTerms => ({
-    covenantScript: hex.decode("ac".repeat(34)),
+    covenantTapTree: FAKE_COVENANT.encode(),
+    covenantSpendLeaf: FAKE_COVENANT.scripts[0]!,
     makerProceedsScript: hex.decode(FAKE_MAKER_SCRIPT),
     wantAmount: 5000n,
     makerPublicKey: new Uint8Array(32).fill(9),

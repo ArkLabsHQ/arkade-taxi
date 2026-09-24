@@ -10,7 +10,7 @@ import {
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { createHash } from "node:crypto";
 import { base64, hex } from "@scure/base";
-import { sealGraph } from "../swapFillFixtures.js";
+import { checkpointSpending, sealGraph } from "../swapFillFixtures.js";
 import {
     encodeJointFillSource,
     readFundingSource,
@@ -19,12 +19,10 @@ import {
 
 const graph = () => {
     const tx = new Transaction({ version: 3 });
-    for (const [txid, index] of [
-        ["aa".repeat(32), 0],
-        ["bb".repeat(32), 1],
-        ["cc".repeat(32), 2],
-    ] as const)
-        tx.addInput({ txid, index });
+    const checkpoints = [0, 1, 2].map((index) =>
+        checkpointSpending({ txid: `${["aa", "bb", "cc"][index]}`.repeat(32), vout: index }),
+    );
+    for (const cp of checkpoints) tx.addInput({ txid: cp.id, index: 0 });
     const script = (seed: number) =>
         new Uint8Array([0x51, 0x20, ...schnorr.getPublicKey(new Uint8Array(32).fill(seed))]);
     tx.addOutput({ script: script(1), amount: 330n });
@@ -43,15 +41,9 @@ const graph = () => {
             ]),
         ]).txOut(),
     );
-    const checkpoints = [0, 1, 2].map((index) => {
-        const cp = new Transaction({ version: 3 });
-        cp.addInput({ txid: `${["aa", "bb", "cc"][index]}`.repeat(32), index });
-        cp.addOutput({ script: new Uint8Array([0x51]), amount: 1_000n });
-        return base64.encode(cp.toPSBT());
-    });
     return sealGraph({
         arkTx: base64.encode(tx.toPSBT()),
-        checkpoints,
+        checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
         graphId: "",
         inputOwners: [null, "solver", "sponsor"],
     });

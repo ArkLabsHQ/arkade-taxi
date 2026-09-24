@@ -83,6 +83,10 @@ export interface SwapFillSolverInputWire {
     txid: string;
     vout: number;
     value: string;
+    /** As `FundingInputWire`, lowercase hex: build data the indexer does not
+     * serve. Taxi refuses a tree that does not rebuild the indexed script. */
+    tapTree: string;
+    spendLeaf: string;
     assets?: SwapFillSolverAssetWire[];
 }
 
@@ -90,6 +94,8 @@ export interface SwapFillSolverInput {
     txid: string;
     vout: number;
     value: bigint;
+    tapTree: Uint8Array;
+    spendLeaf: Uint8Array;
     assets?: { assetId: AssetIdValue; amount: bigint }[];
 }
 
@@ -285,10 +291,18 @@ const solverInputFromWire = (
     if (!input || typeof input !== "object" || Array.isArray(input)) fail(label, "expected object");
     const value = satsFromWire(input.value, `${label}.value`);
     if (value <= 0n) fail(label, "value must be positive");
-    return {
+    const point = {
         txid: txid(input.txid, `${label}.txid`),
         vout: vout(input.vout, `${label}.vout`),
+    };
+    const tapTree = hexToBytes(input.tapTree, `${label}.tapTree`);
+    const spendLeaf = hexToBytes(input.spendLeaf, `${label}.spendLeaf`);
+    if (!tapTree.length || !spendLeaf.length) fail(label, "empty tree or leaf");
+    return {
+        ...point,
         value,
+        tapTree,
+        spendLeaf,
         ...(input.assets === undefined
             ? {}
             : {

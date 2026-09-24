@@ -39,7 +39,9 @@ const REQUEST: SwapFillQuoteRequestBody = {
     operationId: "op-1",
     receiveQuoteId: "receive-1",
     offerHex: "deadbeef",
-    solverInputs: [{ txid: "bb".repeat(32), vout: 1, value: "5000" }],
+    solverInputs: [
+        { txid: "bb".repeat(32), vout: 1, value: "5000", tapTree: "c0de", spendLeaf: "51" },
+    ],
     solverProceedsScript: "deadbeef",
     solverKeys: ["02".padEnd(66, "ab")],
     contributionSats: "330",
@@ -89,15 +91,37 @@ describe("swap-fill wire codec", () => {
         expect(() =>
             swapFillQuoteRequestFromWire({
                 ...REQUEST,
-                solverInputs: [{ txid: "zz", vout: 0, value: "1" }],
+                solverInputs: [{ ...REQUEST.solverInputs[0]!, txid: "zz", vout: 0, value: "1" }],
             }),
         ).toThrow(/txid/);
         expect(() =>
             swapFillQuoteRequestFromWire({
                 ...REQUEST,
-                solverInputs: [{ txid: "bb".repeat(32), vout: 0, value: "0" }],
+                solverInputs: [{ ...REQUEST.solverInputs[0]!, vout: 0, value: "0" }],
             }),
         ).toThrow(/value/);
+    });
+
+    it("decodes each solver input's taproot tree and spend leaf to bytes", () => {
+        const [input] = swapFillQuoteRequestFromWire(REQUEST).solverInputs;
+        expect(input!.tapTree).toEqual(new Uint8Array([0xc0, 0xde]));
+        expect(input!.spendLeaf).toEqual(new Uint8Array([0x51]));
+    });
+
+    it("refuses a solver input without a well-formed taproot tree and spend leaf", () => {
+        const input = REQUEST.solverInputs[0]!;
+        const cases: [Record<string, unknown>, RegExp][] = [
+            [{ tapTree: undefined }, /solverInputs\[0\]\.tapTree/],
+            [{ spendLeaf: undefined }, /solverInputs\[0\]\.spendLeaf/],
+            [{ tapTree: "" }, /empty tree or leaf/],
+            [{ spendLeaf: "" }, /empty tree or leaf/],
+            [{ tapTree: "C0DE" }, /solverInputs\[0\]\.tapTree: not lowercase hex/],
+            [{ spendLeaf: "5" }, /solverInputs\[0\]\.spendLeaf: odd-length/],
+        ];
+        for (const [over, reason] of cases)
+            expect(() =>
+                swapFillQuoteRequestFromWire({ ...REQUEST, solverInputs: [{ ...input, ...over }] }),
+            ).toThrow(reason);
     });
 
     it("rejects a non-positive contribution or an empty operation id", () => {
@@ -212,9 +236,7 @@ describe("swap-fill asset group index", () => {
                 ...REQUEST,
                 solverInputs: [
                     {
-                        txid: "bb".repeat(32),
-                        vout: 1,
-                        value: "5000",
+                        ...REQUEST.solverInputs[0]!,
                         assets: [{ assetId: { txid: GENESIS, groupIndex }, amount: "7" }],
                     },
                 ],

@@ -27,6 +27,12 @@ const DEP = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_COIN = { txid: "ee".repeat(32), vout: 1 };
 const PROCEEDS = new Uint8Array([0x51]);
 const FARE_ASSET = { txid: "12".repeat(32), groupIndex: 0 };
+const SOLVER_INPUT = {
+    ...SOLVER_COIN,
+    value: 6000n,
+    tapTree: new Uint8Array([0xc0, 0xde]),
+    spendLeaf: new Uint8Array([0x51]),
+};
 
 const graph = (over: Partial<SwapFillGraphWire> = {}): SwapFillGraphWire => ({
     arkTx: "aGVsbG8=",
@@ -368,7 +374,7 @@ describe("swap-fill submit error contract", () => {
         const first = await taxi.requestVerifiedSwapFillQuote({
             operationId: "op-1",
             offerHex: "ab12",
-            solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
+            solverInputs: [SOLVER_INPUT],
             solverProceedsScript: PROCEEDS,
             solverKeys: ["ab".repeat(32)],
             contributionSats: 330n,
@@ -380,7 +386,7 @@ describe("swap-fill submit error contract", () => {
         const second = await taxi.requestVerifiedSwapFillQuote({
             operationId: "op-1",
             offerHex: "ab12",
-            solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
+            solverInputs: [SOLVER_INPUT],
             solverProceedsScript: PROCEEDS,
             solverKeys: ["ab".repeat(32)],
             contributionSats: 330n,
@@ -401,7 +407,7 @@ describe("TaxiClient swap-fill endpoints", () => {
             operationId: "op-1",
             receiveQuoteId: "receive-1",
             offerHex: "ab12",
-            solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
+            solverInputs: [SOLVER_INPUT],
             solverProceedsScript: PROCEEDS,
             solverKeys: ["ab".repeat(32)],
             contributionSats: 330n,
@@ -416,7 +422,15 @@ describe("TaxiClient swap-fill endpoints", () => {
             operationId: "op-1",
             receiveQuoteId: "receive-1",
             offerHex: "ab12",
-            solverInputs: [{ txid: SOLVER_COIN.txid, vout: 1, value: "6000" }],
+            solverInputs: [
+                {
+                    txid: SOLVER_COIN.txid,
+                    vout: 1,
+                    value: "6000",
+                    tapTree: "c0de",
+                    spendLeaf: "51",
+                },
+            ],
             solverProceedsScript: "51",
             solverKeys: ["ab".repeat(32)],
             contributionSats: "330",
@@ -432,7 +446,7 @@ describe("TaxiClient swap-fill endpoints", () => {
         const request = {
             operationId: "op-1",
             offerHex: "ab12",
-            solverInputs: [{ txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: 6000n }],
+            solverInputs: [SOLVER_INPUT],
             solverProceedsScript: PROCEEDS,
             solverKeys: ["ab".repeat(32)],
             contributionSats: 330n,

@@ -2,10 +2,13 @@ import {
     ArkAddress,
     CSVMultisigTapscript,
     Transaction,
+    VtxoScript,
     scriptFromTapLeafScript,
     canSpendOffchain,
     type ExtendedVirtualCoin,
     type IWallet,
+    type TapLeafScript,
+    type VirtualCoin,
 } from "@arkade-os/sdk";
 import {
     decodeOffer,
@@ -92,7 +95,9 @@ export class ProductionSwapFillGraphBuilder implements SwapFillGraphBuilder {
 }
 
 export interface DecodedOfferTerms {
-    covenantScript: Uint8Array;
+    /** Derived from the offer's terms, never read from the indexer. */
+    covenantTapTree: Uint8Array;
+    covenantSpendLeaf: Uint8Array;
     makerProceedsScript: Uint8Array;
     wantAmount: bigint;
     wantAsset?: { txid: Uint8Array; groupIndex: number };
@@ -121,8 +126,17 @@ export function createSwapOfferCodec(serverPubkey: Uint8Array): OfferCodec {
                 txid: Uint8Array.from(id.txid).reverse(),
                 groupIndex: id.groupIndex,
             });
+            const covenant = offerVtxoScript(offer, serverPubkey);
+            const fulfill = covenant.functionByName("fulfill");
+            if (!fulfill)
+                throw new ServiceError(
+                    "swap_fill_offer_invalid",
+                    400,
+                    "swap offer covenant has no fulfill path",
+                );
             return {
-                covenantScript: offerVtxoScript(offer, serverPubkey).pkScript,
+                covenantTapTree: covenant.encode(),
+                covenantSpendLeaf: fulfill.leafScript,
                 makerProceedsScript: offer.makerPkScript,
                 wantAmount: offer.wantAmount,
                 ...(offer.wantAsset ? { wantAsset: assetRef(offer.wantAsset) } : {}),
@@ -167,7 +181,7 @@ const assertDeadlineLive = (validUntil: number | undefined, now: number): void =
 const termsOf = (t: {
     receiveQuoteId?: string;
     offerHex: string;
-    solverInputs: SwapFillQuoteRequest["solverInputs"];
+    solverInputs: SwapFill["solverInputs"];
     solverProceedsScript: Uint8Array;
     solverKeys: string[];
     contributionSats: bigint;
@@ -413,18 +427,17 @@ async function createAdmittedSwapFillQuote(
     );
     if (deposit.isSpent)
         throw new ServiceError("swap_fill_deposit_spent", 400, "swap offer deposit is spent");
-    if (!deposit.tapTree || !(deposit.forfeitTapLeafScript ?? deposit.intentTapLeafScript))
-        throw new ServiceError(
-            "swap_fill_deposit_evidence_missing",
-            400,
-            "swap offer deposit lacks taproot evidence",
-        );
-    if (deposit.script.toLowerCase() !== bytesToHex(offer.covenantScript).toLowerCase())
-        throw new ServiceError(
-            "swap_fill_deposit_mismatch",
-            400,
-            "swap offer deposit script differs from the offer covenant",
-        );
+    const depositSpend = checkedTaprootSpend(
+        { tapTree: offer.covenantTapTree, spendLeaf: offer.covenantSpendLeaf },
+        deposit.script,
+        {
+            invalid: "swap_fill_deposit_taproot_invalid",
+            mismatch: "swap_fill_deposit_mismatch",
+            leaf: "swap_fill_deposit_leaf_unknown",
+        },
+        "swap offer deposit",
+        "the offer covenant",
+    );
     if (offer.offerAsset) {
         const wanted = taxiAssetIdToSwapId(offer.offerAsset);
         const held = (deposit.assets ?? []).find((a) => a.assetId === wanted);
@@ -446,7 +459,11 @@ async function createAdmittedSwapFillQuote(
             400,
             "solver funding must not spend the offer deposit",
         );
-    const { fund: solverFund, coins: solverCoins } = await enrichSolverFund(deps, req, offer);
+    const {
+        fund: solverFund,
+        coins: solverCoins,
+        spends: solverSpends,
+    } = await enrichSolverFund(deps, req, offer);
     const bitcoinRule = ruleFor(policy.assetRules, undefined);
     if (!bitcoinRule) throw admissionError("asset_not_served");
     if (!bitcoinRule.enabled) throw admissionError("asset_disabled");
@@ -576,7 +593,10 @@ async function createAdmittedSwapFillQuote(
                 netContributionSats: req.contributionSats,
                 changeScript: taxiScript,
                 ...(sponsorFare ? { fare: sponsorFare } : {}),
-                ...(receiveQuote ? { combineSatsFareWithChange: true } : {}),
+                // The library refuses the flag without a sats fare paid to the change script.
+                ...(receiveQuote && sponsorFare && !("assetId" in sponsorFare)
+                    ? { combineSatsFareWithChange: true }
+                    : {}),
             },
         });
     } catch (cause) {
@@ -688,6 +708,16 @@ async function createAdmittedSwapFillQuote(
                 expiry.value < minimum.value ? expiry : minimum,
             );
             const inputs = [deposit, ...solverCoins, ...selection.inputs];
+            const spends = [
+                depositSpend,
+                ...solverSpends,
+                ...selection.inputs.map((coin) => ({
+                    tapTree: coin.tapTree,
+                    spendLeaf: scriptFromTapLeafScript(
+                        coin.forfeitTapLeafScript ?? coin.intentTapLeafScript,
+                    ),
+                })),
+            ];
             const roles = [
                 "offer-covenant",
                 ...solverCoins.map(() => "solver" as const),
@@ -732,12 +762,8 @@ async function createAdmittedSwapFillQuote(
                     vout: coin.vout,
                     value: BigInt(coin.value).toString(10),
                     script: coin.script.toLowerCase(),
-                    tapTree: bytesToHex(coin.tapTree!),
-                    spendLeaf: bytesToHex(
-                        scriptFromTapLeafScript(
-                            coin.forfeitTapLeafScript ?? coin.intentTapLeafScript!,
-                        ),
-                    ),
+                    tapTree: bytesToHex(spends[index]!.tapTree),
+                    spendLeaf: bytesToHex(spends[index]!.spendLeaf),
                     assets: (coin.assets ?? []).map((asset) => ({
                         assetId: asset.assetId,
                         amount: BigInt(asset.amount).toString(10),
@@ -815,12 +841,53 @@ async function createAdmittedSwapFillQuote(
     });
 }
 
+interface TaprootSpend {
+    tapTree: Uint8Array;
+    spendLeaf: Uint8Array;
+    tapLeafScript: TapLeafScript;
+}
+
+/** Build data for the graph, not trust. Checking it against the INDEXED script refuses
+ * a wrong tree at quote time instead of producing a graph no one can submit. */
+function checkedTaprootSpend(
+    given: { tapTree: Uint8Array; spendLeaf: Uint8Array },
+    indexedScript: string,
+    codes: { invalid: string; mismatch: string; leaf: string },
+    subject: string,
+    source: string,
+): TaprootSpend {
+    let tree: VtxoScript;
+    try {
+        tree = VtxoScript.decode(given.tapTree);
+    } catch (cause) {
+        throw new ServiceError(codes.invalid, 400, `${subject} taproot tree is malformed`, {
+            cause,
+        });
+    }
+    if (bytesToHex(tree.pkScript) !== indexedScript.toLowerCase())
+        throw new ServiceError(codes.mismatch, 400, `${subject} script differs from ${source}`);
+    let tapLeafScript: TapLeafScript;
+    try {
+        tapLeafScript = tree.findLeaf(bytesToHex(given.spendLeaf));
+    } catch (cause) {
+        throw new ServiceError(
+            codes.leaf,
+            400,
+            `${subject} spend leaf is not in its taproot tree`,
+            {
+                cause,
+            },
+        );
+    }
+    return { tapTree: tree.encode(), spendLeaf: given.spendLeaf, tapLeafScript };
+}
+
 async function observedCoin(
     indexer: SwapFillQuoteDeps["senderInventory"],
     outpoint: Outpoint,
     code: string,
     message: string,
-): Promise<ExtendedVirtualCoin> {
+): Promise<VirtualCoin> {
     let response;
     try {
         response = await indexer.getVtxos({ outpoints: [outpoint] });
@@ -833,14 +900,14 @@ async function observedCoin(
         (coin) => coin.txid === outpoint.txid && coin.vout === outpoint.vout,
     );
     if (matches.length !== 1) throw new ServiceError(code, 400, message);
-    return matches[0]! as ExtendedVirtualCoin;
+    return matches[0]!;
 }
 
 async function enrichSolverFund(
     deps: SwapFillQuoteDeps,
     req: SwapFillQuoteRequest,
     offer: DecodedOfferTerms,
-): Promise<{ fund: FillFunding[]; coins: ExtendedVirtualCoin[] }> {
+): Promise<{ fund: FillFunding[]; coins: VirtualCoin[]; spends: TaprootSpend[] }> {
     const safety = deps.runtime.safety();
     const clock = {
         height: Number(safety.chainHeight),
@@ -856,9 +923,10 @@ async function enrichSolverFund(
             cause,
         });
     }
-    const byKey = new Map(response.vtxos.map((c) => [key(c), c as ExtendedVirtualCoin]));
+    const byKey = new Map(response.vtxos.map((c) => [key(c), c]));
     const fund: FillFunding[] = [];
-    const coins: ExtendedVirtualCoin[] = [];
+    const coins: VirtualCoin[] = [];
+    const spends: TaprootSpend[] = [];
     for (const [i, input] of req.solverInputs.entries()) {
         const coin = byKey.get(key(input));
         if (!coin || coin.isSpent)
@@ -873,13 +941,17 @@ async function enrichSolverFund(
                 400,
                 `solver input ${i} differs from indexed funding`,
             );
-        const tapLeafScript = coin.forfeitTapLeafScript ?? coin.intentTapLeafScript;
-        if (!coin.tapTree || !tapLeafScript)
-            throw new ServiceError(
-                "swap_fill_solver_evidence_missing",
-                400,
-                `solver input ${i} lacks taproot evidence`,
-            );
+        const spend = checkedTaprootSpend(
+            input,
+            coin.script,
+            {
+                invalid: "swap_fill_solver_taproot_invalid",
+                mismatch: "swap_fill_solver_taproot_mismatch",
+                leaf: "swap_fill_solver_leaf_unknown",
+            },
+            `solver input ${i}`,
+            "its taproot tree",
+        );
         const actual = new Map((coin.assets ?? []).map((a) => [a.assetId, a.amount]));
         const claimed = new Map(
             (input.assets ?? []).map((a) => [taxiAssetIdToSwapId(a.assetId), a.amount]),
@@ -904,11 +976,12 @@ async function enrichSolverFund(
             txid: coin.txid,
             vout: coin.vout,
             value: coin.value,
-            tapTree: coin.tapTree,
-            tapLeafScript,
+            tapTree: spend.tapTree,
+            tapLeafScript: spend.tapLeafScript,
             ...(coin.assets?.length ? { assets: [...coin.assets] } : {}),
         } as FillFunding);
         coins.push(coin);
+        spends.push(spend);
     }
     const totals = solverTotals(fund);
     if (offer.wantAsset) {
@@ -925,7 +998,7 @@ async function enrichSolverFund(
             400,
             "solver funding does not cover the wanted sats amount",
         );
-    return { fund, coins };
+    return { fund, coins, spends };
 }
 
 function solverTotals(fund: FillFunding[]): { sats: bigint; assets: Map<string, bigint> } {
@@ -1229,24 +1302,27 @@ export async function revalidateBoundSwapFill(
                 .map(({ txid, vout }) => ({ txid, vout })),
         }),
     ]);
-    const current = new Map([
+    const current = new Map<string, VirtualCoin & Partial<ExtendedVirtualCoin>>([
         ...spendable.map((coin) => [key(coin), coin] as const),
-        ...indexed.vtxos.map((coin) => [key(coin), coin as ExtendedVirtualCoin] as const),
+        ...indexed.vtxos.map((coin) => [key(coin), coin] as const),
     ]);
     if (locks.some((locked) => fill.taxiInputs.some((input) => key(input) === key(locked))))
         throw new Error("bound operator input is locked by another intent");
     for (const input of source.source.inputs) {
         const coin = current.get(key(input));
         const leaf = coin?.forfeitTapLeafScript ?? coin?.intentTapLeafScript;
+        // Indexed coins carry no taproot data. Theirs was checked against this
+        // script at quote time, and readFundingSource re-checks it on every read.
         if (
             !coin ||
             coin.isSpent ||
             BigInt(coin.value).toString(10) !== input.value ||
             coin.script.toLowerCase() !== input.script ||
-            !coin.tapTree ||
-            bytesToHex(coin.tapTree) !== input.tapTree ||
-            !leaf ||
-            bytesToHex(scriptFromTapLeafScript(leaf)) !== input.spendLeaf ||
+            (input.role === "sponsor" &&
+                (!coin.tapTree ||
+                    bytesToHex(coin.tapTree) !== input.tapTree ||
+                    !leaf ||
+                    bytesToHex(scriptFromTapLeafScript(leaf)) !== input.spendLeaf)) ||
             JSON.stringify(
                 (coin.assets ?? [])
                     .map((asset) => ({

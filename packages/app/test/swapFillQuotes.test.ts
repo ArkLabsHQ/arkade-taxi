@@ -16,15 +16,22 @@ import {
     fundingCoin,
     MemoryAdvances,
     NOW,
+    operatorTree,
     policy as basePolicy,
     runtimeSafety,
+    senderTree,
     serverUnroll,
 } from "./fixtures.js";
 import {
+    asIndexed,
+    FAKE_COVENANT,
+    FAKE_COVENANT_SCRIPT,
     FAKE_MAKER_SCRIPT,
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     MemorySwapFills,
+    offerTaprootOf,
+    solverTaproot,
 } from "./swapFillFixtures.js";
 import {
     createBoundJointFill,
@@ -38,7 +45,7 @@ const DEP = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_COIN = { txid: "ee".repeat(32), vout: 1 };
 const TAXI_0 = { txid: "cc".repeat(32), vout: 0 };
 const TAXI_1 = { txid: "cc".repeat(32), vout: 1 };
-const COVENANT_SCRIPT = "ac".repeat(34);
+const COVENANT_SCRIPT = FAKE_COVENANT_SCRIPT;
 const MAKER_SCRIPT = FAKE_MAKER_SCRIPT;
 const PROCEEDS_SCRIPT = "51";
 const WANT = 5000n;
@@ -72,6 +79,7 @@ const body = (over: Record<string, unknown> = {}) => ({
             txid: SOLVER_COIN.txid,
             vout: SOLVER_COIN.vout,
             value: String(SOLVER_VALUE),
+            ...solverTaproot(),
             assets: [{ assetId: FARE_ASSET, amount: String(SOLVER_ASSET_AMOUNT) }],
         },
     ],
@@ -103,7 +111,11 @@ const deps = (over: Partial<SwapFillQuoteDeps> = {}): SwapFillQuoteDeps => ({
     },
     senderInventory: {
         getVtxos: async (opts) => ({
-            vtxos: opts?.outpoints?.map((o) => indexerCoins.get(key(o))!).filter(Boolean) ?? [],
+            vtxos:
+                opts?.outpoints
+                    ?.map((o) => indexerCoins.get(key(o))!)
+                    .filter(Boolean)
+                    .map(asIndexed) ?? [],
         }),
     },
     config: config(),
@@ -164,7 +176,7 @@ function quotedReceiverPaid(
         offerCodec: {
             decodeOffer: () =>
                 fakeOfferTerms({
-                    covenantScript: hex.decode(depositCoin.script),
+                    ...offerTaprootOf(depositCoin),
                     makerProceedsScript: covenant.pkScript,
                     makerPublicKey: makerKey,
                     wantAsset: WANTED_ASSET,
@@ -254,7 +266,7 @@ describe("createSwapFillQuote", () => {
                 offerCodec: {
                     decodeOffer: () =>
                         fakeOfferTerms({
-                            covenantScript: hex.decode(depositCoin.script),
+                            ...offerTaprootOf(depositCoin),
                             makerProceedsScript: covenant.pkScript,
                             makerPublicKey: makerKey,
                             wantAsset: WANTED_ASSET,
@@ -283,6 +295,7 @@ describe("createSwapFillQuote", () => {
                             txid: SOLVER_COIN.txid,
                             vout: SOLVER_COIN.vout,
                             value: String(SOLVER_VALUE),
+                            ...solverTaproot(),
                             assets: [{ assetId: FARE_ASSET, amount: "5" }],
                         },
                     ],
@@ -307,14 +320,31 @@ describe("createSwapFillQuote", () => {
             expect(advance).toMatchObject({ state: "locking", topup: 329n, assetUnits: 5n });
             expect(advance.outpoint).toBeUndefined();
             expect(reservations.listForAdvance("receive-1")).toEqual([TAXI_0]);
-            expect(readFundingSource(advance.unsignedLockupTx)).toMatchObject({
+            const source = readFundingSource(advance.unsignedLockupTx);
+            expect(source).toMatchObject({
                 kind: "joint-fill",
                 source: {
                     fillId: fill.id,
                     recoveryPreflight: { expectedTxid: expect.any(String) },
                 },
             });
+            const derived = offerTaprootOf(depositCoin);
+            const recorded = source.kind === "joint-fill" ? source.source.inputs : [];
+            expect(
+                recorded.map(({ role, tapTree, spendLeaf }) => ({ role, tapTree, spendLeaf })),
+            ).toEqual([
+                {
+                    role: "offer-covenant",
+                    tapTree: hex.encode(derived.covenantTapTree),
+                    spendLeaf: hex.encode(derived.covenantSpendLeaf),
+                },
+                { role: "solver", ...solverTaproot() },
+                { role: "sponsor", ...solverTaproot(operatorTree) },
+            ]);
             await expect(revalidateBoundSwapFill(d, fill)).resolves.toBeUndefined();
+            indexerCoins.set(key(DEP), { ...depositCoin, script: FAKE_COVENANT_SCRIPT });
+            await expect(revalidateBoundSwapFill(d, fill)).rejects.toThrow(/bound input/);
+            indexerCoins.set(key(DEP), depositCoin);
             indexerCoins.set(key(SOLVER_COIN), {
                 ...indexerCoins.get(key(SOLVER_COIN))!,
                 isSpent: true,
@@ -376,7 +406,12 @@ describe("createSwapFillQuote", () => {
             d,
             body({
                 solverInputs: [
-                    { txid: SOLVER_COIN.txid, vout: SOLVER_COIN.vout, value: String(SOLVER_VALUE) },
+                    {
+                        txid: SOLVER_COIN.txid,
+                        vout: SOLVER_COIN.vout,
+                        value: String(SOLVER_VALUE),
+                        ...solverTaproot(),
+                    },
                 ],
                 maxFare: { currency: "sats", units: "1000" },
             }),
@@ -560,12 +595,127 @@ describe("createSwapFillQuote", () => {
         expect(builder.built).toHaveLength(0);
     });
 
-    it("fails fast when solver coins lack taproot evidence", async () => {
-        const { tapTree: _dropped, ...bare } = indexerCoins.get(key(SOLVER_COIN))!;
-        indexerCoins.set(key(SOLVER_COIN), bare as ExtendedVirtualCoin);
-        const rejected = await caught(() => createSwapFillQuote(deps(), body()));
-        expect(rejected.code).toBe("swap_fill_solver_evidence_missing");
-        expect(builder.built).toHaveLength(0);
+    describe("taproot build data the indexer cannot serve", () => {
+        const withSolverTaproot = (taproot: Record<string, unknown>) =>
+            body({
+                solverInputs: [
+                    {
+                        ...body().solverInputs[0],
+                        tapTree: undefined,
+                        spendLeaf: undefined,
+                        ...taproot,
+                    },
+                ],
+            });
+
+        it("serves no taproot data, as the production indexer does", async () => {
+            const { vtxos } = await deps().senderInventory.getVtxos({
+                outpoints: [DEP, SOLVER_COIN],
+            });
+            expect(vtxos).toHaveLength(2);
+            for (const coin of vtxos) {
+                expect(coin).not.toHaveProperty("tapTree");
+                expect(coin).not.toHaveProperty("forfeitTapLeafScript");
+                expect(coin).not.toHaveProperty("intentTapLeafScript");
+            }
+        });
+
+        it("quotes a deposit whose script the offer's derived covenant rebuilds", async () => {
+            await expect(createSwapFillQuote(deps(), body())).resolves.toMatchObject({
+                fillId: "fill-1",
+            });
+        });
+
+        it("refuses a deposit the offer's derived covenant does not rebuild", async () => {
+            const refused = await caught(() =>
+                createSwapFillQuote(
+                    deps({
+                        offerCodec: {
+                            decodeOffer: () => fakeOfferTerms(offerTaprootOf(fundingCoin())),
+                        },
+                    }),
+                    body(),
+                ),
+            );
+            expect(refused.status).toBe(400);
+            expect(refused.code).toBe("swap_fill_deposit_mismatch");
+            expect(builder.built).toHaveLength(0);
+        });
+
+        it("hands the builder the solver's tree and leaf once the tree rebuilds the indexed script", async () => {
+            await createSwapFillQuote(deps(), body());
+            const [fund] = builder.built[0]!.solverFund;
+            expect(fund!.tapTree).toEqual(operatorTree.encode());
+            expect(fund!.tapLeafScript).toEqual(
+                operatorTree.findLeaf(hex.encode(operatorTree.scripts[0]!)),
+            );
+        });
+
+        const refusals: [string, Record<string, unknown>, number, string, RegExp][] = [
+            [
+                "a tree whose key is not the coin's script",
+                solverTaproot(senderTree),
+                400,
+                "swap_fill_solver_taproot_mismatch",
+                /solver input 0/,
+            ],
+            [
+                "a spend leaf outside the tree",
+                { ...solverTaproot(), spendLeaf: solverTaproot(senderTree).spendLeaf },
+                400,
+                "swap_fill_solver_leaf_unknown",
+                /solver input 0/,
+            ],
+            [
+                "a tree that does not decode",
+                { ...solverTaproot(), tapTree: "0102" },
+                400,
+                "swap_fill_solver_taproot_invalid",
+                /solver input 0/,
+            ],
+            [
+                "no tree",
+                { spendLeaf: solverTaproot().spendLeaf },
+                400,
+                "invalid_request",
+                /solverInputs\[0\]\.tapTree/,
+            ],
+            [
+                "no spend leaf",
+                { tapTree: solverTaproot().tapTree },
+                400,
+                "invalid_request",
+                /solverInputs\[0\]\.spendLeaf/,
+            ],
+        ];
+        for (const [name, taproot, status, code, message] of refusals)
+            it(`refuses solver taproot data with ${name}`, async () => {
+                const refused = await caught(() =>
+                    createSwapFillQuote(deps(), withSolverTaproot(taproot)),
+                );
+                expect(refused.status).toBe(status);
+                expect(refused.code).toBe(code);
+                expect(refused.message).toMatch(message);
+                expect(builder.built).toHaveLength(0);
+                expect(swapFills.rows.size).toBe(0);
+            });
+
+        it("checks the solver tree against the indexed coin, never against the request", async () => {
+            indexerCoins.set(
+                key(SOLVER_COIN),
+                fundingCoin({
+                    ...indexerCoins.get(key(SOLVER_COIN))!,
+                    script: FAKE_COVENANT_SCRIPT,
+                }),
+            );
+            const refused = await caught(() => createSwapFillQuote(deps(), body()));
+            expect(refused.code).toBe("swap_fill_solver_taproot_mismatch");
+            const accepted = await createSwapFillQuote(
+                deps(),
+                withSolverTaproot(solverTaproot(FAKE_COVENANT)),
+            );
+            expect(accepted.fillId).toBe("fill-1");
+        });
     });
 
     it("rejects solver funding whose value differs from the claim", async () => {
@@ -627,6 +777,7 @@ describe("createSwapFillQuote", () => {
                                 txid: SOLVER_COIN.txid,
                                 vout: SOLVER_COIN.vout,
                                 value: String(SOLVER_VALUE),
+                                ...solverTaproot(),
                                 assets: [{ assetId: FARE_ASSET, amount: "5" }],
                             },
                         ],
@@ -673,6 +824,7 @@ describe("createSwapFillQuote", () => {
                                     txid: SOLVER_COIN.txid,
                                     vout: SOLVER_COIN.vout,
                                     value: String(SOLVER_VALUE),
+                                    ...solverTaproot(),
                                     assets: [{ assetId: FARE_ASSET, amount: "8" }],
                                 },
                             ],
@@ -701,6 +853,7 @@ describe("createSwapFillQuote", () => {
                                     txid: SOLVER_COIN.txid,
                                     vout: SOLVER_COIN.vout,
                                     value: String(SOLVER_VALUE),
+                                    ...solverTaproot(),
                                     assets: [{ assetId: FARE_ASSET, amount: "9" }],
                                 },
                             ],
@@ -727,6 +880,7 @@ describe("createSwapFillQuote", () => {
                                     txid: SOLVER_COIN.txid,
                                     vout: SOLVER_COIN.vout,
                                     value: String(SOLVER_VALUE),
+                                    ...solverTaproot(),
                                     assets: [{ assetId: FARE_ASSET, amount: "10" }],
                                 },
                             ],

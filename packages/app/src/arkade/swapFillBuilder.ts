@@ -393,7 +393,11 @@ export function jointGraphFromWire(wire: SwapFillGraphWire): JointGraph {
     let derivedInputs;
     let derivedOutputs;
     try {
-        derivedInputs = deriveJointInputs({ arkTx: wire.arkTx, inputOwners });
+        derivedInputs = deriveJointInputs({
+            arkTx: wire.arkTx,
+            checkpoints: wire.checkpoints,
+            inputOwners,
+        });
         derivedOutputs = deriveJointOutputs({ arkTx: wire.arkTx });
     } catch (cause) {
         if (cause instanceof JointGraphDerivationError)

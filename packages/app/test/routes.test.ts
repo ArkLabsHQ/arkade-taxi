@@ -53,10 +53,13 @@ import {
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
 import {
+    asIndexed,
+    FAKE_COVENANT_SCRIPT,
     FAKE_MAKER_SCRIPT,
     FakeSwapFillGraphBuilder,
     fakeOfferTerms,
     MemorySwapFills,
+    solverTaproot,
 } from "./swapFillFixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
@@ -1178,22 +1181,31 @@ describe("swap-fill routes", () => {
         registerSenderCoin(
             "dd".repeat(32),
             3,
-            fundingCoin({ txid: "dd".repeat(32), vout: 3, value: 10000, script: "ac".repeat(34) }),
+            asIndexed(
+                fundingCoin({
+                    txid: "dd".repeat(32),
+                    vout: 3,
+                    value: 10000,
+                    script: FAKE_COVENANT_SCRIPT,
+                }),
+            ),
         );
         registerSenderCoin(
             "ee".repeat(32),
             1,
-            fundingCoin({
-                txid: "ee".repeat(32),
-                vout: 1,
-                value: 6000,
-                assets: [
-                    {
-                        assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
-                        amount: 100n,
-                    },
-                ],
-            }),
+            asIndexed(
+                fundingCoin({
+                    txid: "ee".repeat(32),
+                    vout: 1,
+                    value: 6000,
+                    assets: [
+                        {
+                            assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
+                            amount: 100n,
+                        },
+                    ],
+                }),
+            ),
         );
         return {
             operationId: "op-1",
@@ -1203,6 +1215,7 @@ describe("swap-fill routes", () => {
                     txid: "ee".repeat(32),
                     vout: 1,
                     value: "6000",
+                    ...solverTaproot(),
                     assets: [
                         {
                             assetId: { txid: USDT_INTERNAL, groupIndex: 0 },

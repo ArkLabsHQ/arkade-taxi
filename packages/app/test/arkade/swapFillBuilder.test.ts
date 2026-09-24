@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
     asset,
     Extension,
+    P2A,
     Transaction,
     type ExtendedVirtualCoin,
     type IWallet,
@@ -17,7 +18,7 @@ import {
     taxiAssetIdToSwapId,
     type SwapFillBuildRequest,
 } from "../../src/arkade/swapFillBuilder.js";
-import { sealGraph } from "../swapFillFixtures.js";
+import { checkpointSpending, sealGraph } from "../swapFillFixtures.js";
 import { operatorKey, receiverKey } from "../fixtures.js";
 import type { SwapFillGraphWire } from "@arkade-taxi/protocol";
 import { fundingCoin } from "../fixtures.js";
@@ -56,14 +57,18 @@ const SCRIPTS = {
     sponsorScript: hex.decode(SPONSOR_SCRIPT),
 };
 
-const makeGraph = (groups: asset.AssetGroup[]): JointGraph => {
+const makeGraph = (
+    groups: asset.AssetGroup[],
+    trailing: { script: Uint8Array; amount: bigint }[] = [],
+): JointGraph => {
     const tx = new Transaction({ version: 3, lockTime: 0 });
     const inpoints = [
         { txid: "aa".repeat(32), vout: 0 },
         { txid: "bb".repeat(32), vout: 1 },
         { txid: "cc".repeat(32), vout: 2 },
     ];
-    for (const o of inpoints) tx.addInput({ txid: o.txid, index: o.vout });
+    const checkpoints = inpoints.map(checkpointSpending);
+    for (const cp of checkpoints) tx.addInput({ txid: cp.id, index: 0 });
     tx.addOutput({ script: hex.decode(RECEIVER_SCRIPT), amount: 1000n });
     tx.addOutput({ script: hex.decode(SOLVER_SCRIPT), amount: 700n });
     tx.addOutput({ script: hex.decode(SPONSOR_SCRIPT), amount: 330n });
@@ -72,14 +77,10 @@ const makeGraph = (groups: asset.AssetGroup[]): JointGraph => {
         const extOut = Extension.create([asset.Packet.create(groups)]).txOut();
         tx.addOutput({ script: extOut.script, amount: extOut.amount });
     }
+    for (const output of trailing) tx.addOutput(output);
     return sealGraph({
         arkTx: base64.encode(tx.toPSBT()),
-        checkpoints: inpoints.map((o) => {
-            const cp = new Transaction({ version: 3, lockTime: 0 });
-            cp.addInput({ txid: o.txid, index: o.vout });
-            cp.addOutput({ script: new Uint8Array([0x51]), amount: 1000n });
-            return base64.encode(cp.toPSBT());
-        }),
+        checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
         graphId: "",
         inputOwners: [null, "solver", "sponsor"],
     });
@@ -348,5 +349,78 @@ describe("wire translation", () => {
         ]);
         expect(fareAssets?.[0]?.assetId).not.toEqual(fareAssets?.[1]?.assetId);
         expect(jointGraphFromWire(wire)).toEqual(graph);
+    });
+
+    it("refuses an ark input that does not spend its own checkpoint", () => {
+        const foreign = base64.encode(
+            checkpointSpending({ txid: "dd".repeat(32), vout: 1 }).toPSBT(),
+        );
+        const swapped = {
+            ...GRAPH,
+            checkpoints: [GRAPH.checkpoints[0]!, foreign, GRAPH.checkpoints[2]!],
+        };
+        expect(() => jointGraphToWire(swapped, SCRIPTS)).toThrow(
+            /input 1 does not spend its checkpoint/,
+        );
+    });
+
+    it("refuses a checkpoint that spends more than one coin", () => {
+        const double = checkpointSpending({ txid: "aa".repeat(32), vout: 0 });
+        double.addInput({ txid: "dd".repeat(32), index: 9 });
+        const tx = new Transaction({ version: 3, lockTime: 0 });
+        tx.addInput({ txid: double.id, index: 0 });
+        tx.addOutput({ script: hex.decode(RECEIVER_SCRIPT), amount: 1000n });
+        const graph = sealGraph({
+            arkTx: base64.encode(tx.toPSBT()),
+            checkpoints: [base64.encode(double.toPSBT())],
+            graphId: "",
+            inputOwners: [null],
+        });
+        expect(() => jointGraphToWire(graph, SCRIPTS)).toThrow(
+            /checkpoint 0 does not spend exactly one outpoint/,
+        );
+    });
+
+    const groups = () => [
+        asset.AssetGroup.create(
+            USDT,
+            null,
+            [asset.AssetInput.create(1, 5n)],
+            [asset.AssetOutput.create(2, 5n)],
+            [],
+        ),
+    ];
+
+    it("leaves the trailing zero-value P2A anchor every real fill carries off the wire", () => {
+        const graph = makeGraph(groups(), [{ script: P2A.script, amount: P2A.amount }]);
+        const wire = jointGraphToWire(graph, SCRIPTS);
+        expect(wire.outputs).toEqual(jointGraphToWire(GRAPH, SCRIPTS).outputs);
+        expect(jointGraphFromWire(wire)).toEqual(graph);
+    });
+
+    it("refuses an anchor that carries value or is not the last output", () => {
+        const valued = makeGraph(groups(), [{ script: P2A.script, amount: 1n }]);
+        expect(() => jointGraphToWire(valued, SCRIPTS)).toThrow(/no fill party owns/);
+        const early = makeGraph(groups(), [
+            { script: P2A.script, amount: P2A.amount },
+            { script: hex.decode(SPONSOR_SCRIPT), amount: 1n },
+        ]);
+        expect(() => jointGraphToWire(early, SCRIPTS)).toThrow(/no fill party owns/);
+    });
+
+    it("refuses an anchor that an asset group pays", () => {
+        const graph = makeGraph(
+            [
+                asset.AssetGroup.create(
+                    USDT,
+                    null,
+                    [asset.AssetInput.create(1, 5n)],
+                    [asset.AssetOutput.create(5, 5n)],
+                    [],
+                ),
+            ],
+            [{ script: P2A.script, amount: P2A.amount }],
+        );
+        expect(() => jointGraphToWire(graph, SCRIPTS)).toThrow(/no fill party owns/);
     });
 });

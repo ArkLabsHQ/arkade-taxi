@@ -1,4 +1,4 @@
-import { Extension, ExtensionNotFoundError, Transaction } from "@arkade-os/sdk";
+import { Extension, ExtensionNotFoundError, P2A, Transaction } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 
 export class JointGraphDerivationError extends Error {
@@ -35,17 +35,32 @@ export function decodeJointArkTx(arkTx: string): Transaction {
     return decodeTx(arkTx, "graph.arkTx");
 }
 
+/** Ark input i spends checkpoint i's output 0; the coin is what that checkpoint spends. */
 export function deriveJointInputs(graph: {
     arkTx: string;
+    checkpoints: readonly string[];
     inputOwners: readonly (string | null)[];
 }): DerivedJointInput[] {
     const tx = decodeTx(graph.arkTx, "graph.arkTx");
-    if (tx.inputsLength !== graph.inputOwners.length)
-        throw new JointGraphDerivationError("graph inputOwners and arkTx inputs must agree");
+    if (
+        tx.inputsLength !== graph.inputOwners.length ||
+        graph.checkpoints.length !== graph.inputOwners.length
+    )
+        throw new JointGraphDerivationError(
+            "graph inputOwners, checkpoints and arkTx inputs must agree",
+        );
     return graph.inputOwners.map((owner, index) => {
-        const input = tx.getInput(index);
+        const checkpoint = decodeTx(graph.checkpoints[index]!, `graph.checkpoints[${index}]`);
+        const edge = tx.getInput(index);
+        if (!edge?.txid || hex.encode(edge.txid) !== checkpoint.id || edge.index !== 0)
+            throw new JointGraphDerivationError(
+                `graph.arkTx input ${index} does not spend its checkpoint`,
+            );
+        const input = checkpoint.inputsLength === 1 ? checkpoint.getInput(0) : undefined;
         if (!input?.txid || input.index === undefined)
-            throw new JointGraphDerivationError(`graph.arkTx input ${index} has no outpoint`);
+            throw new JointGraphDerivationError(
+                `graph checkpoint ${index} does not spend exactly one outpoint`,
+            );
         return {
             owner,
             txid: hex.encode(input.txid).toLowerCase(),
@@ -86,6 +101,12 @@ export function deriveJointOutputs(graph: { arkTx: string }): DerivedJointOutput
         if (amount === undefined || !script)
             throw new JointGraphDerivationError(`graph.arkTx output ${vout} has no value`);
         if (Extension.isExtension(script)) continue;
+        const anchor =
+            vout === tx.outputsLength - 1 &&
+            amount === P2A.amount &&
+            hex.encode(script) === hex.encode(P2A.script) &&
+            !assets.has(vout);
+        if (anchor) continue;
         outputs.push({
             vout,
             script: Uint8Array.from(script),
