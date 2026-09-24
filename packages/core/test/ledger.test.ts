@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { DustCovenantParams } from "@arkade-taxi/covenant";
 import type { Advance, AdvanceState } from "../src/types.js";
-import { canTransition, isExpired, isTerminal, transition } from "../src/ledger.js";
+import {
+    canTransition,
+    covenantParamsOf,
+    isExpired,
+    isTerminal,
+    transition,
+} from "../src/ledger.js";
 
 const ALL_STATES: readonly AdvanceState[] = [
     "quoted",
@@ -200,5 +207,45 @@ describe("isExpired", () => {
         "expired",
     ] as const)("is false for %s however far past expiresAt", (state) => {
         expect(isExpired(advance({ state, expiresAt: 2_000 }), 9_999_999)).toBe(false);
+    });
+});
+
+describe("covenantParamsOf", () => {
+    // Keyed by the covenant type, so a new covenant field fails typecheck here.
+    const FIELDS: Record<keyof DustCovenantParams, true> = {
+        receiverKey: true,
+        senderKey: true,
+        operatorKey: true,
+        dust: true,
+        topup: true,
+        locktime: true,
+        claimMode: true,
+        recoveryRecipient: true,
+        assetId: true,
+        receiverFare: true,
+    };
+
+    it("maps every covenant field of the advance", () => {
+        const full = advance({
+            claimMode: "recycle",
+            recoveryRecipient: "receiver",
+            assetId: { txid: key(9), groupIndex: 1 },
+            receiverFare: { currency: "asset", units: 9n },
+        });
+        const params = covenantParamsOf(full);
+        expect(Object.keys(params).sort()).toEqual(Object.keys(FIELDS).sort());
+        for (const field of Object.keys(FIELDS) as (keyof DustCovenantParams)[])
+            expect(params[field]).toBe(full[field]);
+    });
+
+    it("emits no optional field the advance lacks", () => {
+        expect(covenantParamsOf(advance())).toStrictEqual({
+            receiverKey: key(1),
+            senderKey: key(2),
+            operatorKey: key(3),
+            dust: 330n,
+            topup: 330n,
+            locktime: 800_000n,
+        });
     });
 });

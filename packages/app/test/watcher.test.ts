@@ -25,6 +25,7 @@ import {
     covenantSpendInput,
     payoutPkScript,
     refundTopup,
+    type ReceiverFare,
 } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
@@ -36,10 +37,10 @@ import {
 import type { Advance, AdvanceState } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { createSpendWatcher } from "../src/watcher.js";
+import { classifyObservedSpend, createSpendWatcher } from "../src/watcher.js";
 import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery.js";
 import { config, fundingCoin, NOW, policy as basePolicy, serverKey } from "./fixtures.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
+import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -93,6 +94,7 @@ async function setup(
     receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
     claimMode?: "recycle" | "purchase",
     recoveryRecipient?: "sender" | "receiver",
+    receiverFare?: ReceiverFare,
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
@@ -103,6 +105,7 @@ async function setup(
     if (kind === "recycled" || kind === "refunded") request.params.claimMode = "recycle";
     if (claimMode !== undefined) request.params.claimMode = claimMode;
     if (recoveryRecipient !== undefined) request.params.recoveryRecipient = recoveryRecipient;
+    if (receiverFare) receiverPays(request, receiverFare);
     if (locktime !== undefined) {
         request.params.locktime = locktime;
         if (locktime >= 500_000_000n) {
@@ -788,6 +791,41 @@ describe("canonical covenant observation", () => {
             state.db.close();
         },
     );
+
+    it.each([
+        ["sender-paid", undefined],
+        ["sats-fare", { currency: "sats", units: 7n }],
+        ["asset-fare", { currency: "asset", units: 9n }],
+    ] as const)("rebuilds the quoted covenant for a persisted %s recovery", async (_, fare) => {
+        const state = await setup(
+            "recovered",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+            fare,
+        );
+        try {
+            const stored = state.advances.get(state.advance.id)!;
+            expect(stored.receiverFare).toEqual(fare);
+            const coin = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!;
+            await expect(
+                classifyObservedSpend(
+                    stored,
+                    coin,
+                    { indexer: state.indexer, config: config() },
+                    { height: Number(stored.locktime), time: NOW },
+                ),
+            ).resolves.toEqual({ kind: "recovered", txid: state.finalArk!.id });
+        } finally {
+            state.db.close();
+        }
+    });
 
     it("proves a large asset purchase only when the extension conserves exact units", async () => {
         const state = await setup("purchased", ":memory:", true);

@@ -1,5 +1,5 @@
 import { CSVMultisigTapscript, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { DustCovenantScript, type ReceiverFare } from "@arkade-taxi/covenant";
 import {
     config,
     fundingCoin,
@@ -66,4 +66,12 @@ export function buildRequest(): LockupBuildRequest {
             batchExpiry: { kind: "height", value: 900000n },
         },
     };
+}
+
+/** The operator funds the whole dust. The sender's sats return as change, which
+ * must reach dust: a sub-dust change would be the lockup's third OP_RETURN. */
+export function receiverPays(request: LockupBuildRequest, receiverFare: ReceiverFare): void {
+    request.params.topup = request.params.dust;
+    request.params.receiverFare = receiverFare;
+    request.senderInputs[0]!.value = request.senderSats = request.params.dust;
 }

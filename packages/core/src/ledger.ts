@@ -1,9 +1,27 @@
+import type { DustCovenantParams } from "@arkade-taxi/covenant";
 import { TERMINAL_STATES, type Advance, type AdvanceState } from "./types.js";
 
 /** Absent `kind` is a covenant advance: the only shape persisted before
  * sponsored direct sends existed. */
 export const advanceKind = (a: Pick<Advance, "kind">): "covenant" | "sponsored" =>
     a.kind ?? "covenant";
+
+/** Rebuild an advance's covenant only through here: dropping any field, the
+ * receiver fare included, derives a different covenant address. */
+export function covenantParamsOf(a: Pick<Advance, keyof DustCovenantParams>): DustCovenantParams {
+    return {
+        receiverKey: a.receiverKey,
+        senderKey: a.senderKey,
+        operatorKey: a.operatorKey,
+        dust: a.dust,
+        topup: a.topup,
+        locktime: a.locktime,
+        ...(a.claimMode ? { claimMode: a.claimMode } : {}),
+        ...(a.recoveryRecipient ? { recoveryRecipient: a.recoveryRecipient } : {}),
+        ...(a.assetId ? { assetId: a.assetId } : {}),
+        ...(a.receiverFare ? { receiverFare: a.receiverFare } : {}),
+    };
+}
 
 /** Capital at risk. A sponsored advance settles when its payment outpoint is
  * observed (`locked`), so only a `locking` sponsored advance ties up capital;

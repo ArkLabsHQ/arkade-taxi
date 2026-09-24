@@ -29,6 +29,7 @@ import {
     createSubmissionResumer,
     productionLockupSubmitter,
     validateLockupSubmission,
+    validatePersistedLockupGraph,
 } from "../../src/arkade/submit.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt.js";
 import { createLockupReconciler } from "../../src/reconciler.js";
@@ -41,7 +42,7 @@ import {
     senderKey,
     serverKey,
 } from "../fixtures.js";
-import { buildRequest, operatorTree, unroll } from "./lockupFixtures.js";
+import { buildRequest, operatorTree, receiverPays, unroll } from "./lockupFixtures.js";
 
 const senderIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
 const operatorIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(3));
@@ -165,6 +166,51 @@ describe("persisted-fact submission validation", () => {
             unsignedLockupTx: encoded,
             unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
         };
+        const signed = await signedEnvelope(encoded);
+        expect(() => validateLockupSubmission(persisted, signed, config())).not.toThrow();
+    });
+
+    it.each([
+        ["sender-paid", undefined],
+        ["sats-fare", { currency: "sats", units: 7n }],
+        ["asset-fare", { currency: "asset", units: 9n }],
+    ] as const)("rebuilds the quoted covenant for a %s advance", async (_, receiverFare) => {
+        const request = buildRequest();
+        const sdkAsset = asset.AssetId.create("12".repeat(32), 7);
+        request.params.assetId = {
+            txid: Uint8Array.from(sdkAsset.txid).reverse(),
+            groupIndex: sdkAsset.groupIndex,
+        };
+        request.params.recoveryRecipient = "receiver";
+        if (receiverFare) receiverPays(request, receiverFare);
+        request.assetUnits = 5n;
+        request.senderInputs[0]!.assetPacket = asset.Packet.create([
+            asset.AssetGroup.create(
+                sdkAsset,
+                null,
+                [],
+                [asset.AssetOutput.create(request.senderInputs[0]!.vout, 5n)],
+                [],
+            ),
+        ]).serialize();
+        const quoted = new DustCovenantScript({
+            params: request.params,
+            serverKey: config().serverPubkey,
+            emulatorKey: config().emulatorPubkey,
+            vtxoMinAmount: config().vtxoMinAmount,
+        });
+        request.covenantAddress = quoted.address(config().addressHrp, serverKey).encode();
+        const encoded = buildLockupEnvelope(request, config(), unroll);
+        const persisted: Advance = {
+            ...advance(),
+            ...request.params,
+            assetUnits: 5n,
+            covenantAddress: request.covenantAddress,
+            unsignedLockupTx: encoded,
+            unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
+        };
+
+        expect(() => validatePersistedLockupGraph(persisted, config())).not.toThrow();
         const signed = await signedEnvelope(encoded);
         expect(() => validateLockupSubmission(persisted, signed, config())).not.toThrow();
     });

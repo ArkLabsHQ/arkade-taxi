@@ -2,6 +2,7 @@ export * from "./types.js";
 export {
     advanceKind,
     canTransition,
+    covenantParamsOf,
     isExposed,
     isExpired,
     isTerminal,

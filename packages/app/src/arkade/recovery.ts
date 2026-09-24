@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { Advance } from "@arkade-taxi/core";
+import { covenantParamsOf, type Advance } from "@arkade-taxi/core";
 import type { AdvanceRepository, PreparedRecoveryRecord } from "@arkade-taxi/db";
 import {
     DustCovenantScript,
@@ -74,17 +74,7 @@ function covenantScript(advance: Advance, config: RuntimeConfig): DustCovenantSc
         serverKey: config.serverPubkey,
         emulatorKey: config.emulatorPubkey,
         vtxoMinAmount: config.vtxoMinAmount,
-        params: {
-            receiverKey: advance.receiverKey,
-            senderKey: advance.senderKey,
-            operatorKey: advance.operatorKey,
-            dust: advance.dust,
-            topup: advance.topup,
-            locktime: advance.locktime,
-            ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
-            ...(advance.recoveryRecipient ? { recoveryRecipient: advance.recoveryRecipient } : {}),
-            ...(advance.assetId ? { assetId: advance.assetId } : {}),
-        },
+        params: covenantParamsOf(advance),
     });
 }
 

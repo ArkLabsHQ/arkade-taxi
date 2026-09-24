@@ -6,7 +6,7 @@ import {
     refundTopup,
 } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
-import { advanceKind } from "@arkade-taxi/core";
+import { advanceKind, covenantParamsOf } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import {
     CSVMultisigTapscript,
@@ -308,17 +308,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         serverKey: config.serverPubkey,
         emulatorKey: config.emulatorPubkey,
         vtxoMinAmount: config.vtxoMinAmount,
-        params: {
-            receiverKey: advance.receiverKey,
-            senderKey: advance.senderKey,
-            operatorKey: advance.operatorKey,
-            dust: advance.dust,
-            topup: advance.topup,
-            locktime: advance.locktime,
-            ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
-            ...(advance.recoveryRecipient ? { recoveryRecipient: advance.recoveryRecipient } : {}),
-            ...(advance.assetId ? { assetId: advance.assetId } : {}),
-        },
+        params: covenantParamsOf(advance),
     });
     const tagged = readFundingSource(advance.unsignedLockupTx);
     const envelope =
@@ -659,22 +649,7 @@ export async function classifyObservedSpend(
 
         if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
             fail("refund input or output count mismatch");
-        const topup = refundTopup(
-            {
-                receiverKey: advance.receiverKey,
-                senderKey: advance.senderKey,
-                operatorKey: advance.operatorKey,
-                dust: advance.dust,
-                topup: advance.topup,
-                locktime: advance.locktime,
-                ...(advance.claimMode ? { claimMode: advance.claimMode } : {}),
-                ...(advance.recoveryRecipient
-                    ? { recoveryRecipient: advance.recoveryRecipient }
-                    : {}),
-                ...(advance.assetId ? { assetId: advance.assetId } : {}),
-            },
-            deps.config.vtxoMinAmount,
-        );
+        const topup = refundTopup(covenantParamsOf(advance), deps.config.vtxoMinAmount);
         exactOutput(
             arkTx,
             0,

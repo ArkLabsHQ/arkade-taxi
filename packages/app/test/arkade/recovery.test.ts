@@ -69,7 +69,7 @@ afterEach(() => {
 const sourceAdvance = (
     kind: "height" | "time" = "height",
     withAsset = false,
-    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode" | "receiverFare"> = {},
 ) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
     const cfg = config();
@@ -413,6 +413,31 @@ describe("recovery graph", () => {
         expect(Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script).toEqual(
             expected.covenant.refund,
         );
+    });
+
+    it.each([
+        ["sender-paid", undefined],
+        ["sats-fare", { currency: "sats", units: 7n }],
+        ["asset-fare", { currency: "asset", units: 9n }],
+    ] as const)("rebuilds the quoted covenant for a persisted %s advance", (_, receiverFare) => {
+        const path = dbFile();
+        const row = sourceAdvance("height", true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+            ...(receiverFare ? { receiverFare } : {}),
+        });
+        const first = open(path);
+        new AdvanceRepository(first).insert(row);
+        first.close();
+        const persisted = new AdvanceRepository(open(path)).get(row.id)!;
+        expect(persisted.receiverFare).toEqual(receiverFare);
+        const quoted = Transaction.fromPSBT(
+            base64.decode(decodeLockupEnvelope(row.unsignedLockupTx).arkTx),
+        ).getOutput(0).script;
+
+        const intent = buildRecoveryIntent(persisted, config());
+        const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
+        expect(checkpoint.getInput(0).witnessUtxo!.script).toEqual(quoted);
     });
 
     it("rejects drift in persisted operator funding and fare facts", () => {
