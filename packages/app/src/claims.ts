@@ -139,6 +139,7 @@ export function listReceiverClaims(
                             kind: recoveryLocktime.kind,
                             value: recoveryLocktime.value.toString(),
                         },
+                        ...(advance.receiverFare ? { unclaimedMode: "reclaim" as const } : {}),
                     };
                 } catch (cause) {
                     throw new ServiceError("internal_error", 500, "internal error", { cause });

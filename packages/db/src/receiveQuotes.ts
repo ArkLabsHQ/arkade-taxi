@@ -572,6 +572,13 @@ export class ReceiveQuoteRepository {
                 const sameBytes = (first: Uint8Array, second: Uint8Array) =>
                     first.length === second.length &&
                     first.every((byte, index) => byte === second[index]);
+                const sameReceiverFare = (
+                    first: ReceiveQuoteParams["receiverFare"],
+                    second: ReceiveQuoteParams["receiverFare"],
+                ) =>
+                    (first === undefined) === (second === undefined) &&
+                    (first === undefined ||
+                        (first.currency === second!.currency && first.units === second!.units));
                 if (
                     fill.receiveQuoteId !== quote.id ||
                     advance.id !== quote.id ||
@@ -591,6 +598,7 @@ export class ReceiveQuoteRepository {
                     !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
                     advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
                     advance.locktime !== quote.params.locktime ||
+                    !sameReceiverFare(advance.receiverFare, quote.params.receiverFare) ||
                     advance.covenantAddress !== quote.covenantAddress ||
                     advance.fare.currency !== "sats" ||
                     advance.fare.units !== quote.fare.units ||

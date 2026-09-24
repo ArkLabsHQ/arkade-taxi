@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import type { Advance } from "@arkade-taxi/core";
+import type { Advance, FareSpec } from "@arkade-taxi/core";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
@@ -64,7 +64,10 @@ const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`
  * the startup invariant rebuild the recovery intent from these exact bytes.
  */
 export async function createBoundJointFill(
-    over: { validUntil?: number } = {},
+    over: {
+        validUntil?: number;
+        receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
+    } = {},
 ): Promise<BoundJointFill> {
     const db = openDatabase(":memory:");
     try {
@@ -105,16 +108,25 @@ export async function createBoundJointFill(
             assets: [{ assetId: WANTED_SWAP_ID, amount: WANT_UNITS }],
         });
         const makerKey = new Uint8Array(32).fill(9);
+        const receiverPaid = over.receiverFare !== undefined;
+        const loan = receiverPaid ? 330n : LOAN;
+        const topLevelReceiverFare: FareSpec | undefined =
+            over.receiverFare === undefined
+                ? undefined
+                : over.receiverFare.currency === "asset"
+                  ? { currency: "asset", assetId: WANTED_ASSET, units: over.receiverFare.units }
+                  : over.receiverFare;
         const params = {
             receiverKey,
             senderKey: makerKey,
             operatorKey: cfg.operatorKey,
             dust: 330n,
-            topup: LOAN,
+            topup: loan,
             assetId: WANTED_ASSET,
             locktime: 899_856n,
             claimMode: "recycle" as const,
             recoveryRecipient: "receiver" as const,
+            ...(over.receiverFare === undefined ? {} : { receiverFare: over.receiverFare }),
         };
         const covenant = new DustCovenantScript({
             serverKey: cfg.serverPubkey,
@@ -134,11 +146,14 @@ export async function createBoundJointFill(
                 makerPublicKey: hex.encode(makerKey),
                 params,
                 covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
-                fare: { currency: "sats", units: FARE },
+                fare: { currency: "sats", units: receiverPaid ? 0n : FARE },
+                ...(receiverPaid
+                    ? { payer: "receiver" as const, receiverFare: topLevelReceiverFare! }
+                    : {}),
                 batchExpiry: { kind: "height", value: 900_000n },
                 inputExpiryFloor: { kind: "height", value: 900_000n },
                 recoveryLocktime: { kind: "height", value: 899_856n },
-                loanSats: LOAN,
+                loanSats: loan,
                 createdAt: NOW,
                 expiresAt: NOW + 60,
                 policyRevision: revision,
@@ -217,8 +232,8 @@ export async function createBoundJointFill(
                 ],
                 solverProceedsScript: "51",
                 solverKeys: ["ab".repeat(32)],
-                contributionSats: LOAN.toString(10),
-                maxFare: { currency: "sats", units: "30" },
+                contributionSats: loan.toString(10),
+                maxFare: { currency: "sats", units: receiverPaid ? "0" : "30" },
                 fundingTxid: BOUND_DEPOSIT.txid,
                 fundingVout: BOUND_DEPOSIT.vout,
                 ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),

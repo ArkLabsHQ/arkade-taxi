@@ -56,6 +56,8 @@ const FARE_ASSET = {
 const FARE_SWAP_ID = asset.AssetId.create("1234".repeat(16), 0).toString();
 const FARE_UNITS = 5n;
 const SOLVER_ASSET_AMOUNT = 100n;
+const anyAsset = { txid: hex.decode(FARE_ASSET.txid), groupIndex: 0 };
+const MAKER_KEY = new Uint8Array(32).fill(9);
 
 let advances: MemoryAdvances;
 let swapFills: MemorySwapFills;
@@ -129,6 +131,136 @@ const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
     }
     throw new Error("expected a rejection");
 };
+
+function receiverPaidParams(
+    cfg: ReturnType<typeof config>,
+    receiverFare: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint },
+) {
+    return {
+        receiverKey,
+        senderKey: MAKER_KEY,
+        operatorKey: cfg.operatorKey,
+        dust: 330n,
+        topup: 330n,
+        assetId: anyAsset,
+        locktime: 899_856n,
+        claimMode: "recycle" as const,
+        recoveryRecipient: "receiver" as const,
+        receiverFare,
+    };
+}
+
+/** Inserts a live receiver-paid receive quote through the real repository and
+ * wires deps to bind it, mirroring "atomically binds a live receive quote". */
+function quotedReceiverPaid(
+    receiverFare: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint },
+    wantAmount: bigint,
+): { d: SwapFillQuoteDeps; quoteId: string; close: () => void } {
+    const db = openDatabase(":memory:");
+    const cfg = config({ vtxoMinAmount: 1n });
+    const policies = new PolicyRepository(db);
+    policies.update(
+        {
+            ...testPolicy,
+            assetRules: [
+                ...testPolicy.assetRules,
+                {
+                    assetId: anyAsset,
+                    enabled: true,
+                    claim: "either",
+                    maxTopupSats: null,
+                    fares: [
+                        {
+                            id: "receive",
+                            currency: { kind: "sats" },
+                            pricing: { kind: "flat", units: 0n },
+                        },
+                    ],
+                },
+            ],
+        },
+        "test",
+    );
+    const revision = policies.getSnapshot().revision;
+    const quotes = new ReceiveQuoteRepository(db);
+    const storedFills = new SwapFillRepository(db);
+    const storedAdvances = new AdvanceRepository(db);
+    const reservations = new ReservationRepository(db);
+    const operatorCoin = fundingCoin({ txid: TAXI_0.txid, vout: TAXI_0.vout, value: 20_000 });
+    const depositCoin = fundingCoin({ txid: DEP.txid, vout: DEP.vout, value: 10_000 });
+    const params = receiverPaidParams(cfg, receiverFare);
+    const covenant = new DustCovenantScript({
+        serverKey: cfg.serverPubkey,
+        emulatorKey: cfg.emulatorPubkey,
+        vtxoMinAmount: cfg.vtxoMinAmount,
+        params,
+    });
+    const quoteId = "receive-1";
+    quotes.insert({
+        quote: {
+            id: quoteId,
+            state: "quoted",
+            receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
+            makerPublicKey: hex.encode(MAKER_KEY),
+            params,
+            covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
+            fare: { currency: "sats", units: 0n },
+            payer: "receiver",
+            receiverFare:
+                receiverFare.currency === "asset"
+                    ? { ...receiverFare, assetId: anyAsset }
+                    : receiverFare,
+            batchExpiry: { kind: "height", value: 900_000n },
+            inputExpiryFloor: { kind: "height", value: 900_000n },
+            recoveryLocktime: { kind: "height", value: 899_856n },
+            loanSats: 330n,
+            createdAt: NOW,
+            expiresAt: NOW + 60,
+            policyRevision: revision,
+            operatorInputs: [operatorFundingInput(operatorCoin)],
+        },
+        expectedPolicyRevision: revision,
+        recoveryExecutionBudget: { kind: "height", value: 72n },
+    });
+    builder = new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), params.dust, {
+        id: FARE_SWAP_ID,
+        amount: wantAmount,
+    });
+    const d = deps({
+        policy: policies,
+        advances: storedAdvances,
+        reservations,
+        swapFills: storedFills,
+        receiveQuotes: quotes,
+        inventory: {
+            getSpendableVtxos: async () => [operatorCoin],
+            getLockedVtxoOutpoints: async () => [],
+        },
+        config: cfg,
+        getServerUnroll: () => serverUnroll,
+        offerCodec: {
+            decodeOffer: () =>
+                fakeOfferTerms({
+                    covenantScript: hex.decode(depositCoin.script),
+                    makerProceedsScript: covenant.pkScript,
+                    makerPublicKey: MAKER_KEY,
+                    wantAsset: anyAsset,
+                    wantAmount,
+                }),
+        },
+    });
+    indexerCoins.set(key(DEP), depositCoin);
+    indexerCoins.set(
+        key(SOLVER_COIN),
+        fundingCoin({
+            txid: SOLVER_COIN.txid,
+            vout: SOLVER_COIN.vout,
+            value: SOLVER_VALUE,
+            assets: [{ assetId: FARE_SWAP_ID, amount: wantAmount }],
+        }),
+    );
+    return { d, quoteId, close: () => db.close() };
+}
 
 beforeEach(() => {
     advances = new MemoryAdvances();
@@ -626,5 +758,132 @@ describe("createSwapFillQuote", () => {
         const expired = getSwapFill({ ...d, now: () => NOW + 61 }, "fill-1");
         expect(expired.state).toBe("expired");
         expect(swapFills.listReservedOutpoints()).toEqual([]);
+    });
+
+    describe("receiver-paid receive quotes", () => {
+        it("binds a receiver-paid quote with the contribution set to the whole dust", async () => {
+            const { d, quoteId, close } = quotedReceiverPaid({ currency: "sats", units: 4n }, 5n);
+            try {
+                const fill = await createSwapFillQuote(
+                    d,
+                    body({
+                        receiveQuoteId: quoteId,
+                        contributionSats: "330",
+                        maxFare: { currency: "sats", units: "0" },
+                        solverInputs: [
+                            {
+                                txid: SOLVER_COIN.txid,
+                                vout: SOLVER_COIN.vout,
+                                value: String(SOLVER_VALUE),
+                                assets: [{ assetId: FARE_ASSET, amount: "5" }],
+                            },
+                        ],
+                    }),
+                );
+                expect(fill.contributionSats).toBe("330");
+                expect(fill.fare).toEqual({ currency: "sats", units: "0" });
+                expect(fill.graph.outputs.some((o) => o.role === "sponsor-fare")).toBe(false);
+            } finally {
+                close();
+            }
+        });
+
+        it("refuses a contribution short of the whole dust on a receiver-paid quote", async () => {
+            const { d, quoteId, close } = quotedReceiverPaid({ currency: "sats", units: 4n }, 5n);
+            try {
+                await expect(
+                    createSwapFillQuote(
+                        d,
+                        body({
+                            receiveQuoteId: quoteId,
+                            contributionSats: "329",
+                            maxFare: { currency: "sats", units: "0" },
+                        }),
+                    ),
+                ).rejects.toThrow(/differs from the receive quote/);
+            } finally {
+                close();
+            }
+        });
+
+        it("refuses a delivery smaller than the receiver's asset fare", async () => {
+            const { d, quoteId, close } = quotedReceiverPaid({ currency: "asset", units: 9n }, 8n);
+            try {
+                await expect(
+                    createSwapFillQuote(
+                        d,
+                        body({
+                            receiveQuoteId: quoteId,
+                            contributionSats: "330",
+                            maxFare: { currency: "sats", units: "0" },
+                            solverInputs: [
+                                {
+                                    txid: SOLVER_COIN.txid,
+                                    vout: SOLVER_COIN.vout,
+                                    value: String(SOLVER_VALUE),
+                                    assets: [{ assetId: FARE_ASSET, amount: "8" }],
+                                },
+                            ],
+                        }),
+                    ),
+                ).rejects.toThrow(/fare is not smaller than the delivered units/);
+            } finally {
+                close();
+            }
+        });
+
+        it("refuses a delivery exactly equal to the asset fare", async () => {
+            // At equality out[1] carries zero units, and the leaf's out[1] lookup is
+            // required, so the claim would succeed only for a Bob who already held the asset.
+            const { d, quoteId, close } = quotedReceiverPaid({ currency: "asset", units: 9n }, 9n);
+            try {
+                await expect(
+                    createSwapFillQuote(
+                        d,
+                        body({
+                            receiveQuoteId: quoteId,
+                            contributionSats: "330",
+                            maxFare: { currency: "sats", units: "0" },
+                            solverInputs: [
+                                {
+                                    txid: SOLVER_COIN.txid,
+                                    vout: SOLVER_COIN.vout,
+                                    value: String(SOLVER_VALUE),
+                                    assets: [{ assetId: FARE_ASSET, amount: "9" }],
+                                },
+                            ],
+                        }),
+                    ),
+                ).rejects.toThrow(/fare is not smaller than the delivered units/);
+            } finally {
+                close();
+            }
+        });
+
+        it("admits a delivery one unit above the asset fare", async () => {
+            const { d, quoteId, close } = quotedReceiverPaid({ currency: "asset", units: 9n }, 10n);
+            try {
+                await expect(
+                    createSwapFillQuote(
+                        d,
+                        body({
+                            receiveQuoteId: quoteId,
+                            contributionSats: "330",
+                            maxFare: { currency: "sats", units: "0" },
+                            solverInputs: [
+                                {
+                                    txid: SOLVER_COIN.txid,
+                                    vout: SOLVER_COIN.vout,
+                                    value: String(SOLVER_VALUE),
+                                    assets: [{ assetId: FARE_ASSET, amount: "10" }],
+                                },
+                            ],
+                        }),
+                    ),
+                ).resolves.toBeDefined();
+            } finally {
+                close();
+            }
+        });
     });
 });

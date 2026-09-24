@@ -315,6 +315,111 @@ describe("receive quote repository", () => {
         db.close();
     });
 
+    describe("bind: receiver fare agreement", () => {
+        const receiverPaidFare = { currency: "asset" as const, units: 9n };
+
+        const receiverPaidQuote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote =>
+            quote({
+                params: {
+                    ...quote().params,
+                    dust: 330n,
+                    topup: 330n,
+                    receiverFare: receiverPaidFare,
+                },
+                payer: "receiver",
+                receiverFare: { ...receiverPaidFare, assetId: ASSET },
+                loanSats: 330n,
+                fare: { currency: "sats", units: 0n },
+                ...over,
+            });
+
+        const receiverPaidAdvance = (over: Partial<Advance> = {}): Advance =>
+            boundAdvance({ topup: 330n, fare: { currency: "sats", units: 0n }, ...over });
+
+        it("refuses to bind when the quote carries a receiver fare the advance omits", () => {
+            const db = openDatabase(":memory:");
+            const policy = configure(db);
+            const repo = new ReceiveQuoteRepository(db);
+            insert(repo, policy, receiverPaidQuote());
+            expect(() =>
+                repo.bind({
+                    quoteId: "receive-1",
+                    fill: boundFill({
+                        contributionSats: 330n,
+                        fare: { currency: "sats", units: 0n },
+                    }),
+                    advance: receiverPaidAdvance(),
+                    expectedPolicyRevision: policy.getSnapshot().revision,
+                    now: NOW,
+                }),
+            ).toThrow(/economics mismatch/);
+            db.close();
+        });
+
+        it("refuses to bind when the advance carries a receiver fare the quote omits", () => {
+            const db = openDatabase(":memory:");
+            const policy = configure(db);
+            const repo = new ReceiveQuoteRepository(db);
+            insert(repo, policy);
+            expect(() =>
+                repo.bind({
+                    quoteId: "receive-1",
+                    fill: boundFill(),
+                    advance: boundAdvance({ receiverFare: receiverPaidFare }),
+                    expectedPolicyRevision: policy.getSnapshot().revision,
+                    now: NOW,
+                }),
+            ).toThrow(/economics mismatch/);
+            db.close();
+        });
+
+        it.each([
+            ["currency", { currency: "sats" as const, units: 9n }],
+            ["units", { currency: "asset" as const, units: 8n }],
+        ])(
+            "refuses to bind when the receiver fare %s differs from the quote's",
+            (_field, advanceFare) => {
+                const db = openDatabase(":memory:");
+                const policy = configure(db);
+                const repo = new ReceiveQuoteRepository(db);
+                insert(repo, policy, receiverPaidQuote());
+                expect(() =>
+                    repo.bind({
+                        quoteId: "receive-1",
+                        fill: boundFill({
+                            contributionSats: 330n,
+                            fare: { currency: "sats", units: 0n },
+                        }),
+                        advance: receiverPaidAdvance({ receiverFare: advanceFare }),
+                        expectedPolicyRevision: policy.getSnapshot().revision,
+                        now: NOW,
+                    }),
+                ).toThrow(/economics mismatch/);
+                db.close();
+            },
+        );
+
+        it("binds when the advance's receiver fare agrees with the quote's", () => {
+            const db = openDatabase(":memory:");
+            const policy = configure(db);
+            const repo = new ReceiveQuoteRepository(db);
+            insert(repo, policy, receiverPaidQuote());
+            expect(() =>
+                repo.bind({
+                    quoteId: "receive-1",
+                    fill: boundFill({
+                        contributionSats: 330n,
+                        fare: { currency: "sats", units: 0n },
+                    }),
+                    advance: receiverPaidAdvance({ receiverFare: receiverPaidFare }),
+                    expectedPolicyRevision: policy.getSnapshot().revision,
+                    now: NOW,
+                }),
+            ).not.toThrow();
+            db.close();
+        });
+    });
+
     it("isolates an inconsistent bound row so unrelated expiries still complete", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);

@@ -383,6 +383,16 @@ async function createAdmittedSwapFillQuote(
                 400,
                 "offer, contribution, or fare cap differs from the receive quote",
             );
+        if (
+            receiveQuote.payer === "receiver" &&
+            receiveQuote.receiverFare?.currency === "asset" &&
+            receiveQuote.receiverFare.units >= offer.wantAmount
+        )
+            throw new ServiceError(
+                "fare_exceeds_delivery",
+                409,
+                "receiver fare is not smaller than the delivered units",
+            );
     }
     if (
         offer.emulatorPubkey.length !== config.emulatorPubkey.length ||
