@@ -40,6 +40,24 @@ const emulatorSubmits = async () =>
             event.action === "forwarded",
     ).length;
 
+const resumeAfterFault = async () => {
+    const snapshot = await poll(
+        "provider recovered after fault",
+        health,
+        (body) => body.blockers.every((blocker: string) => blocker === "manual_pause"),
+        120_000,
+    );
+    if (snapshot.paused) {
+        const response = await fetch(`${required("TAXI_E2E_BASE_URL")}/admin/api/resume`, {
+            method: "POST",
+            body: "{}",
+            headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },
+        });
+        if (!response.ok) throw new Error(`operator resume: HTTP ${response.status}`);
+    }
+    await ready();
+};
+
 async function restart() {
     const result = await control("restart");
     expect(result.id).not.toBe(result.previousId);
@@ -262,7 +280,7 @@ liveScenario("stale-provider-identity", async () => {
         code: "runtime_unsafe",
     });
     await control("reset");
-    await ready();
+    await resumeAfterFault();
     await control("configure", { target: "arkd", path: "/v1/info", mode: "identity" });
     await poll("stale provider identity closes readiness", health, (body) =>
         body.runtime.blockers.includes("server_identity_mismatch"),
@@ -275,7 +293,7 @@ liveScenario("stale-provider-identity", async () => {
     });
     expect((await rowFor(offered.quote.transferId)).state).toBe("locked");
     await control("reset");
-    await ready();
+    await resumeAfterFault();
     await purchase(live, locked);
 });
 
