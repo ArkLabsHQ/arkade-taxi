@@ -324,10 +324,14 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE receive_quotes ADD COLUMN payer TEXT
                 CHECK (payer IS NULL OR payer = 'receiver');
              ALTER TABLE receive_quotes ADD COLUMN receiver_fare_json TEXT
-                CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json));
+                CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json))
+                CHECK ((payer IS NULL) = (receiver_fare_json IS NULL));
              ALTER TABLE advances ADD COLUMN receiver_fare_currency TEXT
                 CHECK (receiver_fare_currency IS NULL OR receiver_fare_currency IN ('sats','asset'));
-             ALTER TABLE advances ADD COLUMN receiver_fare_units TEXT;`,
+             ALTER TABLE advances ADD COLUMN receiver_fare_units TEXT
+                CHECK ((receiver_fare_currency IS NULL) = (receiver_fare_units IS NULL))
+                CHECK (receiver_fare_units IS NULL
+                    OR (receiver_fare_units GLOB '[0-9]*' AND receiver_fare_units NOT GLOB '*[^0-9]*'));`,
     },
 ];
 

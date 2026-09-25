@@ -463,7 +463,11 @@ describe("migrations", () => {
     });
     it("rejects a v10 stamp without the receiver-paid advances column", () => {
         const db = migrated();
-        db.exec("ALTER TABLE advances DROP COLUMN receiver_fare_currency");
+        // receiver_fare_units carries a CHECK referencing receiver_fare_currency, so it
+        // must go first: SQLite refuses to drop a column another column's CHECK cites.
+        db.exec(
+            "ALTER TABLE advances DROP COLUMN receiver_fare_units; ALTER TABLE advances DROP COLUMN receiver_fare_currency;",
+        );
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
@@ -611,6 +615,63 @@ describe("advances constraints", () => {
 
         expect(() => insertRaw(db, { id: "a2", ...outpoint })).toThrow(/UNIQUE constraint failed/);
         expect(() => insertRaw(db, { id: "a3" })).not.toThrow();
+    });
+
+    it("requires receiver fare currency and units together", () => {
+        const db = migrated();
+        expect(() => insertRaw(db, { receiver_fare_currency: "sats" })).toThrow(
+            /CHECK constraint failed/,
+        );
+        expect(() => insertRaw(db, { receiver_fare_units: "5" })).toThrow(
+            /CHECK constraint failed/,
+        );
+    });
+
+    it("accepts sender-paid and receiver-paid advances rows", () => {
+        const db = migrated();
+        expect(() => insertRaw(db, { id: "a1" })).not.toThrow();
+        expect(() =>
+            insertRaw(db, { id: "a2", receiver_fare_currency: "sats", receiver_fare_units: "5" }),
+        ).not.toThrow();
+        expect(() =>
+            insertRaw(db, { id: "a3", receiver_fare_currency: "asset", receiver_fare_units: "0" }),
+        ).not.toThrow();
+    });
+
+    it("rejects a non-canonical receiver fare units string", () => {
+        const db = migrated();
+        expect(() =>
+            insertRaw(db, { receiver_fare_currency: "sats", receiver_fare_units: "-5" }),
+        ).toThrow(/CHECK constraint failed/);
+        expect(() =>
+            insertRaw(db, { receiver_fare_currency: "sats", receiver_fare_units: "" }),
+        ).toThrow(/CHECK constraint failed/);
+    });
+});
+
+describe("receive quotes constraints", () => {
+    it("requires payer and receiver fare together", () => {
+        const db = migrated();
+        expect(() => insertRawReceiveQuote(db, { payer: "receiver" })).toThrow(
+            /CHECK constraint failed/,
+        );
+        expect(() =>
+            insertRawReceiveQuote(db, {
+                receiver_fare_json: JSON.stringify({ currency: "sats", units: "5" }),
+            }),
+        ).toThrow(/CHECK constraint failed/);
+    });
+
+    it("accepts sender-paid and receiver-paid receive quotes", () => {
+        const db = migrated();
+        expect(() => insertRawReceiveQuote(db, { id: "q1" })).not.toThrow();
+        expect(() =>
+            insertRawReceiveQuote(db, {
+                id: "q2",
+                payer: "receiver",
+                receiver_fare_json: JSON.stringify({ currency: "sats", units: "5" }),
+            }),
+        ).not.toThrow();
     });
 });
 
