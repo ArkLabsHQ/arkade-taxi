@@ -82,7 +82,7 @@ liveScenario("sponsored-direct-send", async () => {
                     vtxoMinAmount: 1n,
                     hrp: "tark",
                     expect: {
-                        maxContributionSats: 1n,
+                        maxContributionSats: 330n,
                         maxFare: { currency: "asset", assetId, units: 1_000_000n },
                     },
                 }),
@@ -93,9 +93,11 @@ liveScenario("sponsored-direct-send", async () => {
         );
         const quote = verified.quote;
         expect(senderInputs).toHaveLength(1);
+        // A sponsored asset send has no claim leaf to repay through, so the
+        // contribution is a gift; the sats are a carrier, so it is all of it.
         expect(quote.params).toMatchObject({
             dust: "330",
-            contribution: "1",
+            contribution: "330",
             assetId: wireAssetId,
         });
         expect(quote.fare).toEqual({
@@ -116,7 +118,7 @@ liveScenario("sponsored-direct-send", async () => {
             [1, 1_000_000n],
         ]);
         expectReceipt(unsigned, 1, 1n, live.info.operatorKey);
-        expect(unsigned.getOutput(2).amount).toBe(671n);
+        expect(unsigned.getOutput(2).amount).toBe(1000n);
         const signed = await signSponsoredPayment({ verified, identity: alice.identity });
         const lockup = await preEffectRequest(
             () => live.client.submitSponsoredLockup(verified, signed),
@@ -158,7 +160,7 @@ liveScenario("sponsored-direct-send", async () => {
             ),
         ).toEqual({ sats: bobBefore.sats + 330n, units: 200_000_000n });
         expect(await walletBalance(alice, minted.assetId)).toEqual({
-            sats: aliceBefore.sats - 329n,
+            sats: aliceBefore.sats,
             units: 0n,
         });
         // The 1 USDT fare output is subdust-hosted, so like a covenant
@@ -171,9 +173,10 @@ liveScenario("sponsored-direct-send", async () => {
                 "operator financial effect",
                 () => walletBalance(live.actors.operator, minted.assetId),
                 (value) =>
-                    value.sats === operatorBefore.sats - 2n && value.units === operatorBefore.units,
+                    value.sats === operatorBefore.sats - 331n &&
+                    value.units === operatorBefore.units,
             ),
-        ).toEqual({ sats: operatorBefore.sats - 2n, units: operatorBefore.units });
+        ).toEqual({ sats: operatorBefore.sats - 331n, units: operatorBefore.units });
     } finally {
         await live.close();
     }

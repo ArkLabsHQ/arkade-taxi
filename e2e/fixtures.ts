@@ -313,6 +313,8 @@ export async function openLive() {
         locktimeMarginSeconds: 86400,
         maxOutstandingSats: "10000000",
         maxConcurrentAdvances: 20,
+        // A bitcoin transfer's payment is its sender sats, so a positive sats
+        // fare has nothing to come out of and the operator refuses the quote.
         assetRules: [null, { txid: hex.encode(assetId.txid), groupIndex: assetId.groupIndex }].map(
             (id) => ({
                 assetId: id,
@@ -321,7 +323,7 @@ export async function openLive() {
                     {
                         id: "sats",
                         currency: { kind: "sats" },
-                        pricing: { kind: "flat", units: "1" },
+                        pricing: { kind: "flat", units: id ? "1" : "0" },
                     },
                 ],
                 claim: "either",
@@ -372,8 +374,13 @@ export async function quoteFor(
     coin: ExtendedVirtualCoin,
     withAsset = false,
     omitAssetUnits = false,
+    claimMode?: "recycle" | "purchase",
 ) {
     const preparedAt = Math.floor(Date.now() / 1000);
+    // An asset transfer's sats are only a carrier, so Taxi fronts the whole dust
+    // unit; a bitcoin one nets the advance against what the sender brings.
+    const topup = withAsset ? 330n : 1n;
+    const fareUnits = withAsset ? 1n : 0n;
     const senderInputs = [fundingOf(coin)];
     const receiver = live.actors[receiverName];
     const destination = ArkAddress.decode(await receiver.wallet.getAddress());
@@ -386,6 +393,7 @@ export async function quoteFor(
         senderSats: 1000n,
         ...(withAsset ? { assetId: live.assetId } : {}),
         ...(withAsset && !omitAssetUnits ? { assetUnits: 100n } : {}),
+        ...(claimMode ? { claimMode } : {}),
     };
     await ready(preparedAt);
     const quote = await preEffectRequest(() => live.client.requestQuote(request), {
@@ -403,9 +411,10 @@ export async function quoteFor(
             receiverKey,
             senderKey,
             ...(withAsset ? { assetId: live.assetId } : {}),
-            maxTopupSats: 1n,
-            maxFare: { currency: "sats", units: 1n },
+            maxTopupSats: topup,
+            maxFare: { currency: "sats", units: fareUnits },
             minLocktime: 1n,
+            ...(claimMode ? { claimMode } : {}),
         },
         trustedServerKey: hexToBytes(live.info.serverKey, "serverKey"),
         trustedEmulatorKey: hexToBytes(live.info.emulatorKey, "emulatorKey"),
@@ -417,8 +426,11 @@ export async function quoteFor(
         ...(withAsset && !omitAssetUnits ? { assetUnits: 100n } : {}),
     };
     expect(quote.params.dust).toBe("330");
-    expect(quote.params.topup).toBe("1");
-    expect(quote.fare).toEqual({ currency: "sats", units: "1" });
+    expect(quote.params.topup).toBe(topup.toString());
+    expect(quote.fare).toEqual({ currency: "sats", units: fareUnits.toString() });
+    // The covenant disables the leaf its mode did not choose, and an unasked
+    // `either` rule resolves to recycle, so the mode is chosen before signing.
+    expect(quote.params.claimMode).toBe(claimMode ?? "recycle");
     const verified = verifyQuote(args);
     const offered = { quote, args, verified, destination: destination.pkScript, request };
     live.owned.get(quote.transferId)!.offered = offered;

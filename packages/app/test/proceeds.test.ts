@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ArkAddress, Estimator, Wallet, SingleKey } from "@arkade-os/sdk";
+import { ArkAddress, Estimator, Extension, Wallet, SingleKey, asset } from "@arkade-os/sdk";
 import {
     openDatabase,
     ProceedsRepository,
@@ -151,6 +151,7 @@ function setup(
             const remove = vi.fn(async () => {
                 throw new Error("delete unavailable");
             });
+            const sign = vi.fn(async (..._args: unknown[]) => sdkIntent);
             const sdk: any = Object.assign(Object.create(Wallet.prototype), {
                 getAddress: wallet.getAddress,
                 logUngatedInputs: () => {},
@@ -159,7 +160,7 @@ function setup(
                     signerSet: { active: bytesToHex(cfg.serverPubkey), deprecated: [] },
                 }),
                 identity: SingleKey.fromPrivateKey(cfg.operatorPrivkey),
-                makeRegisterIntentSignature: async () => sdkIntent,
+                makeRegisterIntentSignature: sign,
                 makeDeleteIntentSignature: async () => ({
                     proof: "delete-proof",
                     message: { type: "delete", expire_at: 0 },
@@ -180,7 +181,7 @@ function setup(
                 },
             });
             wallet.settle = (params) => sdk._settleImpl(params);
-            return { save, register, remove };
+            return { save, register, remove, sign };
         },
         restartDatabase() {
             db.close();
@@ -743,6 +744,30 @@ describe("durable proceeds collector", () => {
         expect(s.jobs.active()).toBeUndefined();
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
         expect(collector.status().blocker).toBeNull();
+    });
+    it("has the SDK keep a receipt's asset units on the proceeds output", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const fare = asset.AssetId.create("12".repeat(32), 7).toString();
+        const assetReceipt = { ...receipt, assets: [{ assetId: fare, amount: 9n }] };
+        const plan = planProceeds(
+            [assetReceipt],
+            [carrier, spare],
+            [],
+            cfg,
+            {},
+            address,
+            clock,
+            -1n,
+        );
+        const s = setup(plan, [assetReceipt, spare, carrier]);
+        const sdk = s.useActualSdk();
+        await createProceedsCollector(s.deps).tick();
+        const outputs = sdk.sign.mock.calls[0]![1] as { script: Uint8Array; amount: bigint }[];
+        expect(outputs).toHaveLength(2);
+        expect(outputs[0]).toEqual({ amount: 1001n, script: ArkAddress.decode(address).pkScript });
+        const group = Extension.fromBytes(outputs[1]!.script).getAssetPacket()!.groups[0]!;
+        expect(group.assetId!.toString()).toBe(fare);
+        expect(group.outputs).toMatchObject([{ vout: 0, amount: 9n }]);
     });
     it("reconciles an ambiguous cancelled SDK intent across restart without resubmitting", async () => {
         const s = setup();

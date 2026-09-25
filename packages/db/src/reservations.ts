@@ -87,13 +87,14 @@ export class ReservationRepository {
         assertNativeAccess(this.#db);
         this.#db
             .transaction(() => {
+                this.#expireCrossFlow(advance.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (revision !== expectedPolicyRevision) throw new PolicyRevisionConflictError();
                 if (expectedReservedOutpoints) {
                     const expected = new Set(
                         expectedReservedOutpoints.map(({ txid, vout }) => `${txid}:${vout}`),
                     );
-                    const current = this.#list();
+                    const current = this.#allReserved();
                     if (
                         current.length !== expected.size ||
                         current.some(({ txid, vout }) => !expected.has(`${txid}:${vout}`))
@@ -149,8 +150,18 @@ export class ReservationRepository {
                 // sponsored rows tie up capital; see `isExposed` in core.
                 const exposure = this.#db
                     .prepare<[], { total: bigint; count: bigint }>(
-                        `SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances
-                 WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering'))`,
+                        `SELECT
+                            (SELECT coalesce(sum(topup), 0) FROM advances
+                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                            + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                            + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
+                               WHERE state = 'quoted') AS total,
+                            (SELECT count(*) FROM advances
+                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                            + (SELECT count(*) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                            + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
                     )
                     .safeIntegers(true)
                     .get()!;
@@ -169,6 +180,24 @@ export class ReservationRepository {
                         this.#db
                             .prepare(
                                 "SELECT 1 FROM proceeds_inputs WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new ReservationConflictError();
+                    if (
+                        this.#db
+                            .prepare(
+                                "SELECT 1 FROM receive_quote_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new ReservationConflictError();
+                    // Cross-flow fence: a swap fill may hold this coin; the
+                    // selection-layer union cannot close the SELECT/INSERT race.
+                    if (
+                        this.#db
+                            .prepare(
+                                "SELECT 1 FROM swap_fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
                             )
                             .get(input.txid, input.vout)
                     )
@@ -203,6 +232,7 @@ export class ReservationRepository {
         const result = this.#db
             .transaction(() => {
                 const at = now();
+                this.#expireCrossFlow(at);
                 this.#db
                     .prepare(
                         "UPDATE advances SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
@@ -230,8 +260,18 @@ export class ReservationRepository {
                 const policy = this.#policy.get();
                 const exposure = this.#db
                     .prepare<[], { total: bigint; count: bigint }>(
-                        `SELECT coalesce(sum(topup), 0) AS total, count(*) AS count FROM advances
-                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering'))`,
+                        `SELECT
+                            (SELECT coalesce(sum(topup), 0) FROM advances
+                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                            + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                            + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
+                               WHERE state = 'quoted') AS total,
+                            (SELECT count(*) FROM advances
+                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                            + (SELECT count(*) FROM swap_fills
+                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                            + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
                     )
                     .safeIntegers(true)
                     .get()!;
@@ -358,5 +398,42 @@ export class ReservationRepository {
             .safeIntegers(true)
             .all(...(advanceId === undefined ? [] : [advanceId]))
             .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
+    }
+
+    #allReserved(): Outpoint[] {
+        return this.#db
+            .prepare<[], { txid: string; vout: bigint }>(
+                `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
+                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
+                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
+                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations
+                 ORDER BY txid, vout`,
+            )
+            .safeIntegers(true)
+            .all()
+            .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
+    }
+
+    #expireCrossFlow(at: number): void {
+        this.#db
+            .prepare(
+                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
+            )
+            .run(at, at);
+        this.#db
+            .prepare(
+                "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
+            )
+            .run(at);
+        this.#db
+            .prepare(
+                "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
+            )
+            .run(at);
+        this.#db
+            .prepare(
+                "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
+            )
+            .run(at);
     }
 }

@@ -212,12 +212,14 @@ export const policy = (over: Partial<Policy> = {}): Policy => ({
     maxConcurrentAdvances: 10,
     locktimeMarginBlocks: 144,
     locktimeMarginSeconds: 86400,
+    // Zero: a bitcoin transfer's payment is its senderSats, so the service
+    // refuses to quote a positive sats fare against one.
     assetRules: [
         {
             assetId: null,
             enabled: true,
             fares: [
-                { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units: 10n } },
+                { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units: 0n } },
             ],
             claim: "either",
             maxTopupSats: null,

@@ -55,6 +55,8 @@ jobs:
                   node-version: 22
                   cache: pnpm
 
+            - run: node scripts/carrier-artifacts/verify.mjs
+
             - name: Install
               run: |
                   set -eu
@@ -64,6 +66,8 @@ jobs:
                     sleep 5
                   done
                   exit 1
+
+            - run: node scripts/carrier-artifacts/verify.mjs
 
             - name: Build packages for the release tarballs
               run: pnpm -r build

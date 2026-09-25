@@ -8,6 +8,7 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
+import { readFundingSource } from "./arkade/fundingSource.js";
 import type { SubmissionResumer } from "./arkade/submit.js";
 import type { SpendWatcher, WatcherBlocker } from "./watcher.js";
 import { sanitizeOperationalError } from "./errors.js";
@@ -43,6 +44,16 @@ export interface LockupReconcilerDeps {
 const key = ({ txid, vout }: Outpoint): string => `${txid}:${vout}`;
 
 function expectedLockup(advance: Advance): { outpoint: Outpoint; script: string } {
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    if (tagged.kind === "joint-fill") {
+        if (tagged.source.graph.graphId !== advance.unsignedLockupId)
+            throw new Error(`advance ${advance.id}: persisted lockup commitment mismatch`);
+        const tx = Transaction.fromPSBT(base64.decode(tagged.source.graph.arkTx));
+        const output = tx.getOutput(tagged.covenantOutpoint.vout);
+        if (!output.script)
+            throw new Error(`advance ${advance.id}: covenant output script missing`);
+        return { outpoint: tagged.covenantOutpoint, script: hex.encode(output.script) };
+    }
     const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
     if (envelope.unsignedTxId !== advance.unsignedLockupId || envelope.covenantOutputIndex !== 0)
         throw new Error(`advance ${advance.id}: persisted lockup commitment mismatch`);
@@ -101,7 +112,8 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
             deps.reservations.releaseForAdvance(advance.id);
         };
         try {
-            await deps.submission.resume(advance.id);
+            if (readFundingSource(advance.unsignedLockupTx).kind === "legacy")
+                await deps.submission.resume(advance.id);
             expected = expectedLockup(advance);
             const response = await deps.indexer.getVtxos({ outpoints: [expected.outpoint] });
             const coin = exactCoin(response, expected.outpoint);

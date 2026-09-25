@@ -47,6 +47,38 @@ beforeEach(() => {
 });
 
 describe("round-trip fidelity", () => {
+    it("preserves receiver recovery ownership while legacy rows remain absent", () => {
+        repo.insert(advance({ id: "legacy" }));
+        repo.insert(
+            advance({
+                id: "receiver",
+                recoveryRecipient: "receiver",
+                assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },
+                assetUnits: 7n,
+            }),
+        );
+
+        expect(repo.get("legacy")?.recoveryRecipient).toBeUndefined();
+        expect(repo.get("receiver")?.recoveryRecipient).toBe("receiver");
+    });
+
+    it("round-trips a receiver fare through the advance row", () => {
+        repo.insert(
+            advance({
+                id: "fare",
+                assetId: { txid: new Uint8Array(32).fill(4), groupIndex: 0 },
+                assetUnits: 5n,
+                receiverFare: { currency: "asset", units: 9n },
+            }),
+        );
+        expect(repo.get("fare")?.receiverFare).toEqual({ currency: "asset", units: 9n });
+    });
+
+    it("leaves receiver fare absent on a row written without it", () => {
+        repo.insert(advance({ id: "no-fare" }));
+        expect(repo.get("no-fare")?.receiverFare).toBeUndefined();
+    });
+
     it.each([undefined, 0n, -1n])("rejects asset quantity %s", (assetUnits) => {
         const row = advance({
             assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },

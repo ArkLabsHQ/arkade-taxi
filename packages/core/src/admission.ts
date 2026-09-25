@@ -1,8 +1,22 @@
 import type { AdmissionDecision, Exposure, Policy, QuoteRequest } from "./types.js";
-import { FareError, resolveFare, ruleFor, selectFare, type FareSpec } from "./fares.js";
+import {
+    FareError,
+    resolveFare,
+    resolveClaimMode,
+    ruleFor,
+    selectFare,
+    type FareSpec,
+} from "./fares.js";
 
-function requiredTopup(senderSats: bigint, dust: bigint, vtxoMinAmount: bigint): bigint {
-    const shortfall = dust - senderSats;
+/** A bitcoin transfer nets the sender's sats against the shortfall; an asset
+ * transfer fronts the whole unit, since there the sats are only the carrier. */
+function requiredTopup(
+    senderSats: bigint,
+    dust: bigint,
+    vtxoMinAmount: bigint,
+    isBitcoinTransfer: boolean,
+): bigint {
+    const shortfall = isBitcoinTransfer ? dust - senderSats : dust;
     const capped = shortfall > dust ? dust : shortfall;
     return capped < vtxoMinAmount ? vtxoMinAmount : capped;
 }
@@ -23,7 +37,7 @@ export function admit(
     if (!rule) return { ok: false, reason: "asset_not_served" };
     if (!rule.enabled) return { ok: false, reason: "asset_disabled" };
 
-    const topup = requiredTopup(req.senderSats, dust, vtxoMinAmount);
+    const topup = requiredTopup(req.senderSats, dust, vtxoMinAmount, req.assetId === undefined);
 
     const perPaymentCap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (topup > perPaymentCap) {
@@ -53,5 +67,8 @@ export function admit(
         throw error;
     }
 
-    return { ok: true, topup, fare, claim: rule.claim };
+    const claim = resolveClaimMode(rule.claim, req.claimMode);
+    if (typeof claim !== "string") return { ok: false, reason: claim.reason };
+
+    return { ok: true, topup, fare, claim };
 }

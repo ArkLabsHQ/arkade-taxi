@@ -10,11 +10,12 @@ import {
     scriptFromTapLeafScript,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { buildLockupEnvelope, inputAssets } from "../../src/arkade/lockupBuilder.js";
+import { buildLockupEnvelope, inputAssets, lockupPlan } from "../../src/arkade/lockupBuilder.js";
 import { config, operatorKey } from "../fixtures.js";
 import { buildRequest, unroll, senderTree, operatorTree } from "./lockupFixtures.js";
 import { parseLockupEnvelope } from "../../src/arkade/psbt.js";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
+import type { LockupBuildRequest } from "../../src/quotes.js";
 
 describe("joint funded graph", () => {
     it.each([10n, 330n])(
@@ -369,5 +370,145 @@ describe("joint funded graph", () => {
         expect(envelope.senderInputIndexes).toEqual([0]);
         expect(envelope.operatorInputIndexes).toEqual([1]);
         expect(envelope.covenantOutputIndex).toBe(0);
+    });
+});
+
+describe("sender-paid sats fare", () => {
+    const cfg = config({ vtxoMinAmount: 1n });
+    const paymentAsset = asset.AssetId.create("12".repeat(32), 0);
+
+    interface Over {
+        senderSats?: bigint;
+        fare?: bigint;
+        legacy?: true;
+        asset?: boolean;
+    }
+
+    const request = (over: Over = {}): LockupBuildRequest => {
+        const req = buildRequest();
+        req.senderSats = over.senderSats ?? 11n;
+        req.senderInputs[0].value = req.senderSats;
+        req.params.topup = 330n;
+        req.fare.units = over.fare ?? 10n;
+        if (!over.legacy) req.satsFarePayer = "sender";
+        if (over.asset) {
+            req.senderInputs[0].assetPacket = asset.Packet.create([
+                asset.AssetGroup.create(
+                    paymentAsset,
+                    null,
+                    [],
+                    [asset.AssetOutput.create(2, 100n)],
+                    [],
+                ),
+            ]).serialize();
+            req.params.assetId = {
+                txid: paymentAsset.txid,
+                groupIndex: paymentAsset.groupIndex,
+            };
+            req.assetUnits = 100n;
+        }
+        req.covenantAddress = new DustCovenantScript({
+            params: req.params,
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        return req;
+    };
+
+    const layout = (req: LockupBuildRequest): [string, bigint][] =>
+        lockupPlan(req, cfg).valueOutputs.map((o) => [o.role, o.amount]);
+
+    /** Everything Taxi holds once the transfer settles — the fare, its own change
+     * and the covenant's pinned repayment — against the inventory it committed. */
+    const netOperatorSats = (req: LockupBuildRequest): bigint =>
+        lockupPlan(req, cfg)
+            .valueOutputs.filter((o) => o.role !== "covenant" && o.role !== "sender-change")
+            .reduce((sum, o) => sum + o.amount, 0n) +
+        req.params.topup -
+        req.funding.totalValue;
+
+    it("takes the fare from the sender, so the service is actually paid", () => {
+        const req = request();
+        expect(netOperatorSats(req)).toBe(10n);
+        expect(layout(req)).toEqual([
+            ["covenant", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 1n],
+            ["operator-change", 670n],
+        ]);
+    });
+
+    it("collects nothing without the discriminator, as every funded graph did", () => {
+        const req = request({ legacy: true });
+        expect(layout(req)).toEqual([
+            ["covenant", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 11n],
+            ["operator-change", 660n],
+        ]);
+        expect(netOperatorSats(req)).toBe(0n);
+    });
+
+    it("charges the same way when the carrier moves an asset", () => {
+        const req = request({ senderSats: 700n, asset: true });
+        expect(layout(req)).toEqual([
+            ["covenant", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 690n],
+            ["operator-change", 670n],
+        ]);
+        expect(netOperatorSats(req)).toBe(10n);
+        expect(layout(request({ senderSats: 700n, asset: true, legacy: true }))).toEqual([
+            ["covenant", 330n],
+            ["operator-fare", 10n],
+            ["sender-change", 700n],
+            ["operator-change", 660n],
+        ]);
+    });
+
+    it.each([1n, 10n, 50n])("never nets a %s sat fare out of the loan principal", (fare) => {
+        const req = request({ senderSats: 60n, fare });
+        const amounts = new Map(layout(req));
+        expect(amounts.get("covenant")).toBe(req.params.dust);
+        expect(amounts.get("operator-change")).toBe(req.funding.totalValue - req.params.topup);
+        expect(amounts.get("sender-change")).toBe(req.senderSats - fare);
+        expect(netOperatorSats(req)).toBe(fare);
+    });
+
+    it("refuses a sender that cannot cover the fare", () => {
+        expect(() => lockupPlan(request({ senderSats: 1n }), cfg)).toThrow(/sender funding/);
+    });
+
+    it.each(["zero", "asset"])("refuses a payer naming a %s fare", (kind) => {
+        const req = request(kind === "zero" ? { fare: 0n } : { asset: true, senderSats: 700n });
+        if (kind === "asset")
+            req.fare = { currency: "asset", assetId: req.params.assetId!, units: 5n };
+        expect(() => lockupPlan(req, cfg)).toThrow(/positive sats fare/);
+    });
+
+    it("refuses an unrecognised payer rather than falling back to the legacy layout", () => {
+        const req = request();
+        (req as { satsFarePayer?: string }).satsFarePayer = "operator";
+        expect(() => lockupPlan(req, cfg)).toThrow(/sats fare payer/);
+    });
+
+    it("carries the discriminator through the envelope it signs", () => {
+        const req = request({ senderSats: 700n, asset: true });
+        const encoded = buildLockupEnvelope(req, cfg, unroll);
+        const wire = JSON.parse(Buffer.from(base64.decode(encoded)).toString());
+        expect(wire.satsFarePayer).toBe("sender");
+        expect(parseLockupEnvelope(encoded, req, cfg, unroll).unsignedTxId).toBe(wire.unsignedTxId);
+        expect(Transaction.fromPSBT(base64.decode(wire.arkTx)).getOutput(2).amount).toBe(690n);
+        const legacy = buildLockupEnvelope(
+            request({ senderSats: 700n, asset: true, legacy: true }),
+            cfg,
+            unroll,
+        );
+        expect(
+            JSON.parse(Buffer.from(base64.decode(legacy)).toString()).satsFarePayer,
+        ).toBeUndefined();
     });
 });

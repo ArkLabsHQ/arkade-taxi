@@ -9,11 +9,12 @@ const internal = new Error(
 );
 const cltv = "FORFEIT_CLOSURE_LOCKED (11): 1789280546 > 1789194383 (blocktime)";
 const emulator = `2026-09-12T06:28:29.100000000Z time="2026-09-12T06:28:29Z" level=error msg="failed to process transaction" error="failed to submit tx on arkd: rpc error: code = FailedPrecondition desc = ${cltv}"`;
-const arkd = `2026-09-12T06:28:29.090000000Z time="2026-09-12T06:28:29Z" level=warning msg="method=/ark.v1.ArkService/SubmitTx duration=5ms metadata={\\"x-sdk-version\\":\\"emulator/v0.0.7\\"}" error="${cltv}"`;
+const arkd = `2026-09-12T06:28:29.090000000Z time="2026-09-12T06:28:29Z" level=warning msg="method=/ark.v1.ArkService/SubmitTx duration=5ms metadata={\\"x-build-version\\":\\"0.9.9\\",\\"x-sdk-version\\":\\"emulator/v0.0.7\\"}" error="${cltv}"`;
 const audit = `2026-09-12T06:28:29.120000000Z time="2026-09-12T06:28:29Z" level=debug msg="added or updated offchain tx ${txid}"`;
 const fixture = () => ({
     project,
     txid,
+    emulatorSdkVersion: "v0.0.7",
     locktime: "1789280546",
     currentBlocktime: "1789194383",
     startedAt: at,

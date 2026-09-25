@@ -80,7 +80,7 @@ describe("admit", () => {
         const d = okOf(admit(request(), policy(), exposure(), DUST, MIN));
         expect(d.topup).toBe(DUST);
         expect(d.fare).toEqual({ currency: "sats", units: 10n });
-        expect(d.claim).toBe("either");
+        expect(d.claim).toBe("recycle");
     });
 
     it("refuses while paused, before anything else is considered", () => {
@@ -224,5 +224,81 @@ describe("topup", () => {
         expect(
             okOf(admit(request({ senderSats: DUST }), policy(), exposure(), DUST, MIN)).topup,
         ).toBe(MIN);
+    });
+});
+
+// For a pure asset transfer the operator fronts the full dust unit and every
+// sender sat comes back as change.
+describe("asset leg preserves sender sats", () => {
+    const assetRule = (claim: AssetRule["claim"]) =>
+        rule({ assetId: USDT, claim, fares: [cutFare] });
+
+    it.each([1n, 330n, 10_000n])(
+        "fronts the full dust and returns all %s sender sats as change",
+        (senderSats) => {
+            const d = okOf(
+                admit(
+                    request({ assetId: USDT, assetUnits: 5n, senderSats }),
+                    policy({ assetRules: [assetRule("recycle")] }),
+                    exposure(),
+                    DUST,
+                    MIN,
+                ),
+            );
+            expect(d.topup).toBe(DUST);
+            expect(senderSats + d.topup - DUST).toBe(senderSats);
+        },
+    );
+
+    // A bitcoin transfer is the one case where sender sats reduce the advance.
+    it.each([
+        [1n, 329n],
+        [330n, MIN],
+        [10_000n, MIN],
+    ])("still nets the advance against a bitcoin sender's %s sats", (senderSats, topup) => {
+        expect(okOf(admit(request({ senderSats }), policy(), exposure(), DUST, MIN)).topup).toBe(
+            topup,
+        );
+    });
+});
+
+describe("claim mode", () => {
+    const assetRule = (claim: AssetRule["claim"]) =>
+        rule({ assetId: USDT, claim, fares: [cutFare] });
+    const ask = (claimMode: "recycle" | "purchase" | undefined, claim: AssetRule["claim"]) =>
+        admit(
+            request({ assetId: USDT, assetUnits: 5n, claimMode }),
+            policy({ assetRules: [assetRule(claim)] }),
+            exposure(),
+            DUST,
+            MIN,
+        );
+
+    it("resolves the rule's single mode when the request names none", () => {
+        expect(okOf(ask(undefined, "recycle")).claim).toBe("recycle");
+        expect(okOf(ask(undefined, "purchase")).claim).toBe("purchase");
+    });
+
+    it("resolves recycle for an either rule so the tree commits to one leaf", () => {
+        expect(okOf(ask(undefined, "either")).claim).toBe("recycle");
+    });
+
+    it("accepts the mode the rule permits", () => {
+        expect(okOf(ask("purchase", "purchase")).claim).toBe("purchase");
+        expect(okOf(ask("recycle", "either")).claim).toBe("recycle");
+        expect(okOf(ask("purchase", "either")).claim).toBe("purchase");
+    });
+
+    it.each([
+        ["purchase", "recycle"],
+        ["recycle", "purchase"],
+    ] as const)("refuses %s against a %s-only rule before any reservation", (asked, claim) => {
+        expect(reasonOf(ask(asked, claim))).toBe("claim_mode_not_allowed");
+    });
+
+    it("refuses a mode the wire could never have carried", () => {
+        expect(reasonOf(ask("nonsense" as unknown as "recycle", "either"))).toBe(
+            "unknown_claim_mode",
+        );
     });
 });

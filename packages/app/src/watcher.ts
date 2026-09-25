@@ -3,10 +3,11 @@ import {
     Leaf,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
 } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
-import { advanceKind } from "@arkade-taxi/core";
+import { advanceKind, covenantParamsOf } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import {
     CSVMultisigTapscript,
@@ -31,6 +32,7 @@ import {
 import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
+import { readFundingSource } from "./arkade/fundingSource.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
@@ -193,7 +195,13 @@ const assetId = (advance: Advance): string | undefined =>
           ).toString()
         : undefined;
 
-const expectedAssetPacket = (sources: Holding[][], destination: number): asset.Packet | null => {
+type AssetFare = { id: string; vout: number; units: bigint };
+
+const expectedAssetPacket = (
+    sources: Holding[][],
+    destination: number,
+    fare?: AssetFare,
+): asset.Packet | null => {
     const totals = new Map<string, bigint>();
     sources.forEach((source) =>
         source.forEach(({ id, amount }) => totals.set(id, (totals.get(id) ?? 0n) + amount)),
@@ -216,7 +224,12 @@ const expectedAssetPacket = (sources: Holding[][], destination: number): asset.P
                               ]
                             : [],
                     ),
-                    [AssetOutput.create(destination, amount)],
+                    fare?.id === id
+                        ? [
+                              AssetOutput.create(fare.vout, fare.units),
+                              AssetOutput.create(destination, amount - fare.units),
+                          ]
+                        : [AssetOutput.create(destination, amount)],
                     [],
                 ),
             ),
@@ -229,12 +242,13 @@ const exactExtension = (
     covenantScript: Uint8Array,
     sources: Holding[][],
     destination: number,
+    fare?: AssetFare,
 ): void => {
     const output = tx.getOutput(index);
     const script = output.script ?? fail("covenant extension output is missing or misplaced");
     if (output.amount !== 0n || !Extension.isExtension(script))
         fail("covenant extension output is missing or misplaced");
-    const assets = expectedAssetPacket(sources, destination);
+    const assets = expectedAssetPacket(sources, destination, fare);
     const expected = Extension.create([
         ...(assets ? [assets] : []),
         EmulatorPacket.create([{ vin: 0, script: covenantScript }]),
@@ -307,32 +321,41 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         serverKey: config.serverPubkey,
         emulatorKey: config.emulatorPubkey,
         vtxoMinAmount: config.vtxoMinAmount,
-        params: {
-            receiverKey: advance.receiverKey,
-            senderKey: advance.senderKey,
-            operatorKey: advance.operatorKey,
-            dust: advance.dust,
-            topup: advance.topup,
-            locktime: advance.locktime,
-            ...(advance.assetId ? { assetId: advance.assetId } : {}),
-        },
+        params: covenantParamsOf(advance),
     });
-    const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    const envelope =
+        tagged.kind === "legacy" ? decodeLockupEnvelope(advance.unsignedLockupTx) : undefined;
+    const graphId =
+        tagged.kind === "joint-fill" ? tagged.source.graph.graphId : envelope!.unsignedTxId;
+    const covenantOutputIndex =
+        tagged.kind === "joint-fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
+    const serverUnrollScript =
+        tagged.kind === "joint-fill"
+            ? tagged.source.serverUnrollScript
+            : envelope!.serverUnrollScript;
     if (
-        envelope.unsignedTxId !== advance.unsignedLockupId ||
-        envelope.covenantOutputIndex !== outpoint.vout ||
-        envelope.serverUnrollScript !==
-            hex.encode(CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript)).script)
+        graphId !== advance.unsignedLockupId ||
+        covenantOutputIndex !== outpoint.vout ||
+        serverUnrollScript !==
+            hex.encode(CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)).script)
     )
         fail("persisted lockup commitments are inconsistent");
-    const lockup = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+    const lockup = Transaction.fromPSBT(
+        base64.decode(tagged.kind === "joint-fill" ? tagged.source.graph.arkTx : envelope!.arkTx),
+    );
     if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
         fail("persisted covenant outpoint does not belong to the lockup graph");
     exactOutput(lockup, outpoint.vout, advance.dust, script.pkScript, "lockup covenant");
     if (script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress)
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);
-    const units = envelope.assetUnits === undefined ? undefined : BigInt(envelope.assetUnits);
+    const units =
+        tagged.kind === "joint-fill"
+            ? tagged.assetUnits
+            : envelope!.assetUnits === undefined
+              ? undefined
+              : BigInt(envelope!.assetUnits);
     if (
         (expectedAsset === undefined) !== (units === undefined) ||
         (units !== undefined && units <= 0n)
@@ -340,12 +363,18 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         fail("persisted covenant asset facts mismatch");
     return {
         script,
-        unroll: CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript)),
+        unroll: CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)),
         expectedHoldings: expectedAsset ? [{ id: expectedAsset, amount: units! }] : [],
     };
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    if (tagged.kind === "joint-fill") {
+        if (tagged.source.graph.graphId !== advance.unsignedLockupId)
+            fail("persisted lockup commitments are inconsistent");
+        return tagged.covenantOutpoint;
+    }
     const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
     if (envelope.unsignedTxId !== advance.unsignedLockupId)
         fail("persisted lockup commitments are inconsistent");
@@ -608,14 +637,15 @@ export async function classifyObservedSpend(
                 receiverSigners,
                 "receiver Arkade input",
             );
-            const merged = advance.dust + BigInt(exactReceiverCoin.value) - advance.topup;
+            const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
+            const merged = advance.dust + BigInt(exactReceiverCoin.value) - operatorSats;
             if (merged < advance.dust || merged < deps.config.vtxoMinAmount)
                 fail("recycle receiver output is below dust or provider minimum");
             exactOutput(
                 arkTx,
                 0,
-                advance.topup,
-                payoutPkScript(advance.operatorKey, advance.topup, advance.dust),
+                operatorSats,
+                payoutPkScript(advance.operatorKey, operatorSats, advance.dust),
                 "recycle repayment",
             );
             exactOutput(
@@ -626,25 +656,21 @@ export async function classifyObservedSpend(
                 "recycle receiver output",
             );
             const receiverHoldings = holdings(exactReceiverCoin, "receiver funding outpoint");
-            exactExtension(arkTx, 2, covenantProgram, [covenantHoldings, receiverHoldings], 1);
+            exactExtension(
+                arkTx,
+                2,
+                covenantProgram,
+                [covenantHoldings, receiverHoldings],
+                1,
+                assetFare > 0n ? { id: assetId(advance)!, vout: 0, units: assetFare } : undefined,
+            );
             exactAnchor(arkTx, 3);
             return { kind: "recycled", txid: arkTx.id };
         }
 
         if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
             fail("refund input or output count mismatch");
-        const topup = refundTopup(
-            {
-                receiverKey: advance.receiverKey,
-                senderKey: advance.senderKey,
-                operatorKey: advance.operatorKey,
-                dust: advance.dust,
-                topup: advance.topup,
-                locktime: advance.locktime,
-                ...(advance.assetId ? { assetId: advance.assetId } : {}),
-            },
-            deps.config.vtxoMinAmount,
-        );
+        const topup = refundTopup(covenantParamsOf(advance), deps.config.vtxoMinAmount);
         exactOutput(
             arkTx,
             0,
@@ -656,8 +682,12 @@ export async function classifyObservedSpend(
             arkTx,
             1,
             advance.dust - topup,
-            payoutPkScript(advance.senderKey, advance.dust - topup, advance.dust),
-            "refund sender output",
+            payoutPkScript(
+                advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
+                advance.dust - topup,
+                advance.dust,
+            ),
+            "refund recovery output",
         );
         exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
         exactAnchor(arkTx, 3);

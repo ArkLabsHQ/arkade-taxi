@@ -72,7 +72,9 @@ jobs:
                   node-version: 22
                   cache: pnpm
                   registry-url: https://registry.npmjs.org
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm -r build
 
             - name: Verify tag matches manifest versions
@@ -82,6 +84,11 @@ jobs:
                     V=$(node -p "require('./$p').version")
                     [ "$V" = "$TAG" ] || { echo "::error::$p is $V, tag is $TAG"; exit 1; }
                   done
+
+            - name: Refuse registry coordinates the vendored candidates claim
+              run: node scripts/carrier-artifacts/release-gate.mjs
+              env:
+                  CARRIER_RELEASE_ACK: ${{ vars.CARRIER_RELEASE_ACK }}
 
             - run: pnpm publish -r --access public --no-git-checks
               env:

@@ -1,5 +1,5 @@
-import type { AssetIdRef } from "@arkade-taxi/covenant";
-import type { AssetRule, ClaimMode, FareSpec } from "./fares.js";
+import type { AssetIdRef, ReceiverFare } from "@arkade-taxi/covenant";
+import type { AssetRule, ClaimMode, FareSpec, ResolvedClaimMode } from "./fares.js";
 
 /**
  * Transitions are driven by observed chain state, never by optimism: `locked`
@@ -102,6 +102,9 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     topup: bigint;
     assetId?: AssetIdRef;
     assetUnits?: bigint;
+    recoveryRecipient?: "sender" | "receiver";
+    /** Leaf this covenant committed to; absent is the legacy four-leaf tree. */
+    claimMode?: "recycle" | "purchase";
     /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime.
      * Sponsored advances carry no locktime; the persisted value is a domain
      * sentinel satisfying the batch-expiry CHECK (0n for height expiries,
@@ -122,6 +125,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
      * covenant removes the need for.
      */
     fare: FareSpec;
+
+    /** What the receiver owes at claim, charged out of the covenant itself.
+     * Persisted because the claim feed and every recovery rebuild read the
+     * advance, and the fare is part of the covenant address. */
+    receiverFare?: ReceiverFare;
 
     outpoint?: Outpoint;
     spentTxid?: string;
@@ -168,6 +176,8 @@ export interface QuoteRequest {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     assetId?: AssetIdRef;
+    /** Leaf the sender authorises; omitted resolves against the rule. */
+    claimMode?: Exclude<ClaimMode, "either">;
     /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
      * payment, where the operator funds the whole thing. */
     senderSats: bigint;
@@ -178,4 +188,5 @@ export interface QuoteRequest {
 }
 
 export type AdmissionDecision =
-    { ok: true; topup: bigint; fare: FareSpec; claim: ClaimMode } | { ok: false; reason: string };
+    | { ok: true; topup: bigint; fare: FareSpec; claim: ResolvedClaimMode }
+    | { ok: false; reason: string };

@@ -78,6 +78,19 @@ export function inputAssets(input: FundingInputValue): Map<string, bigint> {
     return result;
 }
 
+/** A collaborative spend: a multisig of exactly the owner and the Arkade Service. A
+ * unilateral CSV exit leaf does not decode as one and throws. */
+export function assertOwnerServerLeaf(
+    spendLeaf: Uint8Array,
+    owner: Uint8Array,
+    server: Uint8Array,
+): void {
+    const closure = MultisigTapscript.decode(spendLeaf);
+    const keys = closure.params.pubkeys.map((key) => hex.encode(key)).sort();
+    if (JSON.stringify(keys) !== JSON.stringify([hex.encode(owner), hex.encode(server)].sort()))
+        throw new LockupShapeError("funding leaf must require exactly owner and Arkade Service");
+}
+
 export function toArkInput(
     input: FundingInputValue,
     owner: Uint8Array,
@@ -86,10 +99,7 @@ export function toArkInput(
     fundingInputToWire(input);
     const tree = VtxoScript.decode(input.tapTree);
     const leaf = tree.findLeaf(hex.encode(input.spendLeaf));
-    const closure = MultisigTapscript.decode(input.spendLeaf);
-    const keys = closure.params.pubkeys.map((key) => hex.encode(key)).sort();
-    if (JSON.stringify(keys) !== JSON.stringify([hex.encode(owner), hex.encode(server)].sort()))
-        throw new LockupShapeError("funding leaf must require exactly owner and Arkade Service");
+    assertOwnerServerLeaf(input.spendLeaf, owner, server);
     return {
         txid: input.txid,
         vout: input.vout,
@@ -97,6 +107,21 @@ export function toArkInput(
         tapTree: input.tapTree,
         tapLeafScript: leaf,
     };
+}
+
+/**
+ * Absent is the legacy layout, where the fare left operator change and came
+ * straight back to the operator — a net fare of zero. Only a positive sats fare
+ * can name a payer; asset fares are hosted, not paid, out of operator sats.
+ */
+export function senderPaysSatsFare(
+    req: Pick<LockupBuildRequest, "satsFarePayer" | "fare">,
+): boolean {
+    if (req.satsFarePayer === undefined) return false;
+    if (req.satsFarePayer !== "sender") throw new LockupShapeError("unknown sats fare payer");
+    if (req.fare.currency !== "sats" || req.fare.units <= 0n)
+        throw new LockupShapeError("a sats fare payer needs a positive sats fare");
+    return true;
 }
 
 export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
@@ -147,16 +172,20 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
               ? req.fare.units
               : config.vtxoMinAmount;
     if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
+    const senderPaysFare = senderPaysSatsFare(req);
     if (fareHosting > 0n)
         outputs.push({
             role: "operator-fare",
             amount: fareHosting,
             script: ownerOutputScript(req.params.operatorKey, fareHosting, config),
         });
-    const senderChange = req.senderSats + req.params.topup - req.params.dust;
-    const operatorChange = req.funding.totalValue - req.params.topup - fareHosting;
-    if (senderChange < 0n || operatorChange < 0n)
-        throw new LockupShapeError("insufficient funding");
+    const senderFare = senderPaysFare ? fareHosting : 0n;
+    const operatorFare = fareHosting - senderFare;
+    const senderChange = req.senderSats + req.params.topup - req.params.dust - senderFare;
+    const operatorChange = req.funding.totalValue - req.params.topup - operatorFare;
+    if (senderChange < 0n)
+        throw new LockupShapeError("sender funding does not cover the dust carrier and fare");
+    if (operatorChange < 0n) throw new LockupShapeError("insufficient funding");
     const destinations = new Map<string, Map<number, bigint>>();
     const toId = (id: { txid: Uint8Array; groupIndex: number }) =>
         AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
@@ -250,6 +279,7 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
         outputs: transactionOutputs,
         valueOutputs: outputs,
         covenant,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         assetUnits: paymentId ? destinations.get(paymentId)!.get(0)! : req.assetUnits,
         arkInputs: inputs.map((input, i) =>
             toArkInput(
@@ -272,6 +302,7 @@ export function buildLockupEnvelope(
         arkTx: base64.encode(graph.arkTx.toPSBT()),
         checkpoints: graph.checkpoints.map((tx) => base64.encode(tx.toPSBT())),
         ...(plan.assetUnits !== undefined ? { assetUnits: plan.assetUnits.toString() } : {}),
+        ...(plan.satsFarePayer ? { satsFarePayer: plan.satsFarePayer } : {}),
         unsignedTxId: unsignedGraphId(graph.arkTx, graph.checkpoints),
         covenantOutputIndex: 0,
         senderInputIndexes: req.senderInputs.map((_, i) => i),

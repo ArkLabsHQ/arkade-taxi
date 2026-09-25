@@ -1,29 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { ArkAddress, asset, SingleKey } from "@arkade-os/sdk";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { ArkAddress, asset, SingleKey, Transaction } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
+import { DustCovenantScript, type ReceiverFare } from "@arkade-taxi/covenant";
 import { TERMINAL_STATES, type Advance } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "../src/claims.js";
 import { ServiceError } from "../src/errors.js";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
+import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
 import { config, MemoryAdvances, NOW, receiverKey, senderKey, serverKey } from "./fixtures.js";
+import { createBoundJointFill } from "./jointFillFixtures.js";
 
 const cfg = config();
 const bob = new ArkAddress(serverKey, receiverKey, "ark");
 const alice = new ArkAddress(serverKey, senderKey, "ark");
 const assetUnits = 9_007_199_254_740_993n;
 
-function persisted(over: Partial<Advance> = {}, withAsset = false): Advance {
+function persisted(
+    over: Partial<Advance> = {},
+    withAsset = false,
+    receiverFare?: ReceiverFare,
+): Advance {
     const request = buildRequest();
     request.advanceId = over.id ?? "transfer-1";
+    if (over.claimMode !== undefined) request.params.claimMode = over.claimMode;
+    if (over.recoveryRecipient !== undefined)
+        request.params.recoveryRecipient = over.recoveryRecipient;
     if (withAsset) {
         const id = asset.AssetId.create("12".repeat(32), 7);
         request.params.assetId = { txid: Uint8Array.from(id.txid).reverse(), groupIndex: 7 };
         request.senderInputs[0]!.assetPacket = asset.Packet.create([
             asset.AssetGroup.create(id, null, [], [asset.AssetOutput.create(2, assetUnits)], []),
         ]).serialize();
+    }
+    if (receiverFare) receiverPays(request, receiverFare);
+    if (withAsset || receiverFare)
         request.covenantAddress = new DustCovenantScript({
             params: request.params,
             serverKey,
@@ -32,7 +44,6 @@ function persisted(over: Partial<Advance> = {}, withAsset = false): Advance {
         })
             .address("ark", serverKey)
             .encode();
-    }
     const unsignedLockupTx = buildLockupEnvelope(request, cfg, unroll);
     const envelope = decodeLockupEnvelope(unsignedLockupTx);
     return {
@@ -151,6 +162,7 @@ describe("listReceiverClaims", () => {
                         dust: "330",
                         topup: "230",
                         locktime: "899856",
+                        claimMode: "recycle",
                     },
                     covenantAddress: row.covenantAddress,
                     outpoint: { txid: "cd".repeat(32), vout: 0 },
@@ -170,6 +182,18 @@ describe("listReceiverClaims", () => {
         );
         expect(claim?.claim?.assetUnits).toBe("9007199254740993");
         expect(claim?.claim?.params.assetId).toEqual({ txid: "12".repeat(32), groupIndex: 7 });
+    });
+
+    it("projects receiver-owned recovery and claim mode as verified descriptor terms", () => {
+        const [claim] = listReceiverClaims(
+            deps(persisted({ recoveryRecipient: "receiver", claimMode: "recycle" }, true)),
+            receivers,
+            ACTIVE_CLAIM_STATES,
+        );
+        expect(claim?.claim?.params).toMatchObject({
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
     });
 
     it.each(TERMINAL_STATES)("projects %s only when requested, without a descriptor", (state) => {
@@ -246,5 +270,75 @@ describe("listReceiverClaims", () => {
         row.assetUnits = 1n;
         row.unsignedLockupTx = encodeLockupEnvelope(envelope);
         expect(() => listReceiverClaims(deps(row), receivers, ACTIVE_CLAIM_STATES)).toThrow();
+    });
+
+    describe("receiver-paid claim descriptor", () => {
+        const receiverPaidAdvance = persisted({ recoveryRecipient: "receiver" }, true, {
+            currency: "asset",
+            units: 9n,
+        });
+        const senderPaidAdvance = persisted({}, true);
+
+        it("publishes unclaimedMode on a receiver-paid claim descriptor and omits it otherwise", () => {
+            const [receiverPaid] = listReceiverClaims(
+                deps(receiverPaidAdvance),
+                receivers,
+                ACTIVE_CLAIM_STATES,
+            );
+            const [senderPaid] = listReceiverClaims(
+                deps(senderPaidAdvance),
+                receivers,
+                ACTIVE_CLAIM_STATES,
+            );
+            expect(receiverPaid?.claim?.unclaimedMode).toBe("reclaim");
+            expect(senderPaid?.claim && "unclaimedMode" in senderPaid.claim).toBe(false);
+        });
+
+        it("publishes the receiver fare in the claim descriptor params", () => {
+            const [claim] = listReceiverClaims(
+                deps(receiverPaidAdvance),
+                receivers,
+                ACTIVE_CLAIM_STATES,
+            );
+            expect(claim?.claim?.params.receiverFare).toEqual({ currency: "asset", units: "9" });
+        });
+
+        it("binds a non-zero receiver fare through the real quote path, and publishes it on the claim", async () => {
+            const bound = await createBoundJointFill({
+                receiverFare: { currency: "sats", units: 4n },
+            });
+            try {
+                bound.db
+                    .prepare(
+                        "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = ?",
+                    )
+                    .run(bound.fill.id);
+                const txid = Transaction.fromPSBT(
+                    base64.decode(bound.fill.graph.arkTx),
+                ).id.toLowerCase();
+                expect(
+                    bound.swapFills.reconcileSettled(
+                        bound.fill.id,
+                        txid,
+                        { txid, vout: 0 },
+                        NOW + 1,
+                    ),
+                ).toBe(true);
+
+                const locked = bound.advances.get(bound.advance.id)!;
+                expect(locked.state).toBe("locked");
+                expect(locked.receiverFare).toEqual({ currency: "sats", units: 4n });
+
+                const [claim] = listReceiverClaims(
+                    { config: bound.config, advances: bound.advances },
+                    { addresses: [bob.encode()], receiverKeys: [receiverKey] },
+                    ACTIVE_CLAIM_STATES,
+                );
+                expect(claim?.claim?.params.receiverFare).toEqual({ currency: "sats", units: "4" });
+                expect(claim?.claim?.unclaimedMode).toBe("reclaim");
+            } finally {
+                bound.close();
+            }
+        });
     });
 });

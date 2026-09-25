@@ -10,6 +10,8 @@ import {
     type SponsoredQuoteDeps,
 } from "../src/sponsoredQuotes.js";
 import { listReceiverClaims } from "../src/claims.js";
+import { validatePersistedLockupGraph } from "../src/arkade/submit.js";
+import { buildSponsoredEnvelope } from "../src/arkade/sponsoredBuilder.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import {
     config,
@@ -53,6 +55,47 @@ const usdtPolicy = (): Policy =>
                         id: "usdt-fare",
                         currency: { kind: "sameAsset" },
                         pricing: { kind: "flat", units: 1_000_000n },
+                    },
+                ],
+            },
+        ],
+    });
+
+const satsFarePolicy = (units: bigint): Policy =>
+    basePolicy({
+        assetRules: [
+            {
+                assetId: {
+                    txid: Uint8Array.from(Buffer.from(USDT_DISPLAY, "hex")).reverse(),
+                    groupIndex: 0,
+                },
+                enabled: true,
+                claim: "either",
+                maxTopupSats: null,
+                fares: [
+                    {
+                        id: "sats-fare",
+                        currency: { kind: "sats" },
+                        pricing: { kind: "flat", units },
+                    },
+                ],
+            },
+        ],
+    });
+
+const bitcoinSatsFarePolicy = (units: bigint): Policy =>
+    basePolicy({
+        assetRules: [
+            {
+                assetId: null,
+                enabled: true,
+                claim: "either",
+                maxTopupSats: null,
+                fares: [
+                    {
+                        id: "sats-fare",
+                        currency: { kind: "sats" },
+                        pricing: { kind: "flat", units },
                     },
                 ],
             },
@@ -129,6 +172,40 @@ const sponsoredBody = (over: Record<string, unknown> = {}) => {
     };
 };
 
+/** No asset anywhere: the bitcoin rule, where `topup` is derived from the sender's
+ * own sats rather than fronting the whole carrier. */
+const bitcoinBody = (senderSats: string) => {
+    const txid = "cd".repeat(32);
+    const vout = 3;
+    registerSenderCoin(
+        txid,
+        vout,
+        fundingCoin({
+            txid,
+            vout,
+            value: Number(senderSats),
+            script: bytesToHex(senderTree.pkScript),
+            expiresAtHeight: 910000,
+        }),
+    );
+    return {
+        receiverAddress,
+        senderKey: bytesToHex(senderKey),
+        senderSats,
+        senderInputs: [
+            {
+                txid,
+                vout,
+                value: senderSats,
+                tapTree: bytesToHex(senderTree.encode()),
+                spendLeaf: bytesToHex(senderTree.scripts[0]),
+                expiry: { kind: "height", value: "910000" },
+            },
+        ],
+        fareId: "sats-fare",
+    };
+};
+
 const caught = async (fn: () => Promise<unknown>): Promise<ServiceError> => {
     try {
         await fn();
@@ -151,7 +228,9 @@ describe("createSponsoredQuote", () => {
         expect(quote.receiverAddress).toBe(receiverAddress);
         expect(quote.params).toMatchObject({
             dust: DUST.toString(),
-            contribution: "10",
+            // Asset transfers front the whole dust unit: the sender's 1000 sats
+            // are change, not a contribution toward it.
+            contribution: DUST.toString(),
         });
         expect(quote.fare).toMatchObject({ currency: "asset", units: "1000000" });
         expect(quote.commitment).toMatchObject({
@@ -164,6 +243,134 @@ describe("createSponsoredQuote", () => {
         const stored = advances.get("adv-1");
         expect(stored).toMatchObject({ kind: "sponsored", state: "quoted", locktime: 0n });
         expect(stored?.covenantAddress).toBe(receiverAddress);
+    });
+
+    it("bills a sats fare to the sender and sponsors only the carrier", async () => {
+        const quote = await createSponsoredQuote(
+            deps({ policy: satsFarePolicy(10n) }),
+            sponsoredBody({ fareId: "sats-fare" }),
+        );
+        expect(quote.fare).toEqual({ currency: "sats", units: "10" });
+        const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
+        expect(envelope.satsFarePayer).toBe("sender");
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 10n, 990n, 19_670n]);
+        expect(advances.get("adv-1")?.fare).toEqual({ currency: "sats", units: 10n });
+    });
+
+    // A sponsored bitcoin fill pays the receiver the whole carrier whatever the
+    // sender brings, so unlike a covenant one it has change to charge against.
+    it("charges a sats fare on a bitcoin fill that has change to pay it from", async () => {
+        const quote = await createSponsoredQuote(
+            deps({ policy: bitcoinSatsFarePolicy(10n) }),
+            bitcoinBody("1000"),
+        );
+        expect(quote.fare).toEqual({ currency: "sats", units: "10" });
+        expect(quote.params.contribution).toBe("10");
+        const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
+        expect(envelope.satsFarePayer).toBe("sender");
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 10n, 670n, 19_990n]);
+        expect(advances.get(quote.transferId)?.fare).toEqual({ currency: "sats", units: 10n });
+    });
+
+    it("refuses a sats fare on a sub-dust bitcoin fill, which has no change", async () => {
+        const d = deps({ policy: bitcoinSatsFarePolicy(10n) });
+        const bad = await caught(() => createSponsoredQuote(d, bitcoinBody("100")));
+        expect(bad.code).toBe("fare_unavailable");
+        expect(bad.status).toBe(409);
+        expect(advances.rows.size).toBe(0);
+    });
+
+    it("refuses a sats fare the sender's change cannot cover, before reserving", async () => {
+        const d = deps({ policy: satsFarePolicy(10n) });
+        const bad = await caught(() =>
+            createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare", senderSats: "5" })),
+        );
+        expect(bad.code).toBe("fare_unavailable");
+        expect(bad.status).toBe(409);
+        expect(advances.rows.size).toBe(0);
+    });
+
+    it("reserves the sponsorship alone when the sender pays the sats fare", async () => {
+        const d = deps({ policy: satsFarePolicy(10n) });
+        d.inventory.getSpendableVtxos = async () => [
+            fundingCoin({ value: Number(DUST) }),
+            fundingCoin({ vout: 1, value: 10, expiresAtHeight: 900001 }),
+            fundingCoin({ vout: 2, value: 10000, expiresAtHeight: 900002 }),
+        ];
+        const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
+        expect(advances.get(quote.transferId)?.operatorInputs).toEqual([
+            { txid: "bb".repeat(32), vout: 0 },
+        ]);
+    });
+
+    it.each(["kept", "stripped"])(
+        "rebuilds a sender-paid sponsored graph from the %s envelope",
+        async (discriminator) => {
+            const d = deps({ policy: satsFarePolicy(10n) });
+            const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
+            const stored = advances.get(quote.transferId)!;
+            if (discriminator === "stripped") {
+                const wire = decodeLockupEnvelope(stored.unsignedLockupTx);
+                delete wire.satsFarePayer;
+                stored.unsignedLockupTx = encodeLockupEnvelope(wire);
+            }
+            const rebuild = () => validatePersistedLockupGraph(stored, config());
+            if (discriminator === "stripped") expect(rebuild).toThrow(/persisted/);
+            else expect(rebuild).not.toThrow();
+        },
+    );
+
+    it("still reconstructs a sats-fare graph funded before the fare was charged", async () => {
+        const d = deps({ policy: satsFarePolicy(10n) });
+        const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
+        const built = sponsoredBuilder.built.find((r) => r.advanceId === quote.transferId)!;
+        delete built.satsFarePayer;
+        const legacyTx = buildSponsoredEnvelope(built, config(), serverUnroll);
+        expect(decodeLockupEnvelope(legacyTx).satsFarePayer).toBeUndefined();
+        const funded = {
+            ...advances.get(quote.transferId)!,
+            unsignedLockupTx: legacyTx,
+            unsignedLockupId: decodeLockupEnvelope(legacyTx).unsignedTxId,
+        };
+        expect(validatePersistedLockupGraph(funded, config())).toEqual(
+            decodeLockupEnvelope(legacyTx),
+        );
+    });
+
+    it("rebuilds and locks a sender-paid sponsored payment", async () => {
+        const d = deps({ policy: satsFarePolicy(10n) });
+        const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
+        const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
+        const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
+        const signed = await sender.sign(
+            Transaction.fromPSBT(base64.decode(envelope.arkTx)),
+            envelope.senderInputIndexes,
+        );
+        const checkpoints: string[] = [];
+        for (const [index, checkpoint] of envelope.checkpoints.entries()) {
+            const tx = Transaction.fromPSBT(base64.decode(checkpoint));
+            checkpoints.push(
+                base64.encode(
+                    (envelope.senderInputIndexes.includes(index)
+                        ? await sender.sign(tx, [0])
+                        : tx
+                    ).toPSBT(),
+                ),
+            );
+        }
+        const out = await submitLockup(
+            d as unknown as QuoteDeps,
+            quote.transferId,
+            encodeLockupEnvelope({
+                ...envelope,
+                arkTx: base64.encode(signed.toPSBT()),
+                checkpoints,
+            }),
+        );
+        expect(out.outpoint).toMatchObject({ vout: 0 });
+        expect(getTransfer({ advances }, quote.transferId).state).toBe("locking");
     });
 
     it("rejects a receiver address outside this service", async () => {

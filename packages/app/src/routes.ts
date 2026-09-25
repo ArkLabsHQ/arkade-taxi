@@ -11,20 +11,37 @@ import {
 import { ErrorCode, sanitizeOperationalError, ServiceError, toErrorResponse } from "./errors.js";
 import { assetRuleToWire } from "./rulesWire.js";
 import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
+import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
 import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
+import {
+    createSwapFillQuote,
+    getSwapFill,
+    type OfferCodec,
+    type SwapFillGraphBuilder,
+    type SwapFillStore,
+} from "./swapFillQuotes.js";
+import { submitSwapFill, type SwapFillSubmitDeps } from "./swapFillSubmit.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
+import type { SwapFillReconciler } from "./swapFillReconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
 
 export interface RouteDeps extends QuoteDeps {
+    receiveQuotes: ReceiveQuoteDeps["receiveQuotes"];
     sponsoredBuilder: SponsoredLockupBuilder;
+    swapFills: SwapFillStore;
+    swapFillBuilder: SwapFillGraphBuilder;
+    swapFillSubmit: SwapFillSubmitDeps;
+    offerCodec: OfferCodec;
+    providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
     claimFeedLogger?: ClaimFeedLogger;
     sweeper: Pick<Sweeper, "status">;
     reconciler: Pick<LockupReconciler, "status">;
+    swapFillReconciler?: Pick<SwapFillReconciler, "status">;
     /** Seconds since the last completed tick after which /health reports
      * degraded. */
     sweeperStaleAfterSeconds: number;
@@ -90,6 +107,11 @@ export interface HealthResponse {
         blockers: string[];
         lastWatcherScanAt: number | null;
         watching: number;
+        swapFills?: {
+            lastTickAt: number | null;
+            submitting: number;
+            blockers: string[];
+        };
     };
     reason?: string;
 }
@@ -129,6 +151,7 @@ export function operationalSnapshot(
         | "runtime"
         | "sweeper"
         | "reconciler"
+        | "swapFillReconciler"
         | "sweeperStaleAfterSeconds"
         | "startup"
         | "proceeds"
@@ -140,6 +163,7 @@ export function operationalSnapshot(
     const age = s.lastTickAt === null ? null : now - s.lastTickAt;
     const runtime = deps.runtime?.safety();
     const reconciler = deps.reconciler.status();
+    const swapFills = deps.swapFillReconciler?.status();
     const paused = deps.policy.get().paused;
     const startup = deps.startup?.();
     const proceeds = deps.proceeds?.();
@@ -159,6 +183,8 @@ export function operationalSnapshot(
         ...s.blockers.map(({ code }) => safeCode(code, "recovery_blocked")),
         ...reconciler.blockers.map((code) => safeCode(code, "reconciler_blocked")),
         ...(reconciler.lastTickAt === null ? ["reconciler_not_started"] : []),
+        ...(swapFills?.blockers ?? []).map((code) => safeCode(code, "reconciler_blocked")),
+        ...(swapFills && swapFills.lastTickAt === null ? ["swap_fill_reconciler_not_started"] : []),
         ...(age === null
             ? ["sweeper_not_started"]
             : age > deps.sweeperStaleAfterSeconds
@@ -182,13 +208,15 @@ export function operationalSnapshot(
     const reason =
         uniqueBlockers[0] === "reconciler_not_started"
             ? "the lockup reconciler has not completed a tick"
-            : uniqueBlockers[0] === "sweeper_not_started"
-              ? "the sweeper has not completed a tick"
-              : uniqueBlockers[0] === "chain_height_unavailable"
-                ? "verified chain height is unavailable"
-                : uniqueBlockers[0] === "chain_time_unavailable"
-                  ? "verified chain median time is unavailable"
-                  : uniqueBlockers[0];
+            : uniqueBlockers[0] === "swap_fill_reconciler_not_started"
+              ? "the swap-fill reconciler has not completed a tick"
+              : uniqueBlockers[0] === "sweeper_not_started"
+                ? "the sweeper has not completed a tick"
+                : uniqueBlockers[0] === "chain_height_unavailable"
+                  ? "verified chain height is unavailable"
+                  : uniqueBlockers[0] === "chain_time_unavailable"
+                    ? "verified chain median time is unavailable"
+                    : uniqueBlockers[0];
     return {
         ready,
         body: {
@@ -276,6 +304,17 @@ export function operationalSnapshot(
                 blockers: reconciler.blockers.map((code) => safeCode(code, "reconciler_blocked")),
                 lastWatcherScanAt: reconciler.lastWatcherScanAt ?? null,
                 watching: reconciler.watching ?? 0,
+                ...(swapFills
+                    ? {
+                          swapFills: {
+                              lastTickAt: swapFills.lastTickAt,
+                              submitting: swapFills.submitting,
+                              blockers: swapFills.blockers.map((code) =>
+                                  safeCode(code, "reconciler_blocked"),
+                              ),
+                          },
+                      }
+                    : {}),
             },
             ...(ready ? {} : { reason }),
         },
@@ -364,6 +403,18 @@ export function createRoutes(deps: RouteDeps): Hono {
 
     app.get("/v1/transfers/:id", (c) => handle(c, () => getTransfer(deps, c.req.param("id"))));
 
+    app.post("/v1/receive-quotes", (c) =>
+        handle(c, async () => {
+            return createReceiveQuote(deps, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
+            );
+        }),
+    );
+
+    app.get("/v1/receive-quotes/:id", (c) =>
+        handle(c, () => getReceiveQuote(deps, c.req.param("id"))),
+    );
+
     app.post("/v1/sponsored-transfers", (c) =>
         handle(c, async () => {
             return createSponsoredQuote(deps, await readJson(c), () =>
@@ -387,6 +438,31 @@ export function createRoutes(deps: RouteDeps): Hono {
     app.get("/v1/sponsored-transfers/:id", (c) =>
         handle(c, () => getTransfer(deps, c.req.param("id"))),
     );
+
+    app.post("/v1/swap-fills", (c) =>
+        handle(c, async () => {
+            return createSwapFillQuote(deps, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
+            );
+        }),
+    );
+
+    app.get("/v1/swap-fills/:id", (c) => handle(c, () => getSwapFill(deps, c.req.param("id"))));
+
+    app.post("/v1/swap-fills/:id/submit", async (c) => {
+        try {
+            const body = await submitSwapFill(
+                deps.swapFillSubmit,
+                c.req.param("id"),
+                await readJson(c),
+                () => assertFinancialMutationReady(deps),
+            );
+            return c.json(body, 202);
+        } catch (e) {
+            const err = ServiceError.from(e);
+            return c.json(toErrorResponse(err), err.status);
+        }
+    });
 
     app.get("/v1/claims", (c) =>
         handle(c, () => ({

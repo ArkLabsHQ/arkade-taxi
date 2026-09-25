@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { expect } from "vitest";
 import { RestEmulatorProvider, Transaction } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
@@ -55,6 +55,8 @@ liveScenario("sender-refund-before-locktime", async () => {
                     ),
             ).toBe(true);
         const { tx, checkpoint } = await terminal(live, locked, "refunded", txid);
+        // Sub-dust bitcoin advances 1 sat and the sender funds the rest, so a
+        // sender-owned timeout returns it that way round; an asset one is 329/1.
         expectReceipt(tx, 0, 1n, live.info.operatorKey);
         expectReceipt(tx, 1, 329n, locked.quote.params.senderKey);
         expect(
@@ -77,7 +79,8 @@ async function recoveryIntent(locked: Awaited<ReturnType<typeof lock>>) {
     const advance = {
         ...row,
         ...locked.verified.params,
-        fare: { currency: "sats", units: 1n },
+        // Read back: the graph is rebuilt from the fare the quote really charged.
+        fare: { currency: row.fare.currency, units: BigInt(row.fare.units) },
         batchExpiry: { kind: row.batchExpiry.kind, value: BigInt(row.batchExpiry.value) },
         recoveryLocktime: {
             kind: row.recoveryLocktime.kind,
@@ -124,6 +127,10 @@ liveScenario("premature-recovery-rejected", async () => {
             async () =>
                 matchRecoveryEvidence({
                     ...window,
+                    // Arkd names the emulator by the image the harness raised.
+                    emulatorSdkVersion: JSON.parse(readFileSync("e2e-artifacts/stack.json", "utf8"))
+                        .images.emulator.reference.split(":")
+                        .pop(),
                     txid: intent.expectedTxid,
                     locktime: locked.quote.params.locktime,
                     currentBlocktime: String(tip.time),

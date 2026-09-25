@@ -32,8 +32,9 @@ import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { LockupShapeError } from "./lockup.js";
 import { verifySenderFunding } from "./arkade/senderFunding.js";
-import { ReservationConflictError } from "@arkade-taxi/db";
+import { ReservationConflictError, type SwapFillRepository } from "@arkade-taxi/db";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import { validateLockupSubmission } from "./arkade/submit.js";
 import type { QuoteDeps } from "./quotes.js";
@@ -134,6 +135,7 @@ function decodeBody(
     assetUnits?: bigint;
     fareId?: string;
     assetId?: { txid: Uint8Array; groupIndex: number };
+    extraPacket?: { type: number; payload: Uint8Array };
 } {
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
         throw badRequest("request body must be a JSON object");
@@ -188,19 +190,26 @@ function decodeBody(
     )
         throw badRequest("receiverAddress names the wrong Arkade server key");
 
-    if (b.assetId === undefined)
-        return {
-            ...decoded,
-            receiverAddress: b.receiverAddress,
-            receiverKey: receiver.vtxoTaprootKey,
-        };
+    let extraPacket: { type: number; payload: Uint8Array } | undefined;
+    if (b.extraPacket !== undefined) {
+        const e = b.extraPacket;
+        if (e === null || typeof e !== "object" || Array.isArray(e))
+            throw badRequest("extraPacket must be an object");
+        if (!Number.isInteger(e.type) || e.type < 0 || e.type > 255)
+            throw badRequest("extraPacket.type must be a one-byte tag");
+        if (typeof e.payload !== "string" || !/^([0-9a-fA-F]{2})+$/.test(e.payload))
+            throw badRequest("extraPacket.payload must be non-empty hex");
+        extraPacket = { type: e.type, payload: hexToBytes(e.payload, "extraPacket.payload") };
+    }
+    const tail = {
+        ...decoded,
+        receiverAddress: b.receiverAddress,
+        receiverKey: receiver.vtxoTaprootKey,
+        ...(extraPacket !== undefined ? { extraPacket } : {}),
+    };
+    if (b.assetId === undefined) return tail;
     try {
-        return {
-            ...decoded,
-            receiverAddress: b.receiverAddress,
-            receiverKey: receiver.vtxoTaprootKey,
-            assetId: assetIdFromWire(b.assetId),
-        };
+        return { ...tail, assetId: assetIdFromWire(b.assetId) };
     } catch (e) {
         throw ServiceError.from(e);
     }
@@ -239,6 +248,8 @@ async function createAdmittedSponsoredQuote(
 ): Promise<SponsoredQuoteResponse> {
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     deps.reservations.expireQuotes(deps.now());
+    deps.swapFills?.expireQuotes(deps.now());
+    deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
             return await createReservedSponsoredQuote(deps, body);
@@ -290,6 +301,16 @@ async function createReservedSponsoredQuote(
         config.vtxoMinAmount,
     );
     if (!decision.ok) throw admissionError(decision.reason);
+    const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
+    // The receiver is paid the whole dust carrier whatever the sender brings, so
+    // the fare can only come out of sender change — never out of the payment,
+    // and never out of the sponsorship the operator is giving away.
+    if (senderPaysFare && req.senderSats + decision.topup - config.dust < decision.fare.units)
+        throw new ServiceError(
+            "fare_unavailable",
+            409,
+            "sender funding does not cover the payment carrier and this fare",
+        );
 
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
@@ -304,13 +325,13 @@ async function createReservedSponsoredQuote(
             { cause },
         );
     }
-    const reserved = deps.reservations.listReservedOutpoints();
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
         reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
-            (decision.fare.units === 0n
+            (senderPaysFare || decision.fare.units === 0n
                 ? 0n
                 : decision.fare.currency === "sats"
                   ? decision.fare.units
@@ -321,6 +342,7 @@ async function createReservedSponsoredQuote(
         minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
         minReserveSats: config.operatorMinReserveSats,
+        dustSats: config.dust,
     };
     const selection = structuredClone(selectOperatorFunding(selectionOptions));
     const expiry = { ...selection.batchExpiry };
@@ -337,6 +359,7 @@ async function createReservedSponsoredQuote(
         dust: config.dust,
         contribution: decision.topup,
         ...(req.assetId ? { assetId: req.assetId } : {}),
+        ...(req.extraPacket ? { extraPacket: req.extraPacket } : {}),
     };
 
     const id = deps.randomId();
@@ -346,6 +369,7 @@ async function createReservedSponsoredQuote(
         params,
         receiverAddress: req.receiverAddress,
         fare: decision.fare,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         senderSats: req.senderSats,
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),
@@ -446,7 +470,10 @@ async function createReservedSponsoredQuote(
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...reserved, ...currentLocks],
+        reserved: [
+            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...currentLocks,
+        ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });
@@ -512,6 +539,7 @@ async function createReservedSponsoredQuote(
             dust: params.dust,
             contribution: params.contribution,
             ...(params.assetId ? { assetId: params.assetId } : {}),
+            ...(params.extraPacket ? { extraPacket: params.extraPacket } : {}),
         }),
         receiverAddress: req.receiverAddress,
         fare: fareToWire(decision.fare),

@@ -11,6 +11,7 @@ import type { RuntimeConfig } from "./config.js";
 import { ServiceError } from "./errors.js";
 import type { RouteDeps } from "./routes.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
+import { readFundingSource } from "./arkade/fundingSource.js";
 
 export const ACTIVE_CLAIM_STATES = ["locking", "locked", "recovering"] as const;
 
@@ -83,17 +84,43 @@ export function listReceiverClaims(
             };
             if (advance.state === "locked") {
                 try {
-                    const envelope = validatePersistedLockupGraph(advance, deps.config);
+                    const source = readFundingSource(advance.unsignedLockupTx);
+                    const covenantOutputIndex =
+                        source.kind === "joint-fill"
+                            ? source.covenantOutpoint.vout
+                            : validatePersistedLockupGraph(advance, deps.config)
+                                  .covenantOutputIndex;
                     const { outpoint, recoveryLocktime } = advance;
+                    const jointScriptMatches =
+                        source.kind === "legacy" ||
+                        (() => {
+                            const expected = ArkAddress.decode(advance.covenantAddress).pkScript;
+                            return (
+                                source.covenantOutpoint.txid === outpoint?.txid &&
+                                source.covenantScript.length === expected.length &&
+                                source.covenantScript.every(
+                                    (byte, index) => byte === expected[index],
+                                )
+                            );
+                        })();
                     if (
                         !outpoint ||
-                        outpoint.vout !== envelope.covenantOutputIndex ||
+                        !jointScriptMatches ||
+                        outpoint.vout !== covenantOutputIndex ||
                         !recoveryLocktime ||
                         recoveryLocktime.kind !== advance.batchExpiry.kind ||
                         recoveryLocktime.value !== advance.locktime ||
-                        (envelope.assetUnits === undefined
-                            ? undefined
-                            : BigInt(envelope.assetUnits)) !== advance.assetUnits
+                        (source.kind === "joint-fill"
+                            ? source.assetUnits
+                            : (() => {
+                                  const envelope = validatePersistedLockupGraph(
+                                      advance,
+                                      deps.config,
+                                  );
+                                  return envelope.assetUnits === undefined
+                                      ? undefined
+                                      : BigInt(envelope.assetUnits);
+                              })()) !== advance.assetUnits
                     )
                         throw new Error("persisted claim facts disagree with the lockup graph");
                     result.claim = {
@@ -112,6 +139,7 @@ export function listReceiverClaims(
                             kind: recoveryLocktime.kind,
                             value: recoveryLocktime.value.toString(),
                         },
+                        ...(advance.receiverFare ? { unclaimedMode: "reclaim" as const } : {}),
                     };
                 } catch (cause) {
                     throw new ServiceError("internal_error", 500, "internal error", { cause });

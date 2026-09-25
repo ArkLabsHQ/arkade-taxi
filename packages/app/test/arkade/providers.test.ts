@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { config, emulatorKey } from "../fixtures.js";
-import { verifyProviders } from "../../src/arkade/providers.js";
+import { verifyProviders, withinVtxoMaxAmount } from "../../src/arkade/providers.js";
 import { arkInfo } from "./fixtures.js";
 import { defaultEmulatorPubkey, networks } from "@arkade-os/sdk";
 
@@ -10,6 +10,16 @@ const pinnedEmulatorKey = defaultEmulatorPubkey(networks.regtest);
 const providers = (info = arkInfo()) => ({
     arkProvider: { getInfo: async () => info },
     emulatorProvider: { getInfo: async () => ({ signerPubkey: pinnedEmulatorKey }) },
+});
+
+describe("withinVtxoMaxAmount", () => {
+    it("treats -1 as no ceiling and holds a finite ceiling inclusively", () => {
+        for (const amount of [0n, 330n, 2n ** 62n])
+            expect(withinVtxoMaxAmount(amount, -1n)).toBe(true);
+        expect(withinVtxoMaxAmount(1000n, 1000n)).toBe(true);
+        expect(withinVtxoMaxAmount(1001n, 1000n)).toBe(false);
+        expect(withinVtxoMaxAmount(1n, 0n)).toBe(false);
+    });
 });
 
 describe("provider verification", () => {

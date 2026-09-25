@@ -11,6 +11,8 @@ import {
     type LockupResponse,
     type QuoteRequestBody,
     type QuoteResponse,
+    type ReceiveQuoteRequestBody,
+    type ReceiveQuoteResponse,
     type ReceiverClaimWire,
     type SponsoredQuoteRequestBody,
     type SponsoredQuoteResponse,
@@ -24,8 +26,11 @@ import {
     decodeInfo,
     decodeLockup,
     decodeQuote,
+    decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
+    decodeSwapFillQuote,
+    decodeSwapFillStatus,
 } from "./decode.js";
 import { ClientErrorCode, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
@@ -44,6 +49,7 @@ import {
     type ReceiverWalletInput,
 } from "./spend.js";
 import { ArkAddress, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
+import { PubT, validatePubkey } from "@scure/btc-signer/utils.js";
 import {
     verifyQuote,
     type QuoteExpectation,
@@ -58,6 +64,27 @@ import {
     type VerifiedSponsoredQuote,
     type VerifySponsoredQuoteArgs,
 } from "./sponsored.js";
+import {
+    assertSubmittableSwapFill,
+    encodeSwapFillQuoteBody,
+    SWAP_FILL_AMBIGUOUS_CODE,
+    SwapFillSubmitAmbiguousError,
+    verifySwapFillQuote,
+    type RequestSwapFillQuoteArgs,
+    type RequestVerifiedSwapFillQuoteArgs,
+    type VerifiedSwapFillQuote,
+} from "./swapFill.js";
+import type {
+    SwapFillGraphWire,
+    SwapFillQuoteResponse,
+    SwapFillStatusResponse,
+} from "@arkade-taxi/protocol";
+import {
+    verifyReceiveQuote,
+    type ReceiveQuoteExpectation,
+    type VerifiedReceiveQuote,
+    type VerifyReceiveQuoteArgs,
+} from "./receiveQuote.js";
 
 export interface TaxiClientOptions {
     baseUrl: string;
@@ -90,6 +117,8 @@ export interface QuoteRequest {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     assetId?: AssetIdValue;
+    /** Which claim leaf to authorise. Omitted lets the operator resolve it. */
+    claimMode?: "recycle" | "purchase";
     assetUnits?: bigint;
     fareId?: string;
     /** Exact sum of the selected sender input values. */
@@ -105,6 +134,9 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     selectedVtxos: readonly ExtendedVirtualCoin[];
     assetId?: AssetIdValue;
     fareId?: string;
+    /** The leaf to authorise. Sent as the request and bound as the expectation
+     * from this one field, so a substituted quote cannot pass the check. */
+    claimMode?: "recycle" | "purchase";
     expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId">;
 }
 
@@ -117,6 +149,36 @@ export interface SponsoredQuoteRequest {
     fareId?: string;
     /** Exact sum of the selected sender input values. */
     senderSats: bigint;
+    /** An extra extension packet the payment must carry — an offer's, when
+     * funding one. Checked against the quote's echo during verification. */
+    extraPacket?: { type: number; payload: Uint8Array };
+}
+
+export interface ReceiveQuoteRequest {
+    receiverAddress: string;
+    makerPublicKey: Uint8Array;
+    assetId: AssetIdValue;
+    fareId?: string;
+    fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "receiver";
+}
+
+export interface RequestVerifiedReceiveQuoteArgs extends Omit<
+    VerifyReceiveQuoteArgs,
+    "quote" | "info" | "expect" | "now"
+> {
+    receiverAddress: string;
+    makerPublicKey: Uint8Array;
+    assetId: AssetIdValue;
+    fareId?: string;
+    fundingExpiry?: { kind: "height" | "time"; value: bigint };
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "receiver";
+    expect: Omit<
+        ReceiveQuoteExpectation,
+        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
+    >;
 }
 
 export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
@@ -128,7 +190,13 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     selectedVtxos: readonly ExtendedVirtualCoin[];
     assetId?: AssetIdValue;
     fareId?: string;
-    expect: Omit<SponsoredQuoteExpectation, "receiverAddress" | "senderKey" | "assetId">;
+    /** An offer's `extension` funds that offer. Declared once: the expectation
+     * below is derived from it, so the request and the check cannot diverge. */
+    extraPacket?: { type: number; payload: Uint8Array };
+    expect: Omit<
+        SponsoredQuoteExpectation,
+        "receiverAddress" | "senderKey" | "assetId" | "extraPacket"
+    >;
 }
 
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
@@ -172,6 +240,7 @@ export class TaxiClient {
             senderInputs: req.senderInputs.map(fundingInputToWire),
         };
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
+        if (req.claimMode !== undefined) wire.claimMode = req.claimMode;
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
@@ -179,11 +248,79 @@ export class TaxiClient {
         return body;
     }
 
+    async requestReceiveQuote(req: ReceiveQuoteRequest): Promise<ReceiveQuoteResponse> {
+        const wire: ReceiveQuoteRequestBody = {
+            receiverAddress: req.receiverAddress,
+            makerPublicKey: bytesToHex(req.makerPublicKey),
+            assetId: assetIdToWire(req.assetId),
+        };
+        if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.fundingExpiry !== undefined)
+            wire.fundingExpiry = {
+                kind: req.fundingExpiry.kind,
+                value: satsToWire(req.fundingExpiry.value),
+            };
+        if (req.payer !== undefined) wire.payer = req.payer;
+        const body = await this.request("POST", "/v1/receive-quotes", wire);
+        decodeReceiveQuote(body);
+        return body as ReceiveQuoteResponse;
+    }
+
+    async getReceiveQuote(quoteId: string): Promise<ReceiveQuoteResponse> {
+        if (!quoteId.length || quoteId.length > 128)
+            throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: invalid receive quote id");
+        const body = await this.request("GET", `/v1/receive-quotes/${encodeURIComponent(quoteId)}`);
+        decodeReceiveQuote(body);
+        return body as ReceiveQuoteResponse;
+    }
+
+    async requestVerifiedReceiveQuote(
+        raw: RequestVerifiedReceiveQuoteArgs,
+    ): Promise<{ verified: VerifiedReceiveQuote }> {
+        const request = immutablePlainCopy(raw, "verified receive quote request");
+        await preflightReceiveRequest(request);
+        const info = await this.info();
+        const quote = await this.requestReceiveQuote(request);
+        return {
+            verified: verifyReceiveQuote({
+                quote,
+                info,
+                trustedServerKey: request.trustedServerKey,
+                trustedEmulatorKey: request.trustedEmulatorKey,
+                dust: request.dust,
+                vtxoMinAmount: request.vtxoMinAmount,
+                hrp: request.hrp,
+                now: Math.floor(Date.now() / 1000),
+                expect: {
+                    ...request.expect,
+                    receiverAddress: request.receiverAddress,
+                    makerPublicKey: request.makerPublicKey,
+                    assetId: request.assetId,
+                    ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
+                    ...(request.fundingExpiry === undefined
+                        ? {}
+                        : { fundingExpiry: request.fundingExpiry }),
+                    ...(request.payer === undefined ? {} : { payer: request.payer }),
+                },
+            }),
+        };
+    }
+
     async requestVerifiedQuote(
         args: RequestVerifiedQuoteArgs,
     ): Promise<{ verified: VerifiedQuote; senderInputs: FundingInputValue[] }> {
         const { selectedVtxos, ...options } = args;
         const request = immutablePlainCopy(options, "verified quote request");
+        const requestedClaimMode = request.claimMode ?? request.expect.claimMode;
+        if (
+            request.claimMode !== undefined &&
+            request.expect.claimMode !== undefined &&
+            request.claimMode !== request.expect.claimMode
+        )
+            throw new TaxiError(
+                ClientErrorCode.InvalidResponse,
+                `taxi: claimMode ${request.claimMode} contradicts the expected ${request.expect.claimMode}`,
+            );
         const receiver = ArkAddress.decode(request.receiverAddress);
         if (
             receiver.encode() !== request.receiverAddress ||
@@ -200,6 +337,7 @@ export class TaxiClient {
         const quote = await this.requestQuote({
             ...request,
             receiverKey,
+            claimMode: requestedClaimMode,
             senderInputs,
             senderSats,
         });
@@ -214,6 +352,7 @@ export class TaxiClient {
                 receiverKey,
                 senderKey: request.senderKey,
                 assetId: request.assetId,
+                claimMode: requestedClaimMode,
             },
         });
         return { verified, senderInputs };
@@ -245,6 +384,11 @@ export class TaxiClient {
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.extraPacket !== undefined)
+            wire.extraPacket = {
+                type: req.extraPacket.type,
+                payload: bytesToHex(req.extraPacket.payload),
+            };
         const body = (await this.request(
             "POST",
             "/v1/sponsored-transfers",
@@ -287,6 +431,7 @@ export class TaxiClient {
                 receiverAddress: request.receiverAddress,
                 senderKey: request.senderKey,
                 assetId: request.assetId,
+                extraPacket: request.extraPacket,
             },
         });
         return { verified, senderInputs };
@@ -317,6 +462,66 @@ export class TaxiClient {
     async sponsoredStatus(transferId: string): Promise<TransferStatusResponse> {
         const path = `/v1/sponsored-transfers/${encodeURIComponent(transferId)}`;
         return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
+    }
+
+    async requestSwapFillQuote(req: RequestSwapFillQuoteArgs): Promise<SwapFillQuoteResponse> {
+        const body = (await this.request(
+            "POST",
+            "/v1/swap-fills",
+            encodeSwapFillQuoteBody(req),
+        )) as SwapFillQuoteResponse;
+        decodeSwapFillQuote(body);
+        return body;
+    }
+
+    async requestVerifiedSwapFillQuote(
+        args: RequestVerifiedSwapFillQuoteArgs,
+    ): Promise<{ verified: VerifiedSwapFillQuote }> {
+        const request = immutablePlainCopy(args, "verified swap-fill quote request");
+        const { now, ...body } = request;
+        const quote = await this.requestSwapFillQuote(body);
+        const verified = verifySwapFillQuote({
+            quote,
+            expect: {
+                operationId: body.operationId,
+                solverProceedsScript: body.solverProceedsScript,
+                solverInputs: body.solverInputs.map(({ txid, vout }) => ({ txid, vout })),
+                contributionSats: body.contributionSats,
+                maxFare: body.maxFare,
+                ...(body.fundingTxid !== undefined ? { fundingTxid: body.fundingTxid } : {}),
+                ...(body.fundingVout !== undefined ? { fundingVout: body.fundingVout } : {}),
+                ...(body.validUntil !== undefined ? { validUntil: body.validUntil } : {}),
+            },
+            ...(now !== undefined ? { now } : {}),
+        });
+        return { verified };
+    }
+
+    /** Takes a `VerifiedSwapFillQuote`: only `verifySwapFillQuote` produces
+     * one, so an unverified fill cannot be submitted. Makes exactly one
+     * attempt and never retries: an ambiguous outcome throws
+     * `SwapFillSubmitAmbiguousError`, every earlier failure a plain
+     * `TaxiError` carrying the server's code. */
+    async submitSwapFill(
+        verified: VerifiedSwapFillQuote,
+        solverGraph: SwapFillGraphWire,
+    ): Promise<SwapFillStatusResponse> {
+        const fillId = assertSubmittableSwapFill(verified, solverGraph);
+        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}/submit`;
+        let body: unknown;
+        try {
+            body = await this.request("POST", path, { solverGraph });
+        } catch (error) {
+            if (error instanceof TaxiError && error.code === SWAP_FILL_AMBIGUOUS_CODE)
+                throw new SwapFillSubmitAmbiguousError(fillId, error);
+            throw error;
+        }
+        return decodeSwapFillStatus(body);
+    }
+
+    async swapFillStatus(fillId: string): Promise<SwapFillStatusResponse> {
+        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}`;
+        return decodeSwapFillStatus((await this.request("GET", path)) as SwapFillStatusResponse);
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {
@@ -489,5 +694,86 @@ export class TaxiClient {
                 { cause },
             );
         }
+    }
+}
+
+async function preflightReceiveRequest(request: RequestVerifiedReceiveQuoteArgs): Promise<void> {
+    let receiver: ArkAddress;
+    try {
+        receiver = ArkAddress.decode(request.receiverAddress);
+    } catch (cause) {
+        throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: receiver address is invalid", {
+            cause,
+        });
+    }
+    if (
+        receiver.encode() !== request.receiverAddress ||
+        receiver.hrp !== request.hrp ||
+        bytesToHex(receiver.serverPubKey) !== bytesToHex(request.trustedServerKey)
+    )
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: receiver address must be canonical and match the trusted network and server",
+        );
+    if (!(request.makerPublicKey instanceof Uint8Array) || request.makerPublicKey.length !== 32)
+        throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: maker key must be 32 bytes");
+    try {
+        validatePubkey(request.makerPublicKey, PubT.schnorr);
+    } catch (cause) {
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: maker key is not a curve point",
+            {
+                cause,
+            },
+        );
+    }
+    const deadline = (value: unknown): value is { kind: "height" | "time"; value: bigint } =>
+        !!value &&
+        typeof value === "object" &&
+        ((value as { kind?: unknown }).kind === "height" ||
+            (value as { kind?: unknown }).kind === "time") &&
+        typeof (value as { value?: unknown }).value === "bigint" &&
+        (value as { value: bigint }).value > 0n;
+    if (
+        !(request.assetId.txid instanceof Uint8Array) ||
+        request.assetId.txid.length !== 32 ||
+        !Number.isSafeInteger(request.assetId.groupIndex) ||
+        request.assetId.groupIndex < 0 ||
+        (request.fareId !== undefined &&
+            (typeof request.fareId !== "string" ||
+                !request.fareId.length ||
+                request.fareId.length > 128)) ||
+        !(request.trustedServerKey instanceof Uint8Array) ||
+        request.trustedServerKey.length !== 32 ||
+        !(request.trustedEmulatorKey instanceof Uint8Array) ||
+        request.trustedEmulatorKey.length !== 32 ||
+        typeof request.hrp !== "string" ||
+        !request.hrp.length ||
+        typeof request.dust !== "bigint" ||
+        typeof request.vtxoMinAmount !== "bigint" ||
+        request.dust <= 0n ||
+        request.vtxoMinAmount <= 0n ||
+        request.dust - request.vtxoMinAmount < request.vtxoMinAmount ||
+        typeof request.expect.maxServiceFareSats !== "bigint" ||
+        request.expect.maxServiceFareSats < 0n ||
+        !deadline(request.expect.minRecoveryLocktime) ||
+        !deadline(request.expect.minInputExpiryFloor) ||
+        request.expect.minRecoveryLocktime.kind !== request.expect.minInputExpiryFloor.kind ||
+        (request.fundingExpiry !== undefined && !deadline(request.fundingExpiry))
+    )
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: receive quote expectations are invalid",
+        );
+    try {
+        validatePubkey(request.trustedServerKey, PubT.schnorr);
+        validatePubkey(request.trustedEmulatorKey, PubT.schnorr);
+    } catch (cause) {
+        throw new TaxiError(
+            ClientErrorCode.InvalidResponse,
+            "taxi: trusted server or emulator key is not a curve point",
+            { cause },
+        );
     }
 }

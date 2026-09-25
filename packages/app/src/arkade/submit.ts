@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { advanceKind, type Advance, type Outpoint } from "@arkade-taxi/core";
+import { advanceKind, covenantParamsOf, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type { AdvanceRepository } from "@arkade-taxi/db";
 import {
     DustCovenantScript,
@@ -277,17 +277,10 @@ function assertPersistedGraph(
                 ),
             },
         },
-        params: {
-            receiverKey: advance.receiverKey,
-            senderKey: advance.senderKey,
-            operatorKey: advance.operatorKey,
-            dust: advance.dust,
-            topup: advance.topup,
-            locktime: advance.locktime,
-            ...(advance.assetId ? { assetId: advance.assetId } : {}),
-        },
+        params: covenantParamsOf(advance),
         covenantAddress: advance.covenantAddress,
         fare: advance.fare,
+        ...(envelope.satsFarePayer === undefined ? {} : { satsFarePayer: envelope.satsFarePayer }),
     };
     const unroll = CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript));
     const rebuilt =
@@ -317,6 +310,7 @@ function sponsoredRequest(advance: Advance, request: LockupBuildRequest): Sponso
         },
         receiverAddress: advance.covenantAddress,
         fare: advance.fare,
+        ...(request.satsFarePayer === undefined ? {} : { satsFarePayer: request.satsFarePayer }),
     };
 }
 
@@ -363,15 +357,7 @@ export function validateLockupSubmission(
             serverKey: config.serverPubkey,
             emulatorKey: config.emulatorPubkey,
             vtxoMinAmount: config.vtxoMinAmount,
-            params: {
-                receiverKey: advance.receiverKey,
-                senderKey: advance.senderKey,
-                operatorKey: advance.operatorKey,
-                dust: advance.dust,
-                topup: advance.topup,
-                locktime: advance.locktime,
-                ...(advance.assetId ? { assetId: advance.assetId } : {}),
-            },
+            params: covenantParamsOf(advance),
         });
         if (
             covenant.address(config.addressHrp, config.serverPubkey).encode() !==

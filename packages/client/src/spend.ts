@@ -4,6 +4,7 @@ import {
     copyByteView,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
     signerTransaction,
     type CovenantSpendInput,
@@ -47,6 +48,7 @@ import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./
 import { WeakValueRegistry } from "./lifecycle.js";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
 import type { VerifiedQuote } from "./verify.js";
+import { claimLeafDisabled } from "@arkade-taxi/covenant";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -78,6 +80,8 @@ export interface IncomingClaimExpectation {
     receiverAddress: string;
     assetId?: AssetIdValue;
     assetUnits?: bigint;
+    recoveryRecipient?: "sender" | "receiver";
+    claimMode?: "recycle" | "purchase";
 }
 
 export interface IncomingClaimTrust {
@@ -542,11 +546,16 @@ const observe = async (
 
 const activeState = (
     transfer: CovenantTransfer,
+    requestedLeaf: Leaf,
 ): CapabilityState & { script: DustCovenantScript } => {
     if (!transfer || typeof transfer !== "object")
         reject("unrecognized covenant-transfer capability");
     const retained = capabilities.get(transfer);
     if (retained === undefined) return reject("unrecognized covenant-transfer capability");
+    // Checked before the one-shot lifecycle is consumed, so a wrong-mode call
+    // is a no-op and the right one can still be attempted.
+    if (claimLeafDisabled(retained.params, requestedLeaf))
+        reject("covenant mode does not permit this claim leaf");
     lifecycleRegistry().claim(retained.lifecycle, (lifecycle) => {
         if (lifecycle.state !== "available")
             reject(
@@ -664,7 +673,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
     exactObjectKeys(
         expect as unknown as Record<string, unknown>,
         ["receiverAddress"],
-        ["assetId", "assetUnits"],
+        ["assetId", "assetUnits", "recoveryRecipient", "claimMode"],
         "incoming claim expectation",
     );
     exactObjectKeys(
@@ -696,6 +705,25 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
     const params = quoteParamsFromWire(descriptor.params);
     exactBytes(receiver.vtxoTaprootKey, params.receiverKey, "incoming receiver key");
     exactBytes(params.operatorKey, trusted.operatorKey, "incoming operator key");
+    if (
+        expect.recoveryRecipient !== undefined &&
+        expect.recoveryRecipient !== "sender" &&
+        expect.recoveryRecipient !== "receiver"
+    )
+        reject("expected recovery recipient is invalid");
+    if (
+        expect.recoveryRecipient !== undefined &&
+        (params.recoveryRecipient ?? "sender") !== expect.recoveryRecipient
+    )
+        reject("incoming recovery recipient mismatch");
+    if (
+        expect.claimMode !== undefined &&
+        expect.claimMode !== "recycle" &&
+        expect.claimMode !== "purchase"
+    )
+        reject("expected claim mode is invalid");
+    if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode)
+        reject("incoming claim mode mismatch");
     if (expect.assetId !== undefined) {
         exactObjectKeys(
             expect.assetId as unknown as Record<string, unknown>,
@@ -1119,6 +1147,7 @@ const exactFundingInput = async (
 const packetForSpend = (
     sources: readonly Holding[][],
     destinationVout: number,
+    fare?: { id: string; vout: number; units: bigint },
 ): AssetPacket | undefined => {
     const totals = new Map<string, bigint>();
     sources.forEach((holdings) =>
@@ -1142,7 +1171,12 @@ const packetForSpend = (
                               ]
                             : [],
                     ),
-                    [AssetOutput.create(destinationVout, amount)],
+                    fare?.id === id
+                        ? [
+                              AssetOutput.create(fare.vout, fare.units),
+                              AssetOutput.create(destinationVout, amount - fare.units),
+                          ]
+                        : [AssetOutput.create(destinationVout, amount)],
                     [],
                 ),
             ),
@@ -1437,7 +1471,7 @@ export async function purchase(
     transfer: CovenantTransfer,
     destination: Uint8Array,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.Purchase);
     const output = exactDestination(destination, state);
     if (state.params.dust < state.vtxoMinAmount)
         reject("purchase output is below the Ark operator minimum");
@@ -1461,11 +1495,12 @@ export async function recycle(
     receiverWalletInput: ReceiverWalletInput,
     destination: Uint8Array,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.Recycle);
     receiverWalletInput = receiverInputSnapshot(receiverWalletInput);
     const output = exactDestination(destination, state);
     const funding = await exactFundingInput(receiverWalletInput, state);
-    const merged = state.params.dust + receiverWalletInput.input.value - state.params.topup;
+    const { operatorSats, assetFare } = recycleFare(state.params);
+    const merged = state.params.dust + receiverWalletInput.input.value - operatorSats;
     if (merged < state.params.dust || merged < state.vtxoMinAmount)
         reject("recycle receiver output is below dust or the Ark operator minimum");
     const covenant = covenantSpendInput(
@@ -1484,14 +1519,20 @@ export async function recycle(
                 {
                     script: payoutPkScript(
                         state.params.operatorKey,
-                        state.params.topup,
+                        operatorSats,
                         state.params.dust,
                     ),
-                    amount: state.params.topup,
+                    amount: operatorSats,
                 },
                 { script: output, amount: merged },
             ],
-            assetPacket: packetForSpend([state.holdings, funding.holdings], 1),
+            assetPacket: packetForSpend(
+                [state.holdings, funding.holdings],
+                1,
+                assetFare > 0n
+                    ? { id: assetId(state.params)!, vout: 0, units: assetFare }
+                    : undefined,
+            ),
             human: { identity: receiverWalletInput.identity, key: funding.key, indexes: [1] },
         },
         receiverWalletInput,
@@ -1502,10 +1543,14 @@ export async function refund(
     transfer: CovenantTransfer,
     senderIdentity: Identity,
 ): Promise<string> {
-    const state = activeState(transfer);
+    const state = activeState(transfer, Leaf.RefundSender);
     const sender = await identityKey(senderIdentity, state.params.senderKey, "sender");
     const topup = refundTopup(state.params, state.vtxoMinAmount);
     const returned = state.params.dust - topup;
+    const recoveryKey =
+        state.params.recoveryRecipient === "receiver"
+            ? state.params.receiverKey
+            : state.params.senderKey;
     const input = covenantSpendInput(
         state.script,
         Leaf.RefundSender,
@@ -1522,7 +1567,7 @@ export async function refund(
                 amount: topup,
             },
             {
-                script: payoutPkScript(state.params.senderKey, returned, state.params.dust),
+                script: payoutPkScript(recoveryKey, returned, state.params.dust),
                 amount: returned,
             },
         ],

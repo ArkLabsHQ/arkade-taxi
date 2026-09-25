@@ -37,6 +37,8 @@ export interface LockupEnvelope {
     operatorInputs: FundingInputWire[];
     serverUnrollScript: string;
     assetUnits?: string;
+    /** Present only on lockups whose sats fare comes out of sender change. */
+    satsFarePayer?: "sender";
     unsignedTxId: string;
     covenantOutputIndex: number;
     senderInputIndexes: number[];
@@ -268,7 +270,7 @@ export function decodeLockupEnvelope(encoded: string): LockupEnvelope {
             "senderInputIndexes",
             "operatorInputIndexes",
         ],
-        ["assetUnits"],
+        ["assetUnits", "satsFarePayer"],
         "envelope",
     );
     if (
@@ -290,6 +292,8 @@ export function decodeLockupEnvelope(encoded: string): LockupEnvelope {
         reject("envelope serverUnrollScript is not canonical hex");
     if (wire.assetUnits !== undefined)
         attempt("envelope assetUnits", () => satsFromWire(wire.assetUnits as string, "assetUnits"));
+    if (wire.satsFarePayer !== undefined && wire.satsFarePayer !== "sender")
+        reject("envelope satsFarePayer is not a payer this client knows");
     const checkpoints = wire.checkpoints as unknown[];
     const senderInputs = wire.senderInputs as unknown[];
     const operatorInputs = wire.operatorInputs as unknown[];
@@ -303,6 +307,7 @@ export function decodeLockupEnvelope(encoded: string): LockupEnvelope {
         operatorInputs: operatorInputs as FundingInputWire[],
         serverUnrollScript: wire.serverUnrollScript as string,
         ...(wire.assetUnits !== undefined ? { assetUnits: wire.assetUnits as string } : {}),
+        ...(wire.satsFarePayer !== undefined ? { satsFarePayer: "sender" as const } : {}),
         unsignedTxId: wire.unsignedTxId as string,
         covenantOutputIndex: wire.covenantOutputIndex as number,
         senderInputIndexes: decodeIndexes(wire.senderInputIndexes, "senderInputIndexes"),
@@ -471,9 +476,19 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
                 context.hrp,
             ),
         });
-    const senderChange = context.senderSats + context.params.topup - context.params.dust;
+    if (
+        envelope.satsFarePayer !== undefined &&
+        (context.fare.currency !== "sats" || context.fare.units <= 0n)
+    )
+        reject("satsFarePayer needs a positive sats fare");
+    // Absent, the fare leaves operator change and returns to the operator. The
+    // caller authorised this fare either way, so both layouts are within it.
+    const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
+    const operatorFare = fareHosting - senderFare;
+    const senderChange =
+        context.senderSats + context.params.topup - context.params.dust - senderFare;
     const operatorTotal = operatorInputs.reduce((sum, input) => sum + input.value, 0n);
-    const operatorChange = operatorTotal - context.params.topup - fareHosting;
+    const operatorChange = operatorTotal - context.params.topup - operatorFare;
     if (senderChange < 0n || operatorChange < 0n) reject("lockup funding is insufficient");
 
     const destinations = new Map<string, Map<number, bigint>>();

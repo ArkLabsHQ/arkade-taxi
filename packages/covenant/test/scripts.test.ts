@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
-import { buildPurchase, buildRecycle, buildRefund, buildScripts } from "../src/scripts.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { subDustScript } from "../src/pin.js";
+import {
+    buildPurchase,
+    buildReclaim,
+    buildRecycle,
+    buildRefund,
+    buildScripts,
+} from "../src/scripts.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
+import { receiverPaid } from "./fixtures.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
@@ -20,6 +29,7 @@ const asm = (script: Uint8Array) => arkade.ArkadeScript.decode(script);
 // decode returns small values as numbers but anything wider as raw script-num
 // bytes, so a literal like 330n never appears in a decoded script.
 const num = (n: bigint) => arkade.BigNum.encode(n);
+const pinHash = (xonlyKey: Uint8Array) => sha256(subDustScript(xonlyKey));
 
 describe("buildRecycle", () => {
     it("pins the current input index to 0 and the input count to 2", () => {
@@ -57,6 +67,27 @@ describe("buildRecycle", () => {
         expect(decoded.filter((o) => o === "DROP")).toHaveLength(1);
         expect(decoded.filter((o) => o === "VERIFY")).toHaveLength(2);
     });
+
+    it("a zero fare builds the recycle leaf a fareless covenant builds", () => {
+        expect(
+            buildRecycle(receiverPaid({ receiverFare: { currency: "sats", units: 0n } })),
+        ).toEqual(buildRecycle(receiverPaid({ receiverFare: undefined })));
+    });
+
+    it.each([
+        ["sats", { currency: "sats", units: 7n }],
+        ["asset", { currency: "asset", units: 9n }],
+    ] as const)(
+        "a %s fare leaves purchase, refund and reclaim byte-identical",
+        (_label, receiverFare) => {
+            const bare = receiverPaid({ receiverFare: undefined });
+            const withFare = receiverPaid({ receiverFare });
+            expect(buildPurchase(withFare)).toEqual(buildPurchase(bare));
+            expect(buildRefund(withFare, 1n)).toEqual(buildRefund(bare, 1n));
+            expect(buildReclaim(withFare, 1n)).toEqual(buildReclaim(bare, 1n));
+            expect(buildRecycle(withFare)).not.toEqual(buildRecycle(bare));
+        },
+    );
 });
 
 describe("buildPurchase", () => {
@@ -95,6 +126,36 @@ describe("buildRefund", () => {
 
     it("pays the sender the remainder as a sub-dust output", () => {
         expect(asm(buildRefund(base(), 10n))).toContain(-1);
+    });
+
+    it("keeps explicit sender recovery byte-identical to the absent legacy term", () => {
+        const sender = { ...base(), assetId, recoveryRecipient: "sender" } as DustCovenantParams;
+        expect(buildRefund(sender, 1n)).toEqual(buildRefund({ ...base(), assetId }, 1n));
+    });
+
+    it("pays a receiver-owned refund to the receiver and never the sender", () => {
+        const params = {
+            ...base(),
+            assetId,
+            recoveryRecipient: "receiver",
+        } as DustCovenantParams;
+        const decoded = asm(buildRefund(params, 1n));
+        expect(decoded).toContainEqual(pinHash(key(1)));
+        expect(decoded).not.toContainEqual(pinHash(key(2)));
+        expect(decoded).toContainEqual(num(329n));
+    });
+
+    it("repays a precharged 329-sat advance in full while retaining a one-sat receipt", () => {
+        const params = {
+            ...base(),
+            topup: 329n,
+            assetId,
+            recoveryRecipient: "receiver",
+        } as DustCovenantParams;
+        const decoded = asm(buildRefund(params, 1n));
+        expect(decoded).toContainEqual(num(329n));
+        expect(decoded).toContainEqual(pinHash(key(1)));
+        expect(decoded).not.toContainEqual(pinHash(key(2)));
     });
 });
 

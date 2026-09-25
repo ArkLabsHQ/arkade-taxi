@@ -15,19 +15,23 @@ import {
     type TimeHeight,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { refundTopup } from "@arkade-taxi/covenant";
-import type { Outpoint } from "@arkade-taxi/core";
+import { recycleFare, refundTopup, type AssetIdRef } from "@arkade-taxi/covenant";
+import { covenantParamsOf, type Outpoint } from "@arkade-taxi/core";
 import type {
     AdvanceRepository,
     ProceedsRepository,
     ProceedsPlan,
+    ReceiveQuoteRepository,
     ReservationRepository,
+    SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
 import type { createOperatorRuntime } from "./arkade/operatorWallet.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
+import { readFundingSource } from "./arkade/fundingSource.js";
 import { classifyObservedSpend } from "./watcher.js";
-import { normalizeExpiry, verifyProviders } from "./arkade/providers.js";
+import { normalizeExpiry, verifyProviders, withinVtxoMaxAmount } from "./arkade/providers.js";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
 const intentDigest = (proof: string, message: string) =>
@@ -42,7 +46,7 @@ const total = (coins: readonly VirtualCoin[]) =>
     coins.reduce((sum, c) => sum + BigInt(c.value), 0n);
 const withinOutputLimit = (amount: bigint, maxAmount: bigint) => {
     if (typeof maxAmount !== "bigint") fail("proceeds_output_limit_invalid");
-    return maxAmount < 0n || amount <= maxAmount;
+    return withinVtxoMaxAmount(amount, maxAmount);
 };
 const holdings = (coins: readonly VirtualCoin[]) => {
     const values = new Map<string, bigint>();
@@ -55,6 +59,8 @@ const holdings = (coins: readonly VirtualCoin[]) => {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([assetId, amount]) => ({ assetId, amount: amount.toString() }));
 };
+const swapAssetId = ({ txid, groupIndex }: AssetIdRef) =>
+    asset.AssetId.create(hex.encode(Uint8Array.from(txid).reverse()), groupIndex).toString();
 const facts = (c: VirtualCoin) => ({
     ...outpoint(c),
     value: c.value,
@@ -303,6 +309,8 @@ interface Deps {
     runtime: ReturnType<typeof createOperatorRuntime>;
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
+    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
+    receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
 }
@@ -344,11 +352,21 @@ export async function discoverProceeds(
         if (!advance.outpoint || !advance.arkTxid || !advance.spentTxid) continue;
         if (hex.encode(advance.operatorKey) !== hex.encode(config.operatorKey))
             fail("proceeds_payout_key_changed");
+        const source = readFundingSource(advance.unsignedLockupTx);
         const fare = { txid: advance.arkTxid, vout: 1 };
         const repayment = { txid: advance.spentTxid, vout: 0 };
-        if (!candidates.has(key(fare)) && !candidates.has(key(repayment))) continue;
-        const envelope = validatePersistedLockupGraph(advance, config);
-        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        if (
+            (source.kind === "joint-fill" || !candidates.has(key(fare))) &&
+            !candidates.has(key(repayment))
+        )
+            continue;
+        const envelope =
+            source.kind === "legacy" ? validatePersistedLockupGraph(advance, config) : undefined;
+        const tx = Transaction.fromPSBT(
+            base64.decode(
+                source.kind === "joint-fill" ? source.source.graph.arkTx : envelope!.arkTx,
+            ),
+        );
         if (tx.id !== advance.arkTxid) fail("proceeds_lockup_mismatch");
         const covenant = await indexer.getVtxos({ outpoints: [advance.outpoint] });
         if (covenant.vtxos.length !== 1) fail("proceeds_covenant_missing");
@@ -360,15 +378,12 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (advance.fare.units > 0n) {
+        if (source.kind === "legacy" && advance.fare.units > 0n) {
             const fareAssets =
                 advance.fare.currency === "asset"
                     ? [
                           {
-                              assetId: asset.AssetId.create(
-                                  hex.encode(Uint8Array.from(advance.fare.assetId.txid).reverse()),
-                                  advance.fare.assetId.groupIndex,
-                              ).toString(),
+                              assetId: swapAssetId(advance.fare.assetId),
                               amount: advance.fare.units.toString(),
                           },
                       ]
@@ -379,14 +394,17 @@ export async function discoverProceeds(
                 fareAssets,
             );
         }
-        if (advance.state !== "purchased")
+        if (advance.state === "recycled") {
+            const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
                 repayment,
-                advance.state === "recycled"
-                    ? advance.topup
-                    : refundTopup(advance, config.vtxoMinAmount),
-                [],
+                operatorSats,
+                assetFare > 0n
+                    ? [{ assetId: swapAssetId(advance.assetId!), amount: assetFare.toString() }]
+                    : [],
             );
+        } else if (advance.state !== "purchased")
+            await check(repayment, refundTopup(advance, config.vtxoMinAmount), []);
         if (found.size >= 32) break;
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
@@ -394,6 +412,8 @@ export async function discoverProceeds(
 
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
+    const taxiLocksOf = () =>
+        unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
@@ -439,7 +459,7 @@ export function createProceedsCollector(deps: Deps) {
                 blocker = null;
                 return;
             }
-            const taxiLocks = reservations.listReservedOutpoints();
+            const taxiLocks = taxiLocksOf();
             const locks = [
                 ...taxiLocks,
                 ...(await runtime.storage.intentRepository.getLockedVtxoOutpoints()),
@@ -558,11 +578,7 @@ export function createProceedsCollector(deps: Deps) {
                         if (sponsor && !canSpendOffchain(sponsor, clock))
                             fail("proceeds_input_unavailable");
                         const locked = new Set(
-                            [
-                                ...reservations.listReservedOutpoints(),
-                                ...sdkLocks,
-                                ...plan.inputs,
-                            ].map(key),
+                            [...taxiLocksOf(), ...sdkLocks, ...plan.inputs].map(key),
                         );
                         const reserve = coins.reduce(
                             (sum, c) =>

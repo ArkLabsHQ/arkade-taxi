@@ -29,6 +29,11 @@ export function normalizeExpiry(coin: {
     return { kind, value: BigInt(value) };
 }
 
+/** arkd reports `vtxoMaxAmount` -1 when there is no ceiling. */
+export function withinVtxoMaxAmount(amount: bigint, vtxoMaxAmount: bigint): boolean {
+    return vtxoMaxAmount < 0n || amount <= vtxoMaxAmount;
+}
+
 export function normalizeSigner(key: string): string {
     if (/^[0-9a-f]{64}$/i.test(key)) return key.toLowerCase();
     if (/^0[23][0-9a-f]{64}$/i.test(key)) return key.slice(2).toLowerCase();

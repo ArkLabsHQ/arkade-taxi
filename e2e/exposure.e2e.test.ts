@@ -2,24 +2,52 @@ import { expect } from "vitest";
 import { liveScenario } from "./scenarios.js";
 import { admin, lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
 
+const bitcoinSatsFare = (units: string) =>
+    admin("policy", {
+        assetRules: [
+            {
+                assetId: null,
+                enabled: true,
+                fares: [
+                    { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units } },
+                ],
+                claim: "either",
+                maxTopupSats: null,
+            },
+        ],
+    });
+
 liveScenario("exposure-cap-rejects-quote", async () => {
     const live = await openLive();
     try {
         const first = await lock(
             live,
-            await quoteFor(live, "receiverSats", await sizedSender(live)),
+            await quoteFor(live, "receiverSats", await sizedSender(live), false, false, "purchase"),
         );
         const nextCoin = await sizedSender(live);
         const before = await admin("status");
         expect(before.exposure.outstandingSats).toBe("1");
         expect(before.exposure.activeCount).toBe(1);
         await admin("policy", { maxOutstandingSats: "1" });
-        await expect(quoteFor(live, "receiverSats", nextCoin)).rejects.toMatchObject({
+        await expect(
+            quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        ).rejects.toMatchObject({
             code: "exceeds_max_outstanding",
         });
         expect((await admin("status")).exposure).toEqual(before.exposure);
         await admin("policy", { maxOutstandingSats: "2" });
-        const second = await lock(live, await quoteFor(live, "receiverSats", nextCoin));
+        // Admitted on exposure, refused on the fare: a bitcoin transfer's
+        // payment IS its sender sats, so a sats fare has nothing to come from.
+        await bitcoinSatsFare("1");
+        await expect(
+            quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        ).rejects.toMatchObject({ code: "fare_unavailable" });
+        expect((await admin("status")).exposure).toEqual(before.exposure);
+        await bitcoinSatsFare("0");
+        const second = await lock(
+            live,
+            await quoteFor(live, "receiverSats", nextCoin, false, false, "purchase"),
+        );
         expect((await admin("status")).exposure.outstandingSats).toBe("2");
         for (const locked of [first, second]) {
             const txid = await live.client.purchase(locked.transfer, locked.destination);

@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress } from "@arkade-os/sdk";
+import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
-import { AdvanceRepository, openDatabase, PolicyRepository } from "@arkade-taxi/db";
+import {
+    AdvanceRepository,
+    openDatabase,
+    PolicyRepository,
+    type InsertReceiveQuoteRequest,
+    type ReceiveQuote,
+    type ReceiveQuoteRepository,
+} from "@arkade-taxi/db";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
 import type {
@@ -10,12 +17,16 @@ import type {
     InfoResponse,
     LockupResponse,
     QuoteResponse,
+    ReceiveQuoteResponse,
     SponsoredQuoteResponse,
+    SwapFillQuoteResponse,
+    SwapFillStatusResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
+import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createApp } from "../src/server.js";
@@ -41,13 +52,59 @@ import {
     serverUnroll,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
+import {
+    asIndexed,
+    FAKE_COVENANT_SCRIPT,
+    FAKE_MAKER_SCRIPT,
+    FakeSwapFillGraphBuilder,
+    fakeOfferTerms,
+    MemorySwapFills,
+    solverCoin,
+    solverTaproot,
+} from "./swapFillFixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;
 
+const submitJointStub = (): SwapFillJointOps => ({
+    verifyPlan: () => true,
+    signForTaxi: async (args) => args.partial,
+    prepare: (args) => ({
+        arkTx: args.partial.arkTx,
+        checkpointTxs: [...args.partial.checkpoints],
+        txid: "dd".repeat(32),
+    }),
+    covenantKey: () => "cc".repeat(32),
+    submit: async (args) => {
+        const response = await args.provider.submitTx(args.prepared.arkTx, [
+            ...args.prepared.checkpointTxs,
+        ]);
+        return {
+            txid: args.prepared.txid,
+            signedArkTx: response.signedArkTx,
+            signedCheckpointTxs: [...response.signedCheckpointTxs],
+        };
+    },
+});
+
+const submitEmulatorStub = () => ({
+    submitTx: async (arkTx: string, checkpoints: string[]) => ({
+        signedArkTx: arkTx,
+        signedCheckpointTxs: [...checkpoints],
+    }),
+});
+
+const submitIdentityStub = {
+    xOnlyPublicKey: async () => operatorKey,
+    sign: async (tx: unknown) => tx,
+} as unknown as import("@arkade-os/sdk").Identity;
+
 let advances: MemoryAdvances;
 let lockupBuilder: FakeLockupBuilder;
 let sponsoredBuilder: FakeSponsoredLockupBuilder;
+let swapFills: MemorySwapFills;
+let swapFillBuilder: FakeSwapFillGraphBuilder;
+let receiveQuotes: MemoryReceiveQuotes;
 let sweeperStatus: SweeperStatus;
 let reconcilerStatus: ReconcilerStatus;
 let clock: number;
@@ -91,12 +148,66 @@ const deps = (over: Partial<Policy> = {}): RouteDeps => ({
     lockupBuilder,
     lockupSubmitter: lockupBuilder,
     sponsoredBuilder,
+    swapFills,
+    receiveQuotes,
+    swapFillBuilder,
+    swapFillSubmit: {
+        swapFills,
+        taxiIdentity: () => submitIdentityStub,
+        emulator: submitEmulatorStub(),
+        config: config(),
+        now: () => clock,
+        randomId: () => `lease-${++ids}`,
+        leaseSeconds: 60,
+        joint: submitJointStub(),
+        assertSolverAuthorised: () => {},
+    },
+    offerCodec: { decodeOffer: () => fakeOfferTerms() },
     sweeper: { status: () => sweeperStatus },
     reconciler: { status: () => reconcilerStatus },
     sweeperStaleAfterSeconds: STALE_AFTER,
 });
 
 const app = (over: Partial<Policy> = {}) => createRoutes(deps(over));
+
+class MemoryReceiveQuotes {
+    readonly rows = new Map<string, ReceiveQuote>();
+    insert(request: InsertReceiveQuoteRequest): void {
+        this.rows.set(request.quote.id, structuredClone(request.quote));
+    }
+    get(id: string): ReceiveQuote | undefined {
+        const row = this.rows.get(id);
+        return row && structuredClone(row);
+    }
+    bind(request: Parameters<ReceiveQuoteRepository["bind"]>[0]): void {
+        const row = this.rows.get(request.quoteId);
+        if (!row || row.state !== "quoted") throw new Error("receive quote is not bindable");
+        this.rows.set(row.id, { ...row, state: "bound", boundFillId: request.fill.id });
+        swapFills.insert(request.fill);
+        advances.insert(request.advance);
+    }
+    expireQuotes(at: number): number {
+        let count = 0;
+        for (const row of this.rows.values())
+            if (row.state === "quoted" && row.expiresAt <= at) {
+                row.state = "expired";
+                count++;
+            }
+        return count;
+    }
+    listReservedOutpoints() {
+        return [...this.rows.values()]
+            .filter((row) => row.state === "quoted")
+            .flatMap((row) => row.operatorInputs.map(({ txid, vout }) => ({ txid, vout })));
+    }
+    exposureTotals() {
+        const active = [...this.rows.values()].filter((row) => row.state === "quoted");
+        return {
+            outstandingSats: active.reduce((sum, row) => sum + row.loanSats, 0n),
+            activeCount: active.length,
+        };
+    }
+}
 
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const senderAddress = new ArkAddress(serverKey, senderKey, "ark").encode();
@@ -737,6 +848,9 @@ beforeEach(() => {
     advances = new MemoryAdvances();
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     sponsoredBuilder = new FakeSponsoredLockupBuilder(config(), serverUnroll);
+    swapFills = new MemorySwapFills();
+    swapFillBuilder = new FakeSwapFillGraphBuilder(FAKE_MAKER_SCRIPT, 5000n);
+    receiveQuotes = new MemoryReceiveQuotes();
     sweeperStatus = okSweeper();
     reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
     clock = NOW;
@@ -763,10 +877,11 @@ describe("GET /v1/info", () => {
                     assetId: null,
                     enabled: true,
                     fares: [
-                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "10" } },
+                        { id: "sats", currency: "sats", pricing: { kind: "flat", units: "0" } },
                     ],
                     claim: "either",
                     maxTopupSats: null,
+                    unclaimedMode: "reclaim",
                 },
             ],
             maxPerPaymentTopupSats: "1000",
@@ -786,6 +901,54 @@ describe("GET /v1/info", () => {
     });
 });
 
+describe("receive quote routes", () => {
+    const receivePolicy = {
+        assetRules: [
+            {
+                assetId: ASSET,
+                enabled: true,
+                fares: [
+                    {
+                        id: "receive",
+                        currency: { kind: "sats" as const },
+                        pricing: { kind: "flat" as const, units: 3n },
+                    },
+                ],
+                claim: "either" as const,
+                maxTopupSats: null,
+            },
+        ],
+    };
+
+    it("POSTs a reserved quote and GET returns its saved state without renewing TTL", async () => {
+        const response = await post(
+            "/v1/receive-quotes",
+            {
+                receiverAddress,
+                makerPublicKey: bytesToHex(senderKey),
+                assetId: assetIdToWire(ASSET),
+                fundingExpiry: { kind: "height", value: "850000" },
+            },
+            receivePolicy,
+        );
+        expect(response.status).toBe(200);
+        const created = (await response.json()) as ReceiveQuoteResponse;
+        expect(created).toMatchObject({
+            quoteId: "adv-1",
+            state: "quoted",
+            batchExpiry: { kind: "height", value: "900000" },
+            inputExpiryFloor: { kind: "height", value: "850000" },
+            recoveryLocktime: { kind: "height", value: "849856" },
+        });
+        expect(advances.rows.size).toBe(0);
+
+        clock = created.expiresAt;
+        const read = await app(receivePolicy).request(`/v1/receive-quotes/${created.quoteId}`);
+        expect(read.status).toBe(200);
+        expect(await read.json()).toEqual({ ...created, state: "expired" });
+    });
+});
+
 describe("POST /v1/transfers", () => {
     it("returns 200 and a quote whose amounts are decimal strings", async () => {
         const res = await post("/v1/transfers", quoteBody());
@@ -794,7 +957,7 @@ describe("POST /v1/transfers", () => {
         const body = (await res.json()) as QuoteResponse;
         expect(body.transferId).toBe("adv-1");
         expect(body.params.topup).toBe("330");
-        expect(body.fare.units).toBe("10");
+        expect(body.fare.units).toBe("0");
         expect(body.expiresAt).toBe(NOW + 60);
     });
 
@@ -1012,6 +1175,166 @@ describe("sponsored direct-send routes", () => {
     });
 });
 
+describe("swap-fill routes", () => {
+    const USDT_DISPLAY = "1234".repeat(16);
+    const USDT_INTERNAL = Buffer.from(USDT_DISPLAY, "hex").reverse().toString("hex");
+    const swapBody = (over: Record<string, unknown> = {}) => {
+        registerSenderCoin(
+            "dd".repeat(32),
+            3,
+            asIndexed(
+                fundingCoin({
+                    txid: "dd".repeat(32),
+                    vout: 3,
+                    value: 10000,
+                    script: FAKE_COVENANT_SCRIPT,
+                }),
+            ),
+        );
+        registerSenderCoin(
+            "ee".repeat(32),
+            1,
+            asIndexed(
+                solverCoin({
+                    txid: "ee".repeat(32),
+                    vout: 1,
+                    value: 6000,
+                    assets: [
+                        {
+                            assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
+                            amount: 100n,
+                        },
+                    ],
+                }),
+            ),
+        );
+        return {
+            operationId: "op-1",
+            offerHex: "ab12",
+            solverInputs: [
+                {
+                    txid: "ee".repeat(32),
+                    vout: 1,
+                    value: "6000",
+                    ...solverTaproot(),
+                    assets: [
+                        {
+                            assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+                            amount: "100",
+                        },
+                    ],
+                },
+            ],
+            solverProceedsScript: "51",
+            solverKeys: ["ab".repeat(32)],
+            contributionSats: "330",
+            maxFare: {
+                currency: "asset",
+                assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+                units: "5",
+            },
+            fundingTxid: "dd".repeat(32),
+            fundingVout: 3,
+            ...over,
+        };
+    };
+    const legacySwapApp = () => createRoutes({ ...deps(), receiveQuotes: undefined as never });
+    const legacySwapPost = (path: string, body: unknown) =>
+        legacySwapApp().request(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+
+    it("requires a receive quote for a new public positive-contribution fill", async () => {
+        const response = await post("/v1/swap-fills", swapBody());
+        expect(response.status).toBe(400);
+        expect(((await response.json()) as ErrorResponse).code).toBe("receive_quote_required");
+    });
+
+    it("keeps the legacy unbound fill harness readable and replayable", async () => {
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
+        expect(first.status).toBe(200);
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        expect(quote.operationId).toBe("op-1");
+        expect(quote.template).toBe("taxi-fill/1");
+        expect(quote.graph.inputs).toEqual([
+            { owner: "offer-covenant", txid: "dd".repeat(32), vout: 3 },
+            { owner: "solver", txid: "ee".repeat(32), vout: 1 },
+            { owner: "sponsor", txid: "bb".repeat(32), vout: 0 },
+        ]);
+        const replay = await legacySwapPost("/v1/swap-fills", swapBody());
+        expect(replay.status).toBe(200);
+        expect(await replay.json()).toEqual(quote);
+        const conflict = await legacySwapPost(
+            "/v1/swap-fills",
+            swapBody({ contributionSats: "331" }),
+        );
+        expect(conflict.status).toBe(409);
+        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
+        expect(status.status).toBe(200);
+        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
+    });
+
+    it("returns 404 for an unknown swap fill", async () => {
+        const res = await app().request("/v1/swap-fills/nope");
+        expect(res.status).toBe(404);
+        expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
+    });
+
+    it("submits a quoted fill with 202 and fences a replay", async () => {
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const submit = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: quote.graph,
+        });
+        expect(submit.status).toBe(202);
+        const status = (await submit.json()) as SwapFillStatusResponse;
+        expect(status).toMatchObject({
+            fillId: quote.fillId,
+            operationId: "op-1",
+            state: "submitting",
+        });
+        expect(typeof status.txid).toBe("string");
+        const replay = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: quote.graph,
+        });
+        expect(replay.status).toBe(409);
+        expect(((await replay.json()) as ErrorResponse).code).toBe("invalid_state");
+    });
+
+    it("returns 404 for an unknown fill submit and 400 for a malformed solver graph", async () => {
+        const quoted = (await (
+            await legacySwapPost("/v1/swap-fills", swapBody())
+        ).json()) as SwapFillQuoteResponse;
+        const missing = await legacySwapPost("/v1/swap-fills/nope/submit", {
+            solverGraph: quoted.graph,
+        });
+        expect(missing.status).toBe(404);
+        const first = await legacySwapPost("/v1/swap-fills", swapBody({ operationId: "op-2" }));
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const malformed = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: { template: "taxi-fill/9" },
+        });
+        expect(malformed.status).toBe(400);
+    });
+
+    it("returns 409 when the solver graph differs from the quoted fill", async () => {
+        const first = await legacySwapPost("/v1/swap-fills", swapBody());
+        const quote = (await first.json()) as SwapFillQuoteResponse;
+        const diverted = structuredClone(quote.graph);
+        const change = diverted.outputs.find((o) => o.role === "sponsor-change")!;
+        change.script = "dd".repeat(34);
+        const rejected = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
+            solverGraph: diverted,
+        });
+        expect(rejected.status).toBe(409);
+        expect(((await rejected.json()) as ErrorResponse).code).toBe("swap_fill_graph_conflict");
+        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
+        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
+    });
+});
+
 describe("GET /health", () => {
     it("is 200 while the sweeper is ticking", async () => {
         const res = await app().request("/health");
@@ -1165,6 +1488,47 @@ describe("GET /ready", () => {
         });
     });
 
+    it("merges swap-fill reconciler blockers into readiness and health", async () => {
+        const router = createRoutes({
+            ...deps(),
+            swapFillReconciler: {
+                status: () => ({
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["swap_fill_unexpected_spend"],
+                }),
+            },
+        });
+        const res = await router.request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reconciler: {
+                swapFills: {
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["swap_fill_unexpected_spend"],
+                },
+            },
+            reason: "swap_fill_unexpected_spend",
+        });
+    });
+
+    it("is 503 before the swap-fill reconciler has completed catch-up", async () => {
+        const router = createRoutes({
+            ...deps(),
+            swapFillReconciler: {
+                status: () => ({ lastTickAt: null, submitting: 1, blockers: [] }),
+            },
+        });
+        const res = await router.request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            status: "degraded",
+            reason: "the swap-fill reconciler has not completed a tick",
+        });
+    });
+
     it("is 503 once the last tick is older than the staleness bar", async () => {
         clock = NOW + STALE_AFTER + 1;
         const res = await app().request("/ready");
@@ -1222,5 +1586,77 @@ describe("GET /ready", () => {
 
         expect(body).not.toContain(secret);
         expect(body).toContain("[redacted]");
+    });
+});
+
+describe("CORS", () => {
+    const wallet = { origin: "https://wallet.example" };
+
+    // createApp, not createRoutes, so /admin is reachable too.
+    const corsApp = () => {
+        const db = openDatabase(":memory:");
+        return createApp({
+            ...deps(),
+            advances: new AdvanceRepository(db),
+            policy: new PolicyRepository(db),
+            sweeperIntervalMs: 1_000,
+            sweeperRunning: () => true,
+            rescan: async () => {},
+        });
+    };
+
+    it("stamps Access-Control-Allow-Origin on a /v1 GET, with no credentials header", async () => {
+        const res = await corsApp().request("/v1/info", { headers: wallet });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+
+    it("answers a /v1 preflight with 204 and the CORS headers, not 404", async () => {
+        const res = await corsApp().request("/v1/receive-quotes", {
+            method: "OPTIONS",
+            headers: {
+                ...wallet,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        });
+        expect(res.status).toBe(204);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        expect(res.headers.get("access-control-allow-methods")).toContain("POST");
+        expect(res.headers.get("access-control-allow-headers")).toContain("content-type");
+        expect(res.headers.get("access-control-max-age")).toBeTruthy();
+        expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+
+    it("stamps the header on a /v1 error response, so the browser doesn't hide it", async () => {
+        const res = await corsApp().request("/v1/transfers/nope", { headers: wallet });
+        expect(res.status).toBe(404);
+        expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    });
+
+    it("stamps the header on the /v1/claims/events stream a browser EventSource opens", async () => {
+        const res = await corsApp().request(claimsUrl("/v1/claims/events"), { headers: wallet });
+        try {
+            expect(res.status).toBe(200);
+            expect(res.headers.get("content-type")).toContain("text/event-stream");
+            expect(res.headers.get("access-control-allow-origin")).toBe("*");
+        } finally {
+            await res.body?.cancel();
+        }
+    });
+
+    it("gives /admin no CORS headers and does not answer its preflight", async () => {
+        const app = corsApp();
+        const get = await app.request("/admin", { headers: wallet });
+        expect(get.headers.get("access-control-allow-origin")).toBeNull();
+
+        const preflight = await app.request("/admin", {
+            method: "OPTIONS",
+            headers: { ...wallet, "Access-Control-Request-Method": "GET" },
+        });
+        expect(preflight.status).not.toBe(204);
+        expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
+        expect(preflight.headers.get("access-control-allow-credentials")).toBeNull();
     });
 });

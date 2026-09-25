@@ -101,6 +101,7 @@ interface QuoteFixtureOptions {
     senderSats?: bigint;
     assetUnits?: bigint;
     fare?: FareSpec;
+    satsFarePayer?: "sender";
     serverUnrollScript?: CSVMultisigTapscript.Type;
 }
 
@@ -123,6 +124,7 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
+            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         opts.serverUnrollScript ?? unroll,
@@ -204,6 +206,23 @@ export const assetArgs = (): VerifyQuoteArgs => {
     };
 };
 
+/** The asset fixture with the fare billed to the sender, as a new quote issues it. */
+export const senderPaidAssetArgs = (): VerifyQuoteArgs => {
+    const a = assetArgs();
+    return {
+        ...a,
+        quote: quote(
+            { ...params(), assetId: a.expect.assetId! },
+            {
+                senderInputs: a.senderInputs,
+                senderSats: a.senderSats,
+                assetUnits: a.assetUnits!,
+                satsFarePayer: "sender",
+            },
+        ),
+    };
+};
+
 export const sponsoredAddress = (): string => new ArkAddress(serverKey, receiverKey, HRP).encode();
 
 export const sponsoredParams = (): SponsoredParamsValue => ({
@@ -219,7 +238,9 @@ interface SponsoredQuoteFixtureOptions {
     senderSats?: bigint;
     assetUnits?: bigint;
     fare?: FareSpec;
+    satsFarePayer?: "sender";
     assetId?: { txid: Uint8Array; groupIndex: number };
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export const sponsoredQuote = (
@@ -239,11 +260,16 @@ export const sponsoredQuote = (
                 totalValue: 20_000n,
                 batchExpiry: { kind: "height", value: 900_000n },
             },
-            params: { ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) },
+            params: {
+                ...p,
+                ...(opts.assetId ? { assetId: opts.assetId } : {}),
+                ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
+            },
             receiverAddress: sponsoredAddress(),
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
+            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         unroll,
@@ -251,7 +277,11 @@ export const sponsoredQuote = (
     const envelope = decodeLockupEnvelope(unsignedSponsoredTx);
     return {
         transferId: "tr_01",
-        params: sponsoredParamsToWire({ ...p, ...(opts.assetId ? { assetId: opts.assetId } : {}) }),
+        params: sponsoredParamsToWire({
+            ...p,
+            ...(opts.assetId ? { assetId: opts.assetId } : {}),
+            ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
+        }),
         receiverAddress: sponsoredAddress(),
         fare:
             fare.currency === "asset"
@@ -331,6 +361,46 @@ export const sponsoredAssetArgs = (): VerifySponsoredQuoteArgs => {
         senderInputs,
         senderSats: 700n,
         assetUnits,
+    };
+};
+
+/** The asset-sender fixture paying a sats fare, which a sponsored quote bills to
+ * the sender unless it is reconstructing a funded legacy graph. */
+export const satsFareSponsoredArgs = (opts: { legacy?: true } = {}): VerifySponsoredQuoteArgs => {
+    const a = sponsoredAssetArgs();
+    const fare = { currency: "sats" as const, units: 10n };
+    return {
+        ...a,
+        quote: sponsoredQuote(sponsoredParams(), {
+            senderInputs: a.senderInputs,
+            senderSats: a.senderSats,
+            assetUnits: a.assetUnits!,
+            assetId: a.expect.assetId!,
+            fare,
+            ...(opts.legacy ? {} : { satsFarePayer: "sender" as const }),
+        }),
+        expect: { ...a.expect, maxFare: fare },
+    };
+};
+
+/** The asset-sender fixture with an extra packet declared — the only shape that
+ * has an extension for one to ride in. */
+export const withExtraPacket = (extraPacket: {
+    type: number;
+    payload: Uint8Array;
+}): VerifySponsoredQuoteArgs => {
+    const a = sponsoredAssetArgs();
+    const assetId = a.expect.assetId!;
+    return {
+        ...a,
+        quote: sponsoredQuote(sponsoredParams(), {
+            senderInputs: a.senderInputs,
+            senderSats: a.senderSats,
+            assetUnits: a.assetUnits!,
+            assetId,
+            fare: { currency: "asset" as const, assetId, units: a.expect.maxFare.units },
+            extraPacket,
+        }),
     };
 };
 

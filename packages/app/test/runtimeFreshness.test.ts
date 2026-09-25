@@ -4,7 +4,9 @@ import {
     AdvanceRepository,
     openDatabase,
     PolicyRepository,
+    ReceiveQuoteRepository,
     ReservationRepository,
+    SwapFillRepository,
 } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
@@ -13,6 +15,7 @@ import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
+import { FakeSwapFillGraphBuilder, fakeOfferTerms } from "./swapFillFixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import {
     config,
@@ -43,6 +46,8 @@ function setup() {
     const db = openDatabase(":memory:");
     const advances = new AdvanceRepository(db);
     const reservations = new ReservationRepository(db);
+    const swapFills = new SwapFillRepository(db);
+    const receiveQuotes = new ReceiveQuoteRepository(db);
     const terms = new PolicyRepository(db);
     terms.update(policy(), "test");
     const cfg = config({ addressHrp: "tark", reconcileIntervalMs: 1_000 });
@@ -96,6 +101,7 @@ function setup() {
         config: cfg,
         advances,
         reservations,
+        receiveQuotes,
         policy: terms,
         now: () => Math.floor(now / 1_000),
         nowMs: () => now,
@@ -147,6 +153,25 @@ function setup() {
         createRoutes({
             ...deps,
             sponsoredBuilder: new FakeSponsoredLockupBuilder(cfg, serverUnroll),
+            receiveQuotes,
+            swapFills,
+            swapFillBuilder: new FakeSwapFillGraphBuilder("bd".repeat(34), 5000n),
+            swapFillSubmit: {
+                swapFills,
+                taxiIdentity: () => {
+                    throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+                },
+                emulator: {
+                    submitTx: async () => {
+                        throw new Error("emulator unavailable");
+                    },
+                },
+                config: cfg,
+                now: () => Math.floor(now / 1_000),
+                randomId: () => "submit-stub",
+                leaseSeconds: 60,
+            },
+            offerCodec: { decodeOffer: () => fakeOfferTerms() },
             startup: lifecycle.status,
             reconciler: {
                 status: () => ({ lastTickAt: Math.floor(now / 1_000), locking: 0, blockers: [] }),

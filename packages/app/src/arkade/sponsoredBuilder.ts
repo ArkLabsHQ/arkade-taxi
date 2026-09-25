@@ -4,6 +4,7 @@ import {
     asset,
     ArkAddress,
     Extension,
+    UnknownPacket,
     buildOffchainTx,
     VtxoScript,
     type CSVMultisigTapscript,
@@ -17,7 +18,12 @@ import type { RuntimeConfig } from "../config.js";
 import type { FundingSelection } from "./inventory.js";
 import { LockupShapeError, assertDistinctScripts } from "../lockup.js";
 import { encodeLockupEnvelope, parseJointEnvelope, type JointPlan } from "./psbt.js";
-import { inputAssets, operatorFundingInput, toArkInput } from "./lockupBuilder.js";
+import {
+    inputAssets,
+    operatorFundingInput,
+    senderPaysSatsFare,
+    toArkInput,
+} from "./lockupBuilder.js";
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
 /** Joint-send terms without a covenant. `contribution` plays the role of the
@@ -30,6 +36,8 @@ export interface SponsoredParams {
     dust: bigint;
     contribution: bigint;
     assetId?: AssetIdRef;
+    /** Sender-declared extra extension packet; see SponsoredQuoteParams. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface SponsoredBuildRequest {
@@ -40,10 +48,12 @@ export interface SponsoredBuildRequest {
     params: SponsoredParams;
     /** Bob's full canonical address. The payment output pays it directly. */
     receiverAddress: string;
-    /** A separate output at submission, as with the covenant flow: a sats fare
-     * is an operator-funded self-payment, an asset fare is sender-funded and
-     * the operator supplies its hosting sats. */
+    /** A separate output at submission, as with the covenant flow: an asset fare
+     * is sender-funded and the operator supplies its hosting sats. */
     fare: FareSpec;
+    /** Set on every new positive-sats-fare payment: the fare leaves sender change
+     * instead of operator change. Absent reconstructs a funded legacy graph. */
+    satsFarePayer?: "sender";
     senderSats: bigint;
 }
 
@@ -113,16 +123,20 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
             : req.fare.currency === "sats"
               ? req.fare.units
               : config.vtxoMinAmount;
+    const senderPaysFare = senderPaysSatsFare(req);
     if (fareHosting > 0n)
         outputs.push({
             role: "operator-fare",
             amount: fareHosting,
             script: ownerOutputScript(req.params.operatorKey, fareHosting, config),
         });
-    const senderChange = req.senderSats + req.params.contribution - req.params.dust;
-    const operatorChange = req.funding.totalValue - req.params.contribution - fareHosting;
-    if (senderChange < 0n || operatorChange < 0n)
-        throw new LockupShapeError("insufficient funding");
+    const senderFare = senderPaysFare ? fareHosting : 0n;
+    const operatorFare = fareHosting - senderFare;
+    const senderChange = req.senderSats + req.params.contribution - req.params.dust - senderFare;
+    const operatorChange = req.funding.totalValue - req.params.contribution - operatorFare;
+    if (senderChange < 0n)
+        throw new LockupShapeError("sender funding does not cover the payment and fare");
+    if (operatorChange < 0n) throw new LockupShapeError("insufficient funding");
     const destinations = new Map<string, Map<number, bigint>>();
     const toId = (id: { txid: Uint8Array; groupIndex: number }) =>
         AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
@@ -205,7 +219,17 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
             );
         });
     const transactionOutputs = outputs.map(({ amount, script }) => ({ amount, script }));
-    if (groups.length) transactionOutputs.push(Extension.create([Packet.create(groups)]).txOut());
+    // Mirrors the sender's rebuild in client/src/sponsored.ts: the packet it
+    // declared rides after the asset groups. Any other order or contents and the
+    // sender's byte comparison refuses the transaction.
+    const extraPacket = req.params.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extraPacket !== undefined
+            ? [new UnknownPacket(extraPacket.type, extraPacket.payload)]
+            : []),
+    ];
+    if (packets.length) transactionOutputs.push(Extension.create(packets).txOut());
     if (transactionOutputs.filter((output) => output.script[0] === 0x6a).length > 2)
         throw new LockupShapeError(
             "the public SDK supports at most two OP_RETURN outputs; this payment requires more",
@@ -215,6 +239,7 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
         operatorInputs,
         outputs: transactionOutputs,
         valueOutputs: outputs,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         assetUnits: paymentId ? destinations.get(paymentId)!.get(0)! : req.assetUnits,
         arkInputs: inputs.map((input, i) =>
             toArkInput(
@@ -246,6 +271,7 @@ export function buildSponsoredEnvelope(
         arkTx: base64.encode(graph.arkTx.toPSBT()),
         checkpoints: graph.checkpoints.map((tx) => base64.encode(tx.toPSBT())),
         ...(plan.assetUnits !== undefined ? { assetUnits: plan.assetUnits.toString() } : {}),
+        ...(plan.satsFarePayer ? { satsFarePayer: plan.satsFarePayer } : {}),
         unsignedTxId: sponsoredGraphId(graph.arkTx, graph.checkpoints),
         covenantOutputIndex: 0,
         senderInputIndexes: req.senderInputs.map((_, i) => i),

@@ -11,6 +11,7 @@ import type {
     ClaimsSnapshotResponse,
     FareWire,
     QuoteParams,
+    ReceiveQuoteResponse,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,
@@ -26,12 +27,18 @@ import {
     quoteParamsFromWire,
     satsFromWire,
     sponsoredParamsFromWire,
+    SWAP_FILL_TEMPLATE,
+    swapFillGraphFromWire,
+    swapFillStatusFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
     type InfoResponse,
     type LockupResponse,
     type QuoteResponse,
     type SponsoredParamsValue,
+    type SwapFillGraph,
+    type SwapFillQuoteResponse,
+    type SwapFillStatusResponse,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { ClientErrorCode, TaxiError } from "./errors.js";
@@ -71,6 +78,34 @@ export interface DecodedSponsoredQuote {
     commitment: SponsoredCommitment;
 }
 
+export interface DecodedSwapFillQuote {
+    fillId: string;
+    operationId: string;
+    expiresAt: number;
+    contributionSats: bigint;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    graph: SwapFillGraph;
+}
+
+export interface DecodedReceiveQuote {
+    quoteId: string;
+    state: "quoted" | "bound" | "expired";
+    receiverAddress: string;
+    makerPublicKey: string;
+    params: CovenantParamsValue;
+    covenantAddress: string;
+    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    batchExpiry: { kind: "height" | "time"; value: bigint };
+    inputExpiryFloor: { kind: "height" | "time"; value: bigint };
+    recoveryLocktime: { kind: "height" | "time"; value: bigint };
+    createdAt: number;
+    expiresAt: number;
+    boundFillId?: string;
+    payer?: "receiver";
+    receiverFare?: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
+    unclaimedMode?: "reclaim";
+}
+
 export const causeMessage = (cause: unknown): string =>
     cause instanceof Error ? cause.message : String(cause);
 
@@ -101,6 +136,12 @@ const uint = (v: unknown, label: string): number =>
 
 const bool = (v: unknown, label: string): boolean =>
     typeof v === "boolean" ? v : invalid(`${label} must be a boolean`);
+
+// This build implements only the "reclaim" unclaimed-advance mode; a future
+// mode rides a sibling field rather than widening this string (spec ruling 9).
+const assertUnclaimedMode = (v: unknown, label: string): void => {
+    if (v !== undefined && v !== "reclaim") invalid(`${label}.unclaimedMode must be reclaim`);
+};
 
 const exactRecord = (
     value: unknown,
@@ -175,13 +216,36 @@ const quoteParams = (value: unknown, label: string): QuoteParams => {
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "topup", "locktime"],
-        ["assetId"],
+        ["assetId", "claimMode", "recoveryRecipient", "receiverFare"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
     bytes32(wire.senderKey, `${label}.senderKey`);
     bytes32(wire.operatorKey, `${label}.operatorKey`);
     if (wire.assetId !== undefined) assetId(wire.assetId, `${label}.assetId`);
+    if (
+        wire.claimMode !== undefined &&
+        wire.claimMode !== "recycle" &&
+        wire.claimMode !== "purchase"
+    )
+        invalid(`${label}.claimMode must be recycle or purchase`);
+    if (
+        wire.recoveryRecipient !== undefined &&
+        wire.recoveryRecipient !== "sender" &&
+        wire.recoveryRecipient !== "receiver"
+    )
+        invalid(`${label}.recoveryRecipient must be sender or receiver`);
+    if (wire.receiverFare !== undefined) {
+        const rf = exactRecord(
+            wire.receiverFare,
+            ["currency", "units"],
+            [],
+            `${label}.receiverFare`,
+        );
+        if (rf.currency !== "sats" && rf.currency !== "asset")
+            invalid(`${label}.receiverFare.currency must be sats or asset`);
+        satsFromWire(rf.units as string, `${label}.receiverFare.units`);
+    }
     quoteParamsFromWire(wire as unknown as QuoteParams, label);
     return wire as unknown as QuoteParams;
 };
@@ -204,7 +268,7 @@ const sponsoredParams = (value: unknown, label: string): SponsoredQuoteParams =>
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "contribution"],
-        ["assetId"],
+        ["assetId", "extraPacket"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
@@ -259,7 +323,7 @@ const receiverClaimDescriptor = (value: unknown, label: string): ReceiverClaimDe
     const wire = exactRecord(
         value,
         ["params", "covenantAddress", "outpoint", "fare", "batchExpiry", "recoveryLocktime"],
-        ["assetUnits"],
+        ["assetUnits", "unclaimedMode"],
         label,
     );
     quoteParams(wire.params, `${label}.params`);
@@ -270,8 +334,17 @@ const receiverClaimDescriptor = (value: unknown, label: string): ReceiverClaimDe
     fare(wire.fare, `${label}.fare`);
     taggedLocktime(wire.batchExpiry, `${label}.batchExpiry`);
     taggedLocktime(wire.recoveryLocktime, `${label}.recoveryLocktime`);
+    assertUnclaimedMode(wire.unclaimedMode, label);
     return wire as unknown as ReceiverClaimDescriptorWire;
 };
+
+/** Public path onto the module-private descriptor decoder, for a claim seen
+ * outside a claims snapshot (e.g. a solo receiver-claim lookup). */
+export const decodeReceiverClaimDescriptor = (
+    value: unknown,
+    label = "claim",
+): ReceiverClaimDescriptorWire =>
+    wrap("claim descriptor", () => receiverClaimDescriptor(value, label));
 
 const claimStates = new Set<ReceiverClaimState>([
     "locking",
@@ -390,6 +463,84 @@ export function decodeSponsoredQuote(quote: SponsoredQuoteResponse): DecodedSpon
     });
 }
 
+export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
+    return wrap("receive quote", () => {
+        const quote = exactRecord(
+            value,
+            [
+                "quoteId",
+                "state",
+                "receiverAddress",
+                "makerPublicKey",
+                "params",
+                "covenantAddress",
+                "fare",
+                "batchExpiry",
+                "inputExpiryFloor",
+                "recoveryLocktime",
+                "createdAt",
+                "expiresAt",
+            ],
+            ["boundFillId", "payer", "receiverFare", "unclaimedMode"],
+            "receive quote",
+        );
+        const trio = [quote.payer, quote.receiverFare, quote.unclaimedMode];
+        if (trio.some((v) => v !== undefined) && trio.some((v) => v === undefined))
+            invalid("receive quote.payer, .receiverFare and .unclaimedMode must appear together");
+        if (quote.payer !== undefined && quote.payer !== "receiver")
+            invalid("receive quote.payer must be 'receiver' when present");
+        assertUnclaimedMode(quote.unclaimedMode, "receive quote");
+        if (quote.state !== "quoted" && quote.state !== "bound" && quote.state !== "expired")
+            invalid("receive quote.state is invalid");
+        const state = quote.state as "quoted" | "bound" | "expired";
+        let boundFillId: string | undefined;
+        if (quote.boundFillId !== undefined) {
+            boundFillId = str(quote.boundFillId, "receive quote.boundFillId");
+            if (!boundFillId.length || boundFillId.length > 128)
+                invalid("receive quote.boundFillId is not a bounded identifier");
+        }
+        const makerPublicKey = str(quote.makerPublicKey, "receive quote.makerPublicKey");
+        if (!/^[0-9a-f]{64}$/.test(makerPublicKey))
+            invalid("receive quote.makerPublicKey must be lowercase x-only hex");
+        const deadline = (field: "batchExpiry" | "inputExpiryFloor" | "recoveryLocktime") => {
+            const wire = taggedLocktime(quote[field], `receive quote.${field}`);
+            const parsed = satsFromWire(wire.value, `receive quote.${field}.value`);
+            if (parsed <= 0n) invalid(`receive quote.${field}.value must be positive`);
+            return { kind: wire.kind, value: parsed };
+        };
+        const quoteId = str(quote.quoteId, "receive quote.quoteId");
+        if (quoteId.length > 128) invalid("receive quote.quoteId is too long");
+        return {
+            quoteId,
+            state,
+            receiverAddress: str(quote.receiverAddress, "receive quote.receiverAddress"),
+            makerPublicKey,
+            params: quoteParamsFromWire(
+                quoteParams(quote.params, "receive quote.params"),
+                "receive quote.params",
+            ),
+            covenantAddress: str(quote.covenantAddress, "receive quote.covenantAddress"),
+            fare: fareFromWire(fare(quote.fare, "receive quote.fare"), "receive quote.fare"),
+            batchExpiry: deadline("batchExpiry"),
+            inputExpiryFloor: deadline("inputExpiryFloor"),
+            recoveryLocktime: deadline("recoveryLocktime"),
+            createdAt: uint(quote.createdAt, "receive quote.createdAt"),
+            expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
+            ...(boundFillId === undefined ? {} : { boundFillId }),
+            ...(quote.payer === undefined
+                ? {}
+                : {
+                      payer: quote.payer as "receiver",
+                      receiverFare: fareFromWire(
+                          fare(quote.receiverFare, "receive quote.receiverFare"),
+                          "receive quote.receiverFare",
+                      ),
+                      unclaimedMode: quote.unclaimedMode as "reclaim",
+                  }),
+        };
+    });
+}
+
 export function decodeLockup(res: LockupResponse): LockupResponse {
     return wrap("lockup response", () => {
         if (res === null || typeof res !== "object") invalid("lockup response must be an object");
@@ -427,4 +578,33 @@ export function decodeClaimsSnapshot(value: unknown): ClaimsSnapshotResponse {
 
 export function decodeClaimsChanged(value: unknown): ClaimsChangedEvent {
     return decodeClaimsSnapshot(value);
+}
+
+export function decodeSwapFillQuote(quote: SwapFillQuoteResponse): DecodedSwapFillQuote {
+    return wrap("swap-fill quote", () => {
+        if (quote === null || typeof quote !== "object")
+            invalid("swap-fill quote must be an object");
+        if (quote.template !== SWAP_FILL_TEMPLATE)
+            invalid("swap-fill quote.template must be taxi-fill/1");
+        return {
+            fillId: str(quote.fillId, "swap-fill quote.fillId"),
+            operationId: str(quote.operationId, "swap-fill quote.operationId"),
+            expiresAt: uint(quote.expiresAt, "swap-fill quote.expiresAt"),
+            contributionSats: satsFromWire(
+                quote.contributionSats,
+                "swap-fill quote.contributionSats",
+            ),
+            fare: fareFromWire(quote.fare, "swap-fill quote.fare"),
+            graph: swapFillGraphFromWire(quote.graph),
+        };
+    });
+}
+
+export function decodeSwapFillStatus(value: unknown): SwapFillStatusResponse {
+    return wrap("swap-fill status", () => {
+        const decoded = swapFillStatusFromWire(value);
+        if (decoded.fillId === "" || decoded.operationId === "")
+            invalid("swap-fill status ids must be non-empty");
+        return decoded;
+    });
 }

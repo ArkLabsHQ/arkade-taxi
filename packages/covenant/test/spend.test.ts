@@ -128,3 +128,55 @@ describe("covenant spend leaves", () => {
         expect(() => covenantSpendInput(covenant(), Leaf.Purchase, outpoint, value)).toThrow(label);
     });
 });
+
+// The disabled slot keeps a valid control proof, so the refusal must come from
+// the mode rather than the tree lookup failing.
+describe("covenant spend modes", () => {
+    const withMode = (claimMode: "recycle" | "purchase") =>
+        new DustCovenantScript({
+            serverKey: key(4),
+            emulatorKey: key(5),
+            params: {
+                receiverKey: key(1),
+                senderKey: key(2),
+                operatorKey: key(3),
+                dust: 330n,
+                topup: 320n,
+                locktime: 800_000n,
+                claimMode,
+            },
+            vtxoMinAmount: 10n,
+        });
+    const outpoint = { txid: "12".repeat(32), vout: 0 };
+
+    it("still yields a control proof for the forbidden slot", () => {
+        const script = withMode("recycle");
+        expect(script.findLeaf(hex.encode(script.scripts[Leaf.Purchase]))).toHaveLength(2);
+    });
+
+    it.each([
+        ["recycle", Leaf.Purchase],
+        ["purchase", Leaf.Recycle],
+    ] as const)("refuses the forbidden leaf under a %s covenant", (claimMode, leaf) => {
+        expect(() => covenantSpendInput(withMode(claimMode), leaf, outpoint, 330n)).toThrow(
+            /disabled/,
+        );
+    });
+
+    it.each([
+        ["recycle", Leaf.Recycle],
+        ["purchase", Leaf.Purchase],
+    ] as const)("allows the permitted claim leaf under a %s covenant", (claimMode, leaf) => {
+        expect(
+            covenantSpendInput(withMode(claimMode), leaf, outpoint, 330n).tapLeafScript,
+        ).toHaveLength(2);
+    });
+
+    it("leaves the refund and recovery leaves usable in every mode", () => {
+        for (const claimMode of ["recycle", "purchase"] as const)
+            for (const leaf of [Leaf.RefundSender, Leaf.Recovery])
+                expect(
+                    covenantSpendInput(withMode(claimMode), leaf, outpoint, 330n).tapLeafScript,
+                ).toHaveLength(2);
+    });
+});

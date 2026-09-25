@@ -1,1 +1,5 @@
 * text=auto eol=lf
+
+# The lockfile pins these bytes by sha512, so leaving them to git's text/binary
+# heuristic would let one checkout convert an archive and fail every install.
+vendor/carrier/*.tgz binary

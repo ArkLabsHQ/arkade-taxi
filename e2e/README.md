@@ -3,9 +3,25 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Nineteen live scenarios and two integrity assertions must all pass. Skips,
+Twenty-four live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
+
+## Candidate packages this suite runs against
+
+`pnpm-lock.yaml` resolves `@arkade-os/sdk` and `@arkade-os/swap` from
+`vendor/carrier/*.tgz`, which are **tracked** and hash-pinned against
+`vendor/carrier/manifest.json`, so `pnpm install`, `docker build` and the
+harness's client pack all work from a clean checkout. The temporary consumer
+takes its overrides from that same manifest, so the packed client is exercised
+against the frozen candidates rather than silently falling back to the registry
+build of the same version numbers.
+
+The override alone is not the proof. Those version numbers are published, so an
+override that stopped applying would install cleanly against other bytes. After
+the consumer installs, the harness resolves both packages from the installed
+client and requires the frozen version plus a symbol only the `adc6b329` build
+exports; an import that merely succeeds cannot tell the two apart.
 
 ## Running it
 
@@ -66,7 +82,7 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all nineteen
+- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-four
   scenarios and both integrity assertions must pass with zero failures, skips,
   or todos.
 
@@ -76,7 +92,10 @@ The suite exercises production HTTP and provider boundaries, real covenant
 purchase/recycle/refund/recovery flows, exposure and admission controls, packed
 client verification, persistent operator state, and restart reconciliation.
 It also covers lost submit responses, duplicate requests, stale provider
-identity, and warning/critical recovery deadlines before VTXO expiry.
+identity, warning/critical recovery deadlines before VTXO expiry, and one
+two-owner offer fill in which a solver and a sponsor each sign only their own
+inputs while the offer covenant is co-signed by nobody but the emulator and the
+Arkade Service.
 
 The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
 select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,
@@ -87,8 +106,13 @@ claim independently, recycles 200 USDT with his own sats input, or purchases
 200 USDT after Alice authorizes 201 USDT and Taxi receives a 1 USDT fare output.
 Both flows check the indexed transaction graph and exact wallet balances.
 
-For these selected inputs Taxi advances 1 sat. Repayment and fare outputs target
-the canonical Arkade wallet output key, independently of its funding signing key.
+An asset transfer's sats are only a carrier, so Taxi advances the whole 330-sat
+dust unit and the sender keeps its own carrier, less any sats fare it is billed.
+A sub-dust bitcoin transfer instead nets the advance against the sats the sender
+already brings, leaving a 1-sat advance; a positive sats fare is refused there,
+because a bitcoin transfer has no amount to take one from that is not the
+payment. Repayment and fare outputs target the canonical Arkade wallet output
+key, independently of its funding signing key.
 Taxi's production proceeds collector consolidates canonical subdust receipts
 with an ordinary operator coin using the standard SDK wallet settlement path.
 The live test waits for that service-owned collection, checks the receipt's
@@ -96,9 +120,11 @@ settlement commitment and its spendable wallet output. No test-only recovery
 or manual consolidation is performed. The zero-default collection fee cap is
 zero on regtest. The harness explicitly sets all four upstream intent fee
 programs to `0.0`, verifies the advertised values and records them in `stack.json`;
-upstream defaults are not assumed to be zero. The 1-sat recycle repayment restores Taxi's spendable sats balance. Purchase
-increases Taxi's spendable USDT by exactly 1,000,000 base units; its total sats
-decrease by the 1-sat advance, with all carrier sats included in the balance.
+upstream defaults are not assumed to be zero. Recycling repays the whole advance
+as an ordinary operator coin, so Bob keeps exactly the input he brought and
+Taxi's spendable sats are restored without the collector. Purchase increases
+Taxi's spendable USDT by exactly 1,000,000 base units and leaves it 330 sats
+down: the carrier it bought Bob is never repaid.
 The provider fixture allocates its existing 100,000 sats as two 50,000-sat coins,
 alongside the bootstrapped 500,000-sat coin, leaving separate quote and reserve
 coins after the first asset carrier is created. Cleanup waits for every owned
@@ -117,7 +143,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The registry's stable/latest version on 2026-09-13 is 0.4.72. The harness always
 clones master afresh; read the tested SHA from the current `stack.json` and
-retain it with all 21 passing assertions. Capture the existing default project's
+retain it with all 26 passing assertions. Capture the existing default project's
 container, volume and network inventory before and after, and verify that no
 resources with the run's exact ownership labels remain after successful cleanup.
 

@@ -100,6 +100,9 @@ export interface CovenantParamsValue {
     topup: bigint;
     assetId?: AssetIdValue;
     locktime: bigint;
+    recoveryRecipient?: "sender" | "receiver";
+    claimMode?: "recycle" | "purchase";
+    receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
 }
 
 const fail = (label: string, reason: string): never => {
@@ -292,6 +295,26 @@ export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantP
         locktime: satsFromWire(p.locktime, `${label}.locktime`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    if (p.recoveryRecipient !== undefined) {
+        if (p.recoveryRecipient !== "sender" && p.recoveryRecipient !== "receiver")
+            fail(`${label}.recoveryRecipient`, "must be sender or receiver");
+        out.recoveryRecipient = p.recoveryRecipient;
+    }
+    if (p.claimMode !== undefined) {
+        if (p.claimMode !== "recycle" && p.claimMode !== "purchase")
+            fail(`${label}.claimMode`, "must be recycle or purchase");
+        out.claimMode = p.claimMode;
+    }
+    if (p.receiverFare !== undefined) {
+        const { currency, units } = p.receiverFare;
+        if (currency !== "sats" && currency !== "asset")
+            fail(`${label}.receiverFare.currency`, "must be sats or asset");
+        const value = satsFromWire(units, `${label}.receiverFare.units`);
+        out.receiverFare =
+            currency === "sats"
+                ? { currency: "sats", units: value }
+                : { currency: "asset", units: value };
+    }
     return out;
 }
 
@@ -305,6 +328,13 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         locktime: satsToWire(p.locktime),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    if (p.recoveryRecipient !== undefined) out.recoveryRecipient = p.recoveryRecipient;
+    if (p.claimMode !== undefined) out.claimMode = p.claimMode;
+    if (p.receiverFare !== undefined)
+        out.receiverFare = {
+            currency: p.receiverFare.currency,
+            units: satsToWire(p.receiverFare.units),
+        };
     return out;
 }
 
@@ -317,6 +347,7 @@ export interface SponsoredParamsValue {
     dust: bigint;
     contribution: bigint;
     assetId?: AssetIdValue;
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export function sponsoredParamsFromWire(
@@ -332,6 +363,16 @@ export function sponsoredParamsFromWire(
         contribution: satsFromWire(p.contribution, `${label}.contribution`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
+    if (p.extraPacket !== undefined) {
+        const e = p.extraPacket;
+        if (e === null || typeof e !== "object") fail(`${label}.extraPacket`, "expected an object");
+        if (!Number.isInteger(e.type) || e.type < 0 || e.type > 255)
+            fail(`${label}.extraPacket.type`, "expected a one-byte tag");
+        out.extraPacket = {
+            type: e.type,
+            payload: hexToBytes(e.payload, `${label}.extraPacket.payload`),
+        };
+    }
     return out;
 }
 
@@ -344,6 +385,8 @@ export function sponsoredParamsToWire(p: SponsoredParamsValue): SponsoredQuotePa
         contribution: satsToWire(p.contribution),
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
+    if (p.extraPacket !== undefined)
+        out.extraPacket = { type: p.extraPacket.type, payload: bytesToHex(p.extraPacket.payload) };
     return out;
 }
 

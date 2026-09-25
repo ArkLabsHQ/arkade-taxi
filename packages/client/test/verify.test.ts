@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { bytesToHex, quoteParamsToWire, type AssetIdValue } from "@arkade-taxi/protocol";
+import {
+    bytesToHex,
+    quoteParamsFromWire,
+    quoteParamsToWire,
+    type AssetIdValue,
+} from "@arkade-taxi/protocol";
 import { QuoteVerificationError, TaxiError } from "../src/errors.js";
 import { verifyQuote } from "../src/verify.js";
 import {
@@ -30,6 +35,28 @@ const rejects = (patch: Partial<ReturnType<typeof args>>, code: string) => {
 
 const asset: AssetIdValue = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 
+const receiverRecoveryArgs = () => {
+    const a = assetArgs();
+    const p = {
+        ...quoteParamsFromWire(a.quote.params),
+        recoveryRecipient: "receiver" as const,
+        claimMode: "recycle" as const,
+    };
+    return {
+        ...a,
+        quote: quote(p, {
+            senderInputs: a.senderInputs,
+            senderSats: a.senderSats,
+            assetUnits: a.assetUnits,
+        }),
+        expect: {
+            ...a.expect,
+            recoveryRecipient: "receiver" as const,
+            claimMode: "recycle" as const,
+        },
+    };
+};
+
 describe("verifyQuote — happy path", () => {
     it("returns the rebuilt params and script", () => {
         const v = verifyQuote(args());
@@ -49,6 +76,93 @@ describe("verifyQuote — happy path", () => {
         const a = assetArgs();
         const v = verifyQuote(a);
         expect(v.params.assetId).toEqual(a.expect.assetId);
+    });
+});
+
+// The expectation is bound by the caller, not echoed from the quote.
+describe("verifyQuote — claim mode", () => {
+    const asksFor = (claimMode: "recycle" | "purchase") => {
+        const p = { ...params(), claimMode };
+        return { ...args(), quote: quote(p), expect: { ...args().expect, claimMode } };
+    };
+
+    it.each(["recycle", "purchase"] as const)("accepts the %s mode it asked for", (claimMode) => {
+        expect(verifyQuote(asksFor(claimMode)).params.claimMode).toBe(claimMode);
+    });
+
+    it("rejects a quote whose tree commits to the other leaf", () => {
+        const a = asksFor("purchase");
+        rejects(
+            { ...a, quote: quote({ ...params(), claimMode: "recycle" }) },
+            "CLAIM_MODE_MISMATCH",
+        );
+    });
+
+    it("rejects a legacy tree when the caller named a mode", () => {
+        rejects({ ...asksFor("recycle"), quote: quote({ ...params() }) }, "CLAIM_MODE_MISMATCH");
+    });
+
+    // Absence is a claim: the caller accepted the operator's resolution.
+    it("accepts whatever the operator resolved when the caller named nothing", () => {
+        expect(
+            verifyQuote({ ...args(), quote: quote({ ...params(), claimMode: "purchase" }) }).params
+                .claimMode,
+        ).toBe("purchase");
+        expect(verifyQuote(args()).params.claimMode).toBeUndefined();
+    });
+});
+
+describe("verifyQuote — recovery recipient", () => {
+    it("accepts a receiver-owned recycle tree and rebuilds its address", () => {
+        const a = receiverRecoveryArgs();
+        const verified = verifyQuote(a);
+        expect(verified.params).toMatchObject({
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
+        expect(verified.script.address(HRP, serverKey).encode()).toBe(a.quote.covenantAddress);
+    });
+
+    it.each(["sender", undefined] as const)(
+        "rejects recovery recipient substitution with %s",
+        (recoveryRecipient) => {
+            const a = receiverRecoveryArgs();
+            const p = {
+                ...quoteParamsFromWire(a.quote.params),
+                recoveryRecipient,
+            };
+            rejects(
+                {
+                    ...a,
+                    quote: quote(p, {
+                        senderInputs: a.senderInputs,
+                        senderSats: a.senderSats,
+                        assetUnits: a.assetUnits,
+                    }),
+                },
+                "RECOVERY_RECIPIENT_MISMATCH",
+            );
+        },
+    );
+
+    it("accepts a receiver-owned quote when the caller leaves recovery ownership open", () => {
+        const a = receiverRecoveryArgs();
+        expect(
+            verifyQuote({
+                ...a,
+                expect: { ...a.expect, recoveryRecipient: undefined },
+            }).params.recoveryRecipient,
+        ).toBe("receiver");
+    });
+
+    it("treats the absent legacy term as sender-owned recovery", () => {
+        const a = args();
+        expect(
+            verifyQuote({
+                ...a,
+                expect: { ...a.expect, recoveryRecipient: "sender" },
+            }).params.recoveryRecipient,
+        ).toBeUndefined();
     });
 });
 

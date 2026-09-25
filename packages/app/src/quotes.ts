@@ -41,6 +41,8 @@ import {
     ReservationConflictError,
     LockupClaimError,
     type ReservationRepository,
+    type ReceiveQuoteRepository,
+    type SwapFillRepository,
     type PolicySnapshot,
 } from "@arkade-taxi/db";
 import {
@@ -48,6 +50,7 @@ import {
     selectOperatorFunding,
     type FundingSelection,
 } from "./arkade/inventory.js";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors.js";
 import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit.js";
 
@@ -61,6 +64,9 @@ export interface LockupBuildRequest {
     /** A separate output at lockup: the covenant pins the operator's repayment
      * to exactly `topup`, so no fee is expressible inside it. */
     fare: FareSpec;
+    /** Set on every new positive-sats-fare lockup: the fare leaves sender change
+     * instead of operator change. Absent reconstructs a funded legacy graph. */
+    satsFarePayer?: "sender";
     senderSats: bigint;
 }
 
@@ -157,6 +163,13 @@ export interface QuoteDeps {
         ReservationRepository,
         "reserveQuote" | "listReservedOutpoints" | "expireQuotes" | "claimLockup"
     >;
+    /** Swap-fill reservations also tie up Taxi coins; unioned into funding
+     * selection so an advance never double-spends a fill's coin. */
+    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints" | "expireQuotes">;
+    receiveQuotes?: Pick<
+        ReceiveQuoteRepository,
+        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
+    >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
         getLockedVtxoOutpoints(): Promise<Outpoint[]>;
@@ -179,16 +192,27 @@ function decodeBody(body: unknown): {
     senderInputs: FundingInputValue[];
     assetUnits?: bigint;
     fareId?: string;
+    claimMode?: "recycle" | "purchase";
     assetId?: { txid: Uint8Array; groupIndex: number };
 } {
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
         throw badRequest("request body must be a JSON object");
     }
     const b = body as QuoteRequestBody;
+    if (Object.prototype.hasOwnProperty.call(b, "recoveryRecipient"))
+        throw badRequest("recoveryRecipient is service-issued");
     if (!Array.isArray(b.senderInputs) || !b.senderInputs.length || b.senderInputs.length > 256)
         throw badRequest("senderInputs must contain 1 to 256 funding inputs");
 
-    let decoded;
+    let decoded: {
+        receiverKey: Uint8Array;
+        senderKey: Uint8Array;
+        senderSats: bigint;
+        senderInputs: FundingInputValue[];
+        assetUnits?: bigint;
+        fareId?: string;
+        claimMode?: "recycle" | "purchase";
+    };
     try {
         decoded = {
             receiverKey: hexToBytes(b.receiverKey, "receiverKey"),
@@ -207,6 +231,13 @@ function decodeBody(body: unknown): {
     }
     if (b.fareId !== undefined && (typeof b.fareId !== "string" || !b.fareId.length))
         throw badRequest("invalid fareId");
+    // Rejected here rather than defaulted: a client that named a mode gets that
+    // mode or an error, never a silently different covenant.
+    if (b.claimMode !== undefined) {
+        if (b.claimMode !== "recycle" && b.claimMode !== "purchase")
+            throw badRequest("claimMode must be recycle or purchase");
+        decoded.claimMode = b.claimMode;
+    }
     if (
         new Set(decoded.senderInputs.map((i) => `${i.txid}:${i.vout}`)).size !==
         decoded.senderInputs.length
@@ -282,6 +313,8 @@ export async function createQuote(
 async function createAdmittedQuote(deps: QuoteDeps, body: unknown): Promise<QuoteResponse> {
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     deps.reservations.expireQuotes(deps.now());
+    deps.swapFills?.expireQuotes(deps.now());
+    deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
             return await createReservedQuote(deps, body);
@@ -320,6 +353,24 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     );
     const decision = admit(req, policy, exposure, config.dust, config.vtxoMinAmount);
     if (!decision.ok) throw admissionError(decision.reason);
+    const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
+    if (senderPaysFare) {
+        // A bitcoin transfer's payment IS its senderSats, and `topup` is derived
+        // from them, so there is nothing to take a fare from that is not the
+        // amount asked to be sent.
+        if (req.assetId === undefined)
+            throw new ServiceError(
+                "fare_unavailable",
+                409,
+                "a sats fare has no net amount to come out of on a bitcoin transfer",
+            );
+        if (req.senderSats + decision.topup - config.dust < decision.fare.units)
+            throw new ServiceError(
+                "fare_unavailable",
+                409,
+                "sender funding does not cover the dust carrier and this fare",
+            );
+    }
 
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
@@ -334,13 +385,13 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
             { cause },
         );
     }
-    const reserved = deps.reservations.listReservedOutpoints();
+    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
         reserved: [...reserved, ...intentLocks],
         requiredSats:
             decision.topup +
-            (decision.fare.units === 0n
+            (senderPaysFare || decision.fare.units === 0n
                 ? 0n
                 : decision.fare.currency === "sats"
                   ? decision.fare.units
@@ -351,6 +402,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
         minReserveSats: config.operatorMinReserveSats,
+        dustSats: config.dust,
     };
     const selection = structuredClone(selectOperatorFunding(selectionOptions));
     const expiry = { ...selection.batchExpiry };
@@ -381,6 +433,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         dust: config.dust,
         topup: decision.topup,
         locktime,
+        claimMode: decision.claim,
         ...(req.assetId ? { assetId: req.assetId } : {}),
     };
     const covenant = deriveCovenant(config, params);
@@ -392,6 +445,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         params,
         covenantAddress: covenant.address,
         fare: decision.fare,
+        ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         senderSats: req.senderSats,
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),
@@ -444,6 +498,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         dust: params.dust,
         topup: params.topup,
         locktime: params.locktime,
+        claimMode: decision.claim,
         recoveryLocktime: { kind: expiry.kind, value: params.locktime },
         ...funding,
         batchExpiry: expiry,
@@ -487,7 +542,10 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     const latest = selectOperatorFunding({
         ...selectionOptions,
         spendable: currentSpendable,
-        reserved: [...reserved, ...currentLocks],
+        reserved: [
+            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...currentLocks,
+        ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });

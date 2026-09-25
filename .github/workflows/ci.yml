@@ -18,6 +18,7 @@ jobs:
               with:
                   node-version: 22
                   cache: pnpm
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
             # Run all four. build passing while typecheck fails, and the reverse, have
             # both happened here.
@@ -25,6 +26,8 @@ jobs:
             - run: pnpm typecheck
             - run: pnpm test
             - run: pnpm format:check
+            # What proves the verifier can fail; it refuses an unclean tree.
+            - run: pnpm verify:artifacts:battery
 
     vectors:
         runs-on: ubuntu-latest
@@ -38,7 +41,9 @@ jobs:
             - uses: actions/setup-go@v6
               with:
                   go-version: "1.26"
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
+            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm vectors
             # A committed vectors.json that no longer matches the Go reference is
             # worse than none: every test would still pass, against stale bytes.

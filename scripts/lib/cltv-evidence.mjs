@@ -32,6 +32,7 @@ export function matchRecoveryEvidence(value) {
         !/^[a-f0-9]{64}$/.test(value.txid) ||
         !/^[1-9]\d*$/.test(value.locktime) ||
         !/^[1-9]\d*$/.test(value.currentBlocktime) ||
+        !/^v[0-9][0-9A-Za-z.-]*$/.test(value.emulatorSdkVersion ?? "") ||
         BigInt(value.locktime) <= BigInt(value.currentBlocktime)
     )
         throw new Error("recovery evidence has different run, graph or clock bounds");
@@ -70,7 +71,10 @@ export function matchRecoveryEvidence(value) {
     if (
         submissions.length &&
         (!submissions[0].body.includes('level=warning msg="method=/ark.v1.ArkService/SubmitTx ') ||
-            !submissions[0].body.includes('metadata={\\"x-sdk-version\\":\\"emulator/v0.0.7\\"}') ||
+            // Arkd reports its own build alongside the caller, so pin by key.
+            !submissions[0].body.includes(
+                `\\"x-sdk-version\\":\\"emulator/${value.emulatorSdkVersion}\\"`,
+            ) ||
             !submissions[0].body.endsWith(` error="${detail}"`))
     )
         throw new Error("Arkd refusal is not the exact expected emulator CLTV rejection");

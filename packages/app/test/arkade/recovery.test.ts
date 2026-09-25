@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
     CSVMultisigTapscript,
     Extension,
@@ -18,7 +18,12 @@ import {
 import { base64 } from "@scure/base";
 import { hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
-import { DustCovenantScript, payoutPkScript, refundTopup } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    payoutPkScript,
+    refundTopup,
+    type DustCovenantParams,
+} from "@arkade-taxi/covenant";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import { fundingInputToWire } from "@arkade-taxi/protocol";
 import type { Advance } from "@arkade-taxi/core";
@@ -33,7 +38,14 @@ import {
     serverKey,
     serverUnroll,
 } from "../fixtures.js";
+import {
+    createBoundJointFill,
+    foreignRecoveryPreflight,
+    patchJointSource,
+    type BoundJointFill,
+} from "../jointFillFixtures.js";
 import { buildLockupEnvelope, operatorFundingInput } from "../../src/arkade/lockupBuilder.js";
+import { validatePersistedLockupGraph } from "../../src/arkade/submit.js";
 import {
     decodeLockupEnvelope,
     encodeLockupEnvelope,
@@ -54,7 +66,11 @@ afterEach(() => {
         rmSync(directory, { recursive: true, force: true });
 });
 
-const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) => {
+const sourceAdvance = (
+    kind: "height" | "time" = "height",
+    withAsset = false,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode" | "receiverFare"> = {},
+) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
     const cfg = config();
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
@@ -63,7 +79,8 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
         : undefined;
     const base = advance({
         fare: { currency: "sats", units: 10n },
-        ...(assetId ? { assetId } : {}),
+        ...terms,
+        ...(assetId ? { assetId, assetUnits: 9_007_199_254_740_993n } : {}),
     });
     const script = new DustCovenantScript({
         serverKey: cfg.serverPubkey,
@@ -76,6 +93,7 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
             dust: base.dust,
             topup: base.topup,
             locktime,
+            ...terms,
             ...(assetId ? { assetId } : {}),
         },
     });
@@ -126,6 +144,7 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
                     dust: base.dust,
                     topup: base.topup,
                     locktime,
+                    ...terms,
                     ...(assetId ? { assetId } : {}),
                 },
                 covenantAddress: script.address(cfg.addressHrp, cfg.serverPubkey).encode(),
@@ -177,8 +196,9 @@ const sourceAdvance = (kind: "height" | "time" = "height", withAsset = false) =>
     const source = Transaction.fromPSBT(base64.decode(envelope.arkTx));
     return advance({
         id: `recovery-${kind}`,
-        ...(assetId ? { assetId } : {}),
+        ...(assetId ? { assetId, assetUnits: 9_007_199_254_740_993n } : {}),
         fare: base.fare,
+        ...terms,
         locktime,
         recoveryLocktime: { kind, value: locktime },
         batchExpiry: {
@@ -341,6 +361,83 @@ describe("recovery graph", () => {
         expect(packet.outputs.map((output) => [output.vout, output.amount])).toEqual([
             [1, 9_007_199_254_740_993n],
         ]);
+    });
+
+    it("rebuilds receiver-owned recycle recovery after restart", () => {
+        const path = dbFile();
+        const row = sourceAdvance("height", true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
+        const first = open(path);
+        new AdvanceRepository(first).insert(row);
+        first.close();
+        const persisted = new AdvanceRepository(open(path)).get(row.id)!;
+        const expected = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: config().vtxoMinAmount,
+            params: {
+                receiverKey: persisted.receiverKey,
+                senderKey: persisted.senderKey,
+                operatorKey: persisted.operatorKey,
+                dust: persisted.dust,
+                topup: persisted.topup,
+                locktime: persisted.locktime,
+                assetId: persisted.assetId,
+                recoveryRecipient: "receiver",
+                claimMode: "recycle",
+            },
+        });
+        expect(persisted).toMatchObject({
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+            covenantAddress: expected.address(config().addressHrp, serverKey).encode(),
+        });
+
+        const intent = buildRecoveryIntent(persisted, config());
+        const tx = Transaction.fromPSBT(base64.decode(intent.arkTx));
+        const topup = refundTopup(persisted, config().vtxoMinAmount);
+        const returned = persisted.dust - topup;
+        expect(tx.getOutput(1)).toEqual({
+            amount: returned,
+            script: payoutPkScript(persisted.receiverKey, returned, persisted.dust),
+        });
+        expect(tx.getOutput(1).script).not.toEqual(
+            payoutPkScript(persisted.senderKey, returned, persisted.dust),
+        );
+        expect(Extension.fromTx(tx).getAssetPacket()!.groups[0]!.outputs[0]).toMatchObject({
+            vout: 1,
+            amount: 9_007_199_254_740_993n,
+        });
+        expect(Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script).toEqual(
+            expected.covenant.refund,
+        );
+    });
+
+    it.each([
+        ["sender-paid", undefined],
+        ["sats-fare", { currency: "sats", units: 7n }],
+        ["asset-fare", { currency: "asset", units: 9n }],
+    ] as const)("rebuilds the quoted covenant for a persisted %s advance", (_, receiverFare) => {
+        const path = dbFile();
+        const row = sourceAdvance("height", true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+            ...(receiverFare ? { receiverFare } : {}),
+        });
+        const first = open(path);
+        new AdvanceRepository(first).insert(row);
+        first.close();
+        const persisted = new AdvanceRepository(open(path)).get(row.id)!;
+        expect(persisted.receiverFare).toEqual(receiverFare);
+        const quoted = Transaction.fromPSBT(
+            base64.decode(decodeLockupEnvelope(row.unsignedLockupTx).arkTx),
+        ).getOutput(0).script;
+
+        const intent = buildRecoveryIntent(persisted, config());
+        const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
+        expect(checkpoint.getInput(0).witnessUtxo!.script).toEqual(quoted);
     });
 
     it("rejects drift in persisted operator funding and fare facts", () => {
@@ -904,6 +1001,48 @@ describe("startup recovery invariant", () => {
         };
         expect(() => assertRecoveryStartupInvariants([legacy], config())).toThrow(
             /recovery-height.*legacy recovery phase/,
+        );
+    });
+});
+
+describe("joint-fill startup invariants", () => {
+    let world: BoundJointFill;
+
+    beforeAll(async () => {
+        world = await createBoundJointFill();
+    });
+    afterAll(() => world.close());
+
+    it("takes the covenant outpoint from the tagged source for a locking advance", () => {
+        expect(world.advance.state).toBe("locking");
+        expect(world.advance.outpoint).toBeUndefined();
+        expect(() => buildRecoveryIntent(world.advance, world.config)).toThrow(
+            /covenant outpoint is missing/,
+        );
+        expect(() => assertRecoveryStartupInvariants([world.advance], world.config)).not.toThrow();
+    });
+
+    it("keeps the legacy lockup validator off a joint-fill source", () => {
+        expect(() => validatePersistedLockupGraph(world.advance, world.config)).toThrow();
+        expect(() => assertRecoveryStartupInvariants([world.advance], world.config)).not.toThrow();
+    });
+
+    it("rejects a joint preflight that no longer rebuilds from the persisted facts", () => {
+        const drifted = patchJointSource(world.advance, (source) => {
+            source.recoveryPreflight = foreignRecoveryPreflight();
+        });
+        expect(() => assertRecoveryStartupInvariants([drifted], world.config)).toThrow(
+            /receive-1.*joint recovery preflight drifted/,
+        );
+    });
+
+    it("fails closed on an unreadable joint tag instead of retrying it as legacy", () => {
+        const unknown = {
+            ...world.advance,
+            unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":9}',
+        };
+        expect(() => assertRecoveryStartupInvariants([unknown], world.config)).toThrow(
+            /receive-1.*persisted lockup graph is invalid/,
         );
     });
 });

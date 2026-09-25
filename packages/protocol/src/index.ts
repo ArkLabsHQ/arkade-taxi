@@ -33,6 +33,35 @@ export {
     type CovenantSpendInputValue,
 } from "./codec.js";
 
+export {
+    SWAP_FILL_TEMPLATE,
+    fareToWire as swapFillFareToWire,
+    swapFillGraphFromWire,
+    swapFillGraphToWire,
+    swapFillQuoteRequestFromWire,
+    swapFillStatusFromWire,
+    swapFillSubmitRequestFromWire,
+    type SwapFillGraph,
+    type SwapFillGraphAsset,
+    type SwapFillGraphAssetWire,
+    type SwapFillGraphInput,
+    type SwapFillGraphInputWire,
+    type SwapFillGraphOutput,
+    type SwapFillGraphOutputWire,
+    type SwapFillGraphWire,
+    type SwapFillInputOwner,
+    type SwapFillOutputRole,
+    type SwapFillQuoteRequest,
+    type SwapFillQuoteRequestBody,
+    type SwapFillQuoteResponse,
+    type SwapFillSolverAssetWire,
+    type SwapFillSolverInput,
+    type SwapFillSolverInputWire,
+    type SwapFillState,
+    type SwapFillStatusResponse,
+    type SwapFillSubmitRequestBody,
+} from "./swapFill.js";
+
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */
     txid: string;
@@ -85,6 +114,9 @@ export interface AssetRuleWire {
     fares: FareOfferWire[];
     claim: "recycle" | "purchase" | "either";
     maxTopupSats: string | null;
+    /** What happens to an unclaimed advance. Only "reclaim" is defined so far;
+     * a future mode rides a sibling field rather than widening this one. */
+    unclaimedMode: "reclaim";
 }
 
 export interface QuoteRequestBody {
@@ -92,6 +124,9 @@ export interface QuoteRequestBody {
     receiverKey: string;
     senderKey: string;
     assetId?: AssetIdWire;
+    /** Which claim leaf the sender authorises. Omitted resolves against the
+     * operator's rule for this asset. */
+    claimMode?: "recycle" | "purchase";
     senderSats: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
     assetUnits?: string;
@@ -109,6 +144,13 @@ export interface QuoteParams {
     topup: string;
     assetId?: AssetIdWire;
     locktime: string;
+    recoveryRecipient?: "sender" | "receiver";
+    /** Absent is the historical four-leaf tree; present pins which claim leaf
+     * the covenant actually commits to. */
+    claimMode?: "recycle" | "purchase";
+    /** Present only on a receiver-paid recycle leaf; the fared asset is
+     * `assetId` above, not restated here. */
+    receiverFare?: { currency: "sats" | "asset"; units: string };
 }
 
 export interface QuoteResponse {
@@ -195,6 +237,15 @@ export interface SponsoredQuoteParams {
     dust: string;
     contribution: string;
     assetId?: AssetIdWire;
+    /**
+     * An extra extension packet the payment must carry, declared by the SENDER.
+     * Funding an offer needs its packet (type 0x03) beside the asset groups, and
+     * the sender is the party that made the offer. Echoed in the quote so the
+     * sender's own verification rebuild includes it — which is what stops the
+     * operator substituting a different one. Opaque here: the payload is
+     * preserved byte-for-byte, never parsed.
+     */
+    extraPacket?: { type: number; payload: string };
 }
 
 export interface SponsoredQuoteRequestBody {
@@ -208,6 +259,12 @@ export interface SponsoredQuoteRequestBody {
     assetUnits?: string;
     /** Which offered fare the client accepts. Omitted takes the operator's first. */
     fareId?: string;
+    /**
+     * An extra extension packet the payment must carry, e.g. an offer's packet
+     * when funding one. Echoed back in the quote's params so the sender's
+     * verification rebuild includes it.
+     */
+    extraPacket?: { type: number; payload: string };
 }
 
 export interface SponsoredQuoteResponse {
@@ -242,6 +299,39 @@ export interface TaggedLocktimeWire {
     value: string;
 }
 
+export interface ReceiveQuoteRequestBody {
+    receiverAddress: string;
+    makerPublicKey: string;
+    assetId: AssetIdWire;
+    fareId?: string;
+    fundingExpiry?: TaggedLocktimeWire;
+    /** Opt-in: the receiver pays their own claim fare instead of the sender's. */
+    payer?: "sender" | "receiver";
+}
+
+export interface ReceiveQuoteResponse {
+    quoteId: string;
+    state: "quoted" | "bound" | "expired";
+    receiverAddress: string;
+    makerPublicKey: string;
+    params: QuoteParams;
+    covenantAddress: string;
+    fare: FareWire;
+    batchExpiry: TaggedLocktimeWire;
+    inputExpiryFloor: TaggedLocktimeWire;
+    recoveryLocktime: TaggedLocktimeWire;
+    createdAt: number;
+    expiresAt: number;
+    /** Read-only: the fill this quote is bound to, present only while `bound`.
+     * Recovers a lost quote-creation response; it authorises nothing. */
+    boundFillId?: string;
+    /** These three appear together, only in answer to a request that opted in
+     * with `payer: "receiver"` — never on an old client's plain quote. */
+    payer?: "receiver";
+    receiverFare?: FareWire;
+    unclaimedMode?: "reclaim";
+}
+
 export interface ReceiverClaimDescriptorWire {
     params: QuoteParams;
     covenantAddress: string;
@@ -250,6 +340,7 @@ export interface ReceiverClaimDescriptorWire {
     fare: FareWire;
     batchExpiry: TaggedLocktimeWire;
     recoveryLocktime: TaggedLocktimeWire;
+    unclaimedMode?: "reclaim";
 }
 
 export interface ReceiverClaimWire {

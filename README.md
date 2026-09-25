@@ -120,7 +120,8 @@ comes from pinned wallet config, never from the URI.
 ## Development
 
 ```bash
-pnpm install
+pnpm verify:artifacts
+pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
 pnpm test
@@ -129,6 +130,26 @@ pnpm format:check
 
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
+
+A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.4.74` and
+`@arkade-os/swap@0.0.20` are both published, but npm answers those coordinates
+with a **different build**: what this repository runs against is the pair built
+from `arkade-os/ts-sdk` at `adc6b329`, and no registry carries those bytes.
+`vendor/carrier/` holds them as tracked archives named for that source commit,
+`vendor/carrier/manifest.json` records the provenance of each, and the root
+`pnpm.overrides` point every resolution — direct and transitive — at those
+bytes.
+
+Because the version numbers themselves resolve, **dropping or narrowing an
+override does not fail loudly** — it installs the registry build under the same
+number. So the overrides are load-bearing for correctness, not merely for
+version pinning, and `pnpm verify:artifacts` is what stands behind them: it runs
+on built-in Node with nothing installed, fails on a source, identity or hash
+mismatch, and once `node_modules` exists it loads every declared resolution and
+requires a symbol only the `adc6b329` build exports. Every path that installs
+dependencies runs it before the install and again after it. Re-freezing the
+bundle is `node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout>`,
+then `pnpm install`, then `pnpm verify:artifacts`.
 
 Regenerate the golden vectors from the Go reference (requires Go):
 

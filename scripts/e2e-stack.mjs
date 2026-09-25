@@ -53,6 +53,12 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
+import {
+    VENDOR_DIR,
+    assertFrozenResolutions,
+    distMismatch,
+    workspaceManifests,
+} from "./carrier-artifacts/lib.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REGTEST_REPOSITORY = "https://github.com/ArkLabsHQ/arkade-regtest.git";
@@ -579,6 +585,22 @@ const assertProjectLabels = async (project, expectedServices) => {
     return assertCleanupCandidates(details, { project, services: expectedServices });
 };
 
+const frozenArtifacts = () => {
+    const { artifacts } = JSON.parse(readFileSync(join(REPO, VENDOR_DIR, "manifest.json"), "utf8"));
+    if (!artifacts?.length) throw new Error(`${VENDOR_DIR}/manifest.json freezes no archives`);
+    return artifacts;
+};
+
+/** The packed client names the candidates by version, so a fresh consumer would
+ * take the registry build; point it at the same frozen archives the repo installs. */
+const vendoredClientDependencies = () =>
+    frozenArtifacts().map(({ package: name, file }) => {
+        const vendored = join(REPO, VENDOR_DIR, file);
+        if (!existsSync(vendored))
+            throw new Error(`frozen carrier archive ${file} is missing from ${VENDOR_DIR}`);
+        return [name, `file:${vendored.replaceAll("\\", "/")}`];
+    });
+
 export const packClient = async (root, env) => {
     const packDir = join(root, "packs");
     const consumer = join(root, "consumer");
@@ -590,9 +612,15 @@ export const packClient = async (root, env) => {
         npmUserConfig,
         "registry=https://registry.npmjs.org/\n@arkade-taxi:registry=http://127.0.0.1:9/\nalways-auth=false\n",
     );
+    // A build only adds, so an unmerged branch's output survives and ships.
+    for (const relative of workspaceManifests(REPO).filter((p) => p.startsWith("packages/")))
+        rmSync(join(REPO, dirname(relative), "dist"), { recursive: true, force: true });
     await runPnpm(["-r", "build"], { cwd: REPO, env, npmUserConfig });
     const tarballs = [];
-    for (const name of ["@arkade-taxi/covenant", "@arkade-taxi/protocol", "@arkade-taxi/client"])
+    for (const name of ["@arkade-taxi/covenant", "@arkade-taxi/protocol", "@arkade-taxi/client"]) {
+        // Clearing it is only a claim; this is what makes the claim checkable.
+        const mismatch = distMismatch(join(REPO, "packages", name.split("/")[1]));
+        if (mismatch) throw new Error(`${name} packs output it cannot account for: ${mismatch}`);
         tarballs.push(
             assertPackResult(
                 (
@@ -609,10 +637,12 @@ export const packClient = async (root, env) => {
                 { name, packDir },
             ),
         );
+    }
     if (readdirSync(packDir).filter((name) => name.endsWith(".tgz")).length !== 3)
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);
     const manifest = buildConsumerManifest(tarballs, consumer);
+    for (const [name, spec] of vendoredClientDependencies()) manifest.pnpm.overrides[name] = spec;
     writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
@@ -644,6 +674,11 @@ export const packClient = async (root, env) => {
     )[0];
     const lock = readFileSync(join(consumer, "pnpm-lock.yaml"), "utf8");
     assertLocalConsumerResolution(manifest, lock, listed);
+    // This consumer reaches the real registry, and a bare import cannot tell it apart.
+    await assertFrozenResolutions(
+        join(consumer, "node_modules", "@arkade-taxi", "client", "package.json"),
+        frozenArtifacts(),
+    );
     await import(pathToFileURL(entry).href);
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };
 };
@@ -1109,7 +1144,9 @@ await import("/app/dist/cli.js");
         writeStackManifest(join(artifacts, "stack.json"), {
             startedAtUtc,
             regtest: { repository: REGTEST_REPOSITORY, branch: "master", sha },
-            sdkVersion: "0.4.72",
+            sdkVersion: JSON.parse(
+                readFileSync(join(REPO, "packages", "app", "package.json"), "utf8"),
+            ).dependencies["@arkade-os/sdk"],
             taxi,
             stack: {
                 project,
@@ -1163,7 +1200,8 @@ await import("/app/dist/cli.js");
                     cwd: REPO,
                     env: testEnv,
                     secrets: knownSecrets,
-                    timeoutMs: 900_000,
+                    // Whole-run bound; vitest still enforces its own 300s each.
+                    timeoutMs: 2_700_000,
                 },
             ),
         );

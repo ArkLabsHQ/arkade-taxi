@@ -14,7 +14,14 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/db/package.json packages/db/
 COPY packages/client/package.json packages/client/
 COPY packages/app/package.json packages/app/
+# The lockfile pins the candidate Arkade builds to these tracked archives, so
+# they must reach the layer that installs, not merely the build context.
+COPY vendor/carrier/ vendor/carrier/
+COPY scripts/carrier-artifacts/ scripts/carrier-artifacts/
+RUN node scripts/carrier-artifacts/verify.mjs
 RUN pnpm install --frozen-lockfile
+# Again: only a run with node_modules present can ask what actually resolved.
+RUN node scripts/carrier-artifacts/verify.mjs
 
 COPY . .
 RUN pnpm -r build \

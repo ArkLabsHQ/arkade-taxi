@@ -122,7 +122,9 @@ const request = (a = args()): client.RequestVerifiedQuoteArgs => ({
     selectedVtxos: [coin()],
     assetId: a.expect.assetId,
     assetUnits: a.assetUnits,
+    claimMode: a.expect.claimMode,
     expect: {
+        claimMode: a.expect.claimMode,
         maxTopupSats: a.expect.maxTopupSats,
         maxFare: a.expect.maxFare,
         minLocktime: a.expect.minLocktime,
@@ -133,6 +135,85 @@ const request = (a = args()): client.RequestVerifiedQuoteArgs => ({
     vtxoMinAmount: a.vtxoMinAmount,
     hrp: a.hrp,
     now: a.now,
+});
+
+describe("requestVerifiedQuote — claim mode", () => {
+    const asQuote = (claimMode: "recycle" | "purchase") => {
+        const a = args();
+        return {
+            ...a,
+            quote: quote({ ...params(), claimMode }),
+            expect: { ...a.expect, claimMode },
+        };
+    };
+    const paths = (fetch: { calls: { url: string }[] }) =>
+        fetch.calls.map((c) => new URL(c.url).pathname);
+    const ask = (
+        a: client.VerifyQuoteArgs,
+        over: Partial<client.RequestVerifiedQuoteArgs> = {},
+    ): client.RequestVerifiedQuoteArgs => ({ ...request(a), claimMode: undefined, ...over });
+
+    it("keeps an expectation-only mode in the request and the check", async () => {
+        const a = asQuote("purchase");
+        const { taxi, fetch } = transport(a);
+        await taxi.requestVerifiedQuote(ask(a));
+        expect(JSON.parse(String(fetch.calls[1].init.body)).claimMode).toBe("purchase");
+    });
+
+    it("sends a top-level mode and verifies the quote against it", async () => {
+        const a = asQuote("recycle");
+        const { taxi, fetch } = transport(a);
+        await taxi.requestVerifiedQuote(
+            ask(a, {
+                claimMode: "recycle",
+                expect: { ...request(a).expect, claimMode: undefined },
+            }),
+        );
+        expect(JSON.parse(String(fetch.calls[1].init.body)).claimMode).toBe("recycle");
+    });
+
+    it("accepts a top-level mode that agrees with the expectation", async () => {
+        const a = asQuote("purchase");
+        const { taxi } = transport(a);
+        await expect(
+            taxi.requestVerifiedQuote(ask(a, { claimMode: "purchase" })),
+        ).resolves.toBeDefined();
+    });
+
+    it("refuses contradicting modes before any HTTP request", async () => {
+        const a = asQuote("purchase");
+        const { taxi, fetch } = transport(a);
+        await expect(taxi.requestVerifiedQuote(ask(a, { claimMode: "recycle" }))).rejects.toThrow(
+            /contradicts/i,
+        );
+        expect(paths(fetch)).toEqual([]);
+    });
+
+    it("sends the expectation-only mode even when the operator echoes a legacy tree", async () => {
+        const a = { ...args(), quote: quote({ ...params() }) };
+        const withExpect = { ...a, expect: { ...a.expect, claimMode: "purchase" as const } };
+        const { taxi } = transport(a);
+        await expect(taxi.requestVerifiedQuote(ask(withExpect))).rejects.toMatchObject({
+            code: "CLAIM_MODE_MISMATCH",
+        });
+    });
+
+    it.each(["expectation-only", "top-level"] as const)(
+        "rejects a substituted mode for a %s request",
+        async (location) => {
+            const a = asQuote("purchase");
+            const { taxi, fetch } = transport(asQuote("recycle"));
+            const requested = ask(a);
+            if (location === "top-level") {
+                requested.claimMode = "purchase";
+                requested.expect.claimMode = undefined;
+            }
+            await expect(taxi.requestVerifiedQuote(requested)).rejects.toMatchObject({
+                code: "CLAIM_MODE_MISMATCH",
+            });
+            expect(JSON.parse(String(fetch.calls[1].init.body)).claimMode).toBe("purchase");
+        },
+    );
 });
 
 const transport = (a = args()) => {

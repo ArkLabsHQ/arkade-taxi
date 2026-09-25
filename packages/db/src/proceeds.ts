@@ -131,11 +131,34 @@ export class ProceedsRepository {
         assertNativeAccess(this.db);
         this.db
             .transaction(() => {
+                this.db
+                    .prepare(
+                        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
+                    )
+                    .run(at, at);
+                this.db
+                    .prepare(
+                        "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
+                    )
+                    .run(at);
+                this.db
+                    .prepare(
+                        "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
+                    )
+                    .run(at);
+                this.db
+                    .prepare(
+                        "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
+                    )
+                    .run(at);
                 if (this.active()) throw new Error("proceeds job already active");
                 if (expectedReserved) {
                     const current = this.db
                         .prepare<[], { txid: string; vout: number }>(
-                            "SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs",
+                            `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
+                             UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
+                             UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
+                             UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations`,
                         )
                         .all();
                     const expected = new Set(expectedReserved.map((o) => `${o.txid}:${o.vout}`));
@@ -156,6 +179,22 @@ export class ProceedsRepository {
                         this.db
                             .prepare(
                                 "SELECT 1 FROM operator_input_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new Error("proceeds input already reserved");
+                    if (
+                        this.db
+                            .prepare(
+                                "SELECT 1 FROM swap_fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                            )
+                            .get(input.txid, input.vout)
+                    )
+                        throw new Error("proceeds input already reserved");
+                    if (
+                        this.db
+                            .prepare(
+                                "SELECT 1 FROM receive_quote_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
                             )
                             .get(input.txid, input.vout)
                     )

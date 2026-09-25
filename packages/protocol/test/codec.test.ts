@@ -176,6 +176,48 @@ describe("quoteParamsFromWire", () => {
         const w = { ...wire(), assetId: { txid: hex32("11"), groupIndex: 7 } };
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
     });
+
+    // Absence keeps every already-funded covenant on its four-leaf address.
+    it("omits claimMode entirely rather than defaulting it", () => {
+        expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty("claimMode");
+    });
+
+    it.each(["recycle", "purchase"] as const)("round-trips claimMode %s", (claimMode) => {
+        const w = { ...wire(), claimMode };
+        expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+    });
+
+    it.each(["either", "Recycle", ""])("rejects claimMode %j, naming the field", (claimMode) => {
+        expect(() => quoteParamsFromWire({ ...wire(), claimMode: claimMode as "recycle" })).toThrow(
+            /params\.claimMode/,
+        );
+    });
+
+    it("omits recoveryRecipient rather than defaulting the legacy sender owner", () => {
+        expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty(
+            "recoveryRecipient",
+        );
+    });
+
+    it.each(["sender", "receiver"] as const)(
+        "round-trips recoveryRecipient %s",
+        (recoveryRecipient) => {
+            const w = { ...wire(), recoveryRecipient };
+            expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+        },
+    );
+
+    it.each(["seller", "Receiver", ""])(
+        "rejects recoveryRecipient %j, naming the field",
+        (recoveryRecipient) => {
+            expect(() =>
+                quoteParamsFromWire({
+                    ...wire(),
+                    recoveryRecipient: recoveryRecipient as "receiver",
+                }),
+            ).toThrow(/params\.recoveryRecipient/);
+        },
+    );
 });
 
 describe("sponsoredParamsFromWire", () => {

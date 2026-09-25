@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+    ArkAddress,
     EmulatorPacket,
     Extension,
     MultisigTapscript,
@@ -24,11 +25,14 @@ import {
     Leaf,
     covenantSpendInput,
     payoutPkScript,
+    recycleFare,
     refundTopup,
+    type ReceiverFare,
 } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
     PolicyRepository,
+    ProceedsRepository,
     ReservationRepository,
     openDatabase,
     type Database,
@@ -36,10 +40,20 @@ import {
 import type { Advance, AdvanceState } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { createSpendWatcher } from "../src/watcher.js";
+import { classifyObservedSpend, createSpendWatcher } from "../src/watcher.js";
 import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery.js";
-import { config, fundingCoin, NOW, policy as basePolicy, serverKey } from "./fixtures.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
+import { createProceedsCollector } from "../src/proceeds.js";
+import {
+    config,
+    fundingCoin,
+    NOW,
+    operatorTree,
+    policy as basePolicy,
+    providerEmulatorKey,
+    serverKey,
+} from "./fixtures.js";
+import { arkInfo } from "./arkade/fixtures.js";
+import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -91,12 +105,22 @@ async function setup(
     locktime?: bigint,
     receiverLeaf?: Uint8Array,
     receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
+    claimMode?: "recycle" | "purchase",
+    recoveryRecipient?: "sender" | "receiver",
+    receiverFare?: ReceiverFare,
+    cfg = config(),
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
         receiverLeaf ?? MultisigTapscript.encode({ pubkeys: [serverKey, receiverOwner] }).script,
     ]);
     const request = buildRequest();
+    request.params.operatorKey = cfg.operatorKey;
+    request.params.claimMode = "purchase";
+    if (kind === "recycled" || kind === "refunded") request.params.claimMode = "recycle";
+    if (claimMode !== undefined) request.params.claimMode = claimMode;
+    if (recoveryRecipient !== undefined) request.params.recoveryRecipient = recoveryRecipient;
+    if (receiverFare) receiverPays(request, receiverFare);
     if (locktime !== undefined) {
         request.params.locktime = locktime;
         if (locktime >= 500_000_000n) {
@@ -128,12 +152,12 @@ async function setup(
     if (kind === "recycled") request.params.receiverKey = receiverTree.tweakedPublicKey;
     const covenant = new DustCovenantScript({
         params: request.params,
-        serverKey: config().serverPubkey,
-        emulatorKey: config().emulatorPubkey,
-        vtxoMinAmount: config().vtxoMinAmount,
+        serverKey: cfg.serverPubkey,
+        emulatorKey: cfg.emulatorPubkey,
+        vtxoMinAmount: cfg.vtxoMinAmount,
     });
-    request.covenantAddress = covenant.address("ark", config().serverPubkey).encode();
-    const unsignedLockupTx = buildLockupEnvelope(request, config(), unroll);
+    request.covenantAddress = covenant.address(cfg.addressHrp, cfg.serverPubkey).encode();
+    const unsignedLockupTx = buildLockupEnvelope(request, cfg, unroll);
     const envelope = decodeLockupEnvelope(unsignedLockupTx);
     const lockup = Transaction.fromPSBT(base64.decode(envelope.arkTx));
     const advance: Advance = {
@@ -216,6 +240,7 @@ async function setup(
             covenantSpendInput(covenant, leaf, outpoint, request.params.dust, covenantPacket),
         ];
         const destination = new Uint8Array([0x51, 0x20, ...request.params.receiverKey]);
+        const { operatorSats, assetFare } = recycleFare(request.params);
         let outputs: { script: Uint8Array; amount: bigint }[];
         let receiverSource: Transaction | undefined;
         if (kind === "purchased") {
@@ -233,18 +258,22 @@ async function setup(
                 {
                     script: payoutPkScript(
                         request.params.operatorKey,
-                        request.params.topup,
+                        operatorSats,
                         request.params.dust,
                     ),
-                    amount: request.params.topup,
+                    amount: operatorSats,
                 },
                 {
                     script: destination,
-                    amount: request.params.dust + 500n - request.params.topup,
+                    amount: request.params.dust + 500n - operatorSats,
                 },
             ];
         } else {
-            const topup = refundTopup(request.params, config().vtxoMinAmount);
+            const topup = refundTopup(request.params, cfg.vtxoMinAmount);
+            const recoveryKey =
+                request.params.recoveryRecipient === "receiver"
+                    ? request.params.receiverKey
+                    : request.params.senderKey;
             outputs = [
                 {
                     script: payoutPkScript(request.params.operatorKey, topup, request.params.dust),
@@ -252,7 +281,7 @@ async function setup(
                 },
                 {
                     script: payoutPkScript(
-                        request.params.senderKey,
+                        recoveryKey,
                         request.params.dust - topup,
                         request.params.dust,
                     ),
@@ -270,7 +299,12 @@ async function setup(
                       paymentAsset,
                       null,
                       [asset.AssetInput.create(0, paymentUnits)],
-                      [asset.AssetOutput.create(kind === "purchased" ? 0 : 1, paymentUnits)],
+                      kind === "recycled" && assetFare > 0n
+                          ? [
+                                asset.AssetOutput.create(0, assetFare),
+                                asset.AssetOutput.create(1, paymentUnits - assetFare),
+                            ]
+                          : [asset.AssetOutput.create(kind === "purchased" ? 0 : 1, paymentUnits)],
                       [],
                   ),
               ])
@@ -381,7 +415,7 @@ async function setup(
         advances,
         policy,
         indexer,
-        config: config(),
+        config: cfg,
         now: () => NOW + 10,
         tip: async () => tip,
     });
@@ -423,6 +457,30 @@ describe("canonical covenant observation", () => {
                 state: "recovered",
                 spentTxid: state.finalArk!.id,
             });
+        } finally {
+            state.db.close();
+        }
+    });
+    it("re-derives a claim-only covenant from the persisted mode after a restart", async () => {
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            false,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+        );
+        try {
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "recycled",
+                claimMode: "recycle",
+                spentTxid: state.finalArk!.id,
+            });
+            expect(state.policy.get().paused).toBe(false);
         } finally {
             state.db.close();
         }
@@ -720,6 +778,98 @@ describe("canonical covenant observation", () => {
             observationTipHash: "41".repeat(32),
         });
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual([]);
+        state.db.close();
+    });
+
+    it.each(["refunded", "recovered"] as const)(
+        "proves receiver-owned %s without a sender output",
+        async (kind) => {
+            const state = await setup(
+                kind,
+                ":memory:",
+                true,
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                "recycle",
+                "receiver",
+            );
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({ state: kind });
+            const topup = refundTopup(state.advance, config().vtxoMinAmount);
+            const returned = state.advance.dust - topup;
+            expect(state.finalArk!.getOutput(1).script).toEqual(
+                payoutPkScript(state.advance.receiverKey, returned, state.advance.dust),
+            );
+            expect(state.finalArk!.getOutput(1).script).not.toEqual(
+                payoutPkScript(state.advance.senderKey, returned, state.advance.dust),
+            );
+            expect(
+                Extension.fromTx(state.finalArk!).getAssetPacket()!.groups[0]!.outputs[0],
+            ).toMatchObject({ vout: 1, amount: 9_007_199_254_740_993n });
+            state.db.close();
+        },
+    );
+
+    it.each([
+        ["sender-paid", undefined],
+        ["sats-fare", { currency: "sats", units: 7n }],
+        ["asset-fare", { currency: "asset", units: 9n }],
+    ] as const)("rebuilds the quoted covenant for a persisted %s recovery", async (_, fare) => {
+        const state = await setup(
+            "recovered",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+            fare,
+        );
+        try {
+            const stored = state.advances.get(state.advance.id)!;
+            expect(stored.receiverFare).toEqual(fare);
+            const coin = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!;
+            await expect(
+                classifyObservedSpend(
+                    stored,
+                    coin,
+                    { indexer: state.indexer, config: config() },
+                    { height: Number(stored.locktime), time: NOW },
+                ),
+            ).resolves.toEqual({ kind: "recovered", txid: state.finalArk!.id });
+        } finally {
+            state.db.close();
+        }
+    });
+
+    it.each([
+        ["sats", { currency: "sats", units: 7n }],
+        ["asset", { currency: "asset", units: 9n }],
+    ] as const)("proves a receiver-paid recycle paying its %s fare", async (_, fare) => {
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+            fare,
+        );
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recycled",
+            spentTxid: state.finalArk!.id,
+        });
         state.db.close();
     });
 
@@ -1354,6 +1504,109 @@ describe("canonical covenant observation", () => {
             "transaction_stream_disconnected",
         ]);
         await watcher.stop();
+        state.db.close();
+    });
+});
+
+describe("proceeds of a receiver-paid recycle", () => {
+    it.each([
+        ["7 sats", { currency: "sats", units: 7n }],
+        ["9 asset units", { currency: "asset", units: 9n }],
+        ["zero", { currency: "sats", units: 0n }],
+    ] as const)("collects the operator's repayment for a fare of %s", async (_, fare) => {
+        const cfg = config({ operatorKey: operatorTree.tweakedPublicKey, addressHrp: "tark" });
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+            fare,
+            cfg,
+        );
+        await state.watcher.catchUp();
+        const repaid = state.finalArk!.getOutput(0);
+        const assets = Extension.fromTx(state.finalArk!)
+            .getAssetPacket()!
+            .groups.flatMap((group) =>
+                group.outputs
+                    .filter(({ vout }) => vout === 0)
+                    .map(({ amount }) => ({ assetId: group.assetId!.toString(), amount })),
+            );
+        // Expired, as it must be to reach proceeds: funding never spends an asset-carrying coin.
+        const repayment = fundingCoin({
+            txid: state.finalArk!.id,
+            value: Number(repaid.amount),
+            isSwept: true,
+            assets,
+        });
+        expect(repayment.script).toBe(hex.encode(repaid.script!));
+        state.coins.set(`${repayment.txid}:0`, repayment);
+        const address = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode();
+        const info = arkInfo({ fees: { intentFee: {}, txFeeRate: "0" } });
+        const tip = { hash: "41".repeat(32), height: 700000, time: NOW };
+        let owned = [repayment];
+        const settle = vi.fn(async (_params: unknown) => "cc".repeat(32));
+        const wallet = {
+            getAddress: async () => address,
+            getSpendableVtxos: async () => owned,
+            arkProvider: { getInfo: async () => info },
+            onchainProvider: { getChainTip: async () => tip },
+            settle,
+        };
+        const jobs = new ProceedsRepository(state.db);
+        const collector = createProceedsCollector({
+            config: cfg,
+            runtime: {
+                wallet,
+                assertRecovery: async () => {},
+                providers: {
+                    arkProvider: wallet.arkProvider,
+                    emulatorProvider: {
+                        getInfo: async () => ({ signerPubkey: hex.encode(providerEmulatorKey) }),
+                    },
+                    indexerProvider: state.indexer,
+                },
+                storage: {
+                    intentRepository: {
+                        getIntents: async () => [],
+                        getLockedVtxoOutpoints: async () => [],
+                    },
+                },
+                withSettlement: async (work: (w: typeof wallet) => Promise<void>) => work(wallet),
+            },
+            advances: state.advances,
+            reservations: state.reservations,
+            jobs,
+            now: () => NOW,
+        } as unknown as Parameters<typeof createProceedsCollector>[0]);
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_output_pending");
+        expect(settle).toHaveBeenCalledExactlyOnceWith({
+            inputs: [repayment],
+            outputs: [{ address, amount: repaid.amount }],
+        });
+        state.coins.set(`${repayment.txid}:0`, {
+            ...repayment,
+            isSpent: true,
+            settledBy: "cc".repeat(32),
+        });
+        owned = [
+            fundingCoin({
+                txid: "dd".repeat(32),
+                value: Number(repaid.amount),
+                commitmentTxIds: ["cc".repeat(32)],
+                assets,
+            }),
+        ];
+        await collector.tick();
+        expect(jobs.active()).toBeUndefined();
+        expect(collector.status().blocker).toBeNull();
         state.db.close();
     });
 });

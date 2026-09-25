@@ -4,6 +4,7 @@ import {
     ArkAddress,
     CSVMultisigTapscript,
     DefaultVtxo,
+    EmulatorPacket,
     Extension,
     MultisigTapscript,
     P2A,
@@ -23,8 +24,17 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { base64, hex } from "@scure/base";
 import { verifyQuote } from "../src/verify.js";
 import { activeQuoteStateFor } from "../src/lockup.js";
-import { payoutPkScript, refundTopup } from "@arkade-taxi/covenant";
+import {
+    Leaf,
+    covenantSpendInput,
+    payoutPkScript,
+    refundTopup,
+    type DustCovenantParams,
+    type ReceiverFare,
+} from "@arkade-taxi/covenant";
 import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
+import { classifyObservedSpend } from "../../app/src/watcher.js";
+import { config as serverConfig } from "../../app/test/fixtures.js";
 import { TaxiClient } from "../src/client.js";
 import {
     purchase,
@@ -300,8 +310,28 @@ const setup = async (
     };
 };
 
-const incomingFixture = async (withAsset = true) => {
-    const authorization = withAsset ? assetArgs() : args();
+const authorizationWithTerms = (
+    withAsset: boolean,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+) => {
+    const base = withAsset ? assetArgs() : args();
+    const p = { ...quoteParamsFromWire(base.quote.params), ...terms };
+    return {
+        ...base,
+        quote: quote(p, {
+            senderInputs: base.senderInputs,
+            senderSats: base.senderSats,
+            assetUnits: base.assetUnits,
+        }),
+        expect: { ...base.expect, ...terms },
+    };
+};
+
+const incomingFixture = async (
+    withAsset = true,
+    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode"> = {},
+) => {
+    const authorization = authorizationWithTerms(withAsset, terms);
     const base = await setup(
         authorization,
         withAsset
@@ -335,6 +365,7 @@ const incomingFixture = async (withAsset = true) => {
         claim,
         expect: {
             receiverAddress,
+            ...terms,
             ...(withAsset
                 ? {
                       assetId: structuredClone(authorization.expect.assetId!),
@@ -370,6 +401,39 @@ describe("incoming claim verification", () => {
             expect(base.submitted()).toBeDefined();
         },
     );
+
+    it("pins receiver-owned recovery and recycle mode independently", async () => {
+        const terms = { recoveryRecipient: "receiver" as const, claimMode: "recycle" as const };
+        await expect(
+            verifyIncomingClaim((await incomingFixture(true, terms)).incoming),
+        ).resolves.toBeDefined();
+
+        const wrongRecovery = await incomingFixture(true, terms);
+        wrongRecovery.incoming.expect.recoveryRecipient = "sender";
+        await expect(verifyIncomingClaim(wrongRecovery.incoming)).rejects.toThrow(
+            /recovery recipient/i,
+        );
+
+        const wrongMode = await incomingFixture(true, terms);
+        wrongMode.incoming.expect.claimMode = "purchase";
+        await expect(verifyIncomingClaim(wrongMode.incoming)).rejects.toThrow(/claim mode/i);
+    });
+
+    it("accepts resolved incoming recovery terms when expectations omit them", async () => {
+        const { incoming } = await incomingFixture(true, {
+            recoveryRecipient: "receiver",
+            claimMode: "recycle",
+        });
+        delete incoming.expect.recoveryRecipient;
+        delete incoming.expect.claimMode;
+        await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
+    });
+
+    it("treats an absent incoming recovery term as sender-owned", async () => {
+        const { incoming } = await incomingFixture();
+        incoming.expect.recoveryRecipient = "sender";
+        await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
+    });
 
     const mutations: [string, (value: VerifyIncomingClaimArgs) => void][] = [
         [
@@ -842,6 +906,7 @@ describe("incoming claim verification", () => {
 const receiverFunding = async (
     leaf?: Uint8Array,
     identity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6)),
+    value = 500n,
 ) => {
     const owner = await identity.xOnlyPublicKey();
     const tree = new VtxoScript([
@@ -851,14 +916,14 @@ const receiverFunding = async (
     const input = {
         txid: previous.id,
         vout: 0,
-        value: 500n,
+        value,
         tapTree: tree.encode(),
         tapLeafScript: tree.findLeaf(hex.encode(tree.scripts[0])),
     };
     const coin = {
         txid: previous.id,
         vout: 0,
-        value: 500,
+        value: Number(value),
         script: hex.encode(tree.pkScript),
         status: { confirmed: false },
         createdAt: new Date(NOW * 1000),
@@ -1187,6 +1252,35 @@ describe("purchase", () => {
         expect(emulator.submitTx).not.toHaveBeenCalled();
     });
 
+    // The tree keeps a parseable slot for the forbidden leaf, so the refusal has
+    // to come from the mode and land before any provider call.
+    it("refuses a purchase on a recycle-only covenant, then still recycles", async () => {
+        const a = args();
+        const funding = await receiverFunding();
+        const recycleOnly = {
+            ...a,
+            quote: quote({ ...params(), receiverKey: funding.receiverKey, claimMode: "recycle" }),
+            expect: {
+                ...a.expect,
+                receiverKey: funding.receiverKey,
+                claimMode: "recycle" as const,
+            },
+        };
+        const { transfer, fetcher } = await setup(recycleOnly, [], [funding]);
+        const before = fetcher.mock.calls.length;
+        await expect(
+            purchase(transfer, new Uint8Array([0x51, 0x20, ...funding.receiverKey])),
+        ).rejects.toThrow(/mode does not permit/i);
+        expect(fetcher.mock.calls.length).toBe(before);
+        await expect(
+            recycle(
+                transfer,
+                funding.walletInput,
+                new Uint8Array([0x51, 0x20, ...funding.receiverKey]),
+            ),
+        ).resolves.toBeTypeOf("string");
+    });
+
     it("conserves large asset quantities and emits no asset packet for bitcoin", async () => {
         const assetVerify = assetArgs();
         const id = asset.AssetId.create(
@@ -1473,6 +1567,33 @@ describe("one-shot covenant capability", () => {
 });
 
 describe("recycle", () => {
+    it("refuses a recycle on a purchase-only covenant, then still purchases", async () => {
+        const a = args();
+        const funding = await receiverFunding();
+        const purchaseOnly = {
+            ...a,
+            quote: quote({ ...params(), receiverKey: funding.receiverKey, claimMode: "purchase" }),
+            expect: {
+                ...a.expect,
+                receiverKey: funding.receiverKey,
+                claimMode: "purchase" as const,
+            },
+        };
+        const { transfer, fetcher } = await setup(purchaseOnly, [], [funding]);
+        const before = fetcher.mock.calls.length;
+        await expect(
+            recycle(
+                transfer,
+                funding.walletInput,
+                new Uint8Array([0x51, 0x20, ...funding.receiverKey]),
+            ),
+        ).rejects.toThrow(/mode does not permit/i);
+        expect(fetcher.mock.calls.length).toBe(before);
+        await expect(
+            purchase(transfer, new Uint8Array([0x51, 0x20, ...funding.receiverKey])),
+        ).resolves.toBeTypeOf("string");
+    });
+
     it("spends a literal owner-first leaf matching SDK 0.4.72 DefaultVtxo", async () => {
         const leaf = hex.decode(
             "20f006a18d5653c4edf5391ff23a61f03ff83d237e880ee61187fa9f379a028e0aad20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bac",
@@ -1640,7 +1761,269 @@ describe("recycle", () => {
     });
 });
 
+const DELIVERED = 500n;
+
+const receiverPaidTransfer = async (
+    fare: { fareSats?: bigint; fareUnits?: bigint },
+    coinValue = 1000n,
+) => {
+    const funding = await receiverFunding(undefined, undefined, coinValue);
+    const a = assetArgs();
+    const receiverFare: ReceiverFare | undefined =
+        fare.fareSats !== undefined
+            ? { currency: "sats", units: fare.fareSats }
+            : fare.fareUnits !== undefined
+              ? { currency: "asset", units: fare.fareUnits }
+              : undefined;
+    const terms = { claimMode: "recycle", recoveryRecipient: "receiver" } as const;
+    const p: DustCovenantParams = {
+        ...quoteParamsFromWire(a.quote.params),
+        ...terms,
+        receiverKey: funding.receiverKey,
+        ...(receiverFare ? { receiverFare } : {}),
+    };
+    const id = asset.AssetId.create(
+        hex.encode(Uint8Array.from(a.expect.assetId!.txid).reverse()),
+        a.expect.assetId!.groupIndex,
+    );
+    const base = await setup(
+        {
+            ...a,
+            quote: quote(p, {
+                senderInputs: a.senderInputs,
+                senderSats: a.senderSats,
+                assetUnits: DELIVERED,
+            }),
+            expect: { ...a.expect, ...terms, receiverKey: funding.receiverKey },
+            assetUnits: DELIVERED,
+        },
+        [{ assetId: id.toString(), amount: DELIVERED }],
+        [funding],
+    );
+    const destination = new Uint8Array([0x51, 0x20, ...funding.receiverKey]);
+    return { ...base, funding, destination, assetId: id };
+};
+
+const assetUnitsAt = (tx: Transaction, vout: number): bigint =>
+    Extension.fromTx(tx)
+        .getAssetPacket()!
+        .groups.flatMap((group) => group.outputs)
+        .filter((output) => output.vout === vout)
+        .reduce((sum, output) => sum + output.amount, 0n);
+
+describe("receiver-paid recycle", () => {
+    it("refuses a claim whose coin cannot cover the sats fare, naming the floor", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 334n);
+        await expect(recycle(t.transfer, t.funding.walletInput, t.destination)).rejects.toThrow(
+            /below dust or the Ark operator minimum/,
+        );
+    });
+
+    it("accepts the smallest coin that can cover it", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 337n);
+        await expect(
+            recycle(t.transfer, t.funding.walletInput, t.destination),
+        ).resolves.toBeDefined();
+    });
+
+    it("pays the operator dust plus the sats fare and merges the rest", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n });
+        await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const tx = t.submitted()!;
+        expect(tx.getOutput(0).amount).toBe(337n);
+        expect(tx.getOutput(1).amount).toBe(993n);
+    });
+
+    it("moves an asset fare to the operator output and subtracts it from the merge", async () => {
+        const t = await receiverPaidTransfer({ fareUnits: 9n });
+        await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const tx = t.submitted()!;
+        expect(tx.getOutput(0).amount).toBe(330n);
+        expect(assetUnitsAt(tx, 0)).toBe(9n);
+        expect(assetUnitsAt(tx, 1)).toBe(491n);
+    });
+
+    it("reclaims a receiver-paid covenant with the same outputs as a fareless one", async () => {
+        const amounts = (tx: Transaction) =>
+            Array.from({ length: tx.outputsLength }, (_, index) => tx.getOutput(index).amount);
+        const withFare = await receiverPaidTransfer({ fareSats: 7n });
+        await refund(withFare.transfer, senderIdentity);
+        const without = await receiverPaidTransfer({});
+        await refund(without.transfer, senderIdentity);
+        expect(amounts(withFare.submitted()!)).toEqual(amounts(without.submitted()!));
+        expect(assetUnitsAt(withFare.submitted()!, 1)).toBe(DELIVERED);
+    });
+});
+
+describe("a client-built claim, classified by the server watcher", () => {
+    type Party = Awaited<ReturnType<typeof receiverPaidTransfer>>;
+    type Graph = { signedArkTx: string; signedCheckpointTxs: string[] };
+    type Deps = Parameters<typeof classifyObservedSpend>[2];
+
+    const classify = (t: Party, graph: Graph) => {
+        const ark = Transaction.fromPSBT(base64.decode(graph.signedArkTx));
+        const [covenantCheckpoint, receiverCheckpoint] = graph.signedCheckpointTxs.map((encoded) =>
+            Transaction.fromPSBT(base64.decode(encoded)),
+        );
+        const txs = new Map([ark, covenantCheckpoint, receiverCheckpoint].map((tx) => [tx.id, tx]));
+        const coins: VirtualCoin[] = [
+            { ...t.coin, isSpent: true, spentBy: covenantCheckpoint.id, arkTxId: ark.id },
+            {
+                ...t.funding.coin,
+                isSpent: true,
+                spentBy: receiverCheckpoint.id,
+                arkTxId: ark.id,
+                status: { confirmed: false, isLeaf: false },
+            },
+        ];
+        const indexer: Deps["indexer"] = {
+            getVtxos: async (options) => ({
+                vtxos: (options && "outpoints" in options ? options.outpoints : [])!.flatMap(
+                    ({ txid, vout }) =>
+                        coins.filter((coin) => coin.txid === txid && coin.vout === vout),
+                ),
+            }),
+            getVirtualTxs: async (ids) => ({
+                txs: ids.flatMap((id) =>
+                    txs.has(id) ? [base64.encode(txs.get(id)!.toPSBT())] : [],
+                ),
+            }),
+        };
+        const { quote: q, params: p } = t.verified;
+        return classifyObservedSpend(
+            {
+                id: q.transferId,
+                state: "locked",
+                ...p,
+                assetUnits: DELIVERED,
+                batchExpiry: { kind: "height", value: 900_000n },
+                operatorInputs: [],
+                unsignedLockupTx: q.unsignedLockupTx,
+                unsignedLockupId: q.lockup.unsignedTxId,
+                covenantAddress: q.covenantAddress,
+                fare: fareFromWire(q.fare),
+                outpoint: { ...t.status.outpoint },
+                createdAt: NOW,
+                updatedAt: NOW,
+                expiresAt: NOW + 60,
+            },
+            coins[0],
+            { indexer, config: serverConfig() },
+            { height: 700_000, time: NOW },
+        );
+    };
+
+    const handBuilt = async (t: Party, operatorSats: bigint, assetOutputs: [number, bigint][]) => {
+        const program = t.verified.script.covenant.recycle;
+        const group = (inputs: asset.AssetInput[], outputs: asset.AssetOutput[]) =>
+            asset.Packet.create([asset.AssetGroup.create(t.assetId, null, inputs, outputs, [])]);
+        const covenantPacket = group(
+            [],
+            [asset.AssetOutput.create(t.status.outpoint.vout, DELIVERED)],
+        );
+        const inputs = [
+            covenantSpendInput(
+                t.verified.script,
+                Leaf.Recycle,
+                t.status.outpoint,
+                330n,
+                covenantPacket.serialize(),
+            ),
+            t.funding.walletInput.input,
+        ];
+        const spendPacket = group(
+            [asset.AssetInput.create(0, DELIVERED)],
+            assetOutputs.map(([vout, amount]) => asset.AssetOutput.create(vout, amount)),
+        );
+        const graph = buildOffchainTx(
+            inputs.map((input) => ({ ...input, value: Number(input.value) })),
+            [
+                { script: payoutPkScript(operatorKey, operatorSats, 330n), amount: operatorSats },
+                {
+                    script: t.destination,
+                    amount: 330n + t.funding.walletInput.input.value - operatorSats,
+                },
+                Extension.create([
+                    spendPacket,
+                    EmulatorPacket.create([{ vin: 0, script: program }]),
+                ]).txOut(),
+            ],
+            unroll,
+        );
+        const owner = t.funding.walletInput.identity;
+        const ark = await owner.sign(graph.arkTx, [1]);
+        const receiverCheckpoint = await owner.sign(graph.checkpoints[1], [0]);
+        return finalGraph(
+            base64.encode(ark.toPSBT()),
+            [graph.checkpoints[0], receiverCheckpoint].map((tx) => base64.encode(tx.toPSBT())),
+            program,
+        );
+    };
+
+    it.each([
+        ["sats", { fareSats: 7n }],
+        ["asset", { fareUnits: 9n }],
+    ] as const)("classifies the client's %s-fare claim as recycled", async (_, fare) => {
+        const t = await receiverPaidTransfer(fare);
+        const txid = await recycle(t.transfer, t.funding.walletInput, t.destination);
+        const graph = await t.emulator.submitTx.mock.results[0]!.value;
+        await expect(classify(t, graph)).resolves.toEqual({ kind: "recycled", txid });
+    });
+
+    it.each([
+        ["sats", { fareSats: 7n }, /recycle repayment/],
+        ["asset", { fareUnits: 9n }, /extension packet set/],
+    ] as const)("refuses a claim that skips its %s fare", async (_, fare, reason) => {
+        const t = await receiverPaidTransfer(fare);
+        const graph = await handBuilt(t, 330n, [[1, DELIVERED]]);
+        await expect(classify(t, graph)).resolves.toMatchObject({
+            kind: "unknown",
+            reason: expect.stringMatching(reason),
+        });
+    });
+
+    it("refuses, on both sides, a coin that cannot cover the sats fare", async () => {
+        const t = await receiverPaidTransfer({ fareSats: 7n }, 334n);
+        await expect(recycle(t.transfer, t.funding.walletInput, t.destination)).rejects.toThrow(
+            /below dust/,
+        );
+        const graph = await handBuilt(t, 337n, [[1, DELIVERED]]);
+        await expect(classify(t, graph)).resolves.toMatchObject({
+            kind: "unknown",
+            reason: expect.stringMatching(/below dust/),
+        });
+    });
+});
+
 describe("refund", () => {
+    it("returns receiver-owned asset recovery to the receiver output", async () => {
+        const authorization = authorizationWithTerms(true, {
+            recoveryRecipient: "receiver",
+        });
+        const id = asset.AssetId.create(
+            hex.encode(Uint8Array.from(authorization.expect.assetId!.txid).reverse()),
+            authorization.expect.assetId!.groupIndex,
+        ).toString();
+        const { transfer, submitted } = await setup(authorization, [
+            { assetId: id, amount: authorization.assetUnits! },
+        ]);
+        await refund(transfer, senderIdentity);
+        const tx = submitted()!;
+        const p = quoteParamsFromWire(authorization.quote.params);
+        const topup = refundTopup(p, VTXO_MIN);
+        const returned = p.dust - topup;
+        expect(tx.getOutput(1)).toMatchObject({
+            amount: returned,
+            script: payoutPkScript(receiverKey, returned, p.dust),
+        });
+        expect(tx.getOutput(1).script).not.toEqual(payoutPkScript(p.senderKey, returned, p.dust));
+        expect(Extension.fromTx(tx).getAssetPacket()!.groups[0].outputs[0]).toMatchObject({
+            vout: 1,
+            amount: authorization.assetUnits,
+        });
+        expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
+    });
+
     it("works around the SDK two-OP_RETURN guard without changing asset vouts", async () => {
         const opReturn = { script: new Uint8Array([0x6a]), amount: 0n };
         expect(() => buildOffchainTx([], [opReturn, opReturn, opReturn], unroll)).toThrow(

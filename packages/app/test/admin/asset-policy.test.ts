@@ -32,9 +32,11 @@ describe("admin asset policy wire boundary", () => {
         const exposure = { outstandingSats: 0n, lockedCount: 0, oldestUnsweptLocktime: null };
         expect(admit(request, policy, exposure, 330n, 1n)).toEqual({
             ok: true,
-            topup: 1n,
+            // The sender's sats are change on an asset leg, so the operator
+            // fronts the whole dust unit and "either" resolves to one leaf.
+            topup: 330n,
             fare: { currency: "sats", units: 1n },
-            claim: "either",
+            claim: "recycle",
         });
         expect(
             admit(

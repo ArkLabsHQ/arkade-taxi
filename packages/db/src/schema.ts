@@ -182,6 +182,157 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE advances ADD COLUMN kind TEXT NOT NULL DEFAULT 'covenant'
             CHECK (kind IN ('covenant', 'sponsored'))`,
     },
+    {
+        id: 3,
+        // Sponsored swap fills live in their own tables: new states, new
+        // reservation scope, no edits to the advances schema or its rows.
+        up: `CREATE TABLE swap_fills (
+            id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'submitting', 'settled', 'expired', 'cancelled')),
+            offer_hex TEXT NOT NULL,
+            offer_txid TEXT,
+            offer_vout INTEGER,
+            swap_address TEXT,
+            solver_inputs_json TEXT NOT NULL,
+            solver_proceeds_script TEXT NOT NULL,
+            solver_keys_json TEXT NOT NULL,
+            taxi_inputs_json TEXT NOT NULL,
+            contribution_sats INTEGER NOT NULL CHECK (contribution_sats > 0),
+            fare_currency TEXT NOT NULL CHECK (fare_currency IN ('sats', 'asset')),
+            fare_units INTEGER NOT NULL CHECK (fare_units >= 0),
+            fare_asset_txid BLOB,
+            fare_asset_group_index INTEGER,
+            max_fare_json TEXT NOT NULL,
+            graph_json TEXT NOT NULL,
+            graph_id TEXT NOT NULL,
+            solver_graph_json TEXT,
+            prepared_ark_tx TEXT,
+            prepared_checkpoints_json TEXT,
+            submit_invoked INTEGER NOT NULL DEFAULT 0 CHECK (submit_invoked IN (0, 1)),
+            txid TEXT,
+            outpoint_txid TEXT,
+            outpoint_vout INTEGER,
+            spent_txid TEXT,
+            failure_code TEXT,
+            failure_detail TEXT,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_until INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            CHECK ((offer_txid IS NULL) = (offer_vout IS NULL)),
+            CHECK ((fare_currency = 'asset') = (fare_asset_txid IS NOT NULL)),
+            CHECK ((fare_asset_txid IS NULL) = (fare_asset_group_index IS NULL)),
+            CHECK ((outpoint_txid IS NULL) = (outpoint_vout IS NULL))
+        );
+        CREATE UNIQUE INDEX swap_fills_operation ON swap_fills (operation_id);
+        CREATE INDEX swap_fills_state ON swap_fills (state, expires_at);
+        CREATE TABLE swap_fill_reservations (
+            outpoint_txid TEXT NOT NULL,
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            fill_id TEXT NOT NULL REFERENCES swap_fills(id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX swap_fill_reservations_fill ON swap_fill_reservations (fill_id);`,
+    },
+    {
+        id: 4,
+        // The settlement proof identifies sponsor outputs by script, so the
+        // sponsor script is stored beside the solver proceeds script. Rows
+        // predate deployment, so no backfill beyond the empty default.
+        up: `ALTER TABLE swap_fills ADD COLUMN sponsor_script TEXT NOT NULL DEFAULT ''`,
+    },
+    {
+        id: 5,
+        // Additive and nullable: NULL is the legacy four-leaf covenant, so no
+        // row is rewritten and no address changes.
+        up: `ALTER TABLE advances ADD COLUMN claim_mode TEXT
+            CHECK (claim_mode IS NULL OR claim_mode IN ('recycle', 'purchase'))`,
+    },
+    {
+        id: 6,
+        up: `ALTER TABLE advances ADD COLUMN recovery_recipient TEXT
+            CHECK (recovery_recipient IS NULL OR recovery_recipient IN ('sender', 'receiver'))`,
+    },
+    {
+        id: 7,
+        up: `CREATE TABLE receive_quotes (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'bound', 'expired')),
+            receiver_address TEXT NOT NULL CHECK (length(receiver_address) > 0),
+            maker_public_key TEXT NOT NULL CHECK (
+                length(maker_public_key) = 64 AND maker_public_key NOT GLOB '*[^0-9a-f]*'
+            ),
+            params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+            covenant_address TEXT NOT NULL CHECK (length(covenant_address) > 0),
+            fare_json TEXT NOT NULL CHECK (json_valid(fare_json)),
+            batch_expiry_kind TEXT NOT NULL CHECK (batch_expiry_kind IN ('height', 'time')),
+            batch_expiry_value INTEGER NOT NULL,
+            input_expiry_floor_kind TEXT NOT NULL CHECK (input_expiry_floor_kind IN ('height', 'time')),
+            input_expiry_floor_value INTEGER NOT NULL,
+            recovery_locktime_kind TEXT NOT NULL CHECK (recovery_locktime_kind IN ('height', 'time')),
+            recovery_locktime_value INTEGER NOT NULL,
+            loan_sats INTEGER NOT NULL CHECK (loan_sats > 0),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+            operator_inputs_json TEXT NOT NULL CHECK (json_valid(operator_inputs_json)),
+            bound_fill_id TEXT,
+            CHECK (expires_at > created_at),
+            CHECK (batch_expiry_kind = input_expiry_floor_kind),
+            CHECK (input_expiry_floor_kind = recovery_locktime_kind),
+            CHECK (batch_expiry_value >= input_expiry_floor_value),
+            CHECK (input_expiry_floor_value > recovery_locktime_value),
+            CHECK ((state = 'bound') = (bound_fill_id IS NOT NULL))
+        );
+        CREATE INDEX receive_quotes_state_expiry ON receive_quotes (state, expires_at);
+        CREATE TABLE receive_quote_reservations (
+            outpoint_txid TEXT NOT NULL CHECK (
+                length(outpoint_txid) = 64 AND outpoint_txid NOT GLOB '*[^0-9a-f]*'
+            ),
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            quote_id TEXT NOT NULL REFERENCES receive_quotes(id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX receive_quote_reservations_quote ON receive_quote_reservations (quote_id);`,
+    },
+    {
+        id: 8,
+        up: `ALTER TABLE swap_fills ADD COLUMN receive_quote_id TEXT;
+        CREATE UNIQUE INDEX swap_fills_receive_quote ON swap_fills (receive_quote_id)
+            WHERE receive_quote_id IS NOT NULL;`,
+    },
+    {
+        id: 9,
+        // Additive and nullable: NULL is a fill quoted without a caller
+        // deadline, which is the legacy operator-TTL-only behaviour.
+        up: `ALTER TABLE swap_fills ADD COLUMN valid_until INTEGER
+            CHECK (valid_until IS NULL OR valid_until > 0)`,
+    },
+    {
+        id: 10,
+        // Additive and nullable on both tables. NULL is a sender-paid transfer, which
+        // is every row written before this migration. `advances` matters as much as
+        // `receive_quotes`: the claim feed and every recovery rebuild read the advance,
+        // and the fare is part of the covenant address.
+        up: `ALTER TABLE receive_quotes ADD COLUMN payer TEXT
+                CHECK (payer IS NULL OR payer = 'receiver');
+             ALTER TABLE receive_quotes ADD COLUMN receiver_fare_json TEXT
+                CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json))
+                CHECK ((payer IS NULL) = (receiver_fare_json IS NULL));
+             ALTER TABLE advances ADD COLUMN receiver_fare_currency TEXT
+                CHECK (receiver_fare_currency IS NULL OR receiver_fare_currency IN ('sats','asset'));
+             ALTER TABLE advances ADD COLUMN receiver_fare_units TEXT
+                CHECK ((receiver_fare_currency IS NULL) = (receiver_fare_units IS NULL))
+                CHECK (receiver_fare_units IS NULL
+                    OR (receiver_fare_units GLOB '[0-9]*' AND receiver_fare_units NOT GLOB '*[^0-9]*'));`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -231,10 +382,86 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'kind' AND type = 'TEXT'",
             )
             .get();
+    const hasSwapFills =
+        hasKind &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'graph_id' AND type = 'TEXT'",
+            )
+            .get() &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fill_reservations') WHERE name = 'fill_id' AND type = 'TEXT'",
+            )
+            .get();
+    const hasSponsorScript =
+        hasSwapFills &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'sponsor_script' AND type = 'TEXT'",
+            )
+            .get();
+    const hasClaimMode =
+        hasSponsorScript &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'claim_mode' AND type = 'TEXT'",
+            )
+            .get();
+    const hasRecoveryRecipient =
+        hasClaimMode &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'recovery_recipient' AND type = 'TEXT'",
+            )
+            .get();
+    const hasReceiveQuotes =
+        hasRecoveryRecipient &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('receive_quotes') WHERE name = 'input_expiry_floor_value' AND type = 'INTEGER'",
+            )
+            .get() &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('receive_quote_reservations') WHERE name = 'quote_id' AND type = 'TEXT'",
+            )
+            .get();
+    const hasReceiveQuoteLink =
+        hasReceiveQuotes &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'receive_quote_id' AND type = 'TEXT'",
+            )
+            .get();
+    const hasSwapFillDeadline =
+        hasReceiveQuoteLink &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'valid_until' AND type = 'INTEGER'",
+            )
+            .get();
+    const hasReceiverPaid =
+        hasSwapFillDeadline &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'receiver_fare_currency' AND type = 'TEXT'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
-        (current > maxKnown || (current === 1 && !hasCanonicalV1) || (current === 2 && !hasKind))
+        (current > maxKnown ||
+            (current === 1 && !hasCanonicalV1) ||
+            (current === 2 && !hasKind) ||
+            (current === 3 && !hasSwapFills) ||
+            (current === 4 && !hasSponsorScript) ||
+            (current === 5 && !hasClaimMode) ||
+            (current === 6 && !hasRecoveryRecipient) ||
+            (current === 7 && !hasReceiveQuotes) ||
+            (current === 8 && !hasReceiveQuoteLink) ||
+            (current === 9 && !hasSwapFillDeadline) ||
+            (current === 10 && !hasReceiverPaid))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

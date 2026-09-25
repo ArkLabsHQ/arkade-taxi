@@ -1,0 +1,48 @@
+{
+    "note": "Frozen candidate packages, built from source. These version numbers ARE published, from a different build, so a dropped or narrowed root override does not fail: it installs the registry bytes under the same number. These digests are of THIS bundle: repacking @arkade-os/sdk from the same commit emits different tsup chunk ids, so a re-pack is a deliberate re-freeze — run scripts/carrier-artifacts/pack.mjs, then pnpm install, then node scripts/carrier-artifacts/verify.mjs.",
+    "packedAtUtc": "2026-09-22T22:31:49.845Z",
+    "artifacts": [
+        {
+            "file": "arkade-os-sdk-0.4.74-adc6b329.tgz",
+            "package": "@arkade-os/sdk",
+            "version": "0.4.74",
+            "license": "MIT",
+            "licenseFrom": "the package manifest inside the archive",
+            "sha256": "ea8367c995bc089011a0ca2582825b71b35e3ea185ffad0e4d9b1c0edb7e89e8",
+            "bytes": 2702962,
+            "source": {
+                "repository": "https://github.com/arkade-os/ts-sdk.git",
+                "commit": "adc6b32958c36a7f9c39d6e30efdd945af874f84",
+                "directory": "packages/ts-sdk"
+            },
+            "toolchain": {
+                "node": "v24.16.0",
+                "pnpm": "10.25.0",
+                "declaredPackageManager": "pnpm@10.25.0",
+                "command": "pnpm --filter @arkade-os/sdk pack",
+                "platform": "win32-x64"
+            }
+        },
+        {
+            "file": "arkade-os-swap-0.0.20-adc6b329.tgz",
+            "package": "@arkade-os/swap",
+            "version": "0.0.20",
+            "license": "MIT",
+            "licenseFrom": "the package manifest inside the archive",
+            "sha256": "308f3ba0d06ff47c71c96254616c650bea4af43216259364bc0ddaf641d26e2d",
+            "bytes": 350101,
+            "source": {
+                "repository": "https://github.com/arkade-os/ts-sdk.git",
+                "commit": "adc6b32958c36a7f9c39d6e30efdd945af874f84",
+                "directory": "packages/swap"
+            },
+            "toolchain": {
+                "node": "v24.16.0",
+                "pnpm": "10.25.0",
+                "declaredPackageManager": "pnpm@10.25.0",
+                "command": "pnpm --filter @arkade-os/swap pack",
+                "platform": "win32-x64"
+            }
+        }
+    ]
+}
