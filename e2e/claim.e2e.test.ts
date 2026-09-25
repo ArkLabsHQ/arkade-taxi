@@ -82,9 +82,13 @@ async function smallBitcoinPayment() {
             sats: aliceBefore.sats - 329n,
             units: aliceBefore.units,
         });
-        expect(await walletBalance(live.actors.operator, live.fixture.asset.assetId)).toEqual(
-            taxiBefore,
-        );
+        expect(
+            await poll(
+                "Taxi's one-sat loan is repaid",
+                () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
+                (balance) => balance.sats === taxiBefore.sats && balance.units === taxiBefore.units,
+            ),
+        ).toEqual(taxiBefore);
     } finally {
         await live.close();
     }
