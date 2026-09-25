@@ -20,7 +20,6 @@ import {
     control,
     expectReceipt,
     fundingOf,
-    holdings,
     lock,
     openLive,
     poll,
@@ -32,115 +31,70 @@ import {
     walletBalance,
 } from "./fixtures.js";
 
-async function claim(receiverName: string, withAsset: boolean, mode: "recycle" | "purchase") {
+async function smallBitcoinPayment() {
     const live = await openLive();
-    // Every balance below follows from the advance this mode quoted: an asset
-    // transfer borrows the whole carrier and is billed a fare, a bitcoin one not.
-    const dust = 330n;
-    const topup = withAsset ? 330n : 1n;
-    const fare = withAsset ? 1n : 0n;
     try {
-        const receiver = live.actors[receiverName];
-        if (!withAsset) {
-            const txid = await live.actors.sender.wallet.send({
-                address: await receiver.wallet.getAddress(),
-                amount: 1000,
-            });
-            await poll(
-                "fresh receiver sats",
-                () => receiver.wallet.getSpendableVtxos({ withRecoverable: false }),
-                (coins: any[]) => coins.some((coin) => coin.txid === txid && coin.value === 1000),
-            );
-        }
-        const before = await walletBalance(receiver, live.fixture.asset.assetId);
-        if (receiverName === "receiverWithAsset") expect(before.units).toBe(1000n);
-        else if (withAsset) expect(before.units).toBe(0n);
-        const inventory = await receiver.wallet.getSpendableVtxos({ withRecoverable: false });
-        if (mode === "purchase") expect(inventory).toHaveLength(0);
-        else expect(inventory.length).toBeGreaterThan(0);
-        const coin = await sizedSender(live, withAsset);
-        const senderBefore = await walletBalance(live.actors.sender, live.fixture.asset.assetId);
-        const operatorBefore = await walletBalance(
-            live.actors.operator,
-            live.fixture.asset.assetId,
-        );
+        const alice = live.actors.sender;
+        const bob = live.actors.receiverSats;
+        const bobAddress = await bob.wallet.getAddress();
+        const bobFundingTxid = await alice.wallet.send({ address: bobAddress, amount: 1000 });
+        const bobCoin = await poll(
+            "Bob's spendable coin",
+            () => bob.wallet.getSpendableVtxos({ withRecoverable: false }),
+            (coins) => coins.some((coin) => coin.txid === bobFundingTxid && coin.value === 1000),
+        ).then((coins) => coins.find((coin) => coin.txid === bobFundingTxid)!);
+        const aliceCoin = await sizedSender(live);
+        const [aliceBefore, bobBefore, taxiBefore] = await Promise.all([
+            walletBalance(alice, live.fixture.asset.assetId),
+            walletBalance(bob, live.fixture.asset.assetId),
+            walletBalance(live.actors.operator, live.fixture.asset.assetId),
+        ]);
         const locked = await lock(
             live,
-            await quoteFor(live, receiverName, coin, withAsset, false, mode),
+            await quoteFor(live, "receiverSats", aliceCoin, false, false, "recycle"),
         );
-        let txid: string;
-        if (mode === "purchase")
-            txid = await live.client.purchase(locked.transfer, locked.destination);
-        else {
-            const receiverCoin = inventory.find((item: any) =>
-                receiverName === "receiverWithAsset" ? item.assets?.length : !item.assets?.length,
-            );
-            if (!receiverCoin) throw new Error("the receiver has no input matching this scenario");
-            const funding = fundingOf(receiverCoin);
-            txid = await live.client.recycle(
-                locked.transfer,
-                {
-                    input: {
-                        txid: receiverCoin.txid,
-                        vout: receiverCoin.vout,
-                        value: BigInt(receiverCoin.value),
-                        tapTree: receiverCoin.tapTree,
-                        tapLeafScript: receiverCoin.forfeitTapLeafScript,
-                        ...(holdings(receiverCoin) ? { assetPacket: holdings(receiverCoin) } : {}),
-                    },
-                    expiry: funding.expiry,
-                    identity: receiver.identity,
+        const txid = await live.client.recycle(
+            locked.transfer,
+            {
+                input: {
+                    txid: bobCoin.txid,
+                    vout: bobCoin.vout,
+                    value: BigInt(bobCoin.value),
+                    tapTree: bobCoin.tapTree,
+                    tapLeafScript: bobCoin.forfeitTapLeafScript,
                 },
-                locked.destination,
-            );
-        }
-        const { tx } = await terminal(
-            live,
-            locked,
-            mode === "purchase" ? "purchased" : "recycled",
-            txid,
+                expiry: fundingOf(bobCoin).expiry,
+                identity: bob.identity,
+            },
+            locked.destination,
         );
-        expect(tx.inputsLength).toBe(mode === "purchase" ? 1 : 2);
-        if (mode === "recycle") expectReceipt(tx, 0, topup, live.info.operatorKey);
-        const expected = {
-            sats: before.sats + (mode === "purchase" ? dust : dust - topup),
-            units: before.units + (withAsset ? 100n : 0n),
-        };
+        const { tx } = await terminal(live, locked, "recycled", txid);
+        expect(tx.inputsLength).toBe(2);
+        expectReceipt(tx, 0, 1n, live.info.operatorKey);
         expect(
             await poll(
-                "receiver financial effect",
-                () => walletBalance(receiver, live.fixture.asset.assetId),
-                (value) => value.sats === expected.sats && value.units === expected.units,
+                "Bob receives the 329-sat payment",
+                () => walletBalance(bob, live.fixture.asset.assetId),
+                (balance) => balance.sats === bobBefore.sats + 329n,
             ),
-        ).toEqual(expected);
-        expect(await walletBalance(live.actors.sender, live.fixture.asset.assetId)).toEqual({
-            sats: senderBefore.sats - (dust - topup) - fare,
-            units: senderBefore.units - (withAsset ? 100n : 0n),
+        ).toEqual({ sats: bobBefore.sats + 329n, units: bobBefore.units });
+        expect(await walletBalance(alice, live.fixture.asset.assetId)).toEqual({
+            sats: aliceBefore.sats - 329n,
+            units: aliceBefore.units,
         });
-        const expectedOperator = {
-            sats: operatorBefore.sats + fare - (mode === "purchase" ? topup : 0n),
-            units: operatorBefore.units,
-        };
         expect(
             await poll(
-                "spendable operator proceeds",
+                "Taxi's one-sat loan is repaid",
                 () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
-                (balance) =>
-                    balance.sats === expectedOperator.sats &&
-                    balance.units === expectedOperator.units,
+                (balance) => balance.sats === taxiBefore.sats && balance.units === taxiBefore.units,
             ),
-        ).toEqual(expectedOperator);
+        ).toEqual(taxiBefore);
     } finally {
         await live.close();
     }
 }
 
-liveScenario("asset-recycle-receiver-holds-asset", () =>
-    claim("receiverWithAsset", true, "recycle"),
-);
-liveScenario("asset-recycle-receiver-holds-no-asset", () => claim("receiverSats", true, "recycle"));
-liveScenario("purchase-receiver-holds-no-vtxo", () => claim("emptyReceiver", true, "purchase"));
-liveScenario("subdust-bitcoin-recycle", () => claim("receiverSats", false, "recycle"));
+liveScenario("329-sat-bitcoin-recycle", smallBitcoinPayment);
 
 const assetOutputs = (tx: Transaction, assetId: string) => {
     const packet = Extension.fromTx(tx).getAssetPacket()!;

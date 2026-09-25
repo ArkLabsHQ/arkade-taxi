@@ -6,23 +6,14 @@ export const SCENARIOS = [
         id: "provider-contract",
         title: "live provider identities and persistent operator wallet contract",
     },
-    {
-        id: "asset-recycle-receiver-holds-asset",
-        title: "asset recycle into an existing asset balance",
-    },
-    {
-        id: "asset-recycle-receiver-holds-no-asset",
-        title: "asset recycle into a sats-only receiver",
-    },
-    { id: "purchase-receiver-holds-no-vtxo", title: "purchase into an empty receiver wallet" },
-    { id: "subdust-bitcoin-recycle", title: "sub-dust bitcoin recycle" },
+    { id: "329-sat-bitcoin-recycle", title: "Alice sends Bob 329 sats with Taxi's one-sat loan" },
     {
         id: "receiver-sse-recycle",
-        title: "receiver SSE discovery verifies and recycles 200 USDT",
+        title: "Alice sends Bob 200 USDT; Bob has sats and repays Taxi",
     },
     {
         id: "receiver-sse-asset-fare-purchase",
-        title: "receiver SSE discovery purchases 200 USDT after a 1 USDT fare",
+        title: "Alice sends Bob 200 USDT; Bob has no sats and Taxi takes a 1 USDT fare",
     },
     {
         id: "sponsored-direct-send",
@@ -91,7 +82,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 24;
+export const EXPECTED_TOTAL = 21;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

@@ -7,6 +7,7 @@ import {
     RestEmulatorProvider,
     Transaction,
     asset,
+    selectCoinsWithAsset,
     toXOnly,
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
@@ -74,18 +75,25 @@ liveScenario("joint-fill-two-owner", async () => {
             metadata: { decimals: 0, name: "Taxi Fill", ticker: "TFILL" },
         });
         const wantAsset = asset.AssetId.fromString(minted.assetId);
-        const solverFund = await poll(
+        const solverCoins = await poll(
             "solver holds the offered asset",
-            async () =>
-                (await solver.wallet.getSpendableVtxos({ withRecoverable: false })).filter(
-                    (coin) =>
-                        (coin.assets ?? []).length === 1 &&
-                        coin.assets![0]!.assetId === minted.assetId,
-                ),
+            () => solver.wallet.getSpendableVtxos({ withRecoverable: false }),
             (coins) =>
-                coins.reduce((sum, coin) => sum + coin.assets![0]!.amount, 0n) >=
+                coins.reduce(
+                    (sum, coin) =>
+                        sum +
+                        (coin.assets ?? [])
+                            .filter((held) => held.assetId === minted.assetId)
+                            .reduce((amount, held) => amount + held.amount, 0n),
+                    0n,
+                ) >=
                 WANT_UNITS + FARE_UNITS,
             120_000,
+        );
+        const { selected: solverFund } = selectCoinsWithAsset(
+            solverCoins,
+            minted.assetId,
+            WANT_UNITS + FARE_UNITS,
         );
         const offer = await createOffer(maker.wallet, arkdUrl, {
             wantAmount: WANT_UNITS,
