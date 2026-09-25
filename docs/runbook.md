@@ -133,6 +133,11 @@ Budget operator liquidity for the topup, sats fare or asset-fare hosting sats,
 and change requirements. A sender-funded asset fare is operator revenue.
 Changing fare rules does not change these funding allocations.
 
+The same asset rules also price receiver-paid fills. An asset fare rate at or
+above a typical delivery refuses every such fill at fill-creation time, even
+though the receive quote itself succeeds — size asset fare rates well below
+expected delivery amounts.
+
 ## Monitoring and expiry response
 
 Exposure includes `locking`, `locked` and `recovering` advances; quote
