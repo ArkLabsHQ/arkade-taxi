@@ -113,6 +113,9 @@ already brings, leaving a 1-sat advance; a positive sats fare is refused there,
 because a bitcoin transfer has no amount to take one from that is not the
 payment. Repayment and fare outputs target the canonical Arkade wallet output
 key, independently of its funding signing key.
+The live Bitcoin case spends an exact 329-sat input to pay 329 sats. A 50-sat
+payment from a larger wallet coin needs a separate change-output capability.
+
 Taxi's production proceeds collector consolidates canonical subdust receipts
 with an ordinary operator coin using the standard SDK wallet settlement path.
 The live test waits for that service-owned collection, checks the receipt's
@@ -141,11 +144,11 @@ assumption; this suite exercises that deployment behavior and does not imply
 that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
-The registry's stable/latest version on 2026-09-13 is 0.4.72. The harness always
-clones master afresh; read the tested SHA from the current `stack.json` and
-retain it with all 26 passing assertions. Capture the existing default project's
-container, volume and network inventory before and after, and verify that no
-resources with the run's exact ownership labels remain after successful cleanup.
+The harness always clones master afresh; read the tested SHA from the current
+`stack.json` and retain it with all 23 passing assertions. Capture the existing
+default project's container, volume and network inventory before and after, and
+verify that no resources with the run's exact ownership labels remain after
+successful cleanup.
 
 Discovery on 2026-09-12 via `git ls-remote` resolved regtest master to
 `d9e08ac0552aa12a23b688642aa9a82cf5dc1b7d`. This is an evidence checkpoint, not
