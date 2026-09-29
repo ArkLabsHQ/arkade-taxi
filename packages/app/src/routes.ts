@@ -1,4 +1,4 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type Env } from "hono";
 import { streamSSE } from "hono/streaming";
 import { TERMINAL_STATES } from "@arkade-taxi/core";
 import {
@@ -389,7 +389,7 @@ export function createRoutes(deps: RouteDeps): Hono {
         }),
     );
 
-    app.post("/v1/transfers/:id/lockup", async (c) => {
+    const lockup = async (c: Context<Env, "/:id">) => {
         try {
             assertFinancialMutationReady(deps);
             const id = c.req.param("id");
@@ -399,7 +399,9 @@ export function createRoutes(deps: RouteDeps): Hono {
             const err = ServiceError.from(e);
             return c.json(toErrorResponse(err), err.status);
         }
-    });
+    };
+
+    app.post("/v1/transfers/:id/lockup", lockup);
 
     app.get("/v1/transfers/:id", (c) => handle(c, () => getTransfer(deps, c.req.param("id"))));
 
@@ -423,17 +425,7 @@ export function createRoutes(deps: RouteDeps): Hono {
         }),
     );
 
-    app.post("/v1/sponsored-transfers/:id/lockup", async (c) => {
-        try {
-            assertFinancialMutationReady(deps);
-            const id = c.req.param("id");
-            const body = await submitLockup(deps, id, signedTxOf(await readJson(c)));
-            return c.json(body, deps.advances.get(id)?.state === "locked" ? 200 : 202);
-        } catch (e) {
-            const err = ServiceError.from(e);
-            return c.json(toErrorResponse(err), err.status);
-        }
-    });
+    app.post("/v1/sponsored-transfers/:id/lockup", lockup);
 
     app.get("/v1/sponsored-transfers/:id", (c) =>
         handle(c, () => getTransfer(deps, c.req.param("id"))),

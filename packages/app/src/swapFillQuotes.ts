@@ -63,7 +63,13 @@ import {
 import { buildRecoveryIntent } from "./arkade/recovery.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
-import type { AdvanceStore, QuoteDeps } from "./quotes.js";
+import {
+    rereadInventory,
+    sameFundingSnapshot,
+    withQuoteAdmission,
+    type AdvanceStore,
+    type QuoteDeps,
+} from "./quotes.js";
 import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
 import { createHash } from "node:crypto";
 
@@ -172,6 +178,12 @@ export interface SwapFillQuoteDeps {
 
 const key = (o: Outpoint): string => `${o.txid}:${o.vout}`;
 
+const storedAssets = (coin: Pick<VirtualCoin, "assets">) =>
+    (coin.assets ?? []).map((asset) => ({
+        assetId: asset.assetId,
+        amount: BigInt(asset.amount).toString(10),
+    }));
+
 /** The caller's wall clock, not an input batch expiry: the two never mix. */
 const assertDeadlineLive = (validUntil: number | undefined, now: number): void => {
     if (validUntil !== undefined && validUntil <= now)
@@ -266,26 +278,9 @@ export async function createSwapFillQuote(
     body: unknown,
     assertReady?: () => void,
 ): Promise<SwapFillQuoteResponse> {
-    if (!deps.runtime)
-        throw new ServiceError("runtime_unsafe", 503, "runtime verification required");
-    return deps.runtime.withAdmission((assertCurrent) => {
-        assertCurrent();
-        assertReady?.();
-        return createAdmittedSwapFillQuote(
-            {
-                ...deps,
-                runtime: {
-                    ...deps.runtime,
-                    safety: () => {
-                        assertCurrent();
-                        assertReady?.();
-                        return deps.runtime.safety();
-                    },
-                },
-            },
-            body,
-        );
-    });
+    return withQuoteAdmission(deps, assertReady, (admitted) =>
+        createAdmittedSwapFillQuote(admitted, body),
+    );
 }
 
 async function createAdmittedSwapFillQuote(
@@ -764,10 +759,7 @@ async function createAdmittedSwapFillQuote(
                     script: coin.script.toLowerCase(),
                     tapTree: bytesToHex(spends[index]!.tapTree),
                     spendLeaf: bytesToHex(spends[index]!.spendLeaf),
-                    assets: (coin.assets ?? []).map((asset) => ({
-                        assetId: asset.assetId,
-                        amount: BigInt(asset.amount).toString(10),
-                    })),
+                    assets: storedAssets(coin),
                     expiry: {
                         kind: expiries[index]!.kind,
                         value: expiries[index]!.value.toString(10),
@@ -1196,8 +1188,7 @@ function assertTrustedGraph(args: {
 }
 
 const fareOf = (domain: ReturnType<typeof swapFillGraphFromWire>): SwapFill["fare"] => {
-    const fares = domain.outputs.filter((o) => o.role === "sponsor-fare");
-    const [fare] = fares;
+    const fare = domain.outputs.find((o) => o.role === "sponsor-fare");
     if (!fare) return { currency: "sats", units: 0n };
     if (fare.assets.length)
         return {
@@ -1216,22 +1207,10 @@ async function reverifyFreshness(
     intentLocks: Outpoint[],
     receiveQuote?: ReceiveQuote,
 ): Promise<void> {
-    let currentSpendable;
-    let currentLocks;
-    try {
-        currentSpendable = await deps.inventory.getSpendableVtxos();
-        currentLocks = await deps.inventory.getLockedVtxoOutpoints();
-        const before = new Set(intentLocks.map(key));
-        if (currentLocks.length !== before.size || currentLocks.some((o) => !before.has(key(o))))
-            throw new Error("intent locks changed during construction");
-    } catch (cause) {
-        throw new ServiceError(
-            "runtime_unsafe",
-            503,
-            "wallet inventory or intent locks changed or unavailable",
-            { cause },
-        );
-    }
+    const { spendable: currentSpendable, locks: currentLocks } = await rereadInventory(
+        deps.inventory,
+        intentLocks,
+    );
     const latest = receiveQuote
         ? {
               inputs: receiveQuote.operatorInputs.map((expected) => {
@@ -1374,12 +1353,7 @@ async function revalidateAdmittedBoundSwapFill(
                     !leaf ||
                     bytesToHex(scriptFromTapLeafScript(leaf)) !== input.spendLeaf)) ||
             JSON.stringify(
-                (coin.assets ?? [])
-                    .map((asset) => ({
-                        assetId: asset.assetId,
-                        amount: BigInt(asset.amount).toString(10),
-                    }))
-                    .sort((a, b) => a.assetId.localeCompare(b.assetId)),
+                storedAssets(coin).sort((a, b) => a.assetId.localeCompare(b.assetId)),
             ) !==
                 JSON.stringify([...input.assets].sort((a, b) => a.assetId.localeCompare(b.assetId)))
         )
@@ -1397,13 +1371,6 @@ async function revalidateAdmittedBoundSwapFill(
         throw new Error("policy changed during bound fill revalidation");
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
 }
-
-const sameFundingSnapshot = (
-    actual: ReturnType<typeof operatorFundingInput>,
-    expected: ReturnType<typeof operatorFundingInput>,
-): boolean =>
-    JSON.stringify(actual, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-    JSON.stringify(expected, (_, value) => (typeof value === "bigint" ? value.toString() : value));
 
 export function getSwapFill(
     deps: Pick<SwapFillQuoteDeps, "swapFills" | "now">,

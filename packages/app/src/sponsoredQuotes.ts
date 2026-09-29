@@ -12,17 +12,10 @@ import {
     satsFromWire,
     sponsoredParamsToWire,
     type FundingInputValue,
-    fundingInputFromWire,
     type SponsoredQuoteRequestBody,
     type SponsoredQuoteResponse,
 } from "@arkade-taxi/protocol";
-import {
-    ArkAddress,
-    Transaction,
-    type CSVMultisigTapscript,
-    type ExtendedVirtualCoin,
-} from "@arkade-os/sdk";
-import { createHash } from "node:crypto";
+import { ArkAddress, type CSVMultisigTapscript, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import {
     buildSponsoredEnvelope,
     parseSponsoredEnvelope,
@@ -32,12 +25,18 @@ import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { LockupShapeError } from "./lockup.js";
 import { verifySenderFunding } from "./arkade/senderFunding.js";
-import { ReservationConflictError, type SwapFillRepository } from "@arkade-taxi/db";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
-import { validateLockupSubmission } from "./arkade/submit.js";
-import type { QuoteDeps } from "./quotes.js";
+import {
+    createAdmittedQuote,
+    decodeSenderFunding,
+    rereadInventory,
+    sameFundingSnapshot,
+    validateFakeLockup,
+    withQuoteAdmission,
+    type QuoteDeps,
+} from "./quotes.js";
 
 export type SponsoredQuoteDeps = Omit<QuoteDeps, "lockupBuilder" | "lockupSubmitter"> & {
     sponsoredBuilder: SponsoredLockupBuilder;
@@ -92,32 +91,14 @@ export class FakeSponsoredLockupBuilder implements SponsoredLockupBuilder {
     }
 
     validate(advance: Advance, signedPsbt: string) {
-        try {
-            return validateLockupSubmission(advance, signedPsbt, this.config);
-        } catch (cause) {
-            if (signedPsbt === advance.unsignedLockupTx) throw cause;
-            const envelope = parseSponsoredEnvelope(
+        return validateFakeLockup(advance, signedPsbt, this.config, this.outpoint, () =>
+            parseSponsoredEnvelope(
                 advance.unsignedLockupTx,
                 this.built.find((request) => request.advanceId === advance.id)!,
                 this.config,
                 this.unroll,
-            );
-            return {
-                encoded: signedPsbt,
-                digest: createHash("sha256").update(signedPsbt).digest("hex"),
-                unsignedTxId: advance.unsignedLockupId,
-                arkTx: envelope.arkTx,
-                checkpoints: envelope.checkpoints,
-                unsignedCheckpoints: envelope.checkpoints.map((checkpoint) =>
-                    Transaction.fromPSBT(checkpoint.toPSBT()),
-                ),
-                senderInputIndexes: [...envelope.senderInputIndexes],
-                operatorInputIndexes: [...envelope.operatorInputIndexes],
-                senderKey: advance.senderKey,
-                operatorSignerKey: this.config.operatorSignerKey,
-                outpoint: this.outpoint,
-            };
-        }
+            ),
+        );
     }
 }
 
@@ -144,22 +125,7 @@ function decodeBody(
     if (!Array.isArray(b.senderInputs) || !b.senderInputs.length || b.senderInputs.length > 256)
         throw badRequest("senderInputs must contain 1 to 256 funding inputs");
 
-    let decoded;
-    try {
-        decoded = {
-            senderKey: hexToBytes(b.senderKey, "senderKey"),
-            senderSats: satsFromWire(b.senderSats, "senderSats"),
-            senderInputs: b.senderInputs.map((input, i) =>
-                fundingInputFromWire(input, `senderInputs[${i}]`),
-            ),
-            ...(b.assetUnits !== undefined
-                ? { assetUnits: satsFromWire(b.assetUnits, "assetUnits") }
-                : {}),
-            ...(b.fareId !== undefined ? { fareId: b.fareId } : {}),
-        };
-    } catch (e) {
-        throw ServiceError.from(e);
-    }
+    const decoded = decodeSenderFunding(b);
     if (typeof b.receiverAddress !== "string" || !b.receiverAddress.length)
         throw badRequest("receiverAddress must be a non-empty Arkade address");
     if (b.fareId !== undefined && (typeof b.fareId !== "string" || !b.fareId.length))
@@ -220,51 +186,9 @@ export async function createSponsoredQuote(
     body: unknown,
     assertReady?: () => void,
 ): Promise<SponsoredQuoteResponse> {
-    if (!deps.runtime)
-        throw new ServiceError("runtime_unsafe", 503, "runtime verification required");
-    return deps.runtime.withAdmission((assertCurrent) => {
-        assertCurrent();
-        assertReady?.();
-        return createAdmittedSponsoredQuote(
-            {
-                ...deps,
-                runtime: {
-                    ...deps.runtime,
-                    safety: () => {
-                        assertCurrent();
-                        assertReady?.();
-                        return deps.runtime.safety();
-                    },
-                },
-            },
-            body,
-        );
-    });
-}
-
-async function createAdmittedSponsoredQuote(
-    deps: SponsoredQuoteDeps,
-    body: unknown,
-): Promise<SponsoredQuoteResponse> {
-    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
-    deps.reservations.expireQuotes(deps.now());
-    deps.swapFills?.expireQuotes(deps.now());
-    deps.receiveQuotes?.expireQuotes(deps.now());
-    for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-            return await createReservedSponsoredQuote(deps, body);
-        } catch (error) {
-            if (!(error instanceof ReservationConflictError)) throw error;
-            if (attempt === 2)
-                throw new ServiceError(
-                    "reservation_conflict",
-                    409,
-                    "operator inventory reservation conflicted",
-                    { cause: error },
-                );
-        }
-    }
-    throw new Error("unreachable");
+    return withQuoteAdmission(deps, assertReady, (admitted) =>
+        createAdmittedQuote(admitted, () => createReservedSponsoredQuote(admitted, body)),
+    );
 }
 
 async function createReservedSponsoredQuote(
@@ -446,26 +370,11 @@ async function createReservedSponsoredQuote(
         deps.runtime.safety(),
         config,
     );
-    let currentSpendable: ExtendedVirtualCoin[];
-    let currentLocks: Outpoint[];
     let latestSafety = deps.runtime.safety();
-    try {
-        currentSpendable = await deps.inventory.getSpendableVtxos();
-        currentLocks = await deps.inventory.getLockedVtxoOutpoints();
-        const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
-        if (
-            currentLocks.length !== before.size ||
-            currentLocks.some(({ txid, vout }) => !before.has(`${txid}:${vout}`))
-        )
-            throw new Error("intent locks changed during construction");
-    } catch (cause) {
-        throw new ServiceError(
-            "runtime_unsafe",
-            503,
-            "wallet inventory or intent locks changed or unavailable",
-            { cause },
-        );
-    }
+    const { spendable: currentSpendable, locks: currentLocks } = await rereadInventory(
+        deps.inventory,
+        intentLocks,
+    );
     latestSafety = deps.runtime.safety();
     const latest = selectOperatorFunding({
         ...selectionOptions,
@@ -509,11 +418,9 @@ async function createReservedSponsoredQuote(
         latest.batchExpiry.value !== selection.batchExpiry.value ||
         latest.inputs.some(
             (coin, i) =>
-                JSON.stringify(operatorFundingInput(coin), (_, v) =>
-                    typeof v === "bigint" ? v.toString() : v,
-                ) !==
-                JSON.stringify(operatorFundingInput(selection.inputs[i]), (_, v) =>
-                    typeof v === "bigint" ? v.toString() : v,
+                !sameFundingSnapshot(
+                    operatorFundingInput(coin),
+                    operatorFundingInput(selection.inputs[i]),
                 ),
         ) ||
         expiry.value - latestClock < headroom
