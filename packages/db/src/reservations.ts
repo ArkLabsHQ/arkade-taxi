@@ -66,6 +66,62 @@ export interface LockupClaimResult {
     claimed: boolean;
 }
 
+export function allReservedOutpoints(db: Database): Outpoint[] {
+    return db
+        .prepare<[], { txid: string; vout: bigint }>(
+            `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
+             UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
+             UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
+             UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations
+             ORDER BY txid, vout`,
+        )
+        .safeIntegers(true)
+        .all()
+        .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
+}
+
+// A sponsored advance settles at `locked`, so only `locking` sponsored rows tie
+// up capital; see `isExposed` in core.
+export function totalExposure(db: Database): { total: bigint; count: bigint } {
+    return db
+        .prepare<[], { total: bigint; count: bigint }>(
+            `SELECT
+                (SELECT coalesce(sum(topup), 0) FROM advances
+                 WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
+                   WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
+                (SELECT count(*) FROM advances
+                 WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
+                + (SELECT count(*) FROM swap_fills
+                   WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
+                + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
+        )
+        .safeIntegers(true)
+        .get()!;
+}
+
+export function expireUnboundSwapFills(db: Database, at: number): void {
+    db.prepare(
+        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
+    ).run(at, at);
+    db.prepare(
+        "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
+    ).run(at);
+}
+
+export function expireReceiveQuotes(db: Database, at: number): number {
+    const expired = db
+        .prepare(
+            "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
+        )
+        .run(at).changes;
+    db.prepare(
+        "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
+    ).run(at);
+    return Number(expired);
+}
+
 export class ReservationRepository {
     readonly #db: Database;
     readonly #advances: AdvanceRepository;
@@ -87,14 +143,15 @@ export class ReservationRepository {
         assertNativeAccess(this.#db);
         this.#db
             .transaction(() => {
-                this.#expireCrossFlow(advance.createdAt);
+                expireUnboundSwapFills(this.#db, advance.createdAt);
+                expireReceiveQuotes(this.#db, advance.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (revision !== expectedPolicyRevision) throw new PolicyRevisionConflictError();
                 if (expectedReservedOutpoints) {
                     const expected = new Set(
                         expectedReservedOutpoints.map(({ txid, vout }) => `${txid}:${vout}`),
                     );
-                    const current = this.#allReserved();
+                    const current = allReservedOutpoints(this.#db);
                     if (
                         current.length !== expected.size ||
                         current.some(({ txid, vout }) => !expected.has(`${txid}:${vout}`))
@@ -146,25 +203,7 @@ export class ReservationRepository {
                 ) {
                     throw new Error("reservation: insufficient batch expiry margin");
                 }
-                // A sponsored advance settles at `locked`, so only `locking`
-                // sponsored rows tie up capital; see `isExposed` in core.
-                const exposure = this.#db
-                    .prepare<[], { total: bigint; count: bigint }>(
-                        `SELECT
-                            (SELECT coalesce(sum(topup), 0) FROM advances
-                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                            + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
-                               WHERE state = 'quoted') AS total,
-                            (SELECT count(*) FROM advances
-                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT count(*) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                            + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
-                    )
-                    .safeIntegers(true)
-                    .get()!;
+                const exposure = totalExposure(this.#db);
                 if (exposure.total + advance.topup > policy.maxOutstandingSats)
                     throw new Error("reservation: exceeds max outstanding");
                 if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
@@ -232,17 +271,9 @@ export class ReservationRepository {
         const result = this.#db
             .transaction(() => {
                 const at = now();
-                this.#expireCrossFlow(at);
-                this.#db
-                    .prepare(
-                        "UPDATE advances SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
-                    )
-                    .run(at, at);
-                this.#db
-                    .prepare(
-                        "DELETE FROM operator_input_reservations WHERE advance_id IN (SELECT id FROM advances WHERE state = 'expired' AND expires_at <= ?)",
-                    )
-                    .run(at);
+                expireUnboundSwapFills(this.#db, at);
+                expireReceiveQuotes(this.#db, at);
+                this.#expireAdvances(at);
                 const advance = this.#advances.get(id);
                 if (!advance) return new LockupClaimError("not_found", id);
                 if (advance.state === "expired") return new LockupClaimError("quote_expired", id);
@@ -258,23 +289,7 @@ export class ReservationRepository {
                 }
                 if (advance.state !== "quoted") return new LockupClaimError("invalid_state", id);
                 const policy = this.#policy.get();
-                const exposure = this.#db
-                    .prepare<[], { total: bigint; count: bigint }>(
-                        `SELECT
-                            (SELECT coalesce(sum(topup), 0) FROM advances
-                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                            + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes
-                               WHERE state = 'quoted') AS total,
-                            (SELECT count(*) FROM advances
-                             WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                            + (SELECT count(*) FROM swap_fills
-                               WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                            + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
-                    )
-                    .safeIntegers(true)
-                    .get()!;
+                const exposure = totalExposure(this.#db);
                 if (exposure.total + advance.topup > policy.maxOutstandingSats)
                     throw new LockupClaimError("exceeds_max_outstanding", id);
                 if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
@@ -320,21 +335,7 @@ export class ReservationRepository {
         assertNativeAccess(this.#db);
         if (!Number.isSafeInteger(at) || at < 0)
             throw new Error("reservation: invalid expiry clock");
-        return this.#db
-            .transaction(() => {
-                const expired = this.#db
-                    .prepare(
-                        "UPDATE advances SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
-                    )
-                    .run(at, at).changes;
-                this.#db
-                    .prepare(
-                        "DELETE FROM operator_input_reservations WHERE advance_id IN (SELECT id FROM advances WHERE state = 'expired' AND expires_at <= ?)",
-                    )
-                    .run(at);
-                return Number(expired);
-            })
-            .immediate();
+        return this.#db.transaction(() => this.#expireAdvances(at)).immediate();
     }
 
     releaseForAdvance(advanceId: string): void {
@@ -400,40 +401,17 @@ export class ReservationRepository {
             .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
     }
 
-    #allReserved(): Outpoint[] {
-        return this.#db
-            .prepare<[], { txid: string; vout: bigint }>(
-                `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations
-                 ORDER BY txid, vout`,
+    #expireAdvances(at: number): number {
+        const expired = this.#db
+            .prepare(
+                "UPDATE advances SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND expires_at <= ?",
             )
-            .safeIntegers(true)
-            .all()
-            .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
-    }
-
-    #expireCrossFlow(at: number): void {
+            .run(at, at).changes;
         this.#db
             .prepare(
-                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
-            )
-            .run(at, at);
-        this.#db
-            .prepare(
-                "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
+                "DELETE FROM operator_input_reservations WHERE advance_id IN (SELECT id FROM advances WHERE state = 'expired' AND expires_at <= ?)",
             )
             .run(at);
-        this.#db
-            .prepare(
-                "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
-            )
-            .run(at);
-        this.#db
-            .prepare(
-                "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
-            )
-            .run(at);
+        return Number(expired);
     }
 }

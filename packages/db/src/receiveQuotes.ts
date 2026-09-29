@@ -10,7 +10,13 @@ import {
 import { assertNativeAccess } from "./coordination.js";
 import { AdvanceRepository } from "./advances.js";
 import { PolicyRepository } from "./policy.js";
-import { PolicyRevisionConflictError } from "./reservations.js";
+import {
+    PolicyRevisionConflictError,
+    allReservedOutpoints,
+    expireReceiveQuotes,
+    expireUnboundSwapFills,
+    totalExposure,
+} from "./reservations.js";
 import { SwapFillRepository, type SwapFill } from "./swapFills.js";
 
 export type ReceiveQuoteState = "quoted" | "bound" | "expired";
@@ -450,8 +456,8 @@ export class ReceiveQuoteRepository {
         if (q.state !== "quoted" || q.boundFillId !== undefined) fail("state");
         this.db
             .transaction(() => {
-                this.#expire(q.createdAt);
-                this.#expireSwap(q.createdAt);
+                expireReceiveQuotes(this.db, q.createdAt);
+                expireUnboundSwapFills(this.db, q.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (
                     revision !== request.expectedPolicyRevision ||
@@ -480,7 +486,7 @@ export class ReceiveQuoteRepository {
                     q.inputExpiryFloor.value - q.recoveryLocktime.value !== margin
                 )
                     throw new Error("receive quote: recovery execution budget is unsafe");
-                const current = this.#allReserved();
+                const current = allReservedOutpoints(this.db);
                 if (request.expectedReservedOutpoints) {
                     const expected = new Set(
                         request.expectedReservedOutpoints.map(
@@ -493,7 +499,7 @@ export class ReceiveQuoteRepository {
                     )
                         throw new ReceiveQuoteReservationConflictError();
                 }
-                const exposure = this.#exposure();
+                const exposure = totalExposure(this.db);
                 if (exposure.total + q.loanSats > policy.maxOutstandingSats)
                     throw new Error("receive quote: exceeds max outstanding");
                 if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
@@ -549,8 +555,8 @@ export class ReceiveQuoteRepository {
         if (!Number.isSafeInteger(request.now) || request.now < 0) fail("binding clock");
         this.db
             .transaction(() => {
-                this.#expire(request.now);
-                this.#expireSwap(request.now);
+                expireReceiveQuotes(this.db, request.now);
+                expireUnboundSwapFills(this.db, request.now);
                 const quote = this.get(request.quoteId);
                 if (!quote || quote.state !== "quoted" || quote.boundFillId !== undefined)
                     throw new Error("receive quote: state is not bindable");
@@ -710,66 +716,6 @@ export class ReceiveQuoteRepository {
     expireQuotes(at: number): number {
         assertNativeAccess(this.db);
         if (!Number.isSafeInteger(at) || at < 0) fail("expiry clock");
-        return this.db.transaction(() => this.#expire(at)).immediate();
-    }
-
-    #expire(at: number): number {
-        const expired = this.db
-            .prepare(
-                "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
-            )
-            .run(at).changes;
-        this.db
-            .prepare(
-                "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
-            )
-            .run(at);
-        return Number(expired);
-    }
-
-    #expireSwap(at: number): void {
-        this.db
-            .prepare(
-                "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
-            )
-            .run(at, at);
-        this.db
-            .prepare(
-                "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
-            )
-            .run(at);
-    }
-
-    #allReserved(): Outpoint[] {
-        return this.db
-            .prepare<[], { txid: string; vout: bigint }>(
-                `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
-                 UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations
-                 ORDER BY txid, vout`,
-            )
-            .safeIntegers(true)
-            .all()
-            .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
-    }
-
-    #exposure(): { total: bigint; count: bigint } {
-        return this.db
-            .prepare<[], { total: bigint; count: bigint }>(
-                `SELECT
-                    (SELECT coalesce(sum(topup), 0) FROM advances
-                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                    + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
-                    (SELECT count(*) FROM advances
-                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT count(*) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                    + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
-            )
-            .safeIntegers(true)
-            .get()!;
+        return this.db.transaction(() => expireReceiveQuotes(this.db, at)).immediate();
     }
 }

@@ -2,7 +2,7 @@ import type { Database } from "better-sqlite3";
 import { ruleFor } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
 import { PolicyRepository } from "./policy.js";
-import { PolicyRevisionConflictError } from "./reservations.js";
+import { PolicyRevisionConflictError, expireReceiveQuotes, totalExposure } from "./reservations.js";
 
 export type SwapFillState = "quoted" | "submitting" | "settled" | "expired" | "cancelled";
 
@@ -305,7 +305,7 @@ export class SwapFillRepository {
         this.#db
             .transaction(() => {
                 if (expectedPolicyRevision !== undefined) {
-                    this.#expireReceive(fill.createdAt);
+                    expireReceiveQuotes(this.#db, fill.createdAt);
                     const { policy, revision } = this.#policy.getSnapshot();
                     if (revision !== expectedPolicyRevision)
                         throw new PolicyRevisionConflictError();
@@ -315,7 +315,7 @@ export class SwapFillRepository {
                     const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
                     if (fill.contributionSats > cap)
                         throw new Error("swap fill: contribution exceeds per-payment limit");
-                    const exposure = this.#allExposure();
+                    const exposure = totalExposure(this.#db);
                     if (exposure.total + fill.contributionSats > policy.maxOutstandingSats)
                         throw new Error("swap fill: exceeds max outstanding");
                     if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
@@ -500,12 +500,12 @@ export class SwapFillRepository {
             .transaction(() => {
                 this.#expire(claim.now);
                 if (expectedPolicyRevision !== undefined) {
-                    this.#expireReceive(claim.now);
+                    expireReceiveQuotes(this.#db, claim.now);
                     const { policy, revision } = this.#policy.getSnapshot();
                     if (revision !== expectedPolicyRevision)
                         throw new PolicyRevisionConflictError();
                     if (policy.paused) throw new Error("swap fill: paused");
-                    const exposure = this.#allExposure();
+                    const exposure = totalExposure(this.#db);
                     if (exposure.total > policy.maxOutstandingSats)
                         throw new Error("swap fill: exceeds max outstanding");
                     if (exposure.count > BigInt(policy.maxConcurrentAdvances))
@@ -861,37 +861,5 @@ export class SwapFillRepository {
             if (expireReceive.run(id).changes !== 1)
                 throw new Error(`swap-fill: linked receive quote ${id} cannot expire safely`);
         }
-    }
-
-    #expireReceive(at: number): void {
-        this.#db
-            .prepare(
-                "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
-            )
-            .run(at);
-        this.#db
-            .prepare(
-                "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
-            )
-            .run(at);
-    }
-
-    #allExposure(): { total: bigint; count: bigint } {
-        return this.#db
-            .prepare<[], { total: bigint; count: bigint }>(
-                `SELECT
-                    (SELECT coalesce(sum(topup), 0) FROM advances
-                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                    + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
-                    (SELECT count(*) FROM advances
-                     WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                    + (SELECT count(*) FROM swap_fills
-                       WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
-                    + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
-            )
-            .safeIntegers(true)
-            .get()!;
     }
 }
