@@ -98,7 +98,7 @@ export class SubmissionAttemptError extends Error {
     }
 }
 
-export class PermanentPreparationError extends SubmissionAttemptError {
+class PermanentPreparationError extends SubmissionAttemptError {
     constructor(cause: unknown) {
         super("prepare", undefined, cause, "lockup_submission_invalid_prepared_artifact");
         this.name = "PermanentPreparationError";

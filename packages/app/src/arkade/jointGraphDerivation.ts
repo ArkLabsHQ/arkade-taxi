@@ -5,7 +5,7 @@ export class JointGraphDerivationError extends Error {
     readonly code = "swap_fill_graph_invalid";
 }
 
-export interface DerivedJointInput {
+interface DerivedJointInput {
     readonly owner: string | null;
     readonly txid: string;
     readonly vout: number;
@@ -30,10 +30,6 @@ const decodeTx = (psbt: string, label: string): Transaction => {
         throw new JointGraphDerivationError(`${label} is not a parsable PSBT`, { cause });
     }
 };
-
-export function decodeJointArkTx(arkTx: string): Transaction {
-    return decodeTx(arkTx, "graph.arkTx");
-}
 
 /** Ark input i spends checkpoint i's output 0; the coin is what that checkpoint spends. */
 export function deriveJointInputs(graph: {

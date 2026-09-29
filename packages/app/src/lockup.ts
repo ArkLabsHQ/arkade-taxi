@@ -1,6 +1,5 @@
 import { payoutPkScript, type AssetIdRef, type DustCovenantParams } from "@arkade-taxi/covenant";
 import type { FareSpec } from "@arkade-taxi/core";
-import { hex } from "@scure/base";
 
 /**
  * The outputs a lockup transaction must carry, in index order.
@@ -18,7 +17,7 @@ export interface LockupOutput {
     asset?: { id: AssetIdRef; units: bigint };
 }
 
-export interface LockupOutputRequest {
+interface LockupOutputRequest {
     params: DustCovenantParams;
     covenantPkScript: Uint8Array;
     fare: FareSpec;
@@ -118,8 +117,3 @@ export function buildLockupOutputs(req: LockupOutputRequest): LockupOutput[] {
 export function lockupFundingTotal(outputs: readonly LockupOutput[]): bigint {
     return outputs.reduce((sum, o) => sum + o.amount, 0n);
 }
-
-export const describeOutputs = (outputs: readonly LockupOutput[]): string =>
-    outputs
-        .map((o, i) => `${i}:${o.role}=${o.amount}@${hex.encode(o.script).slice(0, 12)}`)
-        .join(" ");

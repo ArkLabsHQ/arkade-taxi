@@ -48,7 +48,7 @@ export function createProviders(config: TaxiConfig) {
     };
 }
 
-export interface VerifiedProviders {
+interface VerifiedProviders {
     info?: ArkInfo;
     network?: Network;
     serverPubkey?: Uint8Array;

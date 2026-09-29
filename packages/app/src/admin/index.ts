@@ -4,11 +4,10 @@
  */
 
 import { Hono } from "hono";
-import { registerApiRoutes, type AdminDeps, type SweeperStatus } from "./routes.js";
+import { registerApiRoutes, type AdminDeps } from "./routes.js";
 import { registerStaticRoutes } from "./static.js";
 
-export type { AdminDeps, SweeperStatus } from "./routes.js";
-export { APP_JS, INDEX_HTML, STYLES_CSS } from "./static.js";
+export type { SweeperStatus } from "./routes.js";
 
 /**
  * Every route is registered twice — bare and under `/admin` — so the dashboard

@@ -10,7 +10,7 @@ import { refundTopup, validateParams, type DustCovenantParams } from "./params.j
  * the one construct signature the d.ts does get right.
  */
 export type ArkadeProgram = ConstructorParameters<typeof arkade.ArkadeProgramScript>[0];
-export type ArkadeProgramArgs = ConstructorParameters<typeof arkade.ArkadeProgramScript>[1];
+type ArkadeProgramArgs = ConstructorParameters<typeof arkade.ArkadeProgramScript>[1];
 
 type ArkadeFunction = ArkadeProgram["functions"][string];
 type InputDef = Exclude<NonNullable<ArkadeProgram["params"]>[number], string>;

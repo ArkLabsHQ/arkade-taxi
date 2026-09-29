@@ -1,4 +1,4 @@
-export type LifecyclePhase =
+type LifecyclePhase =
     | "local"
     | "listening"
     | "provider"
@@ -10,7 +10,7 @@ export type LifecyclePhase =
     | "stopping"
     | "stopped";
 
-export interface LifecycleStatus {
+interface LifecycleStatus {
     phase: LifecyclePhase;
     complete: boolean;
     blocker: string | null;
@@ -38,7 +38,7 @@ export interface LifecycleDeps {
     forceTerminate(code: 1, reason: "shutdown_timeout" | "shutdown_failed"): void;
 }
 
-export type ShutdownResult =
+type ShutdownResult =
     { ok: true; code: "stopped" } | { ok: false; code: "shutdown_timeout" | "shutdown_failed" };
 
 export function shutdownFatalDiagnostic(code: "shutdown_timeout" | "shutdown_failed"): string {
