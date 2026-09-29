@@ -64,7 +64,7 @@ export const CANDIDATE_SYMBOLS = {
 };
 
 // A gzipped tar without a tar dependency: decode the POSIX ustar fields, skip the rest by size.
-export function readTarMember(archivePath, member) {
+function readTarMember(archivePath, member) {
     const buffer = gunzipSync(readFileSync(archivePath));
     let offset = 0;
     while (offset + 512 <= buffer.length) {
@@ -134,7 +134,7 @@ const INVOKERS = new Set(["node", "pnpm", "npm", "corepack", "bash", "sh"]);
 
 // A comment on the line IMMEDIATELY above the install it excuses. The ceiling is
 // what is written, not a spare one: a first bypass is an edit here as well as there.
-export const OPT_OUT = "carrier-artifacts: not a dependency install";
+const OPT_OUT = "carrier-artifacts: not a dependency install";
 export const EXEMPT_INSTALLS = 0;
 
 // `pnpm/action-setup` installs with no command line at all when its step says so.
@@ -188,7 +188,7 @@ const benignPrefix = (part) =>
 
 // `echo …verify.mjs` names the command without running it, and only the last `;` group's
 // status survives.
-export const invokesVerify = (line) => {
+const invokesVerify = (line) => {
     const command = commandBody(line);
     if (swallowsStatus(command)) return false;
     const groups = command.split(";");
@@ -349,7 +349,7 @@ export function guardedLines(source) {
 // folded step key cannot absorb its own sibling `run:`.
 const FOLDED_SCALAR = /^( *(?:-\s+)?)([A-Za-z_][\w-]*):\s*>[-+\d]*\s*(?:#.*)?$/;
 
-export function logicalLines(lines) {
+function logicalLines(lines) {
     const folded = [];
     let open;
     let blockAt;
@@ -505,7 +505,7 @@ export function readFlatMapping(yaml, key) {
     return mapping;
 }
 
-export function readFlatSequence(yaml, key) {
+function readFlatSequence(yaml, key) {
     const body = yamlBlock(yaml, key);
     if (body === undefined) return undefined;
     return body.map((line) => {
