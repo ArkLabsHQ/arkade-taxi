@@ -180,6 +180,25 @@ const verifyOnlyOwner = (
     verifySignatures(tx, index, [owner], label);
 };
 
+const verifyOwnerCheckpoints = (
+    validated: ValidatedLockupSubmission,
+    ownerCheckpoints: readonly Transaction[],
+): void =>
+    ownerCheckpoints.forEach((checkpoint, index) => {
+        assertCanonical(checkpoint, `owner checkpoint ${index}`);
+        if (
+            !sameBytes(
+                unsignedCopy(checkpoint).toPSBT(),
+                validated.unsignedCheckpoints[index]!.toPSBT(),
+            )
+        )
+            throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
+        const owner = validated.senderInputIndexes.includes(index)
+            ? validated.senderKey
+            : validated.operatorSignerKey;
+        verifyOnlyOwner(checkpoint, 0, owner, `checkpoint ${index}`);
+    });
+
 const exactSignature = (
     before: Transaction,
     after: Transaction,
@@ -482,20 +501,7 @@ export function createLockupSubmitter(deps: {
             );
         if (ownerCheckpoints.length !== validated.unsignedCheckpoints.length)
             throw new LockupShapeError("prepared checkpoint count mismatch");
-        ownerCheckpoints.forEach((checkpoint, index) => {
-            assertCanonical(checkpoint, `owner checkpoint ${index}`);
-            if (
-                !sameBytes(
-                    unsignedCopy(checkpoint).toPSBT(),
-                    validated.unsignedCheckpoints[index]!.toPSBT(),
-                )
-            )
-                throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
-            const owner = validated.senderInputIndexes.includes(index)
-                ? validated.senderKey
-                : validated.operatorSignerKey;
-            verifyOnlyOwner(checkpoint, 0, owner, `checkpoint ${index}`);
-        });
+        verifyOwnerCheckpoints(validated, ownerCheckpoints);
         return { ownerArk, ownerCheckpoints };
     };
 
@@ -637,20 +643,7 @@ export function createLockupSubmitter(deps: {
                         );
                     }),
                 );
-                ownerCheckpoints.forEach((checkpoint, index) => {
-                    assertCanonical(checkpoint, `owner checkpoint ${index}`);
-                    if (
-                        !sameBytes(
-                            unsignedCopy(checkpoint).toPSBT(),
-                            validated.unsignedCheckpoints[index]!.toPSBT(),
-                        )
-                    )
-                        throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
-                    const owner = validated.senderInputIndexes.includes(index)
-                        ? validated.senderKey
-                        : validated.operatorSignerKey;
-                    verifyOnlyOwner(checkpoint, 0, owner, `checkpoint ${index}`);
-                });
+                verifyOwnerCheckpoints(validated, ownerCheckpoints);
                 return {
                     arkTx: base64.encode(ownerArk.toPSBT()),
                     ownerCheckpoints: ownerCheckpoints.map((checkpoint) =>

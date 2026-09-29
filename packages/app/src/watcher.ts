@@ -187,6 +187,13 @@ const holdings = (coin: VirtualCoin, label: string): Holding[] => {
     return values.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 };
 
+const holdingsDiffer = (actual: readonly Holding[], expected: readonly Holding[]): boolean =>
+    actual.length !== expected.length ||
+    actual.some(
+        (holding, index) =>
+            holding.id !== expected[index]!.id || holding.amount !== expected[index]!.amount,
+    );
+
 const assetId = (advance: Advance): string | undefined =>
     advance.assetId
         ? AssetId.create(
@@ -462,14 +469,7 @@ export async function classifyObservedSpend(
         const spentBy = coin.spentBy!;
         const arkTxId = coin.arkTxId!;
         const covenantHoldings = holdings(coin, "covenant outpoint");
-        if (
-            covenantHoldings.length !== facts.expectedHoldings.length ||
-            covenantHoldings.some(
-                (holding, index) =>
-                    holding.id !== facts.expectedHoldings[index]!.id ||
-                    holding.amount !== facts.expectedHoldings[index]!.amount,
-            )
-        )
+        if (holdingsDiffer(covenantHoldings, facts.expectedHoldings))
             fail("spent covenant asset facts differ from the persisted lockup");
         const first = await rawTransactions(deps.indexer, [arkTxId, spentBy]);
         const arkTx = first.get(arkTxId)!;
@@ -900,12 +900,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                             coin.isUnrolled !== false ||
                             coin.value !== Number(advance.dust) ||
                             coin.script !== hex.encode(facts.script.pkScript) ||
-                            assets.length !== facts.expectedHoldings.length ||
-                            assets.some(
-                                (holding, index) =>
-                                    holding.id !== facts.expectedHoldings[index]!.id ||
-                                    holding.amount !== facts.expectedHoldings[index]!.amount,
-                            )
+                            holdingsDiffer(assets, facts.expectedHoldings)
                         )
                             fail("unspent covenant evidence differs from persisted facts");
                         deps.advances.clearSpendUnknown(advance.id, advance.state, deps.now());
