@@ -1,13 +1,6 @@
 import { expect } from "vitest";
 import { writeFileSync } from "node:fs";
-import {
-    ArkAddress,
-    Extension,
-    Transaction,
-    VtxoScript,
-    asset,
-    selectCoinsWithAsset,
-} from "@arkade-os/sdk";
+import { ArkAddress, Transaction, VtxoScript, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
 import { TaxiClient } from "@arkade-taxi/client";
 import type { ClaimsSnapshotResponse, ReceiverClaimWire } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
@@ -17,6 +10,7 @@ import { preEffectRequest, submitWithReadiness } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    assetOutputs,
     control,
     expectReceipt,
     fundingOf,
@@ -95,13 +89,6 @@ async function smallBitcoinPayment() {
 }
 
 liveScenario("329-sat-bitcoin-recycle", smallBitcoinPayment);
-
-const assetOutputs = (tx: Transaction, assetId: string) => {
-    const packet = Extension.fromTx(tx).getAssetPacket()!;
-    expect(packet.groups).toHaveLength(1);
-    expect(packet.groups[0]!.assetId!.toString()).toBe(assetId);
-    return packet.groups[0]!.outputs.map((output) => [output.vout, output.amount]);
-};
 
 async function receiverSseClaim(mode: "recycle" | "purchase") {
     const live = await openLive();

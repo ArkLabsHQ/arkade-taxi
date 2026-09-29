@@ -40,6 +40,14 @@ const emulatorSubmits = async () =>
             event.action === "forwarded",
     ).length;
 
+const arkdSubmits = async () =>
+    (await control("events")).events.filter(
+        (event: any) =>
+            event.target === "arkd" &&
+            event.path === "/v1/tx/submit" &&
+            event.action === "forwarded",
+    );
+
 const resumeAfterFault = async () => {
     const snapshot = await poll(
         "provider recovered after fault",
@@ -238,12 +246,7 @@ liveScenario("duplicate-lockup-idempotent", async () => {
     const locked = await observeLock(live, offered, first);
     const before = await admin("status");
     const rows = (await admin("advances")).advances.length;
-    const submits = (await control("events")).events.filter(
-        (event: any) =>
-            event.target === "arkd" &&
-            event.path === "/v1/tx/submit" &&
-            event.action === "forwarded",
-    ).length;
+    const submits = (await arkdSubmits()).length;
     const duplicates = await Promise.all([
         submitSame(live, offered, signed),
         submitSame(live, offered, signed),
@@ -251,14 +254,7 @@ liveScenario("duplicate-lockup-idempotent", async () => {
     expect(duplicates).toEqual([first, first]);
     expect((await admin("advances")).advances.length).toBe(rows);
     expect((await admin("status")).exposure).toEqual(before.exposure);
-    expect(
-        (await control("events")).events.filter(
-            (event: any) =>
-                event.target === "arkd" &&
-                event.path === "/v1/tx/submit" &&
-                event.action === "forwarded",
-        ),
-    ).toHaveLength(submits);
+    expect(await arkdSubmits()).toHaveLength(submits);
     await purchase(live, locked);
 });
 

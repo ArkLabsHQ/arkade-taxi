@@ -2,6 +2,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { expect } from "vitest";
 import {
     ArkAddress,
+    Extension,
     RestArkProvider,
     RestEmulatorProvider,
     RestIndexerProvider,
@@ -508,4 +509,11 @@ export const expectReceipt = (tx: Transaction, index: number, sats: bigint, owne
     const output = tx.getOutput(index);
     expect(output.amount).toBe(sats);
     expect(hex.encode(output.script!)).toBe(`${sats < 330n ? "6a20" : "5120"}${ownerKey}`);
+};
+
+export const assetOutputs = (tx: Transaction, assetId: string) => {
+    const packet = Extension.fromTx(tx).getAssetPacket()!;
+    expect(packet.groups).toHaveLength(1);
+    expect(packet.groups[0]!.assetId!.toString()).toBe(assetId);
+    return packet.groups[0]!.outputs.map((output) => [output.vout, output.amount]);
 };

@@ -1,17 +1,18 @@
 import { expect } from "vitest";
-import { ArkAddress, Extension, Transaction, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
+import { ArkAddress, Transaction, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
 import { signSponsoredPayment } from "@arkade-taxi/client";
 import { base64, hex } from "@scure/base";
 import { preEffectRequest } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
-import { admin, expectReceipt, openLive, poll, required, walletBalance } from "./fixtures.js";
-
-const assetOutputs = (tx: Transaction, assetId: string) => {
-    const packet = Extension.fromTx(tx).getAssetPacket()!;
-    expect(packet.groups).toHaveLength(1);
-    expect(packet.groups[0]!.assetId!.toString()).toBe(assetId);
-    return packet.groups[0]!.outputs.map((output) => [output.vout, output.amount]);
-};
+import {
+    admin,
+    assetOutputs,
+    expectReceipt,
+    openLive,
+    poll,
+    required,
+    walletBalance,
+} from "./fixtures.js";
 
 liveScenario("sponsored-direct-send", async () => {
     const live = await openLive();
