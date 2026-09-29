@@ -17,10 +17,7 @@ import { OFFER_FILL_TEMPLATE } from "./offerFillPlan.js";
 export {
     JointSigningError,
     JointSubmissionAmbiguousError,
-    type JointPins,
     type JointSignerBinding,
-    type PreparedJointSubmission,
-    type SubmittedJointFill,
 } from "./jointSigning.js";
 
 export type JointFundingOwner = FillInputOwner;

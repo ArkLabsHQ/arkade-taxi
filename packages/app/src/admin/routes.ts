@@ -59,7 +59,7 @@ const ACTIVE_EXPOSURE_STATES = new Set<AdvanceState>(["locking", "locked", "reco
  * making a dead loop look alive. */
 const STALE_FLOOR_MS = 30_000;
 
-export const PROXY_ACTOR_HEADER = "x-taxi-operator";
+const PROXY_ACTOR_HEADER = "x-taxi-operator";
 const MAX_ACTOR_LENGTH = 128;
 const message = (e: unknown): string => sanitizeOperationalError(e, "operation failed");
 

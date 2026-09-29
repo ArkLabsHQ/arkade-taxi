@@ -138,8 +138,12 @@ function decodeEnvelopeBase64(value: string): Uint8Array {
 }
 
 export function unsignedGraphId(tx: Transaction, checkpoints: Transaction[]): string {
+    return domainGraphId("arkade-taxi-lockup-v1\0", tx, checkpoints);
+}
+
+export function domainGraphId(domain: string, tx: Transaction, checkpoints: Transaction[]): string {
     const hash = createHash("sha256");
-    hash.update("arkade-taxi-lockup-v1\0");
+    hash.update(domain);
     hash.update(tx.toPSBT());
     for (const checkpoint of checkpoints) hash.update(hex.decode(checkpoint.id));
     return hash.digest("hex");
@@ -199,7 +203,7 @@ export interface JointPlan {
     satsFarePayer?: "sender";
 }
 
-export interface JointParseRequest {
+interface JointParseRequest {
     senderInputs: FundingInputValue[];
     operatorKey: Uint8Array;
     plan: JointPlan;

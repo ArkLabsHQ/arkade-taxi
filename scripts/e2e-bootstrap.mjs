@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +15,7 @@ import {
     publicWalletFixture,
 } from "./e2e-wallets.mjs";
 import { settleSelectedFunding, settleWallet } from "./e2e-settle.mjs";
+import { run } from "./e2e-mine.mjs";
 
 const required = (name) =>
     process.env[name] ||
@@ -23,20 +23,6 @@ const required = (name) =>
         throw new Error(`${name} is required`);
     })();
 const toBigInt = (value) => BigInt(value ?? 0);
-
-const run = (command, args, options = {}) =>
-    new Promise((done) => {
-        const child = spawn(command, args, {
-            env: options.env ?? process.env,
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-        let stdout = "";
-        let stderr = "";
-        child.stdout.on("data", (chunk) => (stdout += chunk));
-        child.stderr.on("data", (chunk) => (stderr += chunk));
-        child.on("error", (error) => done({ code: 1, stdout, stderr: error.message }));
-        child.on("close", (code) => done({ code: code ?? 1, stdout, stderr }));
-    });
 
 const assetUnits = (balance, assetId) =>
     toBigInt((balance.assets ?? []).find((item) => item.assetId === assetId)?.amount);

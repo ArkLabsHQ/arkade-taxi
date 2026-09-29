@@ -2,6 +2,7 @@ import {
     asset,
     ArkAddress,
     Extension,
+    UnknownPacket,
     buildOffchainTx,
     VtxoScript,
     MultisigTapscript,
@@ -9,6 +10,7 @@ import {
     type CSVMultisigTapscript,
     type ArkTxInput,
     type ExtendedVirtualCoin,
+    type Transaction,
 } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { fundingInputToWire, type FundingInputValue } from "@arkade-taxi/protocol";
@@ -16,8 +18,13 @@ import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "../config.js";
 import type { LockupBuilder, LockupBuildRequest } from "../quotes.js";
 import { normalizeExpiry } from "./providers.js";
-import { LockupShapeError, assertDistinctScripts, type LockupOutput } from "../lockup.js";
-import { encodeLockupEnvelope, parseLockupEnvelope, unsignedGraphId } from "./psbt.js";
+import { LockupShapeError, assertDistinctScripts } from "../lockup.js";
+import {
+    encodeLockupEnvelope,
+    parseLockupEnvelope,
+    unsignedGraphId,
+    type JointPlan,
+} from "./psbt.js";
 import { isDeepStrictEqual } from "node:util";
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -158,13 +165,45 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
     });
     if (covenant.address(config.addressHrp, config.serverPubkey).encode() !== req.covenantAddress)
         throw new LockupShapeError("covenant address differs from parameters");
+    return {
+        ...jointPlan(req, config, {
+            inputs,
+            operatorInputs,
+            first: { role: "covenant", script: covenant.pkScript, amount: req.params.dust },
+            contribution: req.params.topup,
+            carrier: "dust carrier",
+            kind: "lockup",
+        }),
+        covenant,
+    };
+}
+
+type JointRequest = Pick<
+    LockupBuildRequest,
+    "senderInputs" | "senderSats" | "funding" | "fare" | "satsFarePayer" | "assetUnits"
+> & {
+    params: Pick<LockupBuildRequest["params"], "operatorKey" | "senderKey" | "dust" | "assetId">;
+};
+
+export function jointPlan(
+    req: JointRequest,
+    config: RuntimeConfig,
+    graph: {
+        inputs: FundingInputValue[];
+        operatorInputs: FundingInputValue[];
+        first: JointPlan["valueOutputs"][number];
+        contribution: bigint;
+        carrier: string;
+        kind: string;
+        extraPacket?: { type: number; payload: Uint8Array };
+    },
+): JointPlan {
+    const { inputs, operatorInputs } = graph;
     const assets = inputs.map(inputAssets);
     const totals = new Map<string, bigint>();
     for (const holdings of assets)
         for (const [id, amount] of holdings) totals.set(id, (totals.get(id) ?? 0n) + amount);
-    const outputs: LockupOutput[] = [
-        { role: "covenant", script: covenant.pkScript, amount: req.params.dust },
-    ];
+    const outputs: JointPlan["valueOutputs"] = [graph.first];
     const fareHosting =
         req.fare.units === 0n
             ? 0n
@@ -181,10 +220,10 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
         });
     const senderFare = senderPaysFare ? fareHosting : 0n;
     const operatorFare = fareHosting - senderFare;
-    const senderChange = req.senderSats + req.params.topup - req.params.dust - senderFare;
-    const operatorChange = req.funding.totalValue - req.params.topup - operatorFare;
+    const senderChange = req.senderSats + graph.contribution - req.params.dust - senderFare;
+    const operatorChange = req.funding.totalValue - graph.contribution - operatorFare;
     if (senderChange < 0n)
-        throw new LockupShapeError("sender funding does not cover the dust carrier and fare");
+        throw new LockupShapeError(`sender funding does not cover the ${graph.carrier} and fare`);
     if (operatorChange < 0n) throw new LockupShapeError("insufficient funding");
     const destinations = new Map<string, Map<number, bigint>>();
     const toId = (id: { txid: Uint8Array; groupIndex: number }) =>
@@ -268,17 +307,26 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
             );
         });
     const transactionOutputs = outputs.map(({ amount, script }) => ({ amount, script }));
-    if (groups.length) transactionOutputs.push(Extension.create([Packet.create(groups)]).txOut());
+    // Mirrors the sender's rebuild in client/src/sponsored.ts: the packet it
+    // declared rides after the asset groups. Any other order or contents and the
+    // sender's byte comparison refuses the transaction.
+    const extraPacket = graph.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extraPacket !== undefined
+            ? [new UnknownPacket(extraPacket.type, extraPacket.payload)]
+            : []),
+    ];
+    if (packets.length) transactionOutputs.push(Extension.create(packets).txOut());
     if (transactionOutputs.filter((output) => output.script[0] === 0x6a).length > 2)
         throw new LockupShapeError(
-            "the public SDK supports at most two OP_RETURN outputs; this lockup requires more",
+            `the public SDK supports at most two OP_RETURN outputs; this ${graph.kind} requires more`,
         );
     return {
         inputs,
         operatorInputs,
         outputs: transactionOutputs,
         valueOutputs: outputs,
-        covenant,
         ...(senderPaysFare ? { satsFarePayer: "sender" as const } : {}),
         assetUnits: paymentId ? destinations.get(paymentId)!.get(0)! : req.assetUnits,
         arkInputs: inputs.map((input, i) =>
@@ -296,18 +344,26 @@ export function buildLockupEnvelope(
     config: RuntimeConfig,
     unroll: CSVMultisigTapscript.Type,
 ): string {
-    const plan = lockupPlan(req, config);
+    return buildJointEnvelope(req.senderInputs, lockupPlan(req, config), unroll, unsignedGraphId);
+}
+
+export function buildJointEnvelope(
+    senderInputs: FundingInputValue[],
+    plan: JointPlan,
+    unroll: CSVMultisigTapscript.Type,
+    unsignedId: (tx: Transaction, checkpoints: Transaction[]) => string,
+): string {
     const graph = buildOffchainTx(plan.arkInputs, plan.outputs, unroll);
     return encodeLockupEnvelope({
         arkTx: base64.encode(graph.arkTx.toPSBT()),
         checkpoints: graph.checkpoints.map((tx) => base64.encode(tx.toPSBT())),
         ...(plan.assetUnits !== undefined ? { assetUnits: plan.assetUnits.toString() } : {}),
         ...(plan.satsFarePayer ? { satsFarePayer: plan.satsFarePayer } : {}),
-        unsignedTxId: unsignedGraphId(graph.arkTx, graph.checkpoints),
+        unsignedTxId: unsignedId(graph.arkTx, graph.checkpoints),
         covenantOutputIndex: 0,
-        senderInputIndexes: req.senderInputs.map((_, i) => i),
-        operatorInputIndexes: plan.operatorInputs.map((_, i) => req.senderInputs.length + i),
-        senderInputs: req.senderInputs.map(fundingInputToWire),
+        senderInputIndexes: senderInputs.map((_, i) => i),
+        operatorInputIndexes: plan.operatorInputs.map((_, i) => senderInputs.length + i),
+        senderInputs: senderInputs.map(fundingInputToWire),
         operatorInputs: plan.operatorInputs.map(fundingInputToWire),
         serverUnrollScript: hex.encode(unroll.script),
     });

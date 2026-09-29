@@ -104,38 +104,50 @@ export class FakeLockupBuilder implements LockupBuilder {
     }
 
     validate(advance: Advance, signedPsbt: string) {
-        try {
-            return validateLockupSubmission(advance, signedPsbt, this.config);
-        } catch (cause) {
-            if (signedPsbt === advance.unsignedLockupTx) throw cause;
-            const envelope = parseLockupEnvelope(
+        return validateFakeLockup(advance, signedPsbt, this.config, this.outpoint, () =>
+            parseLockupEnvelope(
                 advance.unsignedLockupTx,
                 this.built.find((request) => request.advanceId === advance.id)!,
                 this.config,
                 this.unroll,
-            );
-            return {
-                encoded: signedPsbt,
-                digest: createHash("sha256").update(signedPsbt).digest("hex"),
-                unsignedTxId: advance.unsignedLockupId,
-                arkTx: envelope.arkTx,
-                checkpoints: envelope.checkpoints,
-                unsignedCheckpoints: envelope.checkpoints.map((checkpoint) =>
-                    Transaction.fromPSBT(checkpoint.toPSBT()),
-                ),
-                senderInputIndexes: [...envelope.senderInputIndexes],
-                operatorInputIndexes: [...envelope.operatorInputIndexes],
-                senderKey: advance.senderKey,
-                operatorSignerKey: this.config.operatorSignerKey,
-                outpoint: this.outpoint,
-            };
-        }
+            ),
+        );
     }
 
     async submit(validated: ReturnType<typeof validateLockupSubmission>) {
         this.submitted.push(validated.encoded);
         if (this.failSubmit) throw this.failSubmit;
         return { arkTxid: this.outpoint.txid, outpoint: validated.outpoint };
+    }
+}
+
+export function validateFakeLockup(
+    advance: Advance,
+    signedPsbt: string,
+    config: RuntimeConfig,
+    outpoint: Outpoint,
+    parse: () => ReturnType<typeof parseLockupEnvelope>,
+) {
+    try {
+        return validateLockupSubmission(advance, signedPsbt, config);
+    } catch (cause) {
+        if (signedPsbt === advance.unsignedLockupTx) throw cause;
+        const envelope = parse();
+        return {
+            encoded: signedPsbt,
+            digest: createHash("sha256").update(signedPsbt).digest("hex"),
+            unsignedTxId: advance.unsignedLockupId,
+            arkTx: envelope.arkTx,
+            checkpoints: envelope.checkpoints,
+            unsignedCheckpoints: envelope.checkpoints.map((checkpoint) =>
+                Transaction.fromPSBT(checkpoint.toPSBT()),
+            ),
+            senderInputIndexes: [...envelope.senderInputIndexes],
+            operatorInputIndexes: [...envelope.operatorInputIndexes],
+            senderKey: advance.senderKey,
+            operatorSignerKey: config.operatorSignerKey,
+            outpoint,
+        };
     }
 }
 
@@ -185,6 +197,29 @@ export interface QuoteDeps {
 
 const badRequest = (message: string) => new ServiceError(ErrorCode.InvalidRequest, 400, message);
 
+export function decodeSenderFunding(
+    b: Pick<
+        QuoteRequestBody,
+        "senderKey" | "senderSats" | "senderInputs" | "assetUnits" | "fareId"
+    >,
+) {
+    try {
+        return {
+            senderKey: hexToBytes(b.senderKey, "senderKey"),
+            senderSats: satsFromWire(b.senderSats, "senderSats"),
+            senderInputs: b.senderInputs.map((input, i) =>
+                fundingInputFromWire(input, `senderInputs[${i}]`),
+            ),
+            ...(b.assetUnits !== undefined
+                ? { assetUnits: satsFromWire(b.assetUnits, "assetUnits") }
+                : {}),
+            ...(b.fareId !== undefined ? { fareId: b.fareId } : {}),
+        };
+    } catch (e) {
+        throw ServiceError.from(e);
+    }
+}
+
 function decodeBody(body: unknown): {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
@@ -216,15 +251,7 @@ function decodeBody(body: unknown): {
     try {
         decoded = {
             receiverKey: hexToBytes(b.receiverKey, "receiverKey"),
-            senderKey: hexToBytes(b.senderKey, "senderKey"),
-            senderSats: satsFromWire(b.senderSats, "senderSats"),
-            senderInputs: b.senderInputs.map((input, i) =>
-                fundingInputFromWire(input, `senderInputs[${i}]`),
-            ),
-            ...(b.assetUnits !== undefined
-                ? { assetUnits: satsFromWire(b.assetUnits, "assetUnits") }
-                : {}),
-            ...(b.fareId !== undefined ? { fareId: b.fareId } : {}),
+            ...decodeSenderFunding(b),
         };
     } catch (e) {
         throw ServiceError.from(e);
@@ -283,41 +310,51 @@ function deriveCovenant(
     }
 }
 
-export async function createQuote(
-    deps: QuoteDeps,
-    body: unknown,
-    assertReady?: () => void,
-): Promise<QuoteResponse> {
+export function withQuoteAdmission<D extends { runtime: RuntimeGate }, T>(
+    deps: D,
+    assertReady: (() => void) | undefined,
+    create: (admitted: D) => Promise<T>,
+): Promise<T> {
     if (!deps.runtime)
         throw new ServiceError("runtime_unsafe", 503, "runtime verification required");
     return deps.runtime.withAdmission((assertCurrent) => {
         assertCurrent();
         assertReady?.();
-        return createAdmittedQuote(
-            {
-                ...deps,
-                runtime: {
-                    ...deps.runtime,
-                    safety: () => {
-                        assertCurrent();
-                        assertReady?.();
-                        return deps.runtime.safety();
-                    },
+        return create({
+            ...deps,
+            runtime: {
+                ...deps.runtime,
+                safety: () => {
+                    assertCurrent();
+                    assertReady?.();
+                    return deps.runtime.safety();
                 },
             },
-            body,
-        );
+        });
     });
 }
 
-async function createAdmittedQuote(deps: QuoteDeps, body: unknown): Promise<QuoteResponse> {
+export async function createQuote(
+    deps: QuoteDeps,
+    body: unknown,
+    assertReady?: () => void,
+): Promise<QuoteResponse> {
+    return withQuoteAdmission(deps, assertReady, (admitted) =>
+        createAdmittedQuote(admitted, () => createReservedQuote(admitted, body)),
+    );
+}
+
+export async function createAdmittedQuote<T>(
+    deps: Omit<QuoteDeps, "lockupBuilder" | "lockupSubmitter">,
+    reserve: () => Promise<T>,
+): Promise<T> {
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
     deps.reservations.expireQuotes(deps.now());
     deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
-            return await createReservedQuote(deps, body);
+            return await reserve();
         } catch (error) {
             if (!(error instanceof ReservationConflictError)) throw error;
             if (attempt === 2)
@@ -518,26 +555,11 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         deps.runtime.safety(),
         config,
     );
-    let currentSpendable: ExtendedVirtualCoin[];
-    let currentLocks: Outpoint[];
     let latestSafety = deps.runtime.safety();
-    try {
-        currentSpendable = await deps.inventory.getSpendableVtxos();
-        currentLocks = await deps.inventory.getLockedVtxoOutpoints();
-        const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
-        if (
-            currentLocks.length !== before.size ||
-            currentLocks.some(({ txid, vout }) => !before.has(`${txid}:${vout}`))
-        )
-            throw new Error("intent locks changed during construction");
-    } catch (cause) {
-        throw new ServiceError(
-            "runtime_unsafe",
-            503,
-            "wallet inventory or intent locks changed or unavailable",
-            { cause },
-        );
-    }
+    const { spendable: currentSpendable, locks: currentLocks } = await rereadInventory(
+        deps.inventory,
+        intentLocks,
+    );
     latestSafety = deps.runtime.safety();
     const latest = selectOperatorFunding({
         ...selectionOptions,
@@ -576,11 +598,9 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         latest.batchExpiry.value !== selection.batchExpiry.value ||
         latest.inputs.some(
             (coin, i) =>
-                JSON.stringify(operatorFundingInput(coin), (_, v) =>
-                    typeof v === "bigint" ? v.toString() : v,
-                ) !==
-                JSON.stringify(operatorFundingInput(selection.inputs[i]), (_, v) =>
-                    typeof v === "bigint" ? v.toString() : v,
+                !sameFundingSnapshot(
+                    operatorFundingInput(coin),
+                    operatorFundingInput(selection.inputs[i]),
                 ),
         ) ||
         locktime <= latestClock
@@ -615,6 +635,37 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         },
     };
 }
+
+export async function rereadInventory(
+    inventory: QuoteDeps["inventory"],
+    intentLocks: Outpoint[],
+): Promise<{ spendable: ExtendedVirtualCoin[]; locks: Outpoint[] }> {
+    try {
+        const spendable = await inventory.getSpendableVtxos();
+        const locks = await inventory.getLockedVtxoOutpoints();
+        const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
+        if (
+            locks.length !== before.size ||
+            locks.some(({ txid, vout }) => !before.has(`${txid}:${vout}`))
+        )
+            throw new Error("intent locks changed during construction");
+        return { spendable, locks };
+    } catch (cause) {
+        throw new ServiceError(
+            "runtime_unsafe",
+            503,
+            "wallet inventory or intent locks changed or unavailable",
+            { cause },
+        );
+    }
+}
+
+export const sameFundingSnapshot = (
+    actual: ReturnType<typeof operatorFundingInput>,
+    expected: ReturnType<typeof operatorFundingInput>,
+): boolean =>
+    JSON.stringify(actual, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
+    JSON.stringify(expected, (_, value) => (typeof value === "bigint" ? value.toString() : value));
 
 export async function submitLockup(
     deps: QuoteDeps,

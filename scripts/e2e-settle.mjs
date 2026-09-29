@@ -2,28 +2,33 @@ import { pollUntil } from "./lib/harness.mjs";
 
 const amount = (value) => BigInt(value ?? 0);
 
-export async function settleWallet(wallet, label, timeoutMs = 120_000) {
-    const before = await wallet.getBalance();
-    if (amount(before.preconfirmed) === 0n) return { settled: false, balance: before };
+async function settleWithin(wallet, request, timeoutMs, description) {
     const events = [];
-    const operation = wallet.settle(undefined, (event) => events.push(event.type));
+    const operation = wallet.settle(request, (event) => events.push(event.type));
     let timeoutHandle;
     const timeout = new Promise(
         (_, reject) =>
             (timeoutHandle = setTimeout(
                 () =>
                     reject(
-                        new Error(`timed out settling ${label}; last=${events.at(-1) ?? "none"}`),
+                        new Error(
+                            `timed out settling ${description}; last=${events.at(-1) ?? "none"}`,
+                        ),
                     ),
                 timeoutMs,
             )),
     );
-    let txid;
     try {
-        txid = await Promise.race([operation, timeout]);
+        return await Promise.race([operation, timeout]);
     } finally {
         clearTimeout(timeoutHandle);
     }
+}
+
+export async function settleWallet(wallet, label, timeoutMs = 120_000) {
+    const before = await wallet.getBalance();
+    if (amount(before.preconfirmed) === 0n) return { settled: false, balance: before };
+    const txid = await settleWithin(wallet, undefined, timeoutMs, label);
     const balance = await pollUntil({
         label: `${label} settled balance`,
         timeoutMs,
@@ -51,29 +56,11 @@ export async function settleSelectedFunding(
     )
         throw new Error(`${label} settlement output amount is invalid`);
     const address = await wallet.getAddress();
-    const events = [];
-    const operation = wallet.settle(
+    const txid = await settleWithin(
+        wallet,
         { inputs: [input], outputs: [{ address, amount: outputAmount }] },
-        (event) => events.push(event.type),
+        timeoutMs,
+        `selected ${label}`,
     );
-    let timeoutHandle;
-    const timeout = new Promise(
-        (_, reject) =>
-            (timeoutHandle = setTimeout(
-                () =>
-                    reject(
-                        new Error(
-                            `timed out settling selected ${label}; last=${events.at(-1) ?? "none"}`,
-                        ),
-                    ),
-                timeoutMs,
-            )),
-    );
-    let txid;
-    try {
-        txid = await Promise.race([operation, timeout]);
-    } finally {
-        clearTimeout(timeoutHandle);
-    }
     return { settled: true, txid };
 }

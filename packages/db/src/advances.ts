@@ -159,7 +159,7 @@ interface AdvanceRow {
     failure_detail: string | null;
 }
 
-export type RetryExpediteResult = "expedited" | "not_found" | "incompatible" | "live_lease";
+type RetryExpediteResult = "expedited" | "not_found" | "incompatible" | "live_lease";
 
 export interface PreparedRecoveryRecord {
     digest: string;
@@ -1024,20 +1024,11 @@ export class AdvanceRepository {
                     ["recycled", "purchased", "refunded", "recovered"].includes(current.state) ||
                     current.state !== expectedState
                 ) {
-                    this.#db
-                        .prepare(
-                            `UPDATE advances SET failure_code = 'covenant_observation_disagreement',
-                             failure_detail = ?, observation_stable_tip_hash = NULL,
-                             observation_stable_tip_height = NULL,
-                             observation_stable_count = 0, updated_at = max(updated_at, ?)
-                             WHERE id = ?`,
-                        )
-                        .run(
-                            `canonical spend ${spentTxid} classified ${terminalState} at ${tip.hash}:${tip.height} conflicts with persisted ${current.spentTxid ?? "none"}/${current.state}`,
-                            at,
-                            id,
-                        );
-                    new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                    this.#markObservationDisagreement(
+                        id,
+                        `canonical spend ${spentTxid} classified ${terminalState} at ${tip.hash}:${tip.height} conflicts with persisted ${current.spentTxid ?? "none"}/${current.state}`,
+                        at,
+                    );
                     return "disagreement" as const;
                 }
                 const changed = this.#db
@@ -1129,18 +1120,22 @@ export class AdvanceRepository {
         this.#db
             .transaction(() => {
                 if (!this.get(id)) throw new Error(`advance ${id} not found`);
-                this.#db
-                    .prepare(
-                        `UPDATE advances SET failure_code = 'covenant_observation_disagreement',
-                         failure_detail = ?, observation_stable_tip_hash = NULL,
-                         observation_stable_tip_height = NULL,
-                         observation_stable_count = 0, updated_at = max(updated_at, ?)
-                         WHERE id = ?`,
-                    )
-                    .run(`${reason} at ${tip.hash}:${tip.height}`, at, id);
-                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                this.#markObservationDisagreement(id, `${reason} at ${tip.hash}:${tip.height}`, at);
             })
             .immediate();
+    }
+
+    #markObservationDisagreement(id: string, detail: string, at: number): void {
+        this.#db
+            .prepare(
+                `UPDATE advances SET failure_code = 'covenant_observation_disagreement',
+                 failure_detail = ?, observation_stable_tip_hash = NULL,
+                 observation_stable_tip_height = NULL,
+                 observation_stable_count = 0, updated_at = max(updated_at, ?)
+                 WHERE id = ?`,
+            )
+            .run(detail, at, id);
+        new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
     }
 
     recordStableSpendObservation(

@@ -6,8 +6,6 @@ export {
     tapLeavesOfInput,
     tapScriptSigEntries,
     unsignedPsbtBytes,
-    type TapLeafRef,
-    type TapScriptSigEntry,
 } from "./arkTransaction.js";
 export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph.js";
 // The generic signer takes an explicit template; offerFillSigning binds ours.

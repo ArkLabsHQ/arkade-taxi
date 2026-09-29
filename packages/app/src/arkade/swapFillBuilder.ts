@@ -28,7 +28,7 @@ export class SwapFillBuilderError extends Error {
     readonly code = "swap_fill_build";
 }
 
-export interface SwapFillSponsorFare {
+interface SwapFillSponsorFare {
     /** With `amount`, charges in an asset. Omit both to charge in `sats` alone. */
     assetId?: AssetIdValue;
     amount?: bigint;
@@ -55,7 +55,7 @@ export interface SwapFillBuildRequest {
     sponsor?: SwapFillSponsorRequest;
 }
 
-export interface SwapFillBuilderDeps {
+interface SwapFillBuilderDeps {
     wallet: IWallet;
     arkServerUrl: string;
     buildPlan?: typeof buildOfferFillPlan;

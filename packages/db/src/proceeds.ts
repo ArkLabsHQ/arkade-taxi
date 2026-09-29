@@ -1,6 +1,7 @@
 import type { Database } from "better-sqlite3";
 import type { Outpoint } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
+import { expireReceiveQuotes, expireUnboundSwapFills } from "./reservations.js";
 
 export interface ProceedsPlan {
     inputs: Outpoint[];
@@ -131,26 +132,8 @@ export class ProceedsRepository {
         assertNativeAccess(this.db);
         this.db
             .transaction(() => {
-                this.db
-                    .prepare(
-                        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
-                    )
-                    .run(at, at);
-                this.db
-                    .prepare(
-                        "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
-                    )
-                    .run(at);
-                this.db
-                    .prepare(
-                        "UPDATE receive_quotes SET state = 'expired' WHERE state = 'quoted' AND expires_at <= ?",
-                    )
-                    .run(at);
-                this.db
-                    .prepare(
-                        "DELETE FROM receive_quote_reservations WHERE quote_id IN (SELECT id FROM receive_quotes WHERE state = 'expired' AND expires_at <= ?)",
-                    )
-                    .run(at);
+                expireUnboundSwapFills(this.db, at);
+                expireReceiveQuotes(this.db, at);
                 if (this.active()) throw new Error("proceeds job already active");
                 if (expectedReserved) {
                     const current = this.db

@@ -30,7 +30,7 @@ import {
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "./config.js";
-import type { AdvanceStore } from "./quotes.js";
+import { sameFundingSnapshot, withQuoteAdmission, type AdvanceStore } from "./quotes.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
@@ -265,26 +265,7 @@ export async function createReceiveQuote(
     body: unknown,
     assertReady?: () => void,
 ): Promise<ReceiveQuoteResponse> {
-    if (!deps.runtime)
-        throw new ServiceError("runtime_unsafe", 503, "runtime verification required");
-    return deps.runtime.withAdmission((assertCurrent) => {
-        assertCurrent();
-        assertReady?.();
-        return createAdmitted(
-            {
-                ...deps,
-                runtime: {
-                    ...deps.runtime,
-                    safety: () => {
-                        assertCurrent();
-                        assertReady?.();
-                        return deps.runtime.safety();
-                    },
-                },
-            },
-            body,
-        );
-    });
+    return withQuoteAdmission(deps, assertReady, (admitted) => createAdmitted(admitted, body));
 }
 
 async function createAdmitted(
@@ -531,16 +512,10 @@ function sameSelection(
     )
         return false;
     return first.inputs.every((coin, index) =>
-        equalFunding(operatorFundingInput(coin), operatorFundingInput(second.inputs[index])),
+        sameFundingSnapshot(operatorFundingInput(coin), operatorFundingInput(second.inputs[index])),
     );
 }
 
-const equalFunding = (
-    a: ReturnType<typeof operatorFundingInput>,
-    b: ReturnType<typeof operatorFundingInput>,
-) =>
-    JSON.stringify(a, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-    JSON.stringify(b, (_, value) => (typeof value === "bigint" ? value.toString() : value));
 const equalBytes = (a: Uint8Array, b: Uint8Array): boolean =>
     a.length === b.length && a.every((byte, index) => byte === b[index]);
 const sameOutpoints = (a: readonly Outpoint[], b: readonly Outpoint[]): boolean => {

@@ -15,7 +15,7 @@ import { readFundingSource } from "./arkade/fundingSource.js";
 
 export const ACTIVE_CLAIM_STATES = ["locking", "locked", "recovering"] as const;
 
-export interface ParsedReceivers {
+interface ParsedReceivers {
     addresses: string[];
     receiverKeys: Uint8Array[];
 }

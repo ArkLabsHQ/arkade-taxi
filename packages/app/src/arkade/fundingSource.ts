@@ -44,7 +44,7 @@ export interface JointFillFundingSource {
 export const encodeJointFillSource = (source: JointFillFundingSource): string =>
     `taxi-source:${JSON.stringify(source)}`;
 
-export interface ValidatedJointFillSource {
+interface ValidatedJointFillSource {
     kind: "joint-fill";
     source: JointFillFundingSource;
     covenantOutpoint: { txid: string; vout: number };

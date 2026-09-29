@@ -60,7 +60,7 @@ export const expiryOf = (coin) => {
     throw new Error(`VTXO ${coin.txid}:${coin.vout} has no canonical expiry`);
 };
 
-export const fundingInputOf = (coin) => ({
+const fundingInputOf = (coin) => ({
     txid: coin.txid,
     vout: coin.vout,
     value: String(coin.value),
