@@ -21,6 +21,8 @@ import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } 
 import {
     immutablePlainCopy,
     registerVerifiedQuote,
+    sameAsset,
+    sameBytes,
     validateLockup,
     type LockupEnvelope,
 } from "./lockup.js";
@@ -85,14 +87,6 @@ const rewrap = <T>(code: VerificationCode, f: () => T): T => {
         return reject(code, causeMessage(cause));
     }
 };
-
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-    a.length === b.length && a.every((byte, i) => byte === b[i]);
-
-const sameAsset = (a: AssetIdValue | undefined, b: AssetIdValue | undefined): boolean =>
-    a === undefined || b === undefined
-        ? a === b
-        : a.groupIndex === b.groupIndex && sameBytes(a.txid, b.txid);
 
 const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" : "bitcoin");
 

@@ -19,7 +19,7 @@ import {
 import { QuoteVerificationError, TaxiError, VerificationErrorCode } from "./errors.js";
 import type { VerificationCode } from "./errors.js";
 import { causeMessage, decodeSwapFillQuote, type DecodedSwapFillQuote } from "./decode.js";
-import { immutablePlainCopy } from "./lockup.js";
+import { canonical, immutablePlainCopy, rewrap, sameAsset, sameBytes } from "./lockup.js";
 
 declare const swapFillVerified: unique symbol;
 
@@ -156,39 +156,6 @@ const capabilities = new WeakMap<VerifiedSwapFillQuote, CapabilityState>();
 
 const reject = (code: VerificationCode, detail: string): never => {
     throw new QuoteVerificationError(code, `taxi: ${detail}`);
-};
-
-const rewrap = <T>(code: VerificationCode, f: () => T): T => {
-    try {
-        return f();
-    } catch (cause) {
-        if (cause instanceof QuoteVerificationError) throw cause;
-        return reject(code, causeMessage(cause));
-    }
-};
-
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-    a.length === b.length && a.every((value, index) => value === b[index]);
-
-const sameAsset = (
-    a: { txid: Uint8Array; groupIndex: number } | undefined,
-    b: { txid: Uint8Array; groupIndex: number } | undefined,
-): boolean =>
-    a === undefined || b === undefined
-        ? a === b
-        : a.groupIndex === b.groupIndex && sameBytes(a.txid, b.txid);
-
-const canonical = (value: unknown): string => {
-    if (value instanceof Uint8Array) return `bytes:${bytesToHex(value)}`;
-    if (typeof value === "bigint") return `bigint:${value}`;
-    if (value === undefined) return "undefined";
-    if (value === null || typeof value !== "object") return JSON.stringify(value);
-    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-        .sort()
-        .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
-        .join(",")}}`;
 };
 
 const exact = (actual: unknown, expected: unknown, label: string): void => {

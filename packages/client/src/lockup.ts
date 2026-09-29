@@ -25,7 +25,8 @@ import {
 import { sha256 } from "@noble/hashes/sha2.js";
 import { base64, hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
-import { QuoteVerificationError, VerificationErrorCode } from "./errors.js";
+import { causeMessage } from "./decode.js";
+import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
 import type { VerifiedQuote, VerifyQuoteArgs } from "./verify.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
@@ -50,7 +51,7 @@ export interface SignLockupArgs {
     identity: Identity;
 }
 
-export interface LockupValidationContext {
+interface LockupValidationContext {
     quote: QuoteResponse;
     params: DustCovenantParams;
     covenantScript: Uint8Array;
@@ -69,7 +70,7 @@ export interface LockupValidationContext {
     hrp: string;
 }
 
-export interface ValidatedLockup {
+interface ValidatedLockup {
     envelope: LockupEnvelope;
     tx: Transaction;
     checkpoints: Transaction[];
@@ -82,9 +83,15 @@ interface CapabilityState {
     baseline: Pick<ValidatedLockup, "envelope" | "unsignedPsbt">;
 }
 
-export interface ActiveCapabilityState {
+interface ActiveCapabilityState {
     authorization: VerifyQuoteArgs;
     context: Omit<LockupValidationContext, "quote">;
+    transferId: string;
+    validated: ValidatedLockup;
+}
+
+interface SignerState {
+    context: { params: { senderKey: Uint8Array } };
     transferId: string;
     validated: ValidatedLockup;
 }
@@ -99,23 +106,27 @@ const reject = (detail: string): never => {
     );
 };
 
-const attempt = <T>(label: string, fn: () => T): T => {
+export const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
+    a.length === b.length && a.every((value, index) => value === b[index]);
+
+export const sameAsset = (
+    a: { txid: Uint8Array; groupIndex: number } | undefined,
+    b: { txid: Uint8Array; groupIndex: number } | undefined,
+): boolean =>
+    a === undefined || b === undefined
+        ? a === b
+        : a.groupIndex === b.groupIndex && sameBytes(a.txid, b.txid);
+
+export const rewrap = <T>(code: VerificationCode, f: () => T): T => {
     try {
-        return fn();
+        return f();
     } catch (cause) {
         if (cause instanceof QuoteVerificationError) throw cause;
-        return reject(`${label}: ${cause instanceof Error ? cause.message : String(cause)}`);
+        throw new QuoteVerificationError(code, `taxi: ${causeMessage(cause)}`);
     }
 };
 
-const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
-    a.length === b.length && a.every((value, index) => value === b[index]);
-
-const exactBytes = (actual: Uint8Array, expected: Uint8Array, label: string): void => {
-    if (!sameBytes(actual, expected)) reject(`${label} mismatch`);
-};
-
-const canonical = (value: unknown): string => {
+export const canonical = (value: unknown): string => {
     if (value instanceof Uint8Array) return `bytes:${hex.encode(value)}`;
     if (typeof value === "bigint") return `bigint:${value}`;
     if (value === undefined) return "undefined";
@@ -126,10 +137,6 @@ const canonical = (value: unknown): string => {
         .sort()
         .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
         .join(",")}}`;
-};
-
-const exact = (actual: unknown, expected: unknown, label: string): void => {
-    if (canonical(actual) !== canonical(expected)) reject(`${label} mismatch`);
 };
 
 export const immutablePlainCopy = <T>(value: T, label = "value"): T => {
@@ -199,32 +206,358 @@ export const immutablePlainCopy = <T>(value: T, label = "value"): T => {
     return copy(value, label) as T;
 };
 
-const record = (value: unknown, label: string): Record<string, unknown> => {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-        reject(`${label} must be an object`);
-    return value as Record<string, unknown>;
-};
+// Shared by the lockup and sponsored flows; `reject` keeps each flow's error prefix.
+export function jointTxChecks(reject: (detail: string) => never) {
+    const attempt = <T>(label: string, fn: () => T): T => {
+        try {
+            return fn();
+        } catch (cause) {
+            if (cause instanceof QuoteVerificationError) throw cause;
+            return reject(`${label}: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+    };
 
-const exactKeys = (
-    value: Record<string, unknown>,
-    required: string[],
-    optional: string[],
-    label: string,
-): void => {
-    const keys = Object.keys(value).sort();
-    const allowed = [...required, ...optional].sort();
-    if (keys.some((key) => !allowed.includes(key)) || required.some((key) => !keys.includes(key)))
-        reject(`${label} fields mismatch`);
-};
+    const exactBytes = (actual: Uint8Array, expected: Uint8Array, label: string): void => {
+        if (!sameBytes(actual, expected)) reject(`${label} mismatch`);
+    };
 
-const decodeBase64 = (value: unknown, label: string): Uint8Array => {
-    if (typeof value !== "string" || !value.length || value.length > 4_000_000)
-        reject(`${label} has invalid size`);
-    const encoded = value as string;
-    const bytes = attempt(label, () => base64.decode(encoded));
-    if (base64.encode(bytes) !== encoded) reject(`${label} is not canonical base64`);
-    return bytes;
-};
+    const exact = (actual: unknown, expected: unknown, label: string): void => {
+        if (canonical(actual) !== canonical(expected)) reject(`${label} mismatch`);
+    };
+
+    const record = (value: unknown, label: string): Record<string, unknown> => {
+        if (!value || typeof value !== "object" || Array.isArray(value))
+            reject(`${label} must be an object`);
+        return value as Record<string, unknown>;
+    };
+
+    const exactKeys = (
+        value: Record<string, unknown>,
+        required: string[],
+        optional: string[],
+        label: string,
+    ): void => {
+        const keys = Object.keys(value).sort();
+        const allowed = [...required, ...optional].sort();
+        if (
+            keys.some((key) => !allowed.includes(key)) ||
+            required.some((key) => !keys.includes(key))
+        )
+            reject(`${label} fields mismatch`);
+    };
+
+    const decodeBase64 = (value: unknown, label: string): Uint8Array => {
+        if (typeof value !== "string" || !value.length || value.length > 4_000_000)
+            reject(`${label} has invalid size`);
+        const encoded = value as string;
+        const bytes = attempt(label, () => base64.decode(encoded));
+        if (base64.encode(bytes) !== encoded) reject(`${label} is not canonical base64`);
+        return bytes;
+    };
+
+    const decodeInput = (value: unknown, label: string): FundingInputValue => {
+        const wire = record(value, label);
+        exactKeys(
+            wire,
+            ["txid", "vout", "value", "tapTree", "spendLeaf", "expiry"],
+            ["assetPacket"],
+            label,
+        );
+        const expiry = record(wire.expiry, `${label}.expiry`);
+        exactKeys(expiry, ["kind", "value"], [], `${label}.expiry`);
+        const decoded = attempt(label, () => fundingInputFromWire(wire, label));
+        exact(wire, fundingInputToWire(decoded), label);
+        return decoded;
+    };
+
+    const inputAssets = (input: FundingInputValue): Map<string, bigint> => {
+        const result = new Map<string, bigint>();
+        if (!input.assetPacket) return result;
+        const packet = attempt("funding asset packet", () => Packet.fromBytes(input.assetPacket!));
+        exactBytes(packet.serialize(), input.assetPacket, "funding asset packet encoding");
+        for (const group of packet.groups) {
+            if (!group.assetId || group.controlAsset)
+                reject("funding packet is not existing holdings");
+            const id = group.assetId!.toString();
+            if (result.has(id)) reject("funding packet contains a duplicate asset group");
+            const outputs = group.outputs.filter((output) => output.vout === input.vout);
+            if (outputs.length > 1) reject("funding packet contains a duplicate asset output");
+            if (outputs.length) result.set(id, outputs[0].amount);
+        }
+        const canonicalPacket = Packet.create(
+            [...result]
+                .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+                .map(([id, amount]) =>
+                    AssetGroup.create(
+                        AssetId.fromString(id),
+                        null,
+                        [],
+                        [AssetOutput.create(input.vout, amount)],
+                        [],
+                    ),
+                ),
+        );
+        exactBytes(canonicalPacket.serialize(), input.assetPacket, "funding asset holdings");
+        return result;
+    };
+
+    const inputTree = (
+        input: FundingInputValue,
+        ownerKey: Uint8Array,
+        serverKey: Uint8Array,
+    ): VtxoScript => {
+        const tree = attempt("funding tap tree", () => VtxoScript.decode(input.tapTree));
+        exactBytes(tree.encode(), input.tapTree, "funding tap tree encoding");
+        attempt("funding spend leaf", () => tree.findLeaf(hex.encode(input.spendLeaf)));
+        const closure = attempt("funding multisig leaf", () =>
+            MultisigTapscript.decode(input.spendLeaf),
+        );
+        const actual = closure.params.pubkeys.map(hex.encode).sort();
+        const expected = [hex.encode(ownerKey), hex.encode(serverKey)].sort();
+        exact(actual, expected, "funding multisig owners");
+        return tree;
+    };
+
+    const operatorTree = (
+        input: FundingInputValue,
+        serverKey: Uint8Array,
+        operatorKey: Uint8Array,
+    ): VtxoScript => {
+        if (input.assetPacket) reject("operator funding cannot carry assets");
+        const closure = attempt("operator funding multisig", () =>
+            MultisigTapscript.decode(input.spendLeaf),
+        );
+        const signer = closure.params.pubkeys.find((key) => !sameBytes(key, serverKey));
+        if (!signer) reject("operator funding signer is missing");
+        const tree = inputTree(input, signer!, serverKey);
+        exactBytes(tree.tweakedPublicKey, operatorKey, "operator funding payout");
+        return tree;
+    };
+
+    const rebuildJointTx = (
+        encodedCheckpoints: string[],
+        inputs: FundingInputValue[],
+        trees: VtxoScript[],
+        unrollScript: Uint8Array,
+        outputs: { amount: bigint; script: Uint8Array }[],
+    ): { checkpoints: Transaction[]; expectedArk: Transaction } => {
+        const checkpoints = encodedCheckpoints.map((checkpoint, index) =>
+            attempt(`checkpoint ${index}`, () =>
+                Transaction.fromPSBT(decodeBase64(checkpoint, `checkpoint ${index}`)),
+            ),
+        );
+        if (checkpoints.length !== inputs.length) reject("checkpoint count mismatch");
+        const expectedArk = new Transaction({ version: 3, lockTime: 0 });
+        for (const [index, input] of inputs.entries()) {
+            const source = trees[index];
+            const checkpointTree = new VtxoScript([unrollScript, input.spendLeaf]);
+            const expectedCheckpoint = new Transaction({ version: 3, lockTime: 0 });
+            expectedCheckpoint.addInput({
+                txid: input.txid,
+                index: input.vout,
+                witnessUtxo: { script: source.pkScript, amount: input.value },
+                tapLeafScript: [source.findLeaf(hex.encode(input.spendLeaf))],
+            });
+            setArkPsbtField(expectedCheckpoint, 0, VtxoTaprootTree, input.tapTree);
+            expectedCheckpoint.addOutput({ amount: input.value, script: checkpointTree.pkScript });
+            expectedCheckpoint.addOutput(P2A);
+            exactBytes(
+                checkpoints[index].toPSBT(),
+                expectedCheckpoint.toPSBT(),
+                `checkpoint ${index}`,
+            );
+            expectedArk.addInput({
+                txid: checkpoints[index].id,
+                index: 0,
+                witnessUtxo: { script: checkpointTree.pkScript, amount: input.value },
+                tapLeafScript: [checkpointTree.findLeaf(hex.encode(input.spendLeaf))],
+            });
+            setArkPsbtField(expectedArk, index, VtxoTaprootTree, checkpointTree.encode());
+        }
+        for (const output of outputs) expectedArk.addOutput(output);
+        expectedArk.addOutput(P2A);
+        return { checkpoints, expectedArk };
+    };
+
+    const assertCanonicalDefaultSignatures = (tx: Transaction, label: string): void => {
+        for (let index = 0; index < tx.inputsLength; index++)
+            for (const [, signature] of tx.getInput(index).tapScriptSig ?? [])
+                if (signature.length !== 64)
+                    reject(`${label} input ${index} signature is not canonical DEFAULT`);
+    };
+
+    const validateSignedTransaction = (state: SignerState, signed: Transaction): void => {
+        assertCanonicalDefaultSignatures(signed, "signed Arkade transaction");
+        assertAllowedSighashTypes(signed, [SigHash.DEFAULT]);
+        exactBytes(
+            unsignedCopy(signed).toPSBT(),
+            state.validated.unsignedPsbt,
+            "signed unsigned transaction",
+        );
+        const senderIndexes = state.validated.envelope.senderInputIndexes;
+        const senderSet = new Set(senderIndexes);
+        for (let index = 0; index < signed.inputsLength; index++) {
+            if (!senderSet.has(index)) {
+                if (signatureToken(signed, index) !== signatureToken(state.validated.tx, index))
+                    reject(`signature outside sender input ${index}`);
+                continue;
+            }
+            const signatures = signed.getInput(index).tapScriptSig;
+            if (
+                !signatures ||
+                signatures.length !== 1 ||
+                !sameBytes(signatures[0][0].pubKey, state.context.params.senderKey)
+            )
+                reject(`input ${index} was not signed only by the sender`);
+            attempt(`sender signature ${index}`, () =>
+                verifyTapscriptSignatures(
+                    signed,
+                    index,
+                    [hex.encode(state.context.params.senderKey)],
+                    [],
+                    [SigHash.DEFAULT],
+                ),
+            );
+        }
+    };
+
+    const validateSignedCheckpoints = (
+        state: SignerState,
+        encoded: readonly string[],
+    ): Transaction[] => {
+        if (encoded.length !== state.validated.checkpoints.length)
+            reject("checkpoint count mismatch");
+        const sender = new Set(state.validated.envelope.senderInputIndexes);
+        return encoded.map((value, index) => {
+            const signed = attempt(`signed checkpoint ${index}`, () =>
+                Transaction.fromPSBT(decodeBase64(value, `signed checkpoint ${index}`)),
+            );
+            assertCanonicalDefaultSignatures(signed, `signed checkpoint ${index}`);
+            assertAllowedSighashTypes(signed, [SigHash.DEFAULT]);
+            exactBytes(
+                unsignedCopy(signed).toPSBT(),
+                state.validated.checkpoints[index].toPSBT(),
+                `signed checkpoint ${index} unsigned transaction`,
+            );
+            const signatures = signed.getInput(0).tapScriptSig;
+            if (!sender.has(index)) {
+                if (signatures?.length) reject(`signature outside sender checkpoint ${index}`);
+                return signed;
+            }
+            if (
+                !signatures ||
+                signatures.length !== 1 ||
+                !sameBytes(signatures[0][0].pubKey, state.context.params.senderKey)
+            )
+                reject(`checkpoint ${index} was not signed only by the sender`);
+            attempt(`sender checkpoint signature ${index}`, () =>
+                verifyTapscriptSignatures(
+                    signed,
+                    0,
+                    [hex.encode(state.context.params.senderKey)],
+                    [],
+                    [SigHash.DEFAULT],
+                ),
+            );
+            return signed;
+        });
+    };
+
+    const assertSignedEnvelope = (state: SignerState, encoded: string, label: string): string => {
+        const envelope = decodeLockupEnvelope(encoded);
+        const {
+            arkTx: _expectedArkTx,
+            checkpoints: _expectedCheckpoints,
+            ...expectedCommitments
+        } = state.validated.envelope;
+        const { arkTx, checkpoints, ...actualCommitments } = envelope;
+        exact(actualCommitments, expectedCommitments, label);
+        const signed = attempt("signed Arkade transaction", () =>
+            Transaction.fromPSBT(decodeBase64(arkTx, "signed arkTx")),
+        );
+        validateSignedTransaction(state, signed);
+        validateSignedCheckpoints(state, checkpoints);
+        return state.transferId;
+    };
+
+    const signSenderInputs = async (state: SignerState, identity: Identity): Promise<string> => {
+        const tx = Transaction.fromPSBT(state.validated.tx.toPSBT());
+        assertAllowedSighashTypes(tx, [SigHash.DEFAULT]);
+        const senderIndexes = [...state.validated.envelope.senderInputIndexes];
+        const sender = new Set(senderIndexes);
+        const preparedCheckpoints = state.validated.checkpoints.map((checkpoint) =>
+            Transaction.fromPSBT(checkpoint.toPSBT()),
+        );
+        let signed: Transaction;
+        let signedCheckpoints: Transaction[];
+        if (isBatchSignable(identity)) {
+            const senderCheckpoints = preparedCheckpoints.filter((_, index) => sender.has(index));
+            const results = await identity.signMultiple([
+                { tx, inputIndexes: senderIndexes },
+                ...senderCheckpoints.map((checkpoint) => ({ tx: checkpoint, inputIndexes: [0] })),
+            ]);
+            if (results.length !== senderCheckpoints.length + 1)
+                reject(
+                    `signMultiple returned ${results.length} transactions, expected ${senderCheckpoints.length + 1}`,
+                );
+            signed = results[0];
+            let cursor = 1;
+            signedCheckpoints = preparedCheckpoints.map((checkpoint, index) =>
+                sender.has(index) ? results[cursor++] : checkpoint,
+            );
+        } else {
+            signed = await identity.sign(tx, senderIndexes);
+            signedCheckpoints = [];
+            for (const [index, checkpoint] of preparedCheckpoints.entries())
+                signedCheckpoints.push(
+                    sender.has(index) ? await identity.sign(checkpoint, [0]) : checkpoint,
+                );
+        }
+        validateSignedTransaction(state, signed);
+        const checkpoints = signedCheckpoints.map((checkpoint) =>
+            base64.encode(checkpoint.toPSBT()),
+        );
+        return encodeLockupEnvelope({
+            ...state.validated.envelope,
+            arkTx: base64.encode(signed.toPSBT()),
+            checkpoints,
+        });
+    };
+
+    return {
+        attempt,
+        exactBytes,
+        exact,
+        record,
+        exactKeys,
+        decodeBase64,
+        decodeInput,
+        inputAssets,
+        inputTree,
+        operatorTree,
+        rebuildJointTx,
+        assertCanonicalDefaultSignatures,
+        assertSignedEnvelope,
+        signSenderInputs,
+    };
+}
+
+const {
+    attempt,
+    exactBytes,
+    exact,
+    record,
+    exactKeys,
+    decodeBase64,
+    decodeInput,
+    inputAssets,
+    inputTree,
+    operatorTree,
+    rebuildJointTx,
+    assertCanonicalDefaultSignatures,
+    assertSignedEnvelope,
+    signSenderInputs,
+} = jointTxChecks(reject);
 
 const decodeIndexes = (value: unknown, label: string): number[] => {
     if (!Array.isArray(value)) reject(`${label} must be an array`);
@@ -234,21 +567,6 @@ const decodeIndexes = (value: unknown, label: string): number[] => {
     });
     if (new Set(indexes).size !== indexes.length) reject(`${label} contains duplicates`);
     return indexes;
-};
-
-const decodeInput = (value: unknown, label: string): FundingInputValue => {
-    const wire = record(value, label);
-    exactKeys(
-        wire,
-        ["txid", "vout", "value", "tapTree", "spendLeaf", "expiry"],
-        ["assetPacket"],
-        label,
-    );
-    const expiry = record(wire.expiry, `${label}.expiry`);
-    exactKeys(expiry, ["kind", "value"], [], `${label}.expiry`);
-    const decoded = attempt(label, () => fundingInputFromWire(wire, label));
-    exact(wire, fundingInputToWire(decoded), label);
-    return decoded;
 };
 
 export function decodeLockupEnvelope(encoded: string): LockupEnvelope {
@@ -319,54 +637,7 @@ export function encodeLockupEnvelope(envelope: LockupEnvelope): string {
     return base64.encode(textEncoder.encode(JSON.stringify(envelope)));
 }
 
-const inputAssets = (input: FundingInputValue): Map<string, bigint> => {
-    const result = new Map<string, bigint>();
-    if (!input.assetPacket) return result;
-    const packet = attempt("funding asset packet", () => Packet.fromBytes(input.assetPacket!));
-    exactBytes(packet.serialize(), input.assetPacket, "funding asset packet encoding");
-    for (const group of packet.groups) {
-        if (!group.assetId || group.controlAsset) reject("funding packet is not existing holdings");
-        const id = group.assetId!.toString();
-        if (result.has(id)) reject("funding packet contains a duplicate asset group");
-        const outputs = group.outputs.filter((output) => output.vout === input.vout);
-        if (outputs.length > 1) reject("funding packet contains a duplicate asset output");
-        if (outputs.length) result.set(id, outputs[0].amount);
-    }
-    const canonicalPacket = Packet.create(
-        [...result]
-            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-            .map(([id, amount]) =>
-                AssetGroup.create(
-                    AssetId.fromString(id),
-                    null,
-                    [],
-                    [AssetOutput.create(input.vout, amount)],
-                    [],
-                ),
-            ),
-    );
-    exactBytes(canonicalPacket.serialize(), input.assetPacket, "funding asset holdings");
-    return result;
-};
-
-const inputTree = (
-    input: FundingInputValue,
-    ownerKey: Uint8Array,
-    serverKey: Uint8Array,
-): VtxoScript => {
-    const tree = attempt("funding tap tree", () => VtxoScript.decode(input.tapTree));
-    exactBytes(tree.encode(), input.tapTree, "funding tap tree encoding");
-    attempt("funding spend leaf", () => tree.findLeaf(hex.encode(input.spendLeaf)));
-    const closure = attempt("funding multisig leaf", () =>
-        MultisigTapscript.decode(input.spendLeaf),
-    );
-    const actual = closure.params.pubkeys.map(hex.encode).sort();
-    const expected = [hex.encode(ownerKey), hex.encode(serverKey)].sort();
-    exact(actual, expected, "funding multisig owners");
-    return tree;
-};
-
-const ownerScript = (
+export const ownerScript = (
     key: Uint8Array,
     amount: bigint,
     serverKey: Uint8Array,
@@ -377,19 +648,19 @@ const ownerScript = (
     return amount < dust ? address.subdustPkScript : address.pkScript;
 };
 
-const assetId = (id: { txid: Uint8Array; groupIndex: number }): string =>
+export const assetId = (id: { txid: Uint8Array; groupIndex: number }): string =>
     AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
 
-const unsignedCopy = (tx: Transaction): Transaction => {
+export const unsignedCopy = (tx: Transaction): Transaction => {
     const copy = Transaction.fromPSBT(tx.toPSBT());
     for (let index = 0; index < copy.inputsLength; index++)
         copy.updateInput(index, { tapScriptSig: undefined });
     return copy;
 };
 
-const graphId = (tx: Transaction, checkpoints: Transaction[]): string => {
+export const graphId = (domain: string, tx: Transaction, checkpoints: Transaction[]): string => {
     const hash = sha256.create();
-    hash.update(textEncoder.encode("arkade-taxi-lockup-v1\0"));
+    hash.update(textEncoder.encode(domain));
     hash.update(unsignedCopy(tx).toPSBT());
     for (const checkpoint of checkpoints) hash.update(hex.decode(checkpoint.id));
     return hex.encode(hash.digest());
@@ -440,17 +711,9 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     const senderTrees = senderInputs.map((input) =>
         inputTree(input, context.params.senderKey, context.serverKey),
     );
-    const operatorTrees = operatorInputs.map((input) => {
-        if (input.assetPacket) reject("operator funding cannot carry assets");
-        const closure = attempt("operator funding multisig", () =>
-            MultisigTapscript.decode(input.spendLeaf),
-        );
-        const signer = closure.params.pubkeys.find((key) => !sameBytes(key, context.serverKey));
-        if (!signer) reject("operator funding signer is missing");
-        const tree = inputTree(input, signer!, context.serverKey);
-        exactBytes(tree.tweakedPublicKey, context.operatorKey, "operator funding payout");
-        return tree;
-    });
+    const operatorTrees = operatorInputs.map((input) =>
+        operatorTree(input, context.serverKey, context.operatorKey),
+    );
     const holdings = allInputs.map(inputAssets);
     const totals = new Map<string, bigint>();
     for (const owned of holdings)
@@ -586,40 +849,13 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
         });
     if (groups.length) outputs.push(Extension.create([Packet.create(groups)]).txOut());
 
-    const checkpoints = envelope.checkpoints.map((checkpoint, index) =>
-        attempt(`checkpoint ${index}`, () =>
-            Transaction.fromPSBT(decodeBase64(checkpoint, `checkpoint ${index}`)),
-        ),
+    const { checkpoints, expectedArk } = rebuildJointTx(
+        envelope.checkpoints,
+        allInputs,
+        [...senderTrees, ...operatorTrees],
+        context.trustedServerUnrollScript,
+        outputs,
     );
-    if (checkpoints.length !== allInputs.length) reject("checkpoint count mismatch");
-    const expectedArk = new Transaction({ version: 3, lockTime: 0 });
-    for (const [index, input] of allInputs.entries()) {
-        const source =
-            index < senderInputs.length
-                ? senderTrees[index]
-                : operatorTrees[index - senderInputs.length];
-        const checkpointTree = new VtxoScript([context.trustedServerUnrollScript, input.spendLeaf]);
-        const expectedCheckpoint = new Transaction({ version: 3, lockTime: 0 });
-        expectedCheckpoint.addInput({
-            txid: input.txid,
-            index: input.vout,
-            witnessUtxo: { script: source.pkScript, amount: input.value },
-            tapLeafScript: [source.findLeaf(hex.encode(input.spendLeaf))],
-        });
-        setArkPsbtField(expectedCheckpoint, 0, VtxoTaprootTree, input.tapTree);
-        expectedCheckpoint.addOutput({ amount: input.value, script: checkpointTree.pkScript });
-        expectedCheckpoint.addOutput(P2A);
-        exactBytes(checkpoints[index].toPSBT(), expectedCheckpoint.toPSBT(), `checkpoint ${index}`);
-        expectedArk.addInput({
-            txid: checkpoints[index].id,
-            index: 0,
-            witnessUtxo: { script: checkpointTree.pkScript, amount: input.value },
-            tapLeafScript: [checkpointTree.findLeaf(hex.encode(input.spendLeaf))],
-        });
-        setArkPsbtField(expectedArk, index, VtxoTaprootTree, checkpointTree.encode());
-    }
-    for (const output of outputs) expectedArk.addOutput(output);
-    expectedArk.addOutput(P2A);
 
     const tx = attempt("Arkade transaction", () =>
         Transaction.fromPSBT(decodeBase64(envelope.arkTx, "arkTx")),
@@ -630,7 +866,7 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
         if (tx.getInput(index).tapScriptSig?.length)
             reject(`unsigned quote contains a sender signature at input ${index}`);
     exactBytes(unsignedCopy(tx).toPSBT(), expectedArk.toPSBT(), "Arkade transaction");
-    if (graphId(tx, checkpoints) !== envelope.unsignedTxId)
+    if (graphId("arkade-taxi-lockup-v1\0", tx, checkpoints) !== envelope.unsignedTxId)
         reject("unsigned transaction hash mismatch");
 
     const commitment = record(context.quote.lockup, "quote.lockup");
@@ -684,148 +920,16 @@ export const activeQuoteStateFor = (verified: VerifiedQuote): ActiveCapabilitySt
     return { authorization, context, transferId: authorization.quote.transferId, validated };
 };
 
-const assertCanonicalDefaultSignatures = (tx: Transaction, label: string): void => {
-    for (let index = 0; index < tx.inputsLength; index++)
-        for (const [, signature] of tx.getInput(index).tapScriptSig ?? [])
-            if (signature.length !== 64)
-                reject(`${label} input ${index} signature is not canonical DEFAULT`);
-};
-
-const validateSignedTransaction = (state: ActiveCapabilityState, signed: Transaction): void => {
-    assertCanonicalDefaultSignatures(signed, "signed Arkade transaction");
-    assertAllowedSighashTypes(signed, [SigHash.DEFAULT]);
-    exactBytes(
-        unsignedCopy(signed).toPSBT(),
-        state.validated.unsignedPsbt,
-        "signed unsigned transaction",
-    );
-    const senderIndexes = state.validated.envelope.senderInputIndexes;
-    const senderSet = new Set(senderIndexes);
-    for (let index = 0; index < signed.inputsLength; index++) {
-        if (!senderSet.has(index)) {
-            if (signatureToken(signed, index) !== signatureToken(state.validated.tx, index))
-                reject(`signature outside sender input ${index}`);
-            continue;
-        }
-        const signatures = signed.getInput(index).tapScriptSig;
-        if (
-            !signatures ||
-            signatures.length !== 1 ||
-            !sameBytes(signatures[0][0].pubKey, state.context.params.senderKey)
-        )
-            reject(`input ${index} was not signed only by the sender`);
-        attempt(`sender signature ${index}`, () =>
-            verifyTapscriptSignatures(
-                signed,
-                index,
-                [hex.encode(state.context.params.senderKey)],
-                [],
-                [SigHash.DEFAULT],
-            ),
-        );
-    }
-};
-
-const validateSignedCheckpoints = (
-    state: ActiveCapabilityState,
-    encoded: readonly string[],
-): Transaction[] => {
-    if (encoded.length !== state.validated.checkpoints.length) reject("checkpoint count mismatch");
-    const sender = new Set(state.validated.envelope.senderInputIndexes);
-    return encoded.map((value, index) => {
-        const signed = attempt(`signed checkpoint ${index}`, () =>
-            Transaction.fromPSBT(decodeBase64(value, `signed checkpoint ${index}`)),
-        );
-        assertCanonicalDefaultSignatures(signed, `signed checkpoint ${index}`);
-        assertAllowedSighashTypes(signed, [SigHash.DEFAULT]);
-        exactBytes(
-            unsignedCopy(signed).toPSBT(),
-            state.validated.checkpoints[index].toPSBT(),
-            `signed checkpoint ${index} unsigned transaction`,
-        );
-        const signatures = signed.getInput(0).tapScriptSig;
-        if (!sender.has(index)) {
-            if (signatures?.length) reject(`signature outside sender checkpoint ${index}`);
-            return signed;
-        }
-        if (
-            !signatures ||
-            signatures.length !== 1 ||
-            !sameBytes(signatures[0][0].pubKey, state.context.params.senderKey)
-        )
-            reject(`checkpoint ${index} was not signed only by the sender`);
-        attempt(`sender checkpoint signature ${index}`, () =>
-            verifyTapscriptSignatures(
-                signed,
-                0,
-                [hex.encode(state.context.params.senderKey)],
-                [],
-                [SigHash.DEFAULT],
-            ),
-        );
-        return signed;
-    });
-};
-
 export function assertSignedLockup(verified: VerifiedQuote, encoded: string): string {
-    const state = activeQuoteStateFor(verified);
-    const envelope = decodeLockupEnvelope(encoded);
-    const {
-        arkTx: _expectedArkTx,
-        checkpoints: _expectedCheckpoints,
-        ...expectedCommitments
-    } = state.validated.envelope;
-    const { arkTx, checkpoints, ...actualCommitments } = envelope;
-    exact(actualCommitments, expectedCommitments, "signed lockup commitments");
-    const signed = attempt("signed Arkade transaction", () =>
-        Transaction.fromPSBT(decodeBase64(arkTx, "signed arkTx")),
+    return assertSignedEnvelope(
+        activeQuoteStateFor(verified),
+        encoded,
+        "signed lockup commitments",
     );
-    validateSignedTransaction(state, signed);
-    validateSignedCheckpoints(state, checkpoints);
-    return state.transferId;
 }
 
 export async function signLockup({ verified, identity }: SignLockupArgs): Promise<string> {
-    const state = activeQuoteStateFor(verified);
-    const tx = Transaction.fromPSBT(state.validated.tx.toPSBT());
-    assertAllowedSighashTypes(tx, [SigHash.DEFAULT]);
-    const senderIndexes = [...state.validated.envelope.senderInputIndexes];
-    const sender = new Set(senderIndexes);
-    const preparedCheckpoints = state.validated.checkpoints.map((checkpoint) =>
-        Transaction.fromPSBT(checkpoint.toPSBT()),
-    );
-    let signed: Transaction;
-    let signedCheckpoints: Transaction[];
-    if (isBatchSignable(identity)) {
-        const senderCheckpoints = preparedCheckpoints.filter((_, index) => sender.has(index));
-        const results = await identity.signMultiple([
-            { tx, inputIndexes: senderIndexes },
-            ...senderCheckpoints.map((checkpoint) => ({ tx: checkpoint, inputIndexes: [0] })),
-        ]);
-        if (results.length !== senderCheckpoints.length + 1)
-            reject(
-                `signMultiple returned ${results.length} transactions, expected ${senderCheckpoints.length + 1}`,
-            );
-        signed = results[0];
-        let cursor = 1;
-        signedCheckpoints = preparedCheckpoints.map((checkpoint, index) =>
-            sender.has(index) ? results[cursor++] : checkpoint,
-        );
-    } else {
-        signed = await identity.sign(tx, senderIndexes);
-        signedCheckpoints = [];
-        for (const [index, checkpoint] of preparedCheckpoints.entries())
-            signedCheckpoints.push(
-                sender.has(index) ? await identity.sign(checkpoint, [0]) : checkpoint,
-            );
-    }
-    validateSignedTransaction(state, signed);
-    const checkpoints = signedCheckpoints.map((checkpoint) => base64.encode(checkpoint.toPSBT()));
-    const encoded = encodeLockupEnvelope({
-        ...state.validated.envelope,
-        arkTx: base64.encode(signed.toPSBT()),
-        checkpoints,
-    });
+    const encoded = await signSenderInputs(activeQuoteStateFor(verified), identity);
     assertSignedLockup(verified, encoded);
     return encoded;
 }
