@@ -24,6 +24,7 @@ import {
     terminal,
     transaction,
     walletBalance,
+    walletAssetBalances,
 } from "./fixtures.js";
 
 async function smallBitcoinPayment() {
@@ -188,10 +189,11 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 },
             ],
         });
-        const [aliceBefore, bobBefore, operatorBefore] = await Promise.all([
+        const [aliceBefore, bobBefore, operatorBefore, operatorAssetsBefore] = await Promise.all([
             walletBalance(alice, minted.assetId),
             walletBalance(bob, minted.assetId),
             walletBalance(live.actors.operator, minted.assetId),
+            walletAssetBalances(live.actors.operator, live.info.operatorKey),
         ]);
         expect(bobBefore.units).toBe(0n);
         const { verified, senderInputs } = await preEffectRequest(
@@ -369,6 +371,17 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 balance.sats === expectedOperator.sats && balance.units === expectedOperator.units,
         );
         expect(operatorAfter).toEqual(expectedOperator);
+        const expectedAssets = new Map(operatorAssetsBefore);
+        if (mode === "purchase")
+            expectedAssets.set(
+                minted.assetId,
+                (expectedAssets.get(minted.assetId) ?? 0n) + 1_000_000n,
+            );
+        const operatorAssetsAfter = await walletAssetBalances(
+            live.actors.operator,
+            live.info.operatorKey,
+        );
+        expect(operatorAssetsAfter).toEqual(expectedAssets);
         // Only a sub-dust fare receipt needs the proceeds collector to be spendable.
         const repaid = mode === "recycle";
         const receiptPoint = repaid ? { txid, vout: 0 } : { txid: lockup.txid, vout: 1 };
@@ -400,9 +413,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                   coin.assets?.some((item) => item.assetId === minted.assetId),
               );
         expect(payout).toBeDefined();
-        expect(payout!.assets ?? []).toEqual(
-            repaid ? [] : [{ assetId: minted.assetId, amount: 1_000_000n }],
-        );
+        if (repaid) expect(payout!.assets ?? []).toEqual([]);
         const plainChange = repaid ? [] : collected.filter((coin) => !coin.assets?.length);
         expect(collected).toHaveLength(plainChange.length ? 2 : 1);
         if (plainChange.length) {
@@ -525,6 +536,14 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             operatorSatsAfter: operatorAfter.sats.toString(),
             operatorUnitsBefore: operatorBefore.units.toString(),
             operatorUnitsAfter: operatorAfter.units.toString(),
+            operatorAssetsBefore: [...operatorAssetsBefore].map(([assetId, units]) => ({
+                assetId,
+                units: units.toString(),
+            })),
+            operatorAssetsAfter: [...operatorAssetsAfter].map(([assetId, units]) => ({
+                assetId,
+                units: units.toString(),
+            })),
             secondTransferId: second.quote.transferId,
             secondSpendTxid: secondTxid,
             collectionCommitmentTxid: receipt!.settledBy,

@@ -12,6 +12,7 @@ import {
     poll,
     required,
     walletBalance,
+    walletAssetBalances,
 } from "./fixtures.js";
 
 liveScenario("sponsored-direct-send", async () => {
@@ -63,10 +64,11 @@ liveScenario("sponsored-direct-send", async () => {
                 },
             ],
         });
-        const [aliceBefore, bobBefore, operatorBefore] = await Promise.all([
+        const [aliceBefore, bobBefore, operatorBefore, operatorAssetsBefore] = await Promise.all([
             walletBalance(alice, minted.assetId),
             walletBalance(bob, minted.assetId),
             walletBalance(live.actors.operator, minted.assetId),
+            walletAssetBalances(live.actors.operator, live.info.operatorKey),
         ]);
         expect(bobBefore.units).toBe(0n);
         const { verified, senderInputs } = await preEffectRequest(
@@ -173,6 +175,11 @@ liveScenario("sponsored-direct-send", async () => {
                     value.units === operatorBefore.units + 1_000_000n,
             ),
         ).toEqual({ sats: operatorBefore.sats - 330n, units: operatorBefore.units + 1_000_000n });
+        const expectedAssets = new Map(operatorAssetsBefore);
+        expectedAssets.set(minted.assetId, (expectedAssets.get(minted.assetId) ?? 0n) + 1_000_000n);
+        expect(await walletAssetBalances(live.actors.operator, live.info.operatorKey)).toEqual(
+            expectedAssets,
+        );
         const farePoint = { txid: lockup.outpoint.txid, vout: 1 };
         const receipt = (await live.indexer.getVtxos({ outpoints: [farePoint] })).vtxos.find(
             (coin) => coin.txid === farePoint.txid && coin.vout === farePoint.vout,
@@ -194,9 +201,6 @@ liveScenario("sponsored-direct-send", async () => {
             coin.assets?.some((item) => item.assetId === minted.assetId),
         );
         expect(assetCarriers).toHaveLength(1);
-        expect(assetCarriers[0]!.assets?.filter((item) => item.assetId === minted.assetId)).toEqual(
-            [{ assetId: minted.assetId, amount: 1_000_000n }],
-        );
         const plainChange = collected.filter((coin) => !coin.assets?.length);
         expect(collected).toHaveLength(plainChange.length ? 2 : 1);
         if (plainChange.length) {

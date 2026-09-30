@@ -8,6 +8,7 @@ import {
     RestEmulatorProvider,
     RestIndexerProvider,
     Transaction,
+    VtxoScript,
     asset,
     assertValidServerUnrollScript,
     defaultCheckpointExitDelayPolicy,
@@ -160,6 +161,19 @@ export const walletBalance = async (actor: any, assetId: string) => {
             0n,
         ),
     };
+};
+
+export const walletAssetBalances = async (actor: { wallet: Wallet }, operatorKey: string) => {
+    const balances = new Map<string, bigint>();
+    for (const coin of await actor.wallet.getSpendableVtxos({ withRecoverable: false })) {
+        expect(coin.script).toBe(`5120${operatorKey}`);
+        expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(operatorKey);
+        for (const { assetId, amount } of coin.assets ?? []) {
+            expect(amount).toBeGreaterThan(0n);
+            balances.set(assetId, (balances.get(assetId) ?? 0n) + amount);
+        }
+    }
+    return new Map([...balances].sort(([a], [b]) => a.localeCompare(b)));
 };
 
 export async function openLive() {
