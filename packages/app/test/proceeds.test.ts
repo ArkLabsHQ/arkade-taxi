@@ -9,7 +9,14 @@ import {
     ReservationRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { config, fundingCoin, operatorTree, providerEmulatorKey } from "./fixtures.js";
+import {
+    config,
+    fundingCoin,
+    operatorTree,
+    providerEmulatorKey,
+    runtimeSafety,
+} from "./fixtures.js";
+import { selectOperatorFunding } from "../src/arkade/inventory.js";
 import {
     createProceedsCollector,
     assertProceedsPlan,
@@ -212,11 +219,21 @@ function setup(
             coins = coins.map((c) => ({ ...c, isSpent: true, settledBy: "cc".repeat(32) }));
             outputs = [
                 fundingCoin({
-                    value: Number(plan.amount),
+                    value: Number(BigInt(plan.amount) - BigInt(plan.plainChange ?? "0")),
                     txid: "dd".repeat(32),
                     commitmentTxIds: ["cc".repeat(32)],
                     assets: plan.assets.map((a) => ({ ...a, amount: BigInt(a.amount) })),
                 }),
+                ...(plan.plainChange === undefined
+                    ? []
+                    : [
+                          fundingCoin({
+                              value: Number(plan.plainChange),
+                              txid: "dd".repeat(32),
+                              vout: 1,
+                              commitmentTxIds: ["cc".repeat(32)],
+                          }),
+                      ]),
             ];
         },
         setOutputs(value: typeof outputs) {
@@ -409,6 +426,91 @@ describe("proceeds planning", () => {
             ),
         ).toThrow(/ownership/);
     });
+    it("returns an asset fare and plain working balance so the next quote keeps its reserve", () => {
+        const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+        const received = { ...receipt, assets: [{ assetId: "a", amount: 1000000n }] };
+        const working = { ...carrier, value: 489669 };
+        const reserve = { ...spare, value: 10000 };
+        const plan = planProceeds(
+            [received],
+            [working, reserve],
+            [],
+            protectedCfg,
+            {},
+            address,
+            clock,
+            -1n,
+        );
+        expect(plan.inputs).toEqual([
+            { txid: received.txid, vout: received.vout },
+            { txid: working.txid, vout: working.vout },
+        ]);
+        expect(plan).toMatchObject({ amount: "489670", plainChange: "489340", fee: "0" });
+        const assetCarrier = fundingCoin({
+            txid: "dd".repeat(32),
+            value: 330,
+            assets: received.assets,
+        });
+        const plainChange = fundingCoin({
+            txid: "dd".repeat(32),
+            vout: 1,
+            value: Number(plan.plainChange),
+        });
+        const nowMs = clock.timestamp.getTime();
+        expect(
+            selectOperatorFunding({
+                spendable: [assetCarrier, plainChange, reserve],
+                reserved: [],
+                requiredSats: 330n,
+                safety: runtimeSafety({
+                    checkedAt: nowMs,
+                    chainHeight: BigInt(clock.height),
+                    chainTime: BigInt(nowMs / 1000),
+                }),
+                nowMs,
+                maxSnapshotAgeMs: 1000,
+                minExpiryHeadroomBlocks: cfg.minExpiryHeadroomBlocks,
+                minExpiryHeadroomSeconds: cfg.minExpiryHeadroomSeconds,
+                minReserveSats: protectedCfg.operatorMinReserveSats,
+                dustSats: cfg.dust,
+            }).totalValue,
+        ).toBe(10000n);
+        expect(() => assertProceedsPlan(plan, [received, working], protectedCfg)).not.toThrow();
+        for (const plainChange of [null, "0", "-1", "01", "989340", "9899"])
+            expect(() =>
+                assertProceedsPlan(
+                    { ...plan, plainChange } as CollectionPlan,
+                    [received, working],
+                    protectedCfg,
+                ),
+            ).toThrow(/plan_invalid/);
+        expect(() =>
+            planProceeds([received], [working], [], protectedCfg, {}, address, clock, -1n),
+        ).toThrow(/reserve_unavailable/);
+        const paid = planProceeds(
+            [received],
+            [working, reserve],
+            [],
+            { ...protectedCfg, proceedsMaxFeeSats: 6n },
+            { offchainInput: "1.0", offchainOutput: "2.0" },
+            address,
+            clock,
+            -1n,
+        );
+        expect(paid).toMatchObject({ amount: "489664", plainChange: "489334", fee: "6" });
+        expect(() =>
+            planProceeds(
+                [received],
+                [working, reserve],
+                [],
+                { ...protectedCfg, proceedsMaxFeeSats: 6n },
+                { offchainOutput: "amount >= 489340 ? 2.0 : 1.0" },
+                address,
+                clock,
+                -1n,
+            ),
+        ).toThrow(/fee_authorization_changed/);
+    });
     it("fails closed on fees above the explicit cap", () => {
         expect(() =>
             planProceeds(
@@ -448,6 +550,7 @@ describe("proceeds restart reconciliation", () => {
             { fee: "1", maxFee: "0", amount: "1000" },
             { assets: [{ assetId: "a", amount: "1" }] },
             { receipts: [] },
+            { plainChange: "1" },
         ])
             expect(() =>
                 assertProceedsPlan({ ...plan, ...mutation }, [receipt, spare], cfg),
@@ -662,6 +765,7 @@ describe("durable proceeds collector", () => {
         "rechecks protected sponsor reserve after persisted %s headroom crosses on restart",
         async (kind) => {
             const assetReceipt = { ...receipt, assets: [{ assetId: "a", amount: 1000000n }] };
+            const sponsor = { ...spare, value: 1500 };
             const expiring = {
                 ...carrier,
                 ...(kind === "height"
@@ -673,7 +777,7 @@ describe("durable proceeds collector", () => {
             };
             const plan = planProceeds(
                 [assetReceipt],
-                [spare, expiring],
+                [sponsor, expiring],
                 [],
                 cfg,
                 {},
@@ -685,7 +789,7 @@ describe("durable proceeds collector", () => {
                 { txid: receipt.txid, vout: 0 },
                 { txid: spare.txid, vout: 1 },
             ]);
-            const s = setup(plan, [assetReceipt, spare, expiring], true);
+            const s = setup(plan, [assetReceipt, sponsor, expiring], true);
             createProceedsCollector(s.deps).stop();
             s.restartDatabase();
             s.setTip({ height: 700001, time: Math.floor(clock.timestamp.getTime() / 1000) + 1 });
@@ -697,7 +801,7 @@ describe("durable proceeds collector", () => {
             expect(s.settle).not.toHaveBeenCalled();
             s.setOutputs([
                 assetReceipt,
-                spare,
+                sponsor,
                 expiring,
                 fundingCoin({ value: 1000, txid: "ee".repeat(32) }),
             ]);
@@ -745,7 +849,7 @@ describe("durable proceeds collector", () => {
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
         expect(collector.status().blocker).toBeNull();
     });
-    it("has the SDK keep a receipt's asset units on the proceeds output", async () => {
+    it("has the SDK put all fare assets on the first output and preserve plain change", async () => {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         const fare = asset.AssetId.create("12".repeat(32), 7).toString();
         const assetReceipt = { ...receipt, assets: [{ assetId: fare, amount: 9n }] };
@@ -763,11 +867,27 @@ describe("durable proceeds collector", () => {
         const sdk = s.useActualSdk();
         await createProceedsCollector(s.deps).tick();
         const outputs = sdk.sign.mock.calls[0]![1] as { script: Uint8Array; amount: bigint }[];
-        expect(outputs).toHaveLength(2);
-        expect(outputs[0]).toEqual({ amount: 1001n, script: ArkAddress.decode(address).pkScript });
-        const group = Extension.fromBytes(outputs[1]!.script).getAssetPacket()!.groups[0]!;
+        expect(outputs).toHaveLength(3);
+        expect(outputs[0]).toEqual({ amount: 330n, script: ArkAddress.decode(address).pkScript });
+        expect(outputs[1]).toEqual({ amount: 1671n, script: ArkAddress.decode(address).pkScript });
+        const group = Extension.fromBytes(outputs[2]!.script).getAssetPacket()!.groups[0]!;
         expect(group.assetId!.toString()).toBe(fare);
         expect(group.outputs).toMatchObject([{ vout: 0, amount: 9n }]);
+        const legacy = { ...plan };
+        delete legacy.plainChange;
+        const old = setup(legacy, [assetReceipt, spare, carrier], true);
+        old.restartDatabase();
+        const oldSdk = old.useActualSdk();
+        await createProceedsCollector(old.deps).tick();
+        const oldOutputs = oldSdk.sign.mock.calls[0]![1] as typeof outputs;
+        expect(oldOutputs).toHaveLength(2);
+        expect(oldOutputs[0]).toEqual({
+            amount: 2001n,
+            script: ArkAddress.decode(address).pkScript,
+        });
+        expect(
+            Extension.fromBytes(oldOutputs[1]!.script).getAssetPacket()!.groups[0]!.outputs,
+        ).toMatchObject([{ vout: 0, amount: 9n }]);
     });
     it("reconciles an ambiguous cancelled SDK intent across restart without resubmitting", async () => {
         const s = setup();
@@ -784,13 +904,49 @@ describe("durable proceeds collector", () => {
         expect(s.jobs.active()).toBeUndefined();
         expect(s.settle).not.toHaveBeenCalled();
     });
-    it("holds reservations if the settlement output has missing assets or wrong sats", async () => {
-        const s = setup();
+    it("holds split proceeds across restart until exact asset and plain outputs are indexed", async () => {
+        const received = { ...receipt, assets: [{ assetId: "a", amount: 9n }] };
+        const plan = planProceeds([received], [carrier, spare], [], cfg, {}, address, clock, -1n);
+        const s = setup(plan, [received, carrier, spare], true);
         s.finish();
-        s.setOutputs([fundingCoin({ value: 1000, commitmentTxIds: ["cc".repeat(32)] })]);
-        await createProceedsCollector(s.deps).tick();
-        expect(s.jobs.active()?.blocker).toBe("proceeds_output_pending");
-        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        s.restartDatabase();
+        const carrierOutput = fundingCoin({
+            value: 330,
+            txid: "dd".repeat(32),
+            assets: received.assets,
+            commitmentTxIds: ["cc".repeat(32)],
+        });
+        const changeOutput = fundingCoin({
+            value: 1671,
+            txid: "dd".repeat(32),
+            vout: 1,
+            commitmentTxIds: ["cc".repeat(32)],
+        });
+        const collector = createProceedsCollector(s.deps);
+        for (const outputs of [
+            [carrierOutput],
+            [{ ...carrierOutput, assets: [] }, changeOutput],
+            [
+                { ...carrierOutput, value: 331 },
+                { ...changeOutput, value: 1670 },
+            ],
+            [
+                { ...carrierOutput, assets: [] },
+                { ...changeOutput, assets: received.assets },
+            ],
+            [carrierOutput, { ...changeOutput, commitmentTxIds: ["ee".repeat(32)] }],
+            [carrierOutput, { ...changeOutput, script: "5120" + "00".repeat(32) }],
+            [carrierOutput, changeOutput, { ...changeOutput, vout: 2 }],
+        ]) {
+            s.setOutputs(outputs);
+            await collector.tick();
+            expect(s.jobs.active()?.blocker).toBe("proceeds_output_pending");
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        }
+        s.setOutputs([changeOutput, carrierOutput]);
+        await collector.tick();
+        expect(s.jobs.active()).toBeUndefined();
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
         expect(s.settle).not.toHaveBeenCalled();
     });
     it("serializes ticks and competing collectors and drains an in-flight settlement", async () => {
@@ -831,6 +987,17 @@ describe("durable proceeds collector", () => {
         expect(collector.status().blocker).toBe("proceeds_fee_authorization_changed");
         expect(s.jobs.active()?.plan.maxFee).toBe("0");
         expect(s.settle).not.toHaveBeenCalled();
+        const received = { ...receipt, assets: [{ assetId: "a", amount: 9n }] };
+        const split = planProceeds([received], [carrier, spare], [], cfg, {}, address, clock, -1n);
+        const changed = setup(split, [received, carrier, spare]);
+        changed.beforeSubmit(() => {
+            changed.info.fees!.intentFee.offchainOutput = "amount == 1671.0 ? 1.0 : 0.0";
+        });
+        const splitCollector = createProceedsCollector(changed.deps);
+        await splitCollector.tick();
+        expect(splitCollector.status().blocker).toBe("proceeds_fee_authorization_changed");
+        expect(changed.settle).not.toHaveBeenCalled();
+        expect(changed.jobs.submissionEvidence("job").state).toBe("unsubmitted");
     });
     it("does not discover unknown recoverable wallet receipts", async () => {
         const s = setup();

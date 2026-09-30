@@ -186,13 +186,29 @@ liveScenario("sponsored-direct-send", async () => {
         const collected = (
             await live.actors.operator.wallet.getSpendableVtxos({ withRecoverable: false })
         ).filter((coin) => coin.commitmentTxIds?.includes(receipt!.settledBy!));
-        expect(collected).toHaveLength(1);
-        expect(hex.encode(VtxoScript.decode(collected[0]!.tapTree).tweakedPublicKey)).toBe(
-            live.info.operatorKey,
+        for (const coin of collected)
+            expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(
+                live.info.operatorKey,
+            );
+        const assetCarriers = collected.filter((coin) =>
+            coin.assets?.some((item) => item.assetId === minted.assetId),
         );
-        expect(collected[0]!.assets?.filter((item) => item.assetId === minted.assetId)).toEqual([
-            { assetId: minted.assetId, amount: 1_000_000n },
-        ]);
+        expect(assetCarriers).toHaveLength(1);
+        expect(assetCarriers[0]!.assets?.filter((item) => item.assetId === minted.assetId)).toEqual(
+            [{ assetId: minted.assetId, amount: 1_000_000n }],
+        );
+        const plainChange = collected.filter((coin) => !coin.assets?.length);
+        expect(collected).toHaveLength(plainChange.length ? 2 : 1);
+        if (plainChange.length) {
+            expect(plainChange).toHaveLength(1);
+            expect(assetCarriers[0]!.value).toBe(330);
+            expect(assetCarriers[0]!.assets).toEqual([
+                { assetId: minted.assetId, amount: 1_000_000n },
+            ]);
+            expect(BigInt(plainChange[0]!.value)).toBeGreaterThanOrEqual(
+                BigInt(required("TAXI_OPERATOR_MIN_RESERVE_SATS")),
+            );
+        }
         const status = await poll(
             "service completes sponsored fare collection",
             () => admin("status"),

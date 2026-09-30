@@ -390,13 +390,28 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 ? coin.txid === receiptPoint.txid && coin.vout === receiptPoint.vout
                 : coin.commitmentTxIds?.includes(receipt!.settledBy!),
         );
-        expect(collected).toHaveLength(1);
-        expect(hex.encode(VtxoScript.decode(collected[0]!.tapTree).tweakedPublicKey)).toBe(
-            live.info.operatorKey,
-        );
-        expect(collected[0]!.assets ?? []).toEqual(
+        for (const coin of collected)
+            expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(
+                live.info.operatorKey,
+            );
+        const payout = repaid
+            ? collected[0]
+            : collected.find((coin) =>
+                  coin.assets?.some((item) => item.assetId === minted.assetId),
+              );
+        expect(payout).toBeDefined();
+        expect(payout!.assets ?? []).toEqual(
             repaid ? [] : [{ assetId: minted.assetId, amount: 1_000_000n }],
         );
+        const plainChange = repaid ? [] : collected.filter((coin) => !coin.assets?.length);
+        expect(collected).toHaveLength(plainChange.length ? 2 : 1);
+        if (plainChange.length) {
+            expect(plainChange).toHaveLength(1);
+            expect(payout!.value).toBe(330);
+            expect(BigInt(plainChange[0]!.value)).toBeGreaterThanOrEqual(
+                BigInt(required("TAXI_OPERATOR_MIN_RESERVE_SATS")),
+            );
+        }
         const collectionStatus = await poll(
             "service completes its proceeds job",
             () => admin("status"),
@@ -513,7 +528,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             secondTransferId: second.quote.transferId,
             secondSpendTxid: secondTxid,
             collectionCommitmentTxid: receipt!.settledBy,
-            collectedOutpoint: { txid: collected[0]!.txid, vout: collected[0]!.vout },
+            collectedOutpoint: { txid: payout!.txid, vout: payout!.vout },
         };
         assertArtifactSafe(evidence);
         writeFileSync(

@@ -99,12 +99,17 @@ const reserveValue = (c: ExtendedVirtualCoin, cfg: RuntimeConfig, clock: TimeHei
 export interface CollectionPlan extends ProceedsPlan {
     address: string;
     amount: string;
+    plainChange?: string;
     fee: string;
     maxFee: string;
     assets: { assetId: string; amount: string }[];
     coins: ReturnType<typeof facts>[];
     receipts: Outpoint[];
 }
+const collectionOutputAmounts = (plan: CollectionPlan) =>
+    plan.plainChange === undefined
+        ? [BigInt(plan.amount)]
+        : [BigInt(plan.amount) - BigInt(plan.plainChange), BigInt(plan.plainChange)];
 
 export function assertProceedsPlan(
     plan: CollectionPlan,
@@ -114,11 +119,13 @@ export function assertProceedsPlan(
     try {
         const receiptKeys = new Set(plan.receipts.map(key));
         const inputs = new Set(coins.map(key));
+        const sponsor = coins.find((c) => !receiptKeys.has(key(c)));
         if (
             plan.address !==
                 new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode() ||
             !/^(0|[1-9][0-9]*)$/.test(plan.fee) ||
             !/^(0|[1-9][0-9]*)$/.test(plan.maxFee) ||
+            !/^[1-9][0-9]*$/.test(plan.amount) ||
             BigInt(plan.fee) > BigInt(plan.maxFee) ||
             total(coins) - BigInt(plan.fee) !== BigInt(plan.amount) ||
             BigInt(plan.amount) < cfg.dust ||
@@ -132,25 +139,32 @@ export function assertProceedsPlan(
             inputs.size - receiptKeys.size > 1
         )
             fail("proceeds_plan_invalid");
+        if (
+            plan.plainChange !== undefined &&
+            (typeof plan.plainChange !== "string" ||
+                !/^[1-9][0-9]*$/.test(plan.plainChange) ||
+                BigInt(plan.amount) - BigInt(plan.plainChange) !== cfg.dust ||
+                BigInt(plan.plainChange) < cfg.dust ||
+                BigInt(plan.plainChange) < cfg.operatorMinReserveSats ||
+                !plan.assets.length ||
+                !sponsor ||
+                !!sponsor.assets?.length)
+        )
+            fail("proceeds_plan_invalid");
     } catch {
         fail("proceeds_plan_invalid");
     }
 }
 
-export function proceedsFee(
-    coins: readonly ExtendedVirtualCoin[],
-    info: IntentFeeConfig,
-    script: string,
-): bigint {
-    const estimator = new Estimator(info);
-    const checked = (fee: number) => {
-        if (!Number.isSafeInteger(fee) || fee < 0) fail("proceeds_fee_invalid");
-        return BigInt(fee);
-    };
-    const inputs = coins.reduce(
+const checkedFee = (fee: number) => {
+    if (!Number.isSafeInteger(fee) || fee < 0) fail("proceeds_fee_invalid");
+    return BigInt(fee);
+};
+const proceedsInputFee = (coins: readonly ExtendedVirtualCoin[], estimator: Estimator) =>
+    coins.reduce(
         (sum, c) =>
             sum +
-            checked(
+            checkedFee(
                 estimator.evalOffchainInput({
                     amount: BigInt(c.value),
                     type: c.isSwept ? "recoverable" : "vtxo",
@@ -165,9 +179,22 @@ export function proceedsFee(
             ),
         0n,
     );
+
+export function proceedsFee(
+    coins: readonly ExtendedVirtualCoin[],
+    info: IntentFeeConfig,
+    script: string,
+    outputAmounts?: readonly bigint[],
+): bigint {
+    const estimator = new Estimator(info);
+    const inputs = proceedsInputFee(coins, estimator);
     return (
         inputs +
-        checked(estimator.evalOffchainOutput({ amount: total(coins) - inputs, script }).satoshis)
+        (outputAmounts ?? [total(coins) - inputs]).reduce(
+            (sum, amount) =>
+                sum + checkedFee(estimator.evalOffchainOutput({ amount, script }).satoshis),
+            0n,
+        )
     );
 }
 
@@ -218,24 +245,52 @@ export function planProceeds(
     if (!selected.length) fail("proceeds_output_limit_exceeded");
     const collected = selected.map(outpoint);
     let fee = proceedsFee(selected, fees, script);
+    let plainChange: bigint | undefined;
     if (total(selected) - fee < cfg.dust) {
         const reserve = available.reduce((sum, c) => sum + reserveValue(c, cfg, clock), 0n);
         let overLimit = false;
         const sponsor = available.find((c) => {
             const projected = [...selected, c];
+            const split = holdings(selected).length > 0 && !c.assets?.length;
             const consumedReserve = reserveValue(c, cfg, clock);
-            if (consumedReserve > 0n && reserve - consumedReserve < cfg.operatorMinReserveSats)
+            if (
+                (split || consumedReserve > 0n) &&
+                reserve - consumedReserve < cfg.operatorMinReserveSats
+            )
                 return false;
-            const amount = total(projected) - proceedsFee(projected, fees, script);
+            const quotedFee = proceedsFee(
+                projected,
+                fees,
+                script,
+                split
+                    ? [
+                          cfg.dust,
+                          total(projected) -
+                              proceedsInputFee(projected, new Estimator(fees)) -
+                              cfg.dust,
+                      ]
+                    : undefined,
+            );
+            const amount = total(projected) - quotedFee;
             if (amount < cfg.dust) return false;
-            if (withinOutputLimit(amount, maxAmount)) return true;
-            overLimit = true;
-            return false;
+            const change = amount - cfg.dust;
+            if (split && (change < cfg.dust || change < cfg.operatorMinReserveSats)) return false;
+            if (
+                !withinOutputLimit(split ? cfg.dust : amount, maxAmount) ||
+                (split && !withinOutputLimit(change, maxAmount))
+            ) {
+                overLimit = true;
+                return false;
+            }
+            if (split && proceedsFee(projected, fees, script, [cfg.dust, change]) !== quotedFee)
+                fail("proceeds_fee_authorization_changed");
+            plainChange = split ? change : undefined;
+            fee = quotedFee;
+            return true;
         });
         if (!sponsor)
             fail(overLimit ? "proceeds_output_limit_exceeded" : "proceeds_reserve_unavailable");
         selected.push(sponsor!);
-        fee = proceedsFee(selected, fees, script);
     }
     if (fee > cfg.proceedsMaxFeeSats) fail("proceeds_fee_cap_exceeded");
     return {
@@ -244,6 +299,7 @@ export function planProceeds(
         receipts: collected,
         address,
         amount: (total(selected) - fee).toString(),
+        ...(plainChange === undefined ? {} : { plainChange: plainChange.toString() }),
         assets: holdings(selected),
         fee: fee.toString(),
         maxFee: cfg.proceedsMaxFeeSats.toString(),
@@ -455,11 +511,17 @@ export function createProceedsCollector(deps: Deps) {
         const outputs = coins.filter(
             (c) => c.commitmentTxIds?.includes(commitmentTxid) && canonical(c, config),
         );
+        const amounts = collectionOutputAmounts(plan);
         if (
             !settled ||
-            outputs.length !== 1 ||
-            total(outputs).toString() !== plan.amount ||
-            !isDeepStrictEqual(holdings(outputs), plan.assets)
+            outputs.length !== amounts.length ||
+            !amounts.every((amount, index) =>
+                outputs.some(
+                    (c) =>
+                        BigInt(c.value) === amount &&
+                        isDeepStrictEqual(holdings([c]), index === 0 ? plan.assets : []),
+                ),
+            )
         ) {
             jobs.update(id, "settling", "proceeds_output_pending", commitmentTxid);
             blocker = "proceeds_output_pending";
@@ -551,7 +613,12 @@ export function createProceedsCollector(deps: Deps) {
                         const verified = await verifyProviders(config, runtime.providers);
                         if (verified.blockers.length || !verified.info)
                             fail("proceeds_provider_unsafe");
-                        if (!withinOutputLimit(BigInt(plan.amount), verified.info!.vtxoMaxAmount))
+                        if (
+                            collectionOutputAmounts(plan).some(
+                                (amount) =>
+                                    !withinOutputLimit(amount, verified.info!.vtxoMaxAmount),
+                            )
+                        )
                             fail("proceeds_output_limit_exceeded");
                         const [coins, tip, sdkLocks, current] = await Promise.all([
                             wallet.getSpendableVtxos({ withRecoverable: true }),
@@ -610,7 +677,8 @@ export function createProceedsCollector(deps: Deps) {
                         );
                         if (
                             sponsor &&
-                            reserveValue(sponsor, config, clock) > 0n &&
+                            (plan.plainChange !== undefined ||
+                                reserveValue(sponsor, config, clock) > 0n) &&
                             reserve < config.operatorMinReserveSats
                         )
                             fail("proceeds_reserve_unavailable");
@@ -618,6 +686,9 @@ export function createProceedsCollector(deps: Deps) {
                             selected,
                             verified.info!.fees?.intentFee ?? {},
                             hex.encode(ArkAddress.decode(plan.address).pkScript),
+                            plan.plainChange === undefined
+                                ? undefined
+                                : collectionOutputAmounts(plan),
                         );
                         if (fee.toString() !== plan.fee || fee > BigInt(plan.maxFee))
                             fail("proceeds_fee_authorization_changed");
@@ -629,7 +700,10 @@ export function createProceedsCollector(deps: Deps) {
                     jobs.update(id, "settling", null, null);
                     const commitment = await wallet.settle({
                         inputs: selected,
-                        outputs: [{ address: plan.address, amount: BigInt(plan.amount) }],
+                        outputs: collectionOutputAmounts(plan).map((amount) => ({
+                            address: plan.address,
+                            amount,
+                        })),
                     });
                     jobs.update(id, "settling", "proceeds_output_pending", commitment);
                     await confirmOutput(id, plan, commitment);
