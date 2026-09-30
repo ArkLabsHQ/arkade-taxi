@@ -579,13 +579,15 @@ describe("package manager process boundary", () => {
         );
     });
 
-    it("routes every stack build, pack, install, and Vitest call through the safe helper", () => {
+    it("isolates package manager config for builds and live test processes", () => {
         const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
         expect(stack).toMatch(
             /async function main\(\) \{\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
         );
         expect(stack).not.toContain('run("pnpm"');
-        expect(stack.match(/await runPnpm\(/g)).toHaveLength(5);
+        expect(stack.match(/await runPnpm\(/g)).toHaveLength(4);
+        expect(stack).toContain("NPM_CONFIG_USERCONFIG: packs.npmUserConfig");
+        expect(stack).toContain("NPM_CONFIG_GLOBALCONFIG: packs.npmUserConfig");
         expect(stack).toContain("packageManagerEnvironment(options.env");
         expect(stack).toContain(
             '["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"]',

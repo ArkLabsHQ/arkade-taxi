@@ -128,10 +128,8 @@ liveScenario("premature-recovery-rejected", async () => {
             async () =>
                 matchRecoveryEvidence({
                     ...window,
-                    // Arkd names the emulator by the image the harness raised.
                     emulatorSdkVersion: JSON.parse(readFileSync(artifactPath("stack.json"), "utf8"))
-                        .images.emulator.reference.split(":")
-                        .pop(),
+                        .images.emulator.version,
                     txid: intent.expectedTxid,
                     locktime: locked.quote.params.locktime,
                     currentBlocktime: String(tip.time),

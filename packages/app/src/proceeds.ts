@@ -16,7 +16,7 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { recycleFare, refundTopup, type AssetIdRef } from "@arkade-taxi/covenant";
-import { covenantParamsOf, type Outpoint } from "@arkade-taxi/core";
+import { advanceKind, covenantParamsOf, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type {
     AdvanceRepository,
     ProceedsRepository,
@@ -346,6 +346,19 @@ export async function discoverProceeds(
             fail("proceeds_receipt_mismatch");
         found.set(key(point), candidate);
     };
+    const checkFare = (advance: Advance) =>
+        check(
+            { txid: advance.arkTxid!, vout: 1 },
+            advance.fare.currency === "sats" ? advance.fare.units : config.vtxoMinAmount,
+            advance.fare.currency === "asset"
+                ? [
+                      {
+                          assetId: swapAssetId(advance.fare.assetId),
+                          amount: advance.fare.units.toString(),
+                      },
+                  ]
+                : [],
+        );
     for (const advance of (["recycled", "purchased", "refunded", "recovered"] as const).flatMap(
         (s) => advances.byState(s),
     )) {
@@ -378,22 +391,7 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (source.kind === "legacy" && advance.fare.units > 0n) {
-            const fareAssets =
-                advance.fare.currency === "asset"
-                    ? [
-                          {
-                              assetId: swapAssetId(advance.fare.assetId),
-                              amount: advance.fare.units.toString(),
-                          },
-                      ]
-                    : [];
-            await check(
-                fare,
-                advance.fare.currency === "sats" ? advance.fare.units : config.vtxoMinAmount,
-                fareAssets,
-            );
-        }
+        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance);
         if (advance.state === "recycled") {
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
@@ -406,6 +404,28 @@ export async function discoverProceeds(
         } else if (advance.state !== "purchased")
             await check(repayment, refundTopup(advance, config.vtxoMinAmount), []);
         if (found.size >= 32) break;
+    }
+    for (const advance of advances.byState("locked")) {
+        if (found.size >= 32) break;
+        if (
+            advanceKind(advance) !== "sponsored" ||
+            advance.fare.units <= 0n ||
+            !advance.arkTxid ||
+            !advance.outpoint ||
+            !candidates.has(key({ txid: advance.arkTxid, vout: 1 }))
+        )
+            continue;
+        if (hex.encode(advance.operatorKey) !== hex.encode(config.operatorKey))
+            fail("proceeds_payout_key_changed");
+        const envelope = validatePersistedLockupGraph(advance, config);
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        if (
+            tx.id !== advance.arkTxid ||
+            advance.outpoint.txid !== tx.id ||
+            advance.outpoint.vout !== envelope.covenantOutputIndex
+        )
+            fail("proceeds_lockup_mismatch");
+        await checkFare(advance);
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
 }

@@ -1159,6 +1159,7 @@ await import("/app/dist/cli.js");
             id: taxiImageDetails.Id,
             digests: taxiImageDetails.RepoDigests ?? [],
         };
+        images.emulator.version = emulatorInfo.version;
         writeStackManifest(join(artifacts, "stack.json"), {
             startedAtUtc,
             regtest: { repository: REGTEST_REPOSITORY, branch: "master", sha },
@@ -1217,10 +1218,19 @@ await import("/app/dist/cli.js");
             await new Promise((resolve) => reservation.close(resolve));
             const walletEnv = { ...testEnv };
             delete walletEnv.TAXI_OPERATOR_PRIVKEY;
-            await runPnpm(["exec", "playwright", "test", "--config", "playwright.taxi.config.ts"], {
+            const invocation = packageManagerInvocation([
+                "exec",
+                "playwright",
+                "test",
+                "--config",
+                "playwright.taxi.config.ts",
+            ]);
+            await run(invocation.command, invocation.args, {
                 cwd: wallet,
                 env: {
                     ...walletEnv,
+                    NPM_CONFIG_USERCONFIG: packs.npmUserConfig,
+                    NPM_CONFIG_GLOBALCONFIG: packs.npmUserConfig,
                     TAXI_E2E_BASE_URL: walletTaxiUrl,
                     VITE_ARK_SERVER: arkdUrl,
                     VITE_ESPLORA_URL: esploraUrl,

@@ -183,7 +183,8 @@ It owns a unique project and leaves existing regtest resources untouched.
 For a local Alice/Bob pass without Solver or swap offers:
 
 ```bash
-pnpm e2e:stack --direct --emulator-image arkade-emulator:local-0f647925 --wallet ../wallet-wt-unified-carrier
+docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg VERSION=v0.0.8-local.0f647925 -t arkade-emulator:v0.0.8-local.0f647925 ../emulator-wt-taxi-intents
+pnpm e2e:stack --direct --emulator-image arkade-emulator:v0.0.8-local.0f647925 --wallet ../wallet-wt-unified-carrier
 ```
 
 `--direct` requires all 17 direct Taxi scenarios and both integrity assertions.
@@ -194,11 +195,10 @@ selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.
 and publishes its results alongside it. Verify those results with
 `node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
 
-The npm registry reported stable `@arkade-os/sdk` **0.4.72** on 2026-09-12 via
-`pnpm view @arkade-os/sdk version dist-tags --json`; that is the version used
-by the lockfile. Repeat discovery before an upgrade and repeat the entire gate
-against current regtest master. A successful run proves that recorded provider
-combination, not every future deployment. See [E2E instructions](e2e/README.md).
+The lockfile uses the frozen SDK **0.4.77** from `23c6d353`, recorded in
+`vendor/carrier/manifest.json`. Repeat the entire gate against current regtest
+master after updating providers or artifacts. A successful run proves that
+recorded provider combination. See [E2E instructions](e2e/README.md).
 
 ## License
 
