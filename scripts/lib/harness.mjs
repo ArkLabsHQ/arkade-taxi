@@ -172,6 +172,42 @@ export function resolveTask12Tests(args) {
     return [...TASK12_TESTS];
 }
 
+export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
+    const options = { mode: "full", emulatorImage: undefined, wallet: undefined };
+    const paths = [];
+    const seen = new Set();
+    for (let index = 0; index < args.length; index++) {
+        const arg = args[index];
+        if (!arg.startsWith("--")) {
+            paths.push(arg);
+            continue;
+        }
+        if (!["--direct", "--emulator-image", "--wallet"].includes(arg) || seen.has(arg))
+            throw new Error(`unsupported or repeated E2E option: ${arg}`);
+        seen.add(arg);
+        if (arg === "--direct") options.mode = "direct";
+        else {
+            const value = args[++index];
+            if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
+            options[arg === "--wallet" ? "wallet" : "emulatorImage"] = value;
+        }
+    }
+    if (seen.size && ci && ci !== "false")
+        throw new Error("local E2E options are forbidden in CI; run the complete default suite");
+    if (options.wallet && options.mode !== "direct")
+        throw new Error("--wallet requires the local --direct mode");
+    if (options.mode === "direct" && paths.length)
+        throw new Error("--direct accepts no test selection");
+    const tests = resolveTask12Tests(paths);
+    return {
+        ...options,
+        tests:
+            options.mode === "direct"
+                ? tests.filter((path) => !/\/(joint-fill|receiver-paid)\.e2e\.test\.ts$/.test(path))
+                : tests,
+    };
+}
+
 export function packageManagerInvocation(
     args,
     {

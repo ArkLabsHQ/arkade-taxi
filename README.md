@@ -174,11 +174,25 @@ pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
 ```
 
-All 19 functional/resilience scenarios and both integrity assertions must pass,
+All 21 functional/resilience scenarios and both integrity assertions must pass,
 with zero skips, using the built production image and packed client. The
 harness records the exact master SHA, source identity, image identities and
 SDK version in `e2e-artifacts/stack.json`; retain it with the results and logs.
 It owns a unique project and leaves existing regtest resources untouched.
+
+For a local Alice/Bob pass without Solver or swap offers:
+
+```bash
+pnpm e2e:stack --direct --emulator-image arkade-emulator:local-0f647925 --wallet ../wallet-wt-unified-carrier
+```
+
+`--direct` requires all 17 direct Taxi scenarios and both integrity assertions.
+`--wallet` runs that checkout's `playwright.taxi.config.ts` against the same live
+stack before the recovery scenarios advance chain time. Both options are local
+only; CI continues to require the complete suite. The harness records the
+selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.json`
+and publishes its results alongside it. Verify those results with
+`node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
 
 The npm registry reported stable `@arkade-os/sdk` **0.4.72** on 2026-09-12 via
 `pnpm view @arkade-os/sdk version dist-tags --json`; that is the version used

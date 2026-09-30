@@ -160,7 +160,7 @@ function refundAsm(p: DustCovenantParams, vtxoMinAmount: bigint): Asm {
 
 function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
     const refs = new Set<string>();
-    const collect = (tokens: readonly Asm[number][] = []) => {
+    const collect = (tokens: readonly unknown[] = []) => {
         for (const t of tokens)
             if (typeof t === "string" && t.startsWith("$")) refs.add(t.slice(1));
     };

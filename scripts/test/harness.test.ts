@@ -46,6 +46,7 @@ import {
     resolvePortRefresh,
     resolveMasterSha,
     resolveTask12Tests,
+    resolveE2eOptions,
     resolveInstalledClientEntry,
     renewalFundingAmount,
     removeStaleFailureDiagnostics,
@@ -395,6 +396,27 @@ describe("package manager process boundary", () => {
         expect(resolveTask12Tests([...task12Tests].reverse())).toEqual(task12Tests);
     });
 
+    it("allows only the explicit local direct suite and preserves the complete CI gate", () => {
+        expect(resolveE2eOptions([], { ci: "true" }).tests).toEqual(task12Tests);
+        const direct = resolveE2eOptions(["--direct", "--emulator-image", "emulator:local"], {
+            ci: "",
+        });
+        expect(direct.mode).toBe("direct");
+        expect(direct.emulatorImage).toBe("emulator:local");
+        expect(direct.tests).toEqual(
+            task12Tests.filter((path) => !/\/(joint-fill|receiver-paid)\./.test(path)),
+        );
+        for (const args of [
+            ["--direct", task12Tests[0]],
+            ["--direct", "--direct"],
+            ["--wallet", "/wallet"],
+            ["--emulator-image"],
+            ["--unknown"],
+        ])
+            expect(() => resolveE2eOptions(args, { ci: "" })).toThrow();
+        expect(() => resolveE2eOptions(["--direct"], { ci: "true" })).toThrow(/forbidden in CI/);
+    });
+
     it.each([
         [[task12Tests[0]], "missing test"],
         [[task12Tests[0], task12Tests[0]], "duplicate"],
@@ -560,10 +582,10 @@ describe("package manager process boundary", () => {
     it("routes every stack build, pack, install, and Vitest call through the safe helper", () => {
         const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
         expect(stack).toMatch(
-            /async function main\(\) \{\s*const tests = resolveTask12Tests\(process\.argv\.slice\(2\)\);/,
+            /async function main\(\) \{\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
         );
         expect(stack).not.toContain('run("pnpm"');
-        expect(stack.match(/await runPnpm\(/g)).toHaveLength(4);
+        expect(stack.match(/await runPnpm\(/g)).toHaveLength(5);
         expect(stack).toContain("packageManagerEnvironment(options.env");
         expect(stack).toContain(
             '["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"]',

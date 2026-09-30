@@ -11,6 +11,7 @@ import { matchRecoveryEvidence, readOwnedRecoveryLogs } from "../scripts/lib/clt
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    artifactPath,
     expectReceipt,
     lock,
     openLive,
@@ -128,7 +129,7 @@ liveScenario("premature-recovery-rejected", async () => {
                 matchRecoveryEvidence({
                     ...window,
                     // Arkd names the emulator by the image the harness raised.
-                    emulatorSdkVersion: JSON.parse(readFileSync("e2e-artifacts/stack.json", "utf8"))
+                    emulatorSdkVersion: JSON.parse(readFileSync(artifactPath("stack.json"), "utf8"))
                         .images.emulator.reference.split(":")
                         .pop(),
                     txid: intent.expectedTxid,
@@ -140,7 +141,7 @@ liveScenario("premature-recovery-rejected", async () => {
             (value) => value !== undefined,
             2000,
         );
-        writeFileSync("e2e-artifacts/cltv-evidence.json", `${JSON.stringify(evidence, null, 2)}\n`);
+        writeFileSync(artifactPath("cltv-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
         expect((await live.client.status(locked.quote.transferId)).state).toBe("locked");
         const { vtxos } = await live.indexer.getVtxos({ outpoints: [locked.lockup.outpoint] });
         expect(vtxos[0].isSpent).toBe(false);

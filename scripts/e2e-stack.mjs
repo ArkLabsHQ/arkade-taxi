@@ -46,13 +46,14 @@ import {
     redactSecrets,
     resolveMasterSha,
     resolveInstalledClientEntry,
-    resolveTask12Tests,
+    resolveE2eOptions,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
 } from "./lib/harness.mjs";
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
+import { readScenarioIds } from "../e2e/assert-ran.mjs";
 import {
     VENDOR_DIR,
     assertFrozenResolutions,
@@ -719,7 +720,12 @@ const patchPolicy = async (baseUrl) => {
 };
 
 async function main() {
-    const tests = resolveTask12Tests(process.argv.slice(2));
+    const options = resolveE2eOptions(process.argv.slice(2));
+    const tests = options.tests;
+    const scenarioIds = readScenarioIds(options.mode);
+    const wallet = options.wallet ? resolve(options.wallet) : undefined;
+    if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
+        throw new Error("--wallet checkout requires playwright.taxi.config.ts");
     const interruption = createInterruptionState();
     activeInterruption = interruption;
     const signalHandlers = {
@@ -735,7 +741,11 @@ async function main() {
     const root = mkdtempSync(join(tmpdir(), `taxi12-${id}-`));
     const source = join(root, "source");
     const runner = join(root, "runner");
-    const artifacts = join(REPO, "e2e-artifacts");
+    const artifacts = join(
+        REPO,
+        "e2e-artifacts",
+        ...(options.mode === "direct" ? [`direct-${id}`] : []),
+    );
     const secretDir = join(root, "secrets");
     const secretFile = join(secretDir, "actors.json");
     const fixtureFile = join(root, "fixtures.json");
@@ -746,10 +756,14 @@ async function main() {
     const knownSecrets = [...secrets];
     const runAndPublishResults = prepareResultPublication({
         source: resultsFile,
-        destinations: [join(REPO, "e2e-results.json"), join(artifacts, "results.json")],
+        destinations:
+            options.mode === "direct"
+                ? [join(artifacts, "results.json")]
+                : [join(REPO, "e2e-results.json"), join(artifacts, "results.json")],
         knownSecrets,
     });
     const taxi = captureTaxiIdentity(REPO);
+    const walletIdentity = wallet ? captureTaxiIdentity(wallet) : undefined;
     let actorSecrets = {};
     let state;
     let taxiContainer;
@@ -847,6 +861,7 @@ async function main() {
             AUTOMINE_INTERVAL: "0",
             ...ARKD_DELAYS,
             ...ARKD_FEES,
+            ...(options.emulatorImage ? { EMULATOR_IMAGE: options.emulatorImage } : {}),
             ARKD_PASSWORD: secrets[0],
             ARKD_WALLET_SIGNER_KEY: secrets[1],
             ...ports,
@@ -979,11 +994,12 @@ async function main() {
             { print: false },
         );
         const taxiEnv = join(secretDir, "taxi.env");
-        failureProxy = await createFailureProxy({
+        const proxyTargets = {
             arkd: arkdUrl,
             emulator: emulatorUrl,
             esplora: new URL(esploraUrl).origin,
-        });
+        };
+        failureProxy = await createFailureProxy(proxyTargets);
         const proxyOrigin = `http://host.docker.internal:${failureProxy.port}`;
         writeFileSync(
             esploraBridge,
@@ -1042,6 +1058,8 @@ await import("/app/dist/cli.js");
         );
         assertResolvedPorts(ports, portBindings.length + 1);
         const taxiUrl = `http://127.0.0.1:${ports.TAXI_E2E_HTTP_PORT}`;
+        proxyTargets.taxi = taxiUrl;
+        const walletTaxiUrl = `${failureProxy.url}/taxi`;
         controlServer = createServer(async (request, response) => {
             try {
                 if (request.method !== "POST") throw new Error("POST required");
@@ -1151,6 +1169,10 @@ await import("/app/dist/cli.js");
             stack: {
                 project,
                 profiles,
+                selection: { mode: options.mode, scenarioIds, tests },
+                ...(walletIdentity
+                    ? { wallet: { ...walletIdentity, taxiUrl: walletTaxiUrl } }
+                    : {}),
                 ports: redactSecrets(ports),
                 arkdDelays: configuredArkDelays,
                 intentFees,
@@ -1173,6 +1195,7 @@ await import("/app/dist/cli.js");
             TAXI_E2E_FIXTURE_FILE: fixtureFile,
             TAXI_E2E_SECRET_FILE: secretFile,
             TAXI_E2E_CLIENT_ENTRY: packs.entry,
+            TAXI_E2E_ARTIFACTS: artifacts,
             TAXI_DB_PATH: ":memory:",
             TAXI_ARKD_URL: arkdUrl,
             TAXI_EMULATOR_URL: emulatorUrl,
@@ -1185,6 +1208,31 @@ await import("/app/dist/cli.js");
             TAXI_RECONCILE_INTERVAL_MS: "5000",
         });
         const vitestEntry = join(REPO, "node_modules", "vitest", "vitest.mjs");
+        if (wallet) {
+            const walletArtifacts = join(artifacts, "wallet");
+            mkdirSync(walletArtifacts, { recursive: true });
+            const reservation = createServer();
+            await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
+            const walletPort = reservation.address().port;
+            await new Promise((resolve) => reservation.close(resolve));
+            const walletEnv = { ...testEnv };
+            delete walletEnv.TAXI_OPERATOR_PRIVKEY;
+            await runPnpm(["exec", "playwright", "test", "--config", "playwright.taxi.config.ts"], {
+                cwd: wallet,
+                env: {
+                    ...walletEnv,
+                    TAXI_E2E_BASE_URL: walletTaxiUrl,
+                    VITE_ARK_SERVER: arkdUrl,
+                    VITE_ESPLORA_URL: esploraUrl,
+                    VITE_TAXI_URL: walletTaxiUrl,
+                    VITE_EMULATOR_PUBKEY: emulatorInfo.signerPubkey,
+                    TAXI_E2E_WALLET_PORT: String(walletPort),
+                    TAXI_E2E_WALLET_ARTIFACTS: walletArtifacts,
+                },
+                secrets: knownSecrets,
+                timeoutMs: 900_000,
+            });
+        }
         await runAndPublishResults(() =>
             run(
                 process.execPath,
@@ -1206,11 +1254,19 @@ await import("/app/dist/cli.js");
             ),
         );
         const results = JSON.parse(readFileSync(resultsFile, "utf8"));
-        await run(process.execPath, [join(REPO, "e2e", "assert-ran.mjs"), resultsFile], {
-            cwd: REPO,
-            env: testEnv,
-            secrets: knownSecrets,
-        });
+        await run(
+            process.execPath,
+            [
+                join(REPO, "e2e", "assert-ran.mjs"),
+                ...(options.mode === "direct" ? ["--direct"] : []),
+                resultsFile,
+            ],
+            {
+                cwd: REPO,
+                env: testEnv,
+                secrets: knownSecrets,
+            },
+        );
         const skipped = results.numPendingTests + results.numTodoTests;
         if (results.numFailedTests || skipped || results.numPassedTests < tests.length)
             throw new Error(
@@ -1219,7 +1275,7 @@ await import("/app/dist/cli.js");
         await captureTaxiDiagnostics(taxiContainer, project, artifacts, knownSecrets);
         await captureStackDiagnostics(state, artifacts, knownSecrets);
         process.stdout.write(
-            `arkade-regtest master ${sha}; ${results.numPassedTests} passed, zero skipped\n`,
+            `arkade-regtest master ${sha}; ${options.mode}; ${results.numPassedTests} passed, zero skipped; artifacts ${artifacts}\n`,
         );
     } catch (error) {
         failure = error;

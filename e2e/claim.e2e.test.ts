@@ -10,6 +10,7 @@ import { preEffectRequest, submitWithReadiness } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    artifactPath,
     assetOutputs,
     control,
     expectReceipt,
@@ -516,7 +517,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
         };
         assertArtifactSafe(evidence);
         writeFileSync(
-            `e2e-artifacts/receiver-sse-${mode}.json`,
+            artifactPath(`receiver-sse-${mode}.json`),
             `${JSON.stringify(evidence, null, 2)}\n`,
         );
     } finally {

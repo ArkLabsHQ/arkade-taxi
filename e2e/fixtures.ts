@@ -1,4 +1,5 @@
 import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect } from "vitest";
 import {
     ArkAddress,
@@ -28,6 +29,9 @@ import {
     unwindAll,
     ownedPayoutOutpoints,
 } from "../scripts/lib/scenario-cleanup.mjs";
+
+export const artifactPath = (name: string) =>
+    join(process.env.TAXI_E2E_ARTIFACTS || "e2e-artifacts", name);
 
 export async function control(action: string, rule?: unknown) {
     const response = await fetch(required("TAXI_E2E_CONTROL_URL"), {
@@ -70,7 +74,7 @@ export async function boundary(label: string) {
         at: Date.now(),
         health: await health(),
     };
-    appendFileSync("e2e-artifacts/boundary-diagnostics.jsonl", `${JSON.stringify(snapshot)}\n`);
+    appendFileSync(artifactPath("boundary-diagnostics.jsonl"), `${JSON.stringify(snapshot)}\n`);
     return snapshot.health;
 }
 

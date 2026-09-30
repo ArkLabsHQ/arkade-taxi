@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateResults } from "../../e2e/assert-ran.mjs";
+import { readScenarioIds, validateResults } from "../../e2e/assert-ran.mjs";
 
 const ids = ["first", "second"];
 const result = () => ({
@@ -15,6 +15,33 @@ const result = () => ({
 });
 
 describe("live E2E result gate", () => {
+    it("requires the full manifest by default and precisely the direct scenarios locally", () => {
+        const full = readScenarioIds();
+        const direct = readScenarioIds("direct");
+        expect(full).toHaveLength(21);
+        expect(direct).toHaveLength(17);
+        const passing = {
+            ...result(),
+            numTotalTests: 19,
+            numPassedTests: 19,
+            testResults: [
+                {
+                    assertionResults: [
+                        ...direct.map((id: string) => ({
+                            title: `[${id}] scenario`,
+                            status: "passed",
+                        })),
+                        { title: "manifest integrity", status: "passed" },
+                        { title: "registration integrity", status: "passed" },
+                    ],
+                },
+            ],
+        };
+        expect(validateResults(passing, direct, 2)).toEqual([]);
+        expect(validateResults(passing, full, 2)).not.toEqual([]);
+        expect(() => readScenarioIds("arbitrary")).toThrow(/unknown E2E mode/);
+    });
+
     it("rejects missing integrity checks despite every live scenario passing", () => {
         expect(validateResults(result(), ids, 2)).not.toEqual([]);
         const complete = result();

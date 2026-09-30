@@ -24,6 +24,7 @@ import { preEffectRequest } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    artifactPath,
     expectReceipt,
     fundingOf,
     health,
@@ -452,7 +453,7 @@ function evidence(scenario: string, fields: Record<string, unknown>) {
         ),
     );
     assertArtifactSafe(value);
-    writeFileSync(`e2e-artifacts/${scenario}.json`, `${JSON.stringify(value, null, 2)}\n`);
+    writeFileSync(artifactPath(`${scenario}.json`), `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function claimed(fare: Fare) {
