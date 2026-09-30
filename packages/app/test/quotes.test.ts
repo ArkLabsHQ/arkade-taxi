@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
-import { SingleKey, Transaction } from "@arkade-os/sdk";
+import { Transaction } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { ServiceError } from "../src/errors.js";
@@ -30,6 +30,7 @@ import {
     runtimeSafety,
     quoteInfrastructure,
     serverUnroll,
+    signedEnvelope,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
@@ -99,31 +100,6 @@ beforeEach(() => {
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     ids = 0;
 });
-
-const signedEnvelope = async (encoded: string): Promise<string> => {
-    const envelope = decodeLockupEnvelope(encoded);
-    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
-    const signed = await sender.sign(
-        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
-        envelope.senderInputIndexes,
-    );
-    const checkpoints = await Promise.all(
-        envelope.checkpoints.map(async (checkpoint, index) =>
-            envelope.senderInputIndexes.includes(index)
-                ? base64.encode(
-                      (
-                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
-                      ).toPSBT(),
-                  )
-                : checkpoint,
-        ),
-    );
-    return encodeLockupEnvelope({
-        ...envelope,
-        arkTx: base64.encode(signed.toPSBT()),
-        checkpoints,
-    });
-};
 
 describe("createQuote", () => {
     it.each([

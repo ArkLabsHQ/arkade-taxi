@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, SingleKey, Transaction, type ArkInfo, type Wallet } from "@arkade-os/sdk";
-import { base64 } from "@scure/base";
+import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
@@ -11,7 +10,6 @@ import {
 } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { validateLockupSubmission } from "../src/arkade/submit.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { ServiceError } from "../src/errors.js";
@@ -31,6 +29,7 @@ import {
     quoteBody,
     quoteInfrastructure,
     serverUnroll,
+    signedEnvelope,
 } from "./fixtures.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -43,27 +42,6 @@ function gate() {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => (release = resolve));
     return { pending, release };
-}
-
-async function signedEnvelope(encoded: string): Promise<string> {
-    const envelope = decodeLockupEnvelope(encoded);
-    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
-    const arkTx = await sender.sign(
-        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
-        envelope.senderInputIndexes,
-    );
-    const checkpoints = await Promise.all(
-        envelope.checkpoints.map(async (checkpoint, index) =>
-            envelope.senderInputIndexes.includes(index)
-                ? base64.encode(
-                      (
-                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
-                      ).toPSBT(),
-                  )
-                : checkpoint,
-        ),
-    );
-    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(arkTx.toPSBT()), checkpoints });
 }
 
 function setup() {

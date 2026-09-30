@@ -106,6 +106,7 @@ export interface CollectionPlan extends ProceedsPlan {
     coins: ReturnType<typeof facts>[];
     receipts: Outpoint[];
 }
+// Keep the asset carrier at vout 0 and plain change at vout 1 for confirmation.
 const collectionOutputAmounts = (plan: CollectionPlan) =>
     plan.plainChange === undefined
         ? [BigInt(plan.amount)]

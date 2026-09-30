@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, asset, SingleKey, Transaction } from "@arkade-os/sdk";
-import { base64 } from "@scure/base";
+import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import {
@@ -26,7 +25,6 @@ import type {
 } from "@arkade-taxi/protocol";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
@@ -52,6 +50,7 @@ import {
     serverKey,
     quoteInfrastructure,
     serverUnroll,
+    signedEnvelope,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
 import {
@@ -67,27 +66,6 @@ import {
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;
-
-async function signedEnvelope(encoded: string): Promise<string> {
-    const envelope = decodeLockupEnvelope(encoded);
-    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
-    const arkTx = await sender.sign(
-        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
-        envelope.senderInputIndexes,
-    );
-    const checkpoints = await Promise.all(
-        envelope.checkpoints.map(async (checkpoint, index) =>
-            envelope.senderInputIndexes.includes(index)
-                ? base64.encode(
-                      (
-                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
-                      ).toPSBT(),
-                  )
-                : checkpoint,
-        ),
-    );
-    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(arkTx.toPSBT()), checkpoints });
-}
 
 const submitJointStub = (): SwapFillJointOps => ({
     verifyPlan: () => true,
