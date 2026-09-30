@@ -671,6 +671,7 @@ export async function submitLockup(
     deps: QuoteDeps,
     id: string,
     signedPsbt: string,
+    assertReady?: () => void,
 ): Promise<LockupResponse> {
     const current = require_(deps.advances.get(id), id);
     let validated;
@@ -684,16 +685,25 @@ export async function submitLockup(
             { cause },
         );
     }
-    if (current.state === "quoted" && deps.runtime) await deps.runtime.assertAdmission();
     let claim;
     try {
-        claim = deps.reservations.claimLockup(
-            id,
-            validated.unsignedTxId,
-            validated.digest,
-            validated.encoded,
-            deps.now,
-        );
+        const claimLockup = (assertCurrent?: () => void) => {
+            assertReady?.();
+            assertCurrent?.();
+            return deps.reservations.claimLockup(
+                id,
+                validated.unsignedTxId,
+                validated.digest,
+                validated.encoded,
+                deps.now,
+            );
+        };
+        claim =
+            current.state === "quoted" && deps.runtime
+                ? await deps.runtime.withAdmission(async (assertCurrent) =>
+                      claimLockup(assertCurrent),
+                  )
+                : claimLockup();
     } catch (cause) {
         if (cause instanceof LockupClaimError)
             throw new ServiceError(

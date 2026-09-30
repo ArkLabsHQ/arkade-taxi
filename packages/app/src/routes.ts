@@ -391,9 +391,10 @@ export function createRoutes(deps: RouteDeps): Hono {
 
     const lockup = async (c: Context<Env, "/:id">) => {
         try {
-            assertFinancialMutationReady(deps);
             const id = c.req.param("id");
-            const body = await submitLockup(deps, id, signedTxOf(await readJson(c)));
+            const body = await submitLockup(deps, id, signedTxOf(await readJson(c)), () =>
+                assertFinancialMutationReady(deps),
+            );
             return c.json(body, deps.advances.get(id)?.state === "locked" ? 200 : 202);
         } catch (e) {
             const err = ServiceError.from(e);

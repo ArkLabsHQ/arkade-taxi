@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
+import { ArkAddress, SingleKey, Transaction, type ArkInfo, type Wallet } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
 import {
     AdvanceRepository,
     openDatabase,
@@ -10,6 +11,8 @@ import {
 } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
+import { validateLockupSubmission } from "../src/arkade/submit.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
@@ -40,6 +43,27 @@ function gate() {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => (release = resolve));
     return { pending, release };
+}
+
+async function signedEnvelope(encoded: string): Promise<string> {
+    const envelope = decodeLockupEnvelope(encoded);
+    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
+    const arkTx = await sender.sign(
+        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
+        envelope.senderInputIndexes,
+    );
+    const checkpoints = await Promise.all(
+        envelope.checkpoints.map(async (checkpoint, index) =>
+            envelope.senderInputIndexes.includes(index)
+                ? base64.encode(
+                      (
+                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
+                      ).toPSBT(),
+                  )
+                : checkpoint,
+        ),
+    );
+    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(arkTx.toPSBT()), checkpoints });
 }
 
 function setup() {
@@ -127,7 +151,9 @@ function setup() {
         },
         getServerUnroll: runtime.getServerUnroll,
         lockupBuilder: builder,
-        lockupSubmitter: builder,
+        lockupSubmitter: {
+            validate: (advance, encoded) => validateLockupSubmission(advance, encoded, cfg),
+        },
     };
     const lifecycle = createServiceLifecycle({
         listen: async () => ({ stopAccepting() {}, finished: async () => {} }),
@@ -291,36 +317,79 @@ describe("quote and runtime refresh interleaving", () => {
         expect(h.reservations.listReservedOutpoints()).toHaveLength(1);
     });
 
-    it.each([true, false])(
-        "awaits a genuine pending check and admits only a verified result (healthy=%s)",
-        async (healthy) => {
+    it.each([
+        { operation: "quote", healthy: true },
+        { operation: "quote", healthy: false },
+        { operation: "lockup", healthy: true },
+        { operation: "lockup", healthy: false },
+    ])(
+        "awaits a genuine pending check for $operation and admits only a verified result (healthy=$healthy)",
+        async ({ operation, healthy }) => {
             const h = setup();
             await h.lifecycle.start();
             await h.lifecycle.refresh();
             const router = h.router();
+            const quoted = operation === "lockup" ? await createQuote(h.deps, quoteBody()) : null;
+            const signedLockupTx = quoted
+                ? await signedEnvelope(quoted.unsignedLockupTx)
+                : undefined;
+            const outpoint =
+                quoted && signedLockupTx
+                    ? validateLockupSubmission(
+                          h.advances.get(quoted.transferId)!,
+                          signedLockupTx,
+                          h.deps.config,
+                      ).outpoint
+                    : null;
             const walletRelease = gate();
             const entered = h.pauseWallet(walletRelease.pending);
             const refresh = h.runtime.refresh();
             await entered;
             expect((await router.request("/ready")).status).toBe(503);
-            const quote = router.request("/v1/transfers", {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(quoteBody()),
+            let settled = false;
+            const request = Promise.resolve(
+                router.request(
+                    quoted ? `/v1/transfers/${quoted.transferId}/lockup` : "/v1/transfers",
+                    {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify(quoted ? { signedLockupTx } : quoteBody()),
+                    },
+                ),
+            ).then((response) => {
+                settled = true;
+                return response;
             });
-            expect(h.advances.byState("quoted")).toEqual([]);
-            expect(h.reservations.listReservedOutpoints()).toEqual([]);
-            h.setOnline(healthy);
-            walletRelease.release();
-            await refresh;
-            const response = await quote;
+            try {
+                await new Promise<void>((resolve) => setImmediate(resolve));
+                expect(settled).toBe(false);
+                expect(h.advances.byState("locking")).toEqual([]);
+                expect(h.advances.byState("quoted")).toHaveLength(quoted ? 1 : 0);
+                expect(h.reservations.listReservedOutpoints()).toHaveLength(quoted ? 1 : 0);
+                h.setOnline(healthy);
+            } finally {
+                walletRelease.release();
+                await refresh;
+            }
+            const response = await request;
             expect({ status: response.status, body: await response.json() }).toMatchObject({
-                status: healthy ? 200 : 503,
+                status: healthy ? (quoted ? 202 : 200) : 503,
                 body: healthy
-                    ? { transferId: "quote-interleaving" }
+                    ? quoted
+                        ? { txid: outpoint?.txid, outpoint }
+                        : { transferId: "quote-interleaving" }
                     : { code: "runtime_unsafe", error: "wallet_unsynced" },
             });
-            expect(h.reservations.listReservedOutpoints()).toHaveLength(healthy ? 1 : 0);
+            expect(h.reservations.listReservedOutpoints()).toHaveLength(quoted || healthy ? 1 : 0);
+            if (quoted) {
+                expect(h.advances.get(quoted.transferId)).toMatchObject({
+                    state: healthy ? "locking" : "quoted",
+                    ...(healthy
+                        ? { signedLockupEnvelope: signedLockupTx, submissionPhase: "claimed" }
+                        : {}),
+                });
+                expect(h.builder.submitted).toEqual([]);
+            }
         },
     );
 
@@ -421,6 +490,20 @@ describe("quote and runtime refresh interleaving", () => {
             expect(h.advances.byState("quoted")).toEqual([]);
             expect(h.reservations.listReservedOutpoints()).toEqual([]);
             expect(h.builder.built).toEqual([]);
+            const quoted = await createQuote(h.deps, quoteBody());
+            const lockup = await router.request(`/v1/transfers/${quoted.transferId}/lockup`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                    signedLockupTx: await signedEnvelope(quoted.unsignedLockupTx),
+                }),
+            });
+            expect(lockup.status).toBe(503);
+            expect(await lockup.json()).toMatchObject({ code: "not_ready" });
+            expect(h.advances.get(quoted.transferId)?.state).toBe("quoted");
+            expect(h.advances.byState("locking")).toEqual([]);
+            expect(h.reservations.listReservedOutpoints()).toHaveLength(1);
+            expect(h.builder.submitted).toEqual([]);
         },
     );
 

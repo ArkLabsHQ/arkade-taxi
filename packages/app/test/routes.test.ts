@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, asset } from "@arkade-os/sdk";
+import { ArkAddress, asset, SingleKey, Transaction } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import {
@@ -25,6 +26,7 @@ import type {
 } from "@arkade-taxi/protocol";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
@@ -65,6 +67,27 @@ import {
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;
+
+async function signedEnvelope(encoded: string): Promise<string> {
+    const envelope = decodeLockupEnvelope(encoded);
+    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
+    const arkTx = await sender.sign(
+        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
+        envelope.senderInputIndexes,
+    );
+    const checkpoints = await Promise.all(
+        envelope.checkpoints.map(async (checkpoint, index) =>
+            envelope.senderInputIndexes.includes(index)
+                ? base64.encode(
+                      (
+                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
+                      ).toPSBT(),
+                  )
+                : checkpoint,
+        ),
+    );
+    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(arkTx.toPSBT()), checkpoints });
+}
 
 const submitJointStub = (): SwapFillJointOps => ({
     verifyPlan: () => true,
@@ -754,6 +777,7 @@ describe("runtime admission and readiness", () => {
         const quoteResponse = (await (
             await post("/v1/transfers", quoteBody())
         ).json()) as QuoteResponse;
+        const signedLockupTx = await signedEnvelope(quoteResponse.unsignedLockupTx);
         const router = createRoutes({
             ...deps(),
             runtime: {
@@ -766,7 +790,7 @@ describe("runtime admission and readiness", () => {
                     providerIdentityOk: false,
                     blockers: ["server_identity_mismatch"],
                 }),
-                assertAdmission: async () => {
+                withAdmission: async () => {
                     throw new ServiceError("runtime_unsafe", 503, "server_identity_mismatch");
                 },
             },
@@ -774,7 +798,7 @@ describe("runtime admission and readiness", () => {
         const response = await router.request(`/v1/transfers/${quoteResponse.transferId}/lockup`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ signedLockupTx: "signed" }),
+            body: JSON.stringify({ signedLockupTx }),
         });
         expect(response.status).toBe(503);
         expect(advances.get(quoteResponse.transferId)?.state).toBe("quoted");
@@ -815,6 +839,7 @@ describe("runtime admission and readiness", () => {
         const quoteResponse = (await (
             await post("/v1/transfers", quoteBody())
         ).json()) as QuoteResponse;
+        const signedLockupTx = await signedEnvelope(quoteResponse.unsignedLockupTx);
         const router = createRoutes({
             ...deps(),
             startup: () => ({
@@ -827,7 +852,7 @@ describe("runtime admission and readiness", () => {
         const response = await router.request(`/v1/transfers/${quoteResponse.transferId}/lockup`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ signedLockupTx: "psbt" }),
+            body: JSON.stringify({ signedLockupTx }),
         });
 
         expect(response.status).toBe(503);
@@ -998,7 +1023,11 @@ describe("POST /v1/transfers/:id/lockup", () => {
 
     it("returns 202 with the candidate txid and covenant outpoint until observed", async () => {
         const id = await quoted();
-        const res = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
+        const res = await post(
+            `/v1/transfers/${id}/lockup`,
+            { signedLockupTx: "psbt" },
+            { paused: true },
+        );
 
         expect(res.status).toBe(202);
         expect((await res.json()) as LockupResponse).toEqual({
@@ -1013,13 +1042,33 @@ describe("POST /v1/transfers/:id/lockup", () => {
         expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
     });
 
-    it("returns 202 for an exact duplicate while locking", async () => {
+    it("returns 202 for an exact duplicate while locking and retains HTTP readiness", async () => {
         const id = await quoted();
         await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
-
-        const res = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
-        expect(res.status).toBe(202);
-        expect(((await res.json()) as LockupResponse).outpoint).toEqual(lockupBuilder.outpoint);
+        const duplicate = await post(`/v1/transfers/${id}/lockup`, { signedLockupTx: "psbt" });
+        expect(duplicate.status).toBe(202);
+        expect(((await duplicate.json()) as LockupResponse).outpoint).toEqual(
+            lockupBuilder.outpoint,
+        );
+        const d = deps();
+        const router = createRoutes({
+            ...d,
+            runtime: {
+                ...d.runtime,
+                safety: () => ({ ...d.runtime.safety(), blockers: ["runtime_stopped"] }),
+                withAdmission: async () => {
+                    throw new Error("runtime offline");
+                },
+            },
+        });
+        const res = await router.request(`/v1/transfers/${id}/lockup`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ signedLockupTx: "psbt" }),
+        });
+        expect(res.status).toBe(503);
+        expect((await res.json()) as ErrorResponse).toMatchObject({ code: "not_ready" });
+        expect(advances.get(id)?.state).toBe("locking");
     });
 
     it("returns 400 when signedLockupTx is missing", async () => {
