@@ -30,7 +30,8 @@ export async function createFailureProxy(targets) {
                     new URL(path, "http://proxy").searchParams.getAll(key).includes(value),
                 ),
         );
-        if (rule?.mode === "drop") rules = rules.filter((item) => item !== rule);
+        if (rule?.mode === "drop" && rule.once !== false)
+            rules = rules.filter((item) => item !== rule);
         record({ target, path: path.split("?")[0], method: request.method, action: "forwarded" });
         const send = () => {
             const upstream = httpRequest(
@@ -98,6 +99,7 @@ export async function createFailureProxy(targets) {
             if (
                 !Object.hasOwn(targets, rule.target) ||
                 !["drop", "pause", "identity"].includes(rule.mode) ||
+                (rule.once !== undefined && typeof rule.once !== "boolean") ||
                 typeof rule.path !== "string" ||
                 !rule.path.startsWith("/")
             )
