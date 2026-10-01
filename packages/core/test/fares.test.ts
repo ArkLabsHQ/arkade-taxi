@@ -185,6 +185,29 @@ describe("ruleFor", () => {
     it("returns undefined for an unlisted asset", () => {
         expect(ruleFor(rules, asset(3))).toBeUndefined();
     });
+
+    describe("the any-asset rule", () => {
+        const any: AssetRule = {
+            assetId: "*",
+            enabled: true,
+            fares: [],
+            claim: "purchase",
+            maxTopupSats: null,
+        };
+
+        it("serves an asset that has no rule of its own", () => {
+            expect(ruleFor([any], asset(3))).toBe(any);
+        });
+
+        it("loses to an exact rule wherever the two sit", () => {
+            expect(ruleFor([any, ...rules], USDT)?.claim).toBe("recycle");
+            expect(ruleFor([...rules, any], USDT)?.claim).toBe("recycle");
+        });
+
+        it("never serves bitcoin", () => {
+            expect(ruleFor([any])).toBeUndefined();
+        });
+    });
 });
 
 describe("fareNeedsSenderSats", () => {

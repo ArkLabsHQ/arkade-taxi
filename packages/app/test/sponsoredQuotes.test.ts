@@ -245,6 +245,12 @@ describe("createSponsoredQuote", () => {
         expect(stored?.covenantAddress).toBe(receiverAddress);
     });
 
+    it("quotes an asset that only the any-asset rule serves", async () => {
+        const any = basePolicy({ assetRules: [{ ...usdtPolicy().assetRules[0]!, assetId: "*" }] });
+        const quote = await createSponsoredQuote(deps({ policy: any }), sponsoredBody());
+        expect(quote.fare).toMatchObject({ currency: "asset", units: "1000000" });
+    });
+
     it("bills a sats fare to the sender and sponsors only the carrier", async () => {
         const quote = await createSponsoredQuote(
             deps({ policy: satsFarePolicy(10n) }),

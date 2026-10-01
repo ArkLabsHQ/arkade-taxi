@@ -49,7 +49,23 @@ describe("admin asset policy wire boundary", () => {
         ).toEqual({ ok: false, reason: "asset_not_served" });
     });
 
+    it("round-trips the any-asset rule through PATCH, SQLite and GET", async () => {
+        const h = harness();
+        const response = await h.send("/admin/api/policy", "PATCH", {
+            assetRules: [{ ...rule(), assetId: "*" }, rule()],
+        });
+        expect(response.status).toBe(200);
+        expect(response.body.assetRules.map((r: { assetId: unknown }) => r.assetId)).toEqual([
+            "*",
+            rule().assetId,
+        ]);
+        expect(h.policy.get().assetRules[0]!.assetId).toBe("*");
+        expect((await h.json("/admin/api/policy")).body.assetRules[0].assetId).toBe("*");
+    });
+
     it.each([
+        ["other wildcard", { assetId: "**" }],
+        ["named wildcard", { assetId: "any" }],
         ["short txid", { assetId: { txid: "ab", groupIndex: 7 } }],
         ["uppercase txid", { assetId: { txid: "AB".repeat(32), groupIndex: 7 } }],
         ["nonhex txid", { assetId: { txid: "zz".repeat(32), groupIndex: 7 } }],

@@ -305,6 +305,7 @@ const FIELD_LABELS = {
     maxUnits: "maximum",
     maxTopupSats: "max per payment",
     claim: "claim mode",
+    assetId: "asset",
     groupIndex: "group",
 };
 
@@ -619,11 +620,16 @@ function goLive() {
 }
 
 function carriedText(rules) {
-    const assets = rules.filter((rule) => rule.assetId !== null).length;
-    return [
-        ...(rules.length > assets ? ["small bitcoin payments"] : []),
+    const assets = rules.filter((rule) => rule.assetId !== null && rule.assetId !== "*").length;
+    const parts = [
+        ...(rules.some((rule) => rule.assetId === null) ? ["small bitcoin payments"] : []),
         ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
-    ].join(" and ");
+        ...(rules.some((rule) => rule.assetId === "*")
+            ? [assets ? "any other asset" : "any asset"]
+            : []),
+    ];
+    const last = parts.pop();
+    return parts.length ? parts.join(", ") + " and " + last : last;
 }
 
 const wizard = { step: 1, size: "small", fare: "free", claim: "recycle" };
@@ -657,6 +663,7 @@ function openWizard() {
         return setNote("setup-note", "The console has not reached the Taxi yet.", true);
     Object.assign(wizard, { step: 1, size: "small", fare: "free", claim: "recycle" });
     $("wiz-btc").checked = true;
+    $("wiz-any").checked = false;
     $("wiz-fare-asset").checked = false;
     for (const id of [
         "wiz-assets",
@@ -700,7 +707,8 @@ function renderWizard() {
     $("wiz-custom").hidden = wizard.size !== "custom";
     $("wiz-fare-flat-fields").hidden = wizard.fare !== "flat";
     $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
-    $("wiz-fare-asset-row").hidden = wizard.fare === "free" || assetLines().length === 0;
+    $("wiz-fare-asset-row").hidden =
+        wizard.fare === "free" || (assetLines().length === 0 && !$("wiz-any").checked);
     $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
     const giveaway = wizard.fare === "free" && wizard.claim !== "recycle";
     $("wiz-claim-warn").hidden = !giveaway;
@@ -718,8 +726,8 @@ function wizardProblem() {
         if (bad) return '"' + bad + '" is not an asset id. ' + ASSET_ID_HELP;
         if (new Set(lines.map((line) => assetKey(parseAssetId(line)))).size < lines.length)
             return "An asset is listed twice.";
-        if (!$("wiz-btc").checked && lines.length === 0)
-            return "Choose small bitcoin payments, at least one asset, or both.";
+        if (!$("wiz-btc").checked && !$("wiz-any").checked && lines.length === 0)
+            return "Choose small bitcoin payments, any asset, or at least one specific asset.";
     }
     if (wizard.step === 2 && wizard.size === "custom") {
         const limits = ["wiz-per-payment", "wiz-outstanding", "wiz-concurrent"];
@@ -777,6 +785,7 @@ function wizardPatch() {
         maxConcurrentAdvances: custom ? Number($("wiz-concurrent").value.trim()) : count,
         assetRules: [
             ...($("wiz-btc").checked ? [rule(null)] : []),
+            ...($("wiz-any").checked ? [rule("*")] : []),
             ...assetLines().map((line) => rule(parseAssetId(line))),
         ],
     };
@@ -1008,7 +1017,11 @@ const walletAssetId = (id) =>
     reverseBytes(id.txid) + byteHex(id.groupIndex & 255) + byteHex(id.groupIndex >> 8);
 
 const assetLabel = (id) =>
-    id === null ? "Bitcoin" : walletAssetId(id).slice(0, 8) + "…" + walletAssetId(id).slice(-8);
+    id === null
+        ? "Bitcoin"
+        : id === "*"
+          ? "Any asset"
+          : walletAssetId(id).slice(0, 8) + "…" + walletAssetId(id).slice(-8);
 
 function parseAssetId(text) {
     const s = text.trim().toLowerCase();
@@ -1178,7 +1191,7 @@ function renderRules() {
         const label = assetLabel(rule.assetId);
         const asset = cell("th", label);
         asset.scope = "row";
-        if (rule.assetId) asset.title = walletAssetId(rule.assetId);
+        if (rule.assetId && rule.assetId !== "*") asset.title = walletAssetId(rule.assetId);
 
         const on = control("input", "enabled", "Carry " + label);
         on.type = "checkbox";
@@ -1506,6 +1519,11 @@ function wire() {
             return setNote("policy-note", "Bitcoin already has a rule.", true);
         editRules(() => view.rules.push(newRule(null)), true);
     });
+    $("rule-add-any").addEventListener("click", () => {
+        if (view.rules.some((r) => r.assetId === "*"))
+            return setNote("policy-note", "Any asset already has a rule.", true);
+        editRules(() => view.rules.push(newRule("*")), true);
+    });
     $("rule-add-asset").addEventListener("click", () => {
         const id = parseAssetId($("rule-asset").value);
         if (!id) return setNote("policy-note", ASSET_ID_HELP, true);
@@ -1557,6 +1575,7 @@ function wire() {
     $("wiz-save").addEventListener("click", () => saveWizard(false));
     $("wiz-save-live").addEventListener("click", () => saveWizard(true));
     $("wiz-btc").addEventListener("change", renderWizard);
+    $("wiz-any").addEventListener("change", renderWizard);
     $("wiz-assets").addEventListener("input", renderWizard);
     for (const [name, values] of Object.entries(WIZARD_CHOICES))
         for (const value of values)

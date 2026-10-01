@@ -135,7 +135,7 @@ const fareOption = z
     });
 const assetRule = z
     .object({
-        assetId: assetId.nullable(),
+        assetId: z.union([z.literal("*"), assetId]).nullable(),
         enabled: z.boolean(),
         fares: z.array(fareOption),
         claim: z.enum(["recycle", "purchase", "either"]),

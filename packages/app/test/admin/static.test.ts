@@ -798,6 +798,53 @@ describe("the dashboard is dependency-free", () => {
     });
 });
 
+describe("the any-asset rule", () => {
+    const loaded = async (admin: Harness, realStatus = false) => {
+        const dashboard = runDashboard(() => dashboardPage([], "9".repeat(64), null), admin, {
+            realStatus,
+        });
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
+        );
+        return dashboard;
+    };
+
+    it("is added from the settings table once, and saved as *", async () => {
+        const admin = harness();
+        const dashboard = await loaded(admin);
+        const note = () => dashboard.element("policy-note").textContent;
+
+        dashboard.element("rule-add-any").fire("click");
+        expect(JSON.parse(dashboard.element("assetRules").value)).toMatchObject([{ assetId: "*" }]);
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.textContent).toBe(
+            "Any asset",
+        );
+        dashboard.element("rule-add-any").fire("click");
+        expect(note()).toBe("Any asset already has a rule.");
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() => expect(note()).toBe("request accepted"));
+        expect(admin.policy.get().assetRules.map((rule) => rule.assetId)).toEqual(["*"]);
+    });
+
+    it("is offered by the setup wizard", async () => {
+        const admin = harness({ operationalSnapshot: () => readiness([]) });
+        const dashboard = await loaded(admin, true);
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        dashboard.element("wiz-btc").checked = false;
+        dashboard.element("wiz-any").checked = true;
+        for (let n = 0; n < 3; n++) dashboard.element("wiz-next").fire("click");
+        expect(dashboard.element("wiz-summary").textContent).toMatch(
+            /^Your Taxi will carry any asset\./,
+        );
+
+        dashboard.element("wiz-save").fire("click");
+        await vi.waitFor(() =>
+            expect(admin.policy.get().assetRules.map((rule) => rule.assetId)).toEqual(["*"]),
+        );
+    });
+});
+
 describe("setup guidance", () => {
     it("says every readiness blocker the backend can raise in a sentence", () => {
         const codes = backendBlockerCodes();

@@ -280,11 +280,12 @@
                         <fieldset class="group" id="carry">
                             <legend>What you carry</legend>
                             <p class="hint">
-                                One rule per kind of payment. Each asset needs its own rule with its
-                                exact id: there is no rule for "any asset". A payer is offered the
-                                fares in order, and the first is the default. A flat 0 fare is free;
-                                a percent fare in sats is a share of the sats lent, and in an asset
-                                a share of the amount sent.
+                                One rule per kind of payment: bitcoin, any asset, or one asset by
+                                its exact id. An asset's own rule always wins over "Any asset", so
+                                you can price one asset differently or switch it off. A payer is
+                                offered the fares in order, and the first is the default. A flat 0
+                                fare is free; a percent fare in sats is a share of the sats lent,
+                                and in an asset a share of the amount sent.
                             </p>
                             <div class="scroll">
                                 <table class="rules">
@@ -309,6 +310,7 @@
                             </div>
                             <div class="actions">
                                 <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
+                                <button type="button" id="rule-add-any">Add any asset</button>
                                 <label class="sr-only" for="rule-asset">Asset id to add</label>
                                 <input
                                     type="text"
@@ -485,6 +487,14 @@
                         Payments below the network dust, <span id="wiz-dust">—</span> sats, which
                         cannot be sent on their own.
                     </p>
+                    <label class="check" for="wiz-any">
+                        <input type="checkbox" id="wiz-any" aria-describedby="wiz-any-hint" />
+                        Any asset
+                    </label>
+                    <p class="hint" id="wiz-any-hint">
+                        Every asset payment, whatever the asset. To treat one asset differently,
+                        give it a rule of its own under Settings afterwards.
+                    </p>
                     <p class="field">
                         <label for="wiz-assets">Specific assets (optional)</label>
                         <textarea
@@ -495,8 +505,7 @@
                             aria-describedby="wiz-assets-hint"
                         ></textarea>
                         <span class="hint" id="wiz-assets-hint"
-                            >One per line: the 68-character asset id your wallet shows. Each asset
-                            needs its own line; there is no "any asset".</span
+                            >One per line: the 68-character asset id your wallet shows.</span
                         >
                     </p>
                 </section>

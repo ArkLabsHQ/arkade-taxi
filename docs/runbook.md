@@ -131,6 +131,13 @@ operator wallet, inspect synchronization and then resume. Resume refreshes
 state and refuses while any safety blocker remains. Policy and operation
 changes carry an audit actor.
 
+Asset rules say what the Taxi carries and on what terms. The rule with
+`assetId: null` serves sub-dust bitcoin; `"*"` serves any asset without a rule
+of its own and never bitcoin. An asset's own rule always wins over `"*"`, so an
+exact rule with `enabled: false` switches one asset off while `"*"` serves the
+rest. Swap fills draw on the bitcoin rule whatever asset is swapped, so `"*"`
+alone does not admit them.
+
 On a transfer, a positive sats fare is charged to the sender: the quote is
 refused unless the sender's own sats cover the dust carrier and the fare, and
 the lockup pays the fare to the operator out of the sender's change. A plain
@@ -263,4 +270,6 @@ image. Confirm startup reconciliation, exact active obligations and readiness,
 then resume. If startup fails, preserve diagnostics and the current volume.
 Rollback to the old image with its compatible pre-upgrade backup only after
 accounting for every network effect since that snapshot; never run an old image
-against an unsupported newer schema or erase newer financial facts.
+against an unsupported newer schema or erase newer financial facts. An image
+older than the `"*"` asset rule cannot read a policy holding one; remove that
+rule before rolling back.

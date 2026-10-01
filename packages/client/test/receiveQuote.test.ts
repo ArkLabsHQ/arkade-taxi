@@ -240,6 +240,22 @@ describe("verifyReceiveQuote", () => {
         ).toThrow(/floor/);
     });
 
+    it("verifies against the any-asset rule when the asset has no rule of its own", () => {
+        const advertised = info();
+        advertised.assetRules[0]!.assetId = "*";
+        expect(verifyReceiveQuote({ ...args(), info: advertised }).descriptor.loanSats).toBe(329n);
+    });
+
+    it("holds the quote to the asset's own rule, not the any-asset one", () => {
+        const advertised = info();
+        const own = advertised.assetRules[0]!;
+        advertised.assetRules = [
+            { ...own, assetId: "*" },
+            { ...own, enabled: false },
+        ];
+        expect(() => verifyReceiveQuote({ ...args(), info: advertised })).toThrow(/recycle/);
+    });
+
     it("rejects an unknown pricing kind with plausible proportional fields", () => {
         const changed = info();
         changed.assetRules[0]!.fares[0]!.pricing = {

@@ -46,10 +46,10 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Install `@arkade-taxi/client` and `@arkade-os/sdk@0.4.72`. Call this function
-with Alice's initialized wallet, Bob's full address, the selected offer's
-`fareId`, and policy/trust facts from the wallet's own configuration.
-`assetUnits` is Bob's payment quantity; the fare is additional.
+Install `@arkade-taxi/client` and `@arkade-os/sdk@0.4.72`. Call this function with Alice's
+initialized wallet, Bob's full address, the selected offer's `fareId`, and policy/trust facts
+from the wallet's own configuration. `assetUnits` is Bob's payment quantity; the fare is additional.
+Offers come from `/v1/info` `assetRules`: USDT's own rule, or the `"*"` rule when it has none.
 
 ```ts
 import { TaxiClient, type RequestVerifiedQuoteArgs } from "@arkade-taxi/client";
