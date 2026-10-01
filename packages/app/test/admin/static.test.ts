@@ -327,9 +327,10 @@ describe("static routes", () => {
 
 describe("served constants match the authored assets", () => {
     it("has no drift between src/admin/static/* and the embedded strings", () => {
-        expect(INDEX_HTML).toBe(asset("index.html"));
-        expect(APP_JS).toBe(asset("app.js"));
-        expect(STYLES_CSS).toBe(asset("styles.css"));
+        const fix = "run node scripts/mirror-admin-static.mjs";
+        expect(INDEX_HTML, fix).toBe(asset("index.html"));
+        expect(APP_JS, fix).toBe(asset("app.js"));
+        expect(STYLES_CSS, fix).toBe(asset("styles.css"));
     });
 });
 
