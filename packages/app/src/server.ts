@@ -3,6 +3,7 @@ import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import { createAdminRouter } from "./admin/index.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes.js";
 import { ReceiverClaimFeed } from "./claimFeed.js";
+import { shownConfig } from "./config.js";
 
 export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
     advances: AdvanceRepository;
@@ -64,6 +65,7 @@ function adminDeps(deps: ServerDeps) {
         operationalSnapshot: (options?: { ignoreManualPause?: boolean }) =>
             operationalSnapshot(deps, options),
         now: deps.now,
+        serviceConfig: shownConfig(deps.config),
         funding: async () => ({
             config: deps.config,
             inventory: deps.runtime.safety().inventory,

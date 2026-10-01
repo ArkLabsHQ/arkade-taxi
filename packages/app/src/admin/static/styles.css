@@ -649,6 +649,60 @@ body.is-alarm .headline__sweeper {
     max-width: 72ch;
 }
 
+.rules input.asset-input {
+    width: 30ch;
+}
+
+.rules input[name="percent"] {
+    width: 6ch;
+}
+
+.fare__actions {
+    display: inline-flex;
+    gap: 6px;
+}
+
+.help > summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.help dl {
+    margin: 8px 0 0;
+    max-width: 96ch;
+}
+
+.help dt {
+    margin: 10px 0 4px;
+    color: var(--text-dim);
+    font: 600 10.5px/1.4 var(--sans);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.help dd {
+    margin: 0 0 6px;
+    color: var(--text-dim);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.help dd b {
+    color: var(--text);
+    font-weight: 600;
+}
+
+#service td {
+    white-space: normal;
+    vertical-align: top;
+}
+
+#service td.value {
+    word-break: break-all;
+}
+
 .warn,
 .hint.warn {
     margin: 0 0 6px;

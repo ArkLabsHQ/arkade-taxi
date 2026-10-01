@@ -293,11 +293,55 @@ export const INDEX_HTML = `<!doctype html>
                             <p class="hint">
                                 One rule per kind of payment: bitcoin, any asset, or one asset by
                                 its exact id. An asset's own rule always wins over "Any asset", so
-                                you can price one asset differently or switch it off. A payer is
-                                offered the fares in order, and the first is the default. A flat 0
-                                fare is free; a percent fare in sats is a share of the sats lent,
-                                and in an asset a share of the amount sent.
+                                you can price one asset differently or switch it off. A payer may
+                                take any fare a rule offers; the first is the one they get if they
+                                name none, and the arrows reorder them.
                             </p>
+                            <details class="help" id="carry-help">
+                                <summary>What each choice means</summary>
+                                <dl>
+                                    <dt>When the receiver claims</dt>
+                                    <dd id="help-claim-recycle">
+                                        <b>Get my sats back</b> (recycle). The receiver repays the
+                                        lent sats with their own when they claim, so they come back
+                                        to your Taxi then. If nobody claims, the Taxi recovers them
+                                        itself after the locktime.
+                                    </dd>
+                                    <dd id="help-claim-purchase">
+                                        <b>Sell outright</b> (purchase). The receiver keeps the lent
+                                        sats when they claim: the fare, paid when the payment is
+                                        sent, is all your Taxi earns. Receive quotes refuse this
+                                        mode, as they need the sats repaid.
+                                    </dd>
+                                    <dd id="help-claim-either">
+                                        <b>Payer chooses</b> (either). Each payer picks recycle or
+                                        purchase; one who does not pick gets recycle.
+                                    </dd>
+                                    <dt>Fare currency</dt>
+                                    <dd id="help-currency-sats">
+                                        <b>In sats</b>. Paid out of the payer's own spare sats, so a
+                                        payer who has none cannot take it.
+                                    </dd>
+                                    <dd id="help-currency-sameAsset">
+                                        <b>In the asset</b>. Paid in the asset being moved, so a
+                                        payer holding only that asset can still pay. Never on
+                                        bitcoin.
+                                    </dd>
+                                    <dd id="help-currency-token">
+                                        <b>In a token</b>. A set amount of one token you name,
+                                        whatever is sent, like a prepaid ticket. Always flat.
+                                    </dd>
+                                    <dt>Fare pricing</dt>
+                                    <dd id="help-pricing-flat">
+                                        <b>Flat</b>. The same amount on every payment; 0 is free.
+                                    </dd>
+                                    <dd id="help-pricing-proportional">
+                                        <b>Percent</b>. A share of the sats lent for a sats fare, or
+                                        of the amount sent for an asset fare, rounded down and kept
+                                        between the minimum and the optional maximum.
+                                    </dd>
+                                </dl>
+                            </details>
                             <div class="scroll">
                                 <table class="rules">
                                     <caption class="sr-only">
@@ -355,6 +399,47 @@ export const INDEX_HTML = `<!doctype html>
                                 <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
                         </fieldset>
+
+                        <details class="group help" id="payment-kinds">
+                            <summary>Which settings each kind of payment uses</summary>
+                            <dl>
+                                <dt>Covenant transfers</dt>
+                                <dd id="help-route-transfers">
+                                    The Taxi lends the carrier sats a payment lacks, locked in a
+                                    covenant until the receiver claims it or the Taxi recovers it.
+                                    Uses Pause, the payment's rule (on, fares, claim mode, max per
+                                    payment), Max per payment, Max outstanding, Max payments at
+                                    once, both locktime margins and Quote lifetime.
+                                </dd>
+                                <dt>Sponsored direct transfers</dt>
+                                <dd id="help-route-sponsored-transfers">
+                                    The Taxi pays its share of the carrier straight into the
+                                    receiver's own wallet. Nothing is claimed or repaid, so the fare
+                                    is all your Taxi earns, and a free fare gives the carrier away.
+                                    Uses Pause, the payment's rule (on, fares, max per payment; not
+                                    its claim mode), Max per payment, Max outstanding and Max
+                                    payments at once (counting it only until it lands) and Quote
+                                    lifetime.
+                                </dd>
+                                <dt>Receive quotes</dt>
+                                <dd id="help-route-receive-quotes">
+                                    A receiver asks ahead for a covenant address a swap will pay
+                                    into; the Taxi lends the carrier and gets it back when the
+                                    receiver recycles. Uses Pause, the asset's rule (on, a sats fare
+                                    or the receiver's own fare, a claim mode that allows recycle,
+                                    max per payment), Max per payment, Max outstanding, Max payments
+                                    at once, both locktime margins and Quote lifetime.
+                                </dd>
+                                <dt>Swap fills</dt>
+                                <dd id="help-route-swap-fills">
+                                    A solver fills a swap offer into a receive quote's covenant, and
+                                    the Taxi puts in the sats that quote lends, on its terms. Uses
+                                    Pause and the Bitcoin rule (on, max per payment) whatever is
+                                    swapped, Max per payment, Max outstanding and Max payments at
+                                    once.
+                                </dd>
+                            </dl>
+                        </details>
 
                         <details class="group" id="advanced">
                             <summary>Advanced</summary>
@@ -484,6 +569,37 @@ export const INDEX_HTML = `<!doctype html>
                         <tbody id="history-body"></tbody>
                     </table>
                     <p class="empty" id="history-empty" hidden>No policy changes recorded.</p>
+                </div>
+            </section>
+
+            <section class="panel" id="service" aria-labelledby="service-heading">
+                <div class="panel__head">
+                    <h2 id="service-heading">Service configuration</h2>
+                    <span class="meta">read-only</span>
+                </div>
+                <div class="panel__body">
+                    <p class="hint">
+                        Set from environment variables when the Taxi starts, so changing one needs a
+                        redeploy: set the variable and restart the Taxi. Derived values are read
+                        from the Arkade server and the Arkade SDK at startup. Secrets, such as the
+                        operator private key, are never shown.
+                    </p>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            The Taxi's running configuration
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Variable</th>
+                                <th scope="col">Value</th>
+                                <th scope="col">What it does</th>
+                            </tr>
+                        </thead>
+                        <tbody id="service-config"></tbody>
+                    </table>
+                    <p class="empty" id="service-config-empty">Loading…</p>
                 </div>
             </section>
         </main>
@@ -626,9 +742,35 @@ export const INDEX_HTML = `<!doctype html>
                             <input type="checkbox" id="wiz-fare-asset" />
                             Asset payments may pay the fare in the asset they send instead
                         </label>
+                        <p class="inline-fields" id="wiz-asset-flat-fields" hidden>
+                            <label for="wiz-asset-flat-units">Fare in the asset</label>
+                            <input type="text" id="wiz-asset-flat-units" inputmode="numeric" />
+                            units of the asset per payment
+                        </p>
+                        <p class="inline-fields" id="wiz-asset-percent-fields" hidden>
+                            <label for="wiz-asset-pct">Percentage</label>
+                            <input type="text" id="wiz-asset-pct" inputmode="decimal" /> % of the
+                            amount sent, at least
+                            <label class="sr-only" for="wiz-asset-min">Minimum fare in units</label>
+                            <input
+                                type="text"
+                                id="wiz-asset-min"
+                                inputmode="numeric"
+                                placeholder="0"
+                            />
+                            and at most
+                            <label class="sr-only" for="wiz-asset-max">Maximum fare in units</label>
+                            <input
+                                type="text"
+                                id="wiz-asset-max"
+                                inputmode="numeric"
+                                placeholder="none"
+                            />
+                            units
+                        </p>
                         <p class="hint">
-                            Same numbers, counted in the asset's own units; a percentage is then a
-                            share of the amount sent.
+                            Counted in the asset's own units, not in sats. A payer picks either
+                            fare.
                         </p>
                     </div>
                     <p class="hint warn" id="wiz-fare-btc-warn" hidden>
@@ -1349,6 +1491,60 @@ body.is-alarm .headline__sweeper {
     max-width: 72ch;
 }
 
+.rules input.asset-input {
+    width: 30ch;
+}
+
+.rules input[name="percent"] {
+    width: 6ch;
+}
+
+.fare__actions {
+    display: inline-flex;
+    gap: 6px;
+}
+
+.help > summary {
+    cursor: pointer;
+    color: var(--text-dim);
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.help dl {
+    margin: 8px 0 0;
+    max-width: 96ch;
+}
+
+.help dt {
+    margin: 10px 0 4px;
+    color: var(--text-dim);
+    font: 600 10.5px/1.4 var(--sans);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.help dd {
+    margin: 0 0 6px;
+    color: var(--text-dim);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.help dd b {
+    color: var(--text);
+    font-weight: 600;
+}
+
+#service td {
+    white-space: normal;
+    vertical-align: top;
+}
+
+#service td.value {
+    word-break: break-all;
+}
+
 .warn,
 .hint.warn {
     margin: 0 0 6px;
@@ -1915,6 +2111,7 @@ const ISSUE_RULES = [
     [/bps must be within/, () => "has a percentage outside 0 to 100"],
     [/maxUnits must not be below minUnits/, () => "has a maximum below its minimum"],
     [/token fare must be flat/, () => "is in a fixed token, so it must be flat"],
+    [/Expected object, received null/, () => "is missing"],
     [/non-empty id/, () => "needs an id"],
     [/Unrecognized key/, () => "has a field the Taxi does not know"],
 ];
@@ -2293,10 +2490,8 @@ function openWizard() {
         "wiz-per-payment",
         "wiz-outstanding",
         "wiz-concurrent",
-        "wiz-fare-flat-sats",
-        "wiz-fare-pct",
-        "wiz-fare-min",
-        "wiz-fare-max",
+        ...Object.values(FARE_FIELDS.sats).slice(0, 4),
+        ...Object.values(FARE_FIELDS.asset).slice(0, 4),
     ])
         $(id).value = "";
     const dust = BigInt(view.status.dust);
@@ -2332,6 +2527,8 @@ function renderWizard() {
     $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
     $("wiz-fare-asset-row").hidden =
         wizard.fare === "free" || (assetLines().length === 0 && !$("wiz-any").checked);
+    $("wiz-asset-flat-fields").hidden = !wantsAssetFare() || wizard.fare !== "flat";
+    $("wiz-asset-percent-fields").hidden = !wantsAssetFare() || wizard.fare !== "percent";
     $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
     $("wiz-giveaway").hidden =
         wizard.step !== 3 || giveaways(wizardPatch().assetRules).length === 0;
@@ -2353,44 +2550,93 @@ function wizardProblem() {
         if (!limits.every((id) => WHOLE.test($(id).value.trim()) && $(id).value.trim() !== "0"))
             return "Each limit is a whole number above 0.";
     }
-    if (wizard.step === 3 && wizard.fare === "flat") {
-        if (!WHOLE.test($("wiz-fare-flat-sats").value.trim()))
-            return "The flat fare is a whole number of sats.";
+    if (wizard.step === 3) {
+        const asset = wantsAssetFare() && pricingProblem(FARE_FIELDS.asset);
+        const problem = pricingProblem(FARE_FIELDS.sats) || (asset && "Asset fare: " + asset);
+        if (problem) return problem;
+        if (giveaways(wizardPatch().assetRules).length && !$("wiz-giveaway-ok").checked)
+            return 'To go on, tick "Give carriers away for free", set a fare that cannot come to 0, or get your sats back when the receiver claims.';
     }
-    if (wizard.step === 3 && wizard.fare === "percent") {
-        const pct = $("wiz-fare-pct").value.trim();
-        const min = $("wiz-fare-min").value.trim() || "0";
-        const max = $("wiz-fare-max").value.trim();
-        if (!PERCENT.test(pct) || Number(pct) > 100)
-            return "The percentage is a number from 0 to 100, at most two decimals.";
-        if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
-            return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
-    }
-    if (
-        wizard.step === 3 &&
-        giveaways(wizardPatch().assetRules).length &&
-        !$("wiz-giveaway-ok").checked
-    )
-        return GIVEAWAY;
     return null;
 }
 
+const FARE_FIELDS = {
+    sats: {
+        flat: "wiz-fare-flat-sats",
+        pct: "wiz-fare-pct",
+        min: "wiz-fare-min",
+        max: "wiz-fare-max",
+        unit: "sats",
+    },
+    asset: {
+        flat: "wiz-asset-flat-units",
+        pct: "wiz-asset-pct",
+        min: "wiz-asset-min",
+        max: "wiz-asset-max",
+        unit: "units",
+    },
+};
+
+const field = (id) => $(id).value.trim();
+
+const wantsAssetFare = () =>
+    wizard.fare !== "free" &&
+    $("wiz-fare-asset").checked &&
+    (assetLines().length > 0 || $("wiz-any").checked);
+
+function pricingProblem(f) {
+    if (wizard.fare === "flat" && !WHOLE.test(field(f.flat)))
+        return "The flat fare is a whole number of " + f.unit + ".";
+    if (wizard.fare !== "percent") return null;
+    const min = field(f.min) || "0";
+    const max = field(f.max);
+    if (!PERCENT.test(field(f.pct)) || Number(field(f.pct)) > 100)
+        return "The percentage is a number from 0 to 100, at most two decimals.";
+    if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
+        return (
+            "The minimum and maximum are whole numbers of " +
+            f.unit +
+            ", the maximum not below the minimum."
+        );
+    return null;
+}
+
+function wizardPricing(f) {
+    if (wizard.fare === "free") return { kind: "flat", units: "0" };
+    if (wizard.fare === "flat") return { kind: "flat", units: field(f.flat) };
+    return {
+        kind: "proportional",
+        bps: Math.round(Number(field(f.pct)) * 100),
+        minUnits: field(f.min) || "0",
+        maxUnits: field(f.max) || null,
+    };
+}
+
 function wizardFares(isAsset) {
-    const pricing =
-        wizard.fare === "free"
-            ? { kind: "flat", units: "0" }
-            : wizard.fare === "flat"
-              ? { kind: "flat", units: $("wiz-fare-flat-sats").value.trim() }
-              : {
-                    kind: "proportional",
-                    bps: Math.round(Number($("wiz-fare-pct").value.trim()) * 100),
-                    minUnits: $("wiz-fare-min").value.trim() || "0",
-                    maxUnits: $("wiz-fare-max").value.trim() || null,
-                };
-    const fares = [{ id: "sats", currency: { kind: "sats" }, pricing }];
-    if (isAsset && wizard.fare !== "free" && $("wiz-fare-asset").checked)
-        fares.push({ id: "asset", currency: { kind: "sameAsset" }, pricing });
+    const fares = [
+        { id: "sats", currency: { kind: "sats" }, pricing: wizardPricing(FARE_FIELDS.sats) },
+    ];
+    if (isAsset && wantsAssetFare())
+        fares.push({
+            id: "asset",
+            currency: { kind: "sameAsset" },
+            pricing: wizardPricing(FARE_FIELDS.asset),
+        });
     return fares;
+}
+
+function fareText(pricing, unit, base) {
+    if (pricing.kind === "flat") return group(pricing.units) + " " + unit;
+    return (
+        pricing.bps / 100 +
+        "% of " +
+        base +
+        ", at least " +
+        group(pricing.minUnits) +
+        " " +
+        unit +
+        (pricing.maxUnits === null ? "" : " and at most " + group(pricing.maxUnits) + " " + unit)
+    );
 }
 
 function wizardPatch() {
@@ -2417,21 +2663,16 @@ function wizardPatch() {
 }
 
 function wizardSummary(patch) {
-    const pricing = patch.assetRules[0].fares[0].pricing;
+    const fares = (patch.assetRules.find((rule) => rule.fares.length > 1) || patch.assetRules[0])
+        .fares;
+    const [sats, asset] = fares.map((fare) => fare.pricing);
     const fare =
         wizard.fare === "free"
             ? "Payers pay no fare."
-            : wizard.fare === "flat"
-              ? "Each payment pays a fare of " + group(pricing.units) + " sats."
-              : "Each payment pays " +
-                pricing.bps / 100 +
-                "% of the sats lent, at least " +
-                group(pricing.minUnits) +
-                " sats" +
-                (pricing.maxUnits === null
-                    ? ""
-                    : " and at most " + group(pricing.maxUnits) + " sats") +
-                ".";
+            : "Each payment pays " +
+              (sats.kind === "flat" ? "a fare of " : "") +
+              fareText(sats, "sats", "the sats lent") +
+              ".";
     return [
         "Your Taxi will carry " + carriedText(patch.assetRules) + ".",
         "It lends up to " +
@@ -2442,8 +2683,12 @@ function wizardSummary(patch) {
             group(String(patch.maxConcurrentAdvances)) +
             " payments at once.",
         fare,
-        ...(patch.assetRules.some((rule) => rule.fares.length > 1)
-            ? ["Asset payments may pay it in the asset they send instead."]
+        ...(asset
+            ? [
+                  "Asset payments may instead pay " +
+                      fareText(asset, "units", "the amount they send") +
+                      (asset.kind === "flat" ? " of the asset they send." : "."),
+              ]
             : []),
         CLAIM_SUMMARY[wizard.claim],
         ...(view.policy && view.policy.assetRules.length
@@ -2660,12 +2905,19 @@ function parseAssetId(text) {
     return m && Number(m[2]) <= 65535 ? { txid: m[1], groupIndex: Number(m[2]) } : null;
 }
 
-function newFare(fares, kind = "sats") {
-    const base = kind === "sats" ? "sats" : "asset";
-    let id = base;
-    for (let n = 2; fares.some((f) => f.id === id); n++) id = base + "-" + n;
-    return { id, currency: { kind }, pricing: { kind: "flat", units: "0" } };
+const FARE_ID = { sats: "sats", sameAsset: "asset", token: "token" };
+
+function fareId(fares, kind) {
+    let id = FARE_ID[kind];
+    for (let n = 2; fares.some((f) => f.id === id); n++) id = FARE_ID[kind] + "-" + n;
+    return id;
 }
+
+const newFare = (fares, kind = "sats") => ({
+    id: fareId(fares, kind),
+    currency: { kind },
+    pricing: { kind: "flat", units: "0" },
+});
 
 const newRule = (assetId) => ({
     assetId,
@@ -2747,40 +2999,82 @@ const wrap = (el) => {
     return td;
 };
 
-function fareEditor(rule, fare) {
+const CURRENCIES = [
+    ["sats", "in sats"],
+    ["sameAsset", "in the asset"],
+    ["token", "in a token"],
+];
+
+const PRICINGS = [
+    ["flat", "flat"],
+    ["proportional", "percent"],
+];
+
+function fareIdInput(rule, fare) {
+    const input = control("input", "id", "Id of fare " + fare.id);
+    input.type = "text";
+    input.value = fare.id;
+    input.addEventListener("change", () => {
+        const id = input.value.trim();
+        if (!id || rule.fares.some((f) => f !== fare && f.id === id)) {
+            input.value = fare.id;
+            return setNote("policy-note", "Each fare in a rule needs an id of its own.", true);
+        }
+        editRules(() => (fare.id = id));
+    });
+    return input;
+}
+
+function tokenInput(fare) {
+    const input = control("input", "token", "Asset id of the token fare " + fare.id);
+    input.type = "text";
+    input.className = "asset-input";
+    input.placeholder = "token asset id";
+    const show = () =>
+        (input.value = fare.currency.assetId ? walletAssetId(fare.currency.assetId) : "");
+    show();
+    input.addEventListener("change", () => {
+        const id = parseAssetId(input.value);
+        if (id) editRules(() => (fare.currency.assetId = id));
+        else setNote("policy-note", ASSET_ID_HELP, true);
+        show();
+    });
+    return input;
+}
+
+function fareEditor(rule, fare, index) {
     const line = cell("div", "", "fare");
+    line.append(fareIdInput(rule, fare));
+    if (index === 0) line.append(cell("span", "default", "state-tag"));
     const remove = control("button", "remove-fare", "Remove fare " + fare.id);
     remove.textContent = "Remove";
     remove.addEventListener("click", () =>
         editRules(() => rule.fares.splice(rule.fares.indexOf(fare), 1), true),
     );
-    if (fare.currency.kind === "token") {
-        line.append(cell("span", "in a fixed token: edit as JSON", "dim"), remove);
-        return line;
-    }
     const unit = fare.currency.kind === "sats" ? "sats" : "units";
-    if (rule.assetId === null) line.append(cell("span", "in sats", "dim"));
-    else {
-        const currency = choice(
-            "currency",
-            [
-                ["sats", "in sats"],
-                ["sameAsset", "in this asset"],
-            ],
-            fare.currency.kind,
-            "Fare currency",
-        );
-        currency.addEventListener("change", () =>
-            editRules(() => (fare.currency = { kind: currency.value }), true),
-        );
-        line.append(currency);
-    }
+    // A bitcoin payment has no asset to take a same-asset fare in.
+    const currencies = CURRENCIES.filter(
+        ([kind]) => kind !== "sameAsset" || rule.assetId !== null || fare.currency.kind === kind,
+    );
+    const currency = choice("currency", currencies, fare.currency.kind, "Fare currency");
+    currency.addEventListener("change", () =>
+        editRules(() => {
+            const kind = currency.value;
+            if (/^(sats|asset|token)(-[0-9]+)?$/.test(fare.id))
+                fare.id = fareId(
+                    rule.fares.filter((f) => f !== fare),
+                    kind,
+                );
+            fare.currency = kind === "token" ? { kind, assetId: null } : { kind };
+            if (kind === "token" && fare.pricing.kind !== "flat")
+                fare.pricing = { kind: "flat", units: "0" };
+        }, true),
+    );
+    line.append(currency);
+    if (fare.currency.kind === "token") line.append(tokenInput(fare));
     const pricing = choice(
         "pricing",
-        [
-            ["flat", "flat"],
-            ["proportional", "percent"],
-        ],
+        fare.currency.kind === "token" ? PRICINGS.slice(0, 1) : PRICINGS,
         fare.pricing.kind,
         "Fare pricing",
     );
@@ -2815,7 +3109,18 @@ function fareEditor(rule, fare) {
             ),
             cell("span", unit, "dim"),
         );
-    line.append(remove);
+    const move = (by, text) => {
+        const button = control("button", by < 0 ? "fare-up" : "fare-down", text + fare.id);
+        button.textContent = by < 0 ? "↑" : "↓";
+        button.disabled = !rule.fares[index + by];
+        button.addEventListener("click", () =>
+            editRules(() => rule.fares.splice(index + by, 0, rule.fares.splice(index, 1)[0]), true),
+        );
+        return button;
+    };
+    const actions = cell("span", "", "fare__actions");
+    actions.append(move(-1, "Offer earlier: fare "), move(1, "Offer later: fare "), remove);
+    line.append(actions);
     return line;
 }
 
@@ -2834,7 +3139,7 @@ function renderRules() {
         on.addEventListener("change", () => editRules(() => (rule.enabled = on.checked)));
 
         const fares = document.createElement("td");
-        for (const fare of rule.fares) fares.append(fareEditor(rule, fare));
+        rule.fares.forEach((fare, i) => fares.append(fareEditor(rule, fare, i)));
         if (rule.fares.length === 0)
             fares.append(cell("p", "No fare: these payments are refused.", "warn"));
         const add = control("button", "add-fare", "Add a fare for " + label);
@@ -3044,6 +3349,65 @@ async function loadFunding() {
     renderSetup();
 }
 
+const CONFIG_MEANINGS = {
+    httpPort: "The public port wallets call.",
+    adminPort: "The port serving this console; keep it behind the authenticating proxy.",
+    dbPath: "The SQLite file holding the ledger; it must survive restarts.",
+    arkdUrl: "The Arkade server the Taxi works with.",
+    indexerUrl: "Where the Taxi reads coins: the same Arkade server's indexer.",
+    emulatorUrl: "The emulator that co-signs every claim, refund and recovery.",
+    operatorMinReserveSats: "Sats the Taxi always keeps; it lends only what is above them.",
+    minExpiryHeadroomBlocks:
+        "The Taxi lends only coins with at least this many blocks left before they expire.",
+    recoveryBroadcastBlocks:
+        "Blocks the Taxi allows to recover lent sats: this close to expiry a payment raises a warning, and the locktime margin must be larger.",
+    recoveryCriticalBlocks:
+        "This close to expiry, in blocks, a recovery deadline is critical and new payments pause.",
+    minExpiryHeadroomSeconds:
+        "The Taxi lends only coins with at least this many seconds left before they expire.",
+    recoveryBroadcastSeconds:
+        "Seconds the Taxi allows to recover lent sats, for coins that expire at a time.",
+    recoveryCriticalSeconds:
+        "This close to expiry, in seconds, a recovery deadline is critical and new payments pause.",
+    reconcileIntervalMs:
+        "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
+    proceedsMaxFeeSats:
+        "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
+    logLevel: "How much the Taxi writes to its logs.",
+    operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
+    operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",
+    networkName: "The network the Arkade server reports.",
+    esploraUrl: "The chain explorer the Arkade SDK names for this network.",
+    serverPubkey: "The Arkade server's signing key, pinned at startup.",
+    emulatorPubkey: "The emulator key the Arkade SDK pins for this network.",
+    dust: "The network dust: the most one payment can borrow.",
+    vtxoMinAmount: "The smallest coin the Arkade server accepts, and the least a payment borrows.",
+    addressHrp: "The prefix of Arkade addresses on this network.",
+};
+
+function renderServiceConfig(entries) {
+    const body = $("service-config");
+    body.textContent = "";
+    for (const { key, env, value } of entries) {
+        const name = cell("th", env || key + " (derived)");
+        name.scope = "row";
+        const amount = /^[0-9]+$/.test(value) && !key.endsWith("Port");
+        const shown = value === null ? "not set" : amount ? group(value) : value;
+        const tr = document.createElement("tr");
+        tr.append(name, cell("td", shown, "value"), cell("td", CONFIG_MEANINGS[key] || "", "dim"));
+        body.append(tr);
+    }
+    $("service-config-empty").hidden = entries.length > 0;
+}
+
+async function loadServiceConfig() {
+    try {
+        renderServiceConfig((await api("/admin/api/config")).config);
+    } catch (e) {
+        $("service-config-empty").textContent = explain(e).text;
+    }
+}
+
 async function refresh() {
     try {
         await Promise.all([loadStatus(), loadAdvances()]);
@@ -3218,6 +3582,7 @@ function wire() {
     $("wiz-save-live").addEventListener("click", () => saveWizard(true));
     $("wiz-btc").addEventListener("change", renderWizard);
     $("wiz-any").addEventListener("change", renderWizard);
+    $("wiz-fare-asset").addEventListener("change", renderWizard);
     $("wiz-assets").addEventListener("input", renderWizard);
     for (const [name, values] of Object.entries(WIZARD_CHOICES))
         for (const value of values)
@@ -3241,6 +3606,7 @@ Promise.all([loadPolicy().catch((e) => setNote("policy-note", e.message, true)),
 );
 loadHistory().catch(() => {});
 loadFunding();
+loadServiceConfig();
 window.setInterval(refresh, POLL_MS);
 `;
 

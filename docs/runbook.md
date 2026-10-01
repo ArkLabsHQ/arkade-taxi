@@ -142,7 +142,9 @@ A purchased carrier is never repaid. The console therefore refuses a `purchase`
 or `either` rule offering a fare a payer can bring to 0 (flat 0, or a
 percentage without a minimum) unless you tick "Give carriers away for free".
 The service itself accepts such a rule, and the policy audit records the rule
-exactly as saved.
+exactly as saved. A sponsored direct transfer repays nothing whatever the claim
+mode, so there a free fare always gives the carrier away; the console's guard
+does not cover that case.
 
 On a transfer, a positive sats fare is charged to the sender: the quote is
 refused unless the sender's own sats cover the dust carrier and the fare, and

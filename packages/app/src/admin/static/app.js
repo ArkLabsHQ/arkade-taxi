@@ -324,6 +324,7 @@ const ISSUE_RULES = [
     [/bps must be within/, () => "has a percentage outside 0 to 100"],
     [/maxUnits must not be below minUnits/, () => "has a maximum below its minimum"],
     [/token fare must be flat/, () => "is in a fixed token, so it must be flat"],
+    [/Expected object, received null/, () => "is missing"],
     [/non-empty id/, () => "needs an id"],
     [/Unrecognized key/, () => "has a field the Taxi does not know"],
 ];
@@ -702,10 +703,8 @@ function openWizard() {
         "wiz-per-payment",
         "wiz-outstanding",
         "wiz-concurrent",
-        "wiz-fare-flat-sats",
-        "wiz-fare-pct",
-        "wiz-fare-min",
-        "wiz-fare-max",
+        ...Object.values(FARE_FIELDS.sats).slice(0, 4),
+        ...Object.values(FARE_FIELDS.asset).slice(0, 4),
     ])
         $(id).value = "";
     const dust = BigInt(view.status.dust);
@@ -741,6 +740,8 @@ function renderWizard() {
     $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
     $("wiz-fare-asset-row").hidden =
         wizard.fare === "free" || (assetLines().length === 0 && !$("wiz-any").checked);
+    $("wiz-asset-flat-fields").hidden = !wantsAssetFare() || wizard.fare !== "flat";
+    $("wiz-asset-percent-fields").hidden = !wantsAssetFare() || wizard.fare !== "percent";
     $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
     $("wiz-giveaway").hidden =
         wizard.step !== 3 || giveaways(wizardPatch().assetRules).length === 0;
@@ -762,44 +763,93 @@ function wizardProblem() {
         if (!limits.every((id) => WHOLE.test($(id).value.trim()) && $(id).value.trim() !== "0"))
             return "Each limit is a whole number above 0.";
     }
-    if (wizard.step === 3 && wizard.fare === "flat") {
-        if (!WHOLE.test($("wiz-fare-flat-sats").value.trim()))
-            return "The flat fare is a whole number of sats.";
+    if (wizard.step === 3) {
+        const asset = wantsAssetFare() && pricingProblem(FARE_FIELDS.asset);
+        const problem = pricingProblem(FARE_FIELDS.sats) || (asset && "Asset fare: " + asset);
+        if (problem) return problem;
+        if (giveaways(wizardPatch().assetRules).length && !$("wiz-giveaway-ok").checked)
+            return 'To go on, tick "Give carriers away for free", set a fare that cannot come to 0, or get your sats back when the receiver claims.';
     }
-    if (wizard.step === 3 && wizard.fare === "percent") {
-        const pct = $("wiz-fare-pct").value.trim();
-        const min = $("wiz-fare-min").value.trim() || "0";
-        const max = $("wiz-fare-max").value.trim();
-        if (!PERCENT.test(pct) || Number(pct) > 100)
-            return "The percentage is a number from 0 to 100, at most two decimals.";
-        if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
-            return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
-    }
-    if (
-        wizard.step === 3 &&
-        giveaways(wizardPatch().assetRules).length &&
-        !$("wiz-giveaway-ok").checked
-    )
-        return GIVEAWAY;
     return null;
 }
 
+const FARE_FIELDS = {
+    sats: {
+        flat: "wiz-fare-flat-sats",
+        pct: "wiz-fare-pct",
+        min: "wiz-fare-min",
+        max: "wiz-fare-max",
+        unit: "sats",
+    },
+    asset: {
+        flat: "wiz-asset-flat-units",
+        pct: "wiz-asset-pct",
+        min: "wiz-asset-min",
+        max: "wiz-asset-max",
+        unit: "units",
+    },
+};
+
+const field = (id) => $(id).value.trim();
+
+const wantsAssetFare = () =>
+    wizard.fare !== "free" &&
+    $("wiz-fare-asset").checked &&
+    (assetLines().length > 0 || $("wiz-any").checked);
+
+function pricingProblem(f) {
+    if (wizard.fare === "flat" && !WHOLE.test(field(f.flat)))
+        return "The flat fare is a whole number of " + f.unit + ".";
+    if (wizard.fare !== "percent") return null;
+    const min = field(f.min) || "0";
+    const max = field(f.max);
+    if (!PERCENT.test(field(f.pct)) || Number(field(f.pct)) > 100)
+        return "The percentage is a number from 0 to 100, at most two decimals.";
+    if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
+        return (
+            "The minimum and maximum are whole numbers of " +
+            f.unit +
+            ", the maximum not below the minimum."
+        );
+    return null;
+}
+
+function wizardPricing(f) {
+    if (wizard.fare === "free") return { kind: "flat", units: "0" };
+    if (wizard.fare === "flat") return { kind: "flat", units: field(f.flat) };
+    return {
+        kind: "proportional",
+        bps: Math.round(Number(field(f.pct)) * 100),
+        minUnits: field(f.min) || "0",
+        maxUnits: field(f.max) || null,
+    };
+}
+
 function wizardFares(isAsset) {
-    const pricing =
-        wizard.fare === "free"
-            ? { kind: "flat", units: "0" }
-            : wizard.fare === "flat"
-              ? { kind: "flat", units: $("wiz-fare-flat-sats").value.trim() }
-              : {
-                    kind: "proportional",
-                    bps: Math.round(Number($("wiz-fare-pct").value.trim()) * 100),
-                    minUnits: $("wiz-fare-min").value.trim() || "0",
-                    maxUnits: $("wiz-fare-max").value.trim() || null,
-                };
-    const fares = [{ id: "sats", currency: { kind: "sats" }, pricing }];
-    if (isAsset && wizard.fare !== "free" && $("wiz-fare-asset").checked)
-        fares.push({ id: "asset", currency: { kind: "sameAsset" }, pricing });
+    const fares = [
+        { id: "sats", currency: { kind: "sats" }, pricing: wizardPricing(FARE_FIELDS.sats) },
+    ];
+    if (isAsset && wantsAssetFare())
+        fares.push({
+            id: "asset",
+            currency: { kind: "sameAsset" },
+            pricing: wizardPricing(FARE_FIELDS.asset),
+        });
     return fares;
+}
+
+function fareText(pricing, unit, base) {
+    if (pricing.kind === "flat") return group(pricing.units) + " " + unit;
+    return (
+        pricing.bps / 100 +
+        "% of " +
+        base +
+        ", at least " +
+        group(pricing.minUnits) +
+        " " +
+        unit +
+        (pricing.maxUnits === null ? "" : " and at most " + group(pricing.maxUnits) + " " + unit)
+    );
 }
 
 function wizardPatch() {
@@ -826,21 +876,16 @@ function wizardPatch() {
 }
 
 function wizardSummary(patch) {
-    const pricing = patch.assetRules[0].fares[0].pricing;
+    const fares = (patch.assetRules.find((rule) => rule.fares.length > 1) || patch.assetRules[0])
+        .fares;
+    const [sats, asset] = fares.map((fare) => fare.pricing);
     const fare =
         wizard.fare === "free"
             ? "Payers pay no fare."
-            : wizard.fare === "flat"
-              ? "Each payment pays a fare of " + group(pricing.units) + " sats."
-              : "Each payment pays " +
-                pricing.bps / 100 +
-                "% of the sats lent, at least " +
-                group(pricing.minUnits) +
-                " sats" +
-                (pricing.maxUnits === null
-                    ? ""
-                    : " and at most " + group(pricing.maxUnits) + " sats") +
-                ".";
+            : "Each payment pays " +
+              (sats.kind === "flat" ? "a fare of " : "") +
+              fareText(sats, "sats", "the sats lent") +
+              ".";
     return [
         "Your Taxi will carry " + carriedText(patch.assetRules) + ".",
         "It lends up to " +
@@ -851,8 +896,12 @@ function wizardSummary(patch) {
             group(String(patch.maxConcurrentAdvances)) +
             " payments at once.",
         fare,
-        ...(patch.assetRules.some((rule) => rule.fares.length > 1)
-            ? ["Asset payments may pay it in the asset they send instead."]
+        ...(asset
+            ? [
+                  "Asset payments may instead pay " +
+                      fareText(asset, "units", "the amount they send") +
+                      (asset.kind === "flat" ? " of the asset they send." : "."),
+              ]
             : []),
         CLAIM_SUMMARY[wizard.claim],
         ...(view.policy && view.policy.assetRules.length
@@ -1069,12 +1118,19 @@ function parseAssetId(text) {
     return m && Number(m[2]) <= 65535 ? { txid: m[1], groupIndex: Number(m[2]) } : null;
 }
 
-function newFare(fares, kind = "sats") {
-    const base = kind === "sats" ? "sats" : "asset";
-    let id = base;
-    for (let n = 2; fares.some((f) => f.id === id); n++) id = base + "-" + n;
-    return { id, currency: { kind }, pricing: { kind: "flat", units: "0" } };
+const FARE_ID = { sats: "sats", sameAsset: "asset", token: "token" };
+
+function fareId(fares, kind) {
+    let id = FARE_ID[kind];
+    for (let n = 2; fares.some((f) => f.id === id); n++) id = FARE_ID[kind] + "-" + n;
+    return id;
 }
+
+const newFare = (fares, kind = "sats") => ({
+    id: fareId(fares, kind),
+    currency: { kind },
+    pricing: { kind: "flat", units: "0" },
+});
 
 const newRule = (assetId) => ({
     assetId,
@@ -1156,40 +1212,82 @@ const wrap = (el) => {
     return td;
 };
 
-function fareEditor(rule, fare) {
+const CURRENCIES = [
+    ["sats", "in sats"],
+    ["sameAsset", "in the asset"],
+    ["token", "in a token"],
+];
+
+const PRICINGS = [
+    ["flat", "flat"],
+    ["proportional", "percent"],
+];
+
+function fareIdInput(rule, fare) {
+    const input = control("input", "id", "Id of fare " + fare.id);
+    input.type = "text";
+    input.value = fare.id;
+    input.addEventListener("change", () => {
+        const id = input.value.trim();
+        if (!id || rule.fares.some((f) => f !== fare && f.id === id)) {
+            input.value = fare.id;
+            return setNote("policy-note", "Each fare in a rule needs an id of its own.", true);
+        }
+        editRules(() => (fare.id = id));
+    });
+    return input;
+}
+
+function tokenInput(fare) {
+    const input = control("input", "token", "Asset id of the token fare " + fare.id);
+    input.type = "text";
+    input.className = "asset-input";
+    input.placeholder = "token asset id";
+    const show = () =>
+        (input.value = fare.currency.assetId ? walletAssetId(fare.currency.assetId) : "");
+    show();
+    input.addEventListener("change", () => {
+        const id = parseAssetId(input.value);
+        if (id) editRules(() => (fare.currency.assetId = id));
+        else setNote("policy-note", ASSET_ID_HELP, true);
+        show();
+    });
+    return input;
+}
+
+function fareEditor(rule, fare, index) {
     const line = cell("div", "", "fare");
+    line.append(fareIdInput(rule, fare));
+    if (index === 0) line.append(cell("span", "default", "state-tag"));
     const remove = control("button", "remove-fare", "Remove fare " + fare.id);
     remove.textContent = "Remove";
     remove.addEventListener("click", () =>
         editRules(() => rule.fares.splice(rule.fares.indexOf(fare), 1), true),
     );
-    if (fare.currency.kind === "token") {
-        line.append(cell("span", "in a fixed token: edit as JSON", "dim"), remove);
-        return line;
-    }
     const unit = fare.currency.kind === "sats" ? "sats" : "units";
-    if (rule.assetId === null) line.append(cell("span", "in sats", "dim"));
-    else {
-        const currency = choice(
-            "currency",
-            [
-                ["sats", "in sats"],
-                ["sameAsset", "in this asset"],
-            ],
-            fare.currency.kind,
-            "Fare currency",
-        );
-        currency.addEventListener("change", () =>
-            editRules(() => (fare.currency = { kind: currency.value }), true),
-        );
-        line.append(currency);
-    }
+    // A bitcoin payment has no asset to take a same-asset fare in.
+    const currencies = CURRENCIES.filter(
+        ([kind]) => kind !== "sameAsset" || rule.assetId !== null || fare.currency.kind === kind,
+    );
+    const currency = choice("currency", currencies, fare.currency.kind, "Fare currency");
+    currency.addEventListener("change", () =>
+        editRules(() => {
+            const kind = currency.value;
+            if (/^(sats|asset|token)(-[0-9]+)?$/.test(fare.id))
+                fare.id = fareId(
+                    rule.fares.filter((f) => f !== fare),
+                    kind,
+                );
+            fare.currency = kind === "token" ? { kind, assetId: null } : { kind };
+            if (kind === "token" && fare.pricing.kind !== "flat")
+                fare.pricing = { kind: "flat", units: "0" };
+        }, true),
+    );
+    line.append(currency);
+    if (fare.currency.kind === "token") line.append(tokenInput(fare));
     const pricing = choice(
         "pricing",
-        [
-            ["flat", "flat"],
-            ["proportional", "percent"],
-        ],
+        fare.currency.kind === "token" ? PRICINGS.slice(0, 1) : PRICINGS,
         fare.pricing.kind,
         "Fare pricing",
     );
@@ -1224,7 +1322,18 @@ function fareEditor(rule, fare) {
             ),
             cell("span", unit, "dim"),
         );
-    line.append(remove);
+    const move = (by, text) => {
+        const button = control("button", by < 0 ? "fare-up" : "fare-down", text + fare.id);
+        button.textContent = by < 0 ? "↑" : "↓";
+        button.disabled = !rule.fares[index + by];
+        button.addEventListener("click", () =>
+            editRules(() => rule.fares.splice(index + by, 0, rule.fares.splice(index, 1)[0]), true),
+        );
+        return button;
+    };
+    const actions = cell("span", "", "fare__actions");
+    actions.append(move(-1, "Offer earlier: fare "), move(1, "Offer later: fare "), remove);
+    line.append(actions);
     return line;
 }
 
@@ -1243,7 +1352,7 @@ function renderRules() {
         on.addEventListener("change", () => editRules(() => (rule.enabled = on.checked)));
 
         const fares = document.createElement("td");
-        for (const fare of rule.fares) fares.append(fareEditor(rule, fare));
+        rule.fares.forEach((fare, i) => fares.append(fareEditor(rule, fare, i)));
         if (rule.fares.length === 0)
             fares.append(cell("p", "No fare: these payments are refused.", "warn"));
         const add = control("button", "add-fare", "Add a fare for " + label);
@@ -1453,6 +1562,65 @@ async function loadFunding() {
     renderSetup();
 }
 
+const CONFIG_MEANINGS = {
+    httpPort: "The public port wallets call.",
+    adminPort: "The port serving this console; keep it behind the authenticating proxy.",
+    dbPath: "The SQLite file holding the ledger; it must survive restarts.",
+    arkdUrl: "The Arkade server the Taxi works with.",
+    indexerUrl: "Where the Taxi reads coins: the same Arkade server's indexer.",
+    emulatorUrl: "The emulator that co-signs every claim, refund and recovery.",
+    operatorMinReserveSats: "Sats the Taxi always keeps; it lends only what is above them.",
+    minExpiryHeadroomBlocks:
+        "The Taxi lends only coins with at least this many blocks left before they expire.",
+    recoveryBroadcastBlocks:
+        "Blocks the Taxi allows to recover lent sats: this close to expiry a payment raises a warning, and the locktime margin must be larger.",
+    recoveryCriticalBlocks:
+        "This close to expiry, in blocks, a recovery deadline is critical and new payments pause.",
+    minExpiryHeadroomSeconds:
+        "The Taxi lends only coins with at least this many seconds left before they expire.",
+    recoveryBroadcastSeconds:
+        "Seconds the Taxi allows to recover lent sats, for coins that expire at a time.",
+    recoveryCriticalSeconds:
+        "This close to expiry, in seconds, a recovery deadline is critical and new payments pause.",
+    reconcileIntervalMs:
+        "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
+    proceedsMaxFeeSats:
+        "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
+    logLevel: "How much the Taxi writes to its logs.",
+    operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
+    operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",
+    networkName: "The network the Arkade server reports.",
+    esploraUrl: "The chain explorer the Arkade SDK names for this network.",
+    serverPubkey: "The Arkade server's signing key, pinned at startup.",
+    emulatorPubkey: "The emulator key the Arkade SDK pins for this network.",
+    dust: "The network dust: the most one payment can borrow.",
+    vtxoMinAmount: "The smallest coin the Arkade server accepts, and the least a payment borrows.",
+    addressHrp: "The prefix of Arkade addresses on this network.",
+};
+
+function renderServiceConfig(entries) {
+    const body = $("service-config");
+    body.textContent = "";
+    for (const { key, env, value } of entries) {
+        const name = cell("th", env || key + " (derived)");
+        name.scope = "row";
+        const amount = /^[0-9]+$/.test(value) && !key.endsWith("Port");
+        const shown = value === null ? "not set" : amount ? group(value) : value;
+        const tr = document.createElement("tr");
+        tr.append(name, cell("td", shown, "value"), cell("td", CONFIG_MEANINGS[key] || "", "dim"));
+        body.append(tr);
+    }
+    $("service-config-empty").hidden = entries.length > 0;
+}
+
+async function loadServiceConfig() {
+    try {
+        renderServiceConfig((await api("/admin/api/config")).config);
+    } catch (e) {
+        $("service-config-empty").textContent = explain(e).text;
+    }
+}
+
 async function refresh() {
     try {
         await Promise.all([loadStatus(), loadAdvances()]);
@@ -1627,6 +1795,7 @@ function wire() {
     $("wiz-save-live").addEventListener("click", () => saveWizard(true));
     $("wiz-btc").addEventListener("change", renderWizard);
     $("wiz-any").addEventListener("change", renderWizard);
+    $("wiz-fare-asset").addEventListener("change", renderWizard);
     $("wiz-assets").addEventListener("input", renderWizard);
     for (const [name, values] of Object.entries(WIZARD_CHOICES))
         for (const value of values)
@@ -1650,4 +1819,5 @@ Promise.all([loadPolicy().catch((e) => setNote("policy-note", e.message, true)),
 );
 loadHistory().catch(() => {});
 loadFunding();
+loadServiceConfig();
 window.setInterval(refresh, POLL_MS);
