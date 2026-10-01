@@ -1049,6 +1049,7 @@ export const PROFILE_DEPS = {
         expect(args).toContain("--add-host");
         expect(args).toContain("host.docker.internal:host-gateway");
         expect(args).toContain("127.0.0.1::8080");
+        expect(args).toContain("127.0.0.1::8081");
         expect(args).toContain("C:/temp/esplora-bridge.mjs:/app/e2e-esplora-bridge.mjs:ro");
         expect(args.slice(-6)).toEqual([
             `arkade-taxi:e2e-a1b2c3d4`,
@@ -1058,6 +1059,13 @@ export const PROFILE_DEPS = {
             "e2e-esplora-bridge.mjs",
             "serve",
         ]);
+    });
+
+    it("listens for the admin where it is published and hands its URL to the tests", () => {
+        const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
+        expect(stack).toContain('TAXI_ADMIN_PORT: "8081"');
+        expect(stack).toContain("await patchPolicy(adminUrl)");
+        expect(stack).toContain("TAXI_E2E_ADMIN_URL: adminUrl");
     });
 
     it("accepts only unique daemon-resolved nonzero host ports", () => {

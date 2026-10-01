@@ -18,21 +18,25 @@ const fixture = () => ({
         ],
         NetworkSettings: {
             Networks: { [`${project}_default`]: {} },
-            Ports: { "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "49123" }] },
+            Ports: {
+                "8080/tcp": [{ HostIp: "127.0.0.1", HostPort: "49123" }],
+                "8081/tcp": [{ HostIp: "127.0.0.1", HostPort: "49124" }],
+            },
         },
     },
     volume: { Name: `${project}-taxi-data`, Labels: { "dev.arkade-taxi.e2e-project": project } },
     image: { Id: "sha256:taxi", Config: { Labels: { "dev.arkade-taxi.e2e-project": project } } },
 });
 
-it("preserves the inspected loopback port and named data volume for Taxi alone", () => {
+it("preserves the inspected loopback ports and named data volume for Taxi alone", () => {
     const f = fixture();
     expect(assertTaxiRestartOwnership(f.container, f.volume, f.image, project)).toEqual({
         port: 49123,
+        adminPort: 49124,
     });
 });
 
-it.each(["container", "volume", "image", "network", "mount", "bridge", "binding"])(
+it.each(["container", "volume", "image", "network", "mount", "bridge", "binding", "admin binding"])(
     "refuses restart when the %s belongs outside the exact run",
     (field) => {
         const f = fixture();
@@ -46,6 +50,8 @@ it.each(["container", "volume", "image", "network", "mount", "bridge", "binding"
         if (field === "bridge") f.container.Mounts[1].RW = true;
         if (field === "binding")
             f.container.NetworkSettings.Ports["8080/tcp"][0].HostIp = "0.0.0.0";
+        if (field === "admin binding")
+            f.container.NetworkSettings.Ports["8081/tcp"][0].HostIp = "0.0.0.0";
         expect(() => assertTaxiRestartOwnership(f.container, f.volume, f.image, project)).toThrow(
             /ownership/,
         );

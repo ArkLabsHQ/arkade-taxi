@@ -684,7 +684,7 @@ export const packClient = async (root, env) => {
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };
 };
 
-const patchPolicy = async (baseUrl) => {
+const patchPolicy = async (adminUrl) => {
     const body = {
         paused: false,
         maxOutstandingSats: "10000000",
@@ -709,7 +709,7 @@ const patchPolicy = async (baseUrl) => {
         ],
         quoteTtlSeconds: 120,
     };
-    const response = await fetch(`${baseUrl}/admin/api/policy`, {
+    const response = await fetch(`${adminUrl}/admin/api/policy`, {
         method: "PATCH",
         headers: { "content-type": "application/json", "x-taxi-operator": "task12-harness" },
         body: JSON.stringify(body),
@@ -1024,6 +1024,7 @@ await import("/app/dist/cli.js");
         writeEnv(taxiEnv, {
             TAXI_DB_PATH: "/data/taxi.db",
             TAXI_HTTP_PORT: "8080",
+            TAXI_ADMIN_PORT: "8081",
             TAXI_ARKD_URL: `${proxyOrigin}/arkd`,
             TAXI_EMULATOR_URL: `${proxyOrigin}/emulator`,
             TAXI_OPERATOR_PRIVKEY: actorSecrets.operator,
@@ -1056,8 +1057,16 @@ await import("/app/dist/cli.js");
                 })
             ).stdout,
         );
-        assertResolvedPorts(ports, portBindings.length + 1);
+        ports.TAXI_E2E_ADMIN_PORT = parsePublishedPort(
+            (
+                await run("docker", ["port", taxiContainer, "8081/tcp"], {
+                    print: false,
+                })
+            ).stdout,
+        );
+        assertResolvedPorts(ports, portBindings.length + 2);
         const taxiUrl = `http://127.0.0.1:${ports.TAXI_E2E_HTTP_PORT}`;
+        const adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
         proxyTargets.taxi = taxiUrl;
         const walletTaxiUrl = `${failureProxy.url}/taxi`;
         controlServer = createServer(async (request, response) => {
@@ -1074,7 +1083,12 @@ await import("/app/dist/cli.js");
                     const [container] = await jsonRun("docker", ["inspect", taxiContainer]);
                     const [volume] = await jsonRun("docker", ["volume", "inspect", taxiVolume]);
                     const [image] = await jsonRun("docker", ["image", "inspect", taxiImage]);
-                    const { port } = assertTaxiRestartOwnership(container, volume, image, project);
+                    const { port, adminPort } = assertTaxiRestartOwnership(
+                        container,
+                        volume,
+                        image,
+                        project,
+                    );
                     await run("docker", ["stop", "--time", "10", taxiContainer], { print: false });
                     await captureTaxiDiagnostics(taxiContainer, project, artifacts, knownSecrets);
                     await run("docker", ["rm", taxiContainer], { print: false });
@@ -1088,10 +1102,14 @@ await import("/app/dist/cli.js");
                         image: taxiImage,
                         esploraBridge,
                     });
-                    args[args.indexOf("-p") + 1] = `127.0.0.1:${port}:8080`;
+                    args[args.indexOf("127.0.0.1::8080")] = `127.0.0.1:${port}:8080`;
+                    args[args.indexOf("127.0.0.1::8081")] = `127.0.0.1:${adminPort}:8081`;
                     await run("docker", args, { print: false });
                     const [recreated] = await jsonRun("docker", ["inspect", taxiContainer]);
-                    assertTaxiRestartOwnership(recreated, volume, image, project);
+                    const rebound = assertTaxiRestartOwnership(recreated, volume, image, project);
+                    // The tests keep the URLs they were started with.
+                    if (rebound.port !== port || rebound.adminPort !== adminPort)
+                        throw new Error("Taxi restart changed its published ports");
                     result = {
                         previousId: container.Id,
                         id: recreated.Id,
@@ -1123,7 +1141,7 @@ await import("/app/dist/cli.js");
                 ),
             ready: (value) => value.status === 200,
         });
-        await patchPolicy(taxiUrl);
+        await patchPolicy(adminUrl);
         await pollUntil({
             label: "Taxi production /ready",
             timeoutMs: 120_000,
@@ -1190,6 +1208,7 @@ await import("/app/dist/cli.js");
             ARKADE_REGTEST_ENV: envFile,
             ARKADE_ESPLORA_URL: esploraUrl,
             TAXI_E2E_BASE_URL: taxiUrl,
+            TAXI_E2E_ADMIN_URL: adminUrl,
             TAXI_E2E_CONTROL_URL: `http://127.0.0.1:${controlServer.address().port}`,
             TAXI_E2E_ARKD_URL: arkdUrl,
             TAXI_E2E_EMULATOR_URL: emulatorUrl,
