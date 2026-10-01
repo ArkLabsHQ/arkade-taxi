@@ -15,6 +15,7 @@ import {
     type Network,
     type NetworkName,
 } from "@arkade-os/sdk";
+import { exitDelayEncodable } from "@arkade-taxi/covenant";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
 import type { RuntimeConfig, TaxiConfig } from "../config.js";
 import type { ExpiryDeadline } from "@arkade-taxi/core";
@@ -145,6 +146,8 @@ export async function verifyProviders(
         ark.value.vtxoMinAmount > ark.value.dust
     )
         result.blockers.push("provider_limits_invalid");
+    if (!exitDelayEncodable(ark.value.unilateralExitDelay))
+        result.blockers.push("provider_exit_delay_invalid");
     try {
         if (!network) throw new Error();
         result.serverUnrollScript = assertValidServerUnrollScript(ark.value.checkpointTapscript, {

@@ -1,5 +1,6 @@
 import { DefaultVtxo, ESPLORA_URL, SingleKey } from "@arkade-os/sdk";
 import { createProviders, verifyProviders } from "./arkade/providers.js";
+import { exitTimelock, type RelativeTimelock } from "@arkade-taxi/covenant";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
 import { z } from "zod";
 
@@ -40,6 +41,7 @@ export interface RuntimeConfig extends TaxiConfig {
     dust: bigint;
     vtxoMinAmount: bigint;
     addressHrp: string;
+    exitDelay: RelativeTimelock;
 }
 
 /** What the admin console may show of the running config, by the variable that
@@ -72,6 +74,7 @@ export const SHOWN_CONFIG = {
     dust: null,
     vtxoMinAmount: null,
     addressHrp: null,
+    exitDelay: null,
 } as const satisfies Partial<Record<keyof RuntimeConfig, string | null>>;
 
 export const SECRET_CONFIG: readonly string[] = [
@@ -84,9 +87,17 @@ export interface ShownConfigEntry {
     value: string | null;
 }
 
+const isRelativeTimelock = (value: unknown): value is RelativeTimelock =>
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as RelativeTimelock).value === "bigint" &&
+    ((value as RelativeTimelock).type === "blocks" ||
+        (value as RelativeTimelock).type === "seconds");
+
 const shownValue = (value: unknown): string | null => {
     if (value === undefined || value === null) return null;
     if (value instanceof Uint8Array) return bytesToHex(value);
+    if (isRelativeTimelock(value)) return `${value.value} ${value.type}`;
     const text = String(value);
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
     // A URL can carry credentials in its userinfo or query; neither is shown, and
@@ -284,7 +295,7 @@ export async function resolveRuntimeConfig(
     const script = new DefaultVtxo.Script({
         pubKey: operatorSignerKey,
         serverPubKey: verified.serverPubkey,
-        csvTimelock: { value: delay, type: delay < 512n ? "blocks" : "seconds" },
+        csvTimelock: exitTimelock(delay),
     });
     return {
         ...cfg,
@@ -297,5 +308,6 @@ export async function resolveRuntimeConfig(
         addressHrp: verified.network.hrp,
         operatorKey: script.tweakedPublicKey,
         operatorSignerKey,
+        exitDelay: exitTimelock(delay),
     };
 }

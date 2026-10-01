@@ -45,6 +45,14 @@ describe("provider verification", () => {
         expect(result.blockers).toContain(blocker);
     });
 
+    it.each([0n, 86_400n])("blocks an exit delay the Taxi cannot use (%s)", async (delay) => {
+        const result = await verifyProviders(
+            config({ addressHrp: "tark" }),
+            providers(arkInfo({ unilateralExitDelay: delay })),
+        );
+        expect(result.blockers).toContain("provider_exit_delay_invalid");
+    });
+
     it("does not expose provider errors or accept an unknown emulator", async () => {
         const deps = providers();
         deps.emulatorProvider.getInfo = async () => {

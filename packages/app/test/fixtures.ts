@@ -235,6 +235,7 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     vtxoMinAmount: VTXO_MIN,
     logLevel: "info",
     addressHrp: "ark",
+    exitDelay: { value: 5n, type: "blocks" },
     ...over,
 });
 
