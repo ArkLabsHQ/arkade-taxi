@@ -31,6 +31,7 @@
             <section class="panel" id="setup" aria-labelledby="setup-heading">
                 <div class="panel__head">
                     <h2 id="setup-heading">Get started</h2>
+                    <button type="button" id="wizard-open">Run setup again</button>
                 </div>
                 <ol class="steps">
                     <li class="step" id="step-connected">
@@ -463,5 +464,200 @@
                 </div>
             </section>
         </main>
+
+        <dialog class="wizard" id="wizard" aria-labelledby="wizard-title">
+            <div class="panel__head">
+                <h2 id="wizard-title">Set up your Taxi</h2>
+                <span class="meta" id="wizard-progress">Step 1 of 4</span>
+            </div>
+            <div class="panel__body">
+                <section id="wiz-step-1" aria-labelledby="wiz-h1">
+                    <h3 id="wiz-h1" tabindex="-1">What should your Taxi carry?</h3>
+                    <p class="lede">
+                        Your Taxi lends the sats a payment is missing, so that it can be sent.
+                        Choose which payments it helps.
+                    </p>
+                    <label class="check" for="wiz-btc">
+                        <input type="checkbox" id="wiz-btc" aria-describedby="wiz-btc-hint" />
+                        Small bitcoin payments
+                    </label>
+                    <p class="hint" id="wiz-btc-hint">
+                        Payments below the network dust, <span id="wiz-dust">—</span> sats, which
+                        cannot be sent on their own.
+                    </p>
+                    <p class="field">
+                        <label for="wiz-assets">Specific assets (optional)</label>
+                        <textarea
+                            id="wiz-assets"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="txid:group"
+                            aria-describedby="wiz-assets-hint"
+                        ></textarea>
+                        <span class="hint" id="wiz-assets-hint"
+                            >One per line: the asset's 64-character txid, a colon, then its group
+                            number, as the Funding card lists them. Each asset needs its own line;
+                            there is no "any asset".</span
+                        >
+                    </p>
+                </section>
+
+                <section id="wiz-step-2" aria-labelledby="wiz-h2" hidden>
+                    <h3 id="wiz-h2" tabindex="-1">How much should it lend?</h3>
+                    <p class="lede">
+                        Each payment borrows at most the network dust. Choose how much your Taxi may
+                        have lent out at once.
+                    </p>
+                    <fieldset class="choices">
+                        <legend class="sr-only">Lending limits</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-small" />
+                            <span class="choice__title">Small</span>
+                            <span class="choice__body" id="wiz-size-small-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-medium" />
+                            <span class="choice__title">Medium</span>
+                            <span class="choice__body" id="wiz-size-medium-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-custom" />
+                            <span class="choice__title">Custom</span>
+                            <span class="choice__body">Set the three limits yourself.</span>
+                        </label>
+                    </fieldset>
+                    <div class="form-grid" id="wiz-custom" hidden>
+                        <p class="field">
+                            <label for="wiz-per-payment">Per payment (sats)</label>
+                            <input type="text" id="wiz-per-payment" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-outstanding">In total (sats)</label>
+                            <input type="text" id="wiz-outstanding" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-concurrent">Payments at once</label>
+                            <input type="text" id="wiz-concurrent" inputmode="numeric" />
+                        </p>
+                    </div>
+                    <p class="hint">
+                        Lent sats stay locked until the receiver claims them or the Taxi recovers
+                        them. To lend the whole total, your Taxi needs it on top of the reserve it
+                        must keep.
+                    </p>
+                </section>
+
+                <section id="wiz-step-3" aria-labelledby="wiz-h3" hidden>
+                    <h3 id="wiz-h3" tabindex="-1">What should payers pay?</h3>
+                    <fieldset class="choices">
+                        <legend>Fare</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-free" />
+                            <span class="choice__title">Free</span>
+                            <span class="choice__body">Payers pay nothing extra.</span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-flat" />
+                            <span class="choice__title">A flat fare</span>
+                            <span class="choice__body"
+                                >The same number of sats on every payment.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-percent" />
+                            <span class="choice__title">A percentage</span>
+                            <span class="choice__body"
+                                >A share of the sats lent, with a minimum and an optional
+                                maximum.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="inline-fields" id="wiz-fare-flat-fields" hidden>
+                        <label for="wiz-fare-flat-sats">Fare</label>
+                        <input type="text" id="wiz-fare-flat-sats" inputmode="numeric" /> sats per
+                        payment
+                    </p>
+                    <p class="inline-fields" id="wiz-fare-percent-fields" hidden>
+                        <label for="wiz-fare-pct">Percentage</label>
+                        <input type="text" id="wiz-fare-pct" inputmode="decimal" /> %, at least
+                        <label class="sr-only" for="wiz-fare-min">Minimum fare in sats</label>
+                        <input type="text" id="wiz-fare-min" inputmode="numeric" placeholder="0" />
+                        and at most
+                        <label class="sr-only" for="wiz-fare-max">Maximum fare in sats</label>
+                        <input
+                            type="text"
+                            id="wiz-fare-max"
+                            inputmode="numeric"
+                            placeholder="none"
+                        />
+                        sats
+                    </p>
+                    <div id="wiz-fare-asset-row" hidden>
+                        <label class="check" for="wiz-fare-asset">
+                            <input type="checkbox" id="wiz-fare-asset" />
+                            Asset payments may pay the fare in the asset they send instead
+                        </label>
+                        <p class="hint">
+                            Same numbers, counted in the asset's own units; a percentage is then a
+                            share of the amount sent.
+                        </p>
+                    </div>
+                    <p class="hint warn" id="wiz-fare-btc-warn" hidden>
+                        A small bitcoin payment leaves its sender no sats to spare, so a fare the
+                        sender pays is refused on it. Free is the safe choice for bitcoin.
+                    </p>
+
+                    <fieldset class="choices">
+                        <legend>When the receiver claims</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-recycle" />
+                            <span class="choice__title"
+                                >Get my sats back when the receiver claims</span
+                            >
+                            <span class="choice__body"
+                                >The receiver repays the lent sats with their own, so they return to
+                                your Taxi.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-purchase" />
+                            <span class="choice__title">Sell the carrier outright</span>
+                            <span class="choice__body"
+                                >The receiver keeps the lent sats; the fare is all your Taxi earns.
+                                Receives quoted for a swap are refused, as they need the sats
+                                back.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-either" />
+                            <span class="choice__title">Let the payer choose</span>
+                            <span class="choice__body"
+                                >The payer picks one of the two; if they do not, the sats come back
+                                to you.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                </section>
+
+                <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
+                    <h3 id="wiz-h4" tabindex="-1">Check and save</h3>
+                    <p class="summary" id="wiz-summary"></p>
+                    <p class="hint">
+                        Save keeps your Taxi paused. Save &amp; go live also starts it: it takes
+                        payments as soon as every step of the checklist is done.
+                    </p>
+                </section>
+
+                <p class="note" id="wiz-note" aria-live="polite"></p>
+            </div>
+            <div class="actions wizard__foot">
+                <button type="button" id="wiz-cancel">Not now</button>
+                <button type="button" id="wiz-back">Back</button>
+                <button type="button" class="primary" id="wiz-next">Next</button>
+                <button type="button" id="wiz-save">Save</button>
+                <button type="button" class="primary" id="wiz-save-live">Save &amp; go live</button>
+            </div>
+        </dialog>
     </body>
 </html>

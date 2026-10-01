@@ -42,6 +42,7 @@ export const INDEX_HTML = `<!doctype html>
             <section class="panel" id="setup" aria-labelledby="setup-heading">
                 <div class="panel__head">
                     <h2 id="setup-heading">Get started</h2>
+                    <button type="button" id="wizard-open">Run setup again</button>
                 </div>
                 <ol class="steps">
                     <li class="step" id="step-connected">
@@ -474,6 +475,201 @@ export const INDEX_HTML = `<!doctype html>
                 </div>
             </section>
         </main>
+
+        <dialog class="wizard" id="wizard" aria-labelledby="wizard-title">
+            <div class="panel__head">
+                <h2 id="wizard-title">Set up your Taxi</h2>
+                <span class="meta" id="wizard-progress">Step 1 of 4</span>
+            </div>
+            <div class="panel__body">
+                <section id="wiz-step-1" aria-labelledby="wiz-h1">
+                    <h3 id="wiz-h1" tabindex="-1">What should your Taxi carry?</h3>
+                    <p class="lede">
+                        Your Taxi lends the sats a payment is missing, so that it can be sent.
+                        Choose which payments it helps.
+                    </p>
+                    <label class="check" for="wiz-btc">
+                        <input type="checkbox" id="wiz-btc" aria-describedby="wiz-btc-hint" />
+                        Small bitcoin payments
+                    </label>
+                    <p class="hint" id="wiz-btc-hint">
+                        Payments below the network dust, <span id="wiz-dust">—</span> sats, which
+                        cannot be sent on their own.
+                    </p>
+                    <p class="field">
+                        <label for="wiz-assets">Specific assets (optional)</label>
+                        <textarea
+                            id="wiz-assets"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="txid:group"
+                            aria-describedby="wiz-assets-hint"
+                        ></textarea>
+                        <span class="hint" id="wiz-assets-hint"
+                            >One per line: the asset's 64-character txid, a colon, then its group
+                            number, as the Funding card lists them. Each asset needs its own line;
+                            there is no "any asset".</span
+                        >
+                    </p>
+                </section>
+
+                <section id="wiz-step-2" aria-labelledby="wiz-h2" hidden>
+                    <h3 id="wiz-h2" tabindex="-1">How much should it lend?</h3>
+                    <p class="lede">
+                        Each payment borrows at most the network dust. Choose how much your Taxi may
+                        have lent out at once.
+                    </p>
+                    <fieldset class="choices">
+                        <legend class="sr-only">Lending limits</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-small" />
+                            <span class="choice__title">Small</span>
+                            <span class="choice__body" id="wiz-size-small-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-medium" />
+                            <span class="choice__title">Medium</span>
+                            <span class="choice__body" id="wiz-size-medium-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-custom" />
+                            <span class="choice__title">Custom</span>
+                            <span class="choice__body">Set the three limits yourself.</span>
+                        </label>
+                    </fieldset>
+                    <div class="form-grid" id="wiz-custom" hidden>
+                        <p class="field">
+                            <label for="wiz-per-payment">Per payment (sats)</label>
+                            <input type="text" id="wiz-per-payment" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-outstanding">In total (sats)</label>
+                            <input type="text" id="wiz-outstanding" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-concurrent">Payments at once</label>
+                            <input type="text" id="wiz-concurrent" inputmode="numeric" />
+                        </p>
+                    </div>
+                    <p class="hint">
+                        Lent sats stay locked until the receiver claims them or the Taxi recovers
+                        them. To lend the whole total, your Taxi needs it on top of the reserve it
+                        must keep.
+                    </p>
+                </section>
+
+                <section id="wiz-step-3" aria-labelledby="wiz-h3" hidden>
+                    <h3 id="wiz-h3" tabindex="-1">What should payers pay?</h3>
+                    <fieldset class="choices">
+                        <legend>Fare</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-free" />
+                            <span class="choice__title">Free</span>
+                            <span class="choice__body">Payers pay nothing extra.</span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-flat" />
+                            <span class="choice__title">A flat fare</span>
+                            <span class="choice__body"
+                                >The same number of sats on every payment.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-percent" />
+                            <span class="choice__title">A percentage</span>
+                            <span class="choice__body"
+                                >A share of the sats lent, with a minimum and an optional
+                                maximum.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="inline-fields" id="wiz-fare-flat-fields" hidden>
+                        <label for="wiz-fare-flat-sats">Fare</label>
+                        <input type="text" id="wiz-fare-flat-sats" inputmode="numeric" /> sats per
+                        payment
+                    </p>
+                    <p class="inline-fields" id="wiz-fare-percent-fields" hidden>
+                        <label for="wiz-fare-pct">Percentage</label>
+                        <input type="text" id="wiz-fare-pct" inputmode="decimal" /> %, at least
+                        <label class="sr-only" for="wiz-fare-min">Minimum fare in sats</label>
+                        <input type="text" id="wiz-fare-min" inputmode="numeric" placeholder="0" />
+                        and at most
+                        <label class="sr-only" for="wiz-fare-max">Maximum fare in sats</label>
+                        <input
+                            type="text"
+                            id="wiz-fare-max"
+                            inputmode="numeric"
+                            placeholder="none"
+                        />
+                        sats
+                    </p>
+                    <div id="wiz-fare-asset-row" hidden>
+                        <label class="check" for="wiz-fare-asset">
+                            <input type="checkbox" id="wiz-fare-asset" />
+                            Asset payments may pay the fare in the asset they send instead
+                        </label>
+                        <p class="hint">
+                            Same numbers, counted in the asset's own units; a percentage is then a
+                            share of the amount sent.
+                        </p>
+                    </div>
+                    <p class="hint warn" id="wiz-fare-btc-warn" hidden>
+                        A small bitcoin payment leaves its sender no sats to spare, so a fare the
+                        sender pays is refused on it. Free is the safe choice for bitcoin.
+                    </p>
+
+                    <fieldset class="choices">
+                        <legend>When the receiver claims</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-recycle" />
+                            <span class="choice__title"
+                                >Get my sats back when the receiver claims</span
+                            >
+                            <span class="choice__body"
+                                >The receiver repays the lent sats with their own, so they return to
+                                your Taxi.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-purchase" />
+                            <span class="choice__title">Sell the carrier outright</span>
+                            <span class="choice__body"
+                                >The receiver keeps the lent sats; the fare is all your Taxi earns.
+                                Receives quoted for a swap are refused, as they need the sats
+                                back.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-either" />
+                            <span class="choice__title">Let the payer choose</span>
+                            <span class="choice__body"
+                                >The payer picks one of the two; if they do not, the sats come back
+                                to you.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                </section>
+
+                <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
+                    <h3 id="wiz-h4" tabindex="-1">Check and save</h3>
+                    <p class="summary" id="wiz-summary"></p>
+                    <p class="hint">
+                        Save keeps your Taxi paused. Save &amp; go live also starts it: it takes
+                        payments as soon as every step of the checklist is done.
+                    </p>
+                </section>
+
+                <p class="note" id="wiz-note" aria-live="polite"></p>
+            </div>
+            <div class="actions wizard__foot">
+                <button type="button" id="wiz-cancel">Not now</button>
+                <button type="button" id="wiz-back">Back</button>
+                <button type="button" class="primary" id="wiz-next">Next</button>
+                <button type="button" id="wiz-save">Save</button>
+                <button type="button" class="primary" id="wiz-save-live">Save &amp; go live</button>
+            </div>
+        </dialog>
     </body>
 </html>
 `;
@@ -747,6 +943,105 @@ main {
 .setup__note {
     margin: 0;
     padding: 0 14px 10px;
+}
+
+/* Setup wizard */
+
+.wizard {
+    width: min(720px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    padding: 0;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+}
+
+.wizard::backdrop {
+    background: rgb(8 9 11 / 0.75);
+}
+
+.wizard h3 {
+    margin: 0 0 6px;
+    font: 600 16px/1.4 var(--sans);
+}
+
+/* Focused only so a screen reader announces the new step; it is not a control. */
+.wizard h3:focus {
+    outline: none;
+}
+
+.lede {
+    margin: 0 0 14px;
+    color: var(--text-dim);
+}
+
+.choices {
+    margin: 14px 0 10px;
+    padding: 0;
+    border: 0;
+}
+
+.choices > legend {
+    margin-bottom: 8px;
+    padding: 0;
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.choice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 10px;
+    margin: 0 0 6px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+}
+
+.choice:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--panel-2);
+}
+
+.choice__title {
+    font: 600 13px/1.5 var(--sans);
+}
+
+.choice__body {
+    grid-column: 2;
+    color: var(--text-dim);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.inline-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 10px;
+    color: var(--text-dim);
+}
+
+.inline-fields input[type="text"] {
+    width: 9ch;
+}
+
+.summary {
+    margin: 0 0 10px;
+    font: 400 14px/1.6 var(--sans);
+}
+
+.wizard__foot {
+    justify-content: flex-end;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+}
+
+#wiz-cancel {
+    margin-right: auto;
 }
 
 /* Headline: exposure and sweeper */
@@ -1027,7 +1322,8 @@ body.is-alarm .headline__sweeper {
     max-width: 44ch;
 }
 
-.warn {
+.warn,
+.hint.warn {
     margin: 0 0 6px;
     color: var(--accent);
 }
@@ -1758,16 +2054,11 @@ function renderSetup() {
     );
 
     const on = policy.assetRules.filter((rule) => rule.enabled);
-    const assets = on.filter((rule) => rule.assetId !== null).length;
-    const carried = [
-        ...(on.length > assets ? ["small bitcoin payments"] : []),
-        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
-    ];
     step(
         "carry",
         on.length > 0,
         on.length
-            ? "It carries " + carried.join(" and ") + "."
+            ? "It carries " + carriedText(on) + "."
             : "It carries nothing until at least one rule is switched on.",
     );
 
@@ -1788,6 +2079,239 @@ function goLive() {
     $("go-live-confirm").hidden = true;
     mutate(() => postAction("/admin/api/policy/resume"), "setup-note");
 }
+
+function carriedText(rules) {
+    const assets = rules.filter((rule) => rule.assetId !== null).length;
+    return [
+        ...(rules.length > assets ? ["small bitcoin payments"] : []),
+        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
+    ].join(" and ");
+}
+
+const wizard = { step: 1, size: "small", fare: "free", claim: "recycle" };
+
+const WIZARD_CHOICES = {
+    size: ["small", "medium", "custom"],
+    fare: ["free", "flat", "percent"],
+    claim: ["recycle", "purchase", "either"],
+};
+
+// Per payment is always the dust: the most any one payment can need.
+const PRESETS = { small: [100n, 100], medium: [1000n, 1000] };
+
+const WHOLE = /^(0|[1-9][0-9]*)$/;
+const PERCENT = /^[0-9]+(\\.[0-9]{1,2})?$/;
+
+const CLAIM_SUMMARY = {
+    recycle: "When a receiver claims, they repay the lent sats, so your Taxi gets them back.",
+    purchase: "When a receiver claims, they keep the lent sats; the fare is all your Taxi earns.",
+    either: "Each payer chooses whether the receiver repays the lent sats; without a choice, they do.",
+};
+
+const assetLines = () =>
+    $("wiz-assets")
+        .value.split("\\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+function openWizard() {
+    if (!view.status)
+        return setNote("setup-note", "The console has not reached the Taxi yet.", true);
+    Object.assign(wizard, { step: 1, size: "small", fare: "free", claim: "recycle" });
+    $("wiz-btc").checked = true;
+    $("wiz-fare-asset").checked = false;
+    for (const id of [
+        "wiz-assets",
+        "wiz-per-payment",
+        "wiz-outstanding",
+        "wiz-concurrent",
+        "wiz-fare-flat-sats",
+        "wiz-fare-pct",
+        "wiz-fare-min",
+        "wiz-fare-max",
+    ])
+        $(id).value = "";
+    const dust = BigInt(view.status.dust);
+    $("wiz-dust").textContent = group(view.status.dust);
+    for (const [size, [total, count]] of Object.entries(PRESETS))
+        $("wiz-size-" + size + "-text").textContent =
+            group(dust.toString()) +
+            " sats per payment · " +
+            group((dust * total).toString()) +
+            " sats in total · " +
+            group(String(count)) +
+            " payments at once";
+    renderWizard();
+    $("wizard").showModal();
+    $("wiz-h1").focus();
+}
+
+function renderWizard() {
+    for (let n = 1; n <= 4; n++) $("wiz-step-" + n).hidden = n !== wizard.step;
+    $("wizard-progress").textContent = "Step " + wizard.step + " of 4";
+    $("wiz-back").hidden = wizard.step === 1;
+    $("wiz-next").hidden = wizard.step === 4;
+    $("wiz-save").hidden = wizard.step !== 4;
+    $("wiz-save-live").hidden = wizard.step !== 4;
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values) $("wiz-" + name + "-" + value).checked = wizard[name] === value;
+    $("wiz-custom").hidden = wizard.size !== "custom";
+    $("wiz-fare-flat-fields").hidden = wizard.fare !== "flat";
+    $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
+    $("wiz-fare-asset-row").hidden = wizard.fare === "free" || assetLines().length === 0;
+    $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
+    const giveaway = wizard.fare === "free" && wizard.claim !== "recycle";
+    $("wiz-claim-warn").hidden = !giveaway;
+    $("wiz-claim-warn").textContent =
+        wizard.claim === "purchase"
+            ? "With no fare, selling outright gives the lent sats away on every payment."
+            : "With no fare, a payer who chooses to sell outright gets the lent sats for nothing.";
+    setNote("wiz-note", "", false);
+}
+
+function wizardProblem() {
+    if (wizard.step === 1) {
+        const lines = assetLines();
+        const bad = lines.find((line) => !parseAssetId(line));
+        if (bad) return '"' + bad + '" is not an asset id. ' + ASSET_ID_HELP;
+        if (new Set(lines.map((line) => assetKey(parseAssetId(line)))).size < lines.length)
+            return "An asset is listed twice.";
+        if (!$("wiz-btc").checked && lines.length === 0)
+            return "Choose small bitcoin payments, at least one asset, or both.";
+    }
+    if (wizard.step === 2 && wizard.size === "custom") {
+        const limits = ["wiz-per-payment", "wiz-outstanding", "wiz-concurrent"];
+        if (!limits.every((id) => WHOLE.test($(id).value.trim()) && $(id).value.trim() !== "0"))
+            return "Each limit is a whole number above 0.";
+    }
+    if (wizard.step === 3 && wizard.fare === "flat") {
+        if (!WHOLE.test($("wiz-fare-flat-sats").value.trim()))
+            return "The flat fare is a whole number of sats.";
+    }
+    if (wizard.step === 3 && wizard.fare === "percent") {
+        const pct = $("wiz-fare-pct").value.trim();
+        const min = $("wiz-fare-min").value.trim() || "0";
+        const max = $("wiz-fare-max").value.trim();
+        if (!PERCENT.test(pct) || Number(pct) > 100)
+            return "The percentage is a number from 0 to 100, at most two decimals.";
+        if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
+            return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
+    }
+    return null;
+}
+
+function wizardFares(isAsset) {
+    const pricing =
+        wizard.fare === "free"
+            ? { kind: "flat", units: "0" }
+            : wizard.fare === "flat"
+              ? { kind: "flat", units: $("wiz-fare-flat-sats").value.trim() }
+              : {
+                    kind: "proportional",
+                    bps: Math.round(Number($("wiz-fare-pct").value.trim()) * 100),
+                    minUnits: $("wiz-fare-min").value.trim() || "0",
+                    maxUnits: $("wiz-fare-max").value.trim() || null,
+                };
+    const fares = [{ id: "sats", currency: { kind: "sats" }, pricing }];
+    if (isAsset && wizard.fare !== "free" && $("wiz-fare-asset").checked)
+        fares.push({ id: "asset", currency: { kind: "sameAsset" }, pricing });
+    return fares;
+}
+
+function wizardPatch() {
+    const dust = BigInt(view.status.dust);
+    const custom = wizard.size === "custom";
+    const [total, count] = custom ? [] : PRESETS[wizard.size];
+    const rule = (assetId) => ({
+        assetId,
+        enabled: true,
+        fares: wizardFares(assetId !== null),
+        claim: wizard.claim,
+        maxTopupSats: null,
+    });
+    return {
+        maxPerPaymentTopupSats: custom ? $("wiz-per-payment").value.trim() : dust.toString(),
+        maxOutstandingSats: custom ? $("wiz-outstanding").value.trim() : (dust * total).toString(),
+        maxConcurrentAdvances: custom ? Number($("wiz-concurrent").value.trim()) : count,
+        assetRules: [
+            ...($("wiz-btc").checked ? [rule(null)] : []),
+            ...assetLines().map((line) => rule(parseAssetId(line))),
+        ],
+    };
+}
+
+function wizardSummary(patch) {
+    const pricing = patch.assetRules[0].fares[0].pricing;
+    const fare =
+        wizard.fare === "free"
+            ? "Payers pay no fare."
+            : wizard.fare === "flat"
+              ? "Each payment pays a fare of " + group(pricing.units) + " sats."
+              : "Each payment pays " +
+                pricing.bps / 100 +
+                "% of the sats lent, at least " +
+                group(pricing.minUnits) +
+                " sats" +
+                (pricing.maxUnits === null
+                    ? ""
+                    : " and at most " + group(pricing.maxUnits) + " sats") +
+                ".";
+    return [
+        "Your Taxi will carry " + carriedText(patch.assetRules) + ".",
+        "It lends up to " +
+            group(patch.maxPerPaymentTopupSats) +
+            " sats per payment and " +
+            group(patch.maxOutstandingSats) +
+            " sats in total, to at most " +
+            group(String(patch.maxConcurrentAdvances)) +
+            " payments at once.",
+        fare,
+        ...(patch.assetRules.some((rule) => rule.fares.length > 1)
+            ? ["Asset payments may pay it in the asset they send instead."]
+            : []),
+        CLAIM_SUMMARY[wizard.claim],
+        ...(view.policy && view.policy.assetRules.length
+            ? ["This replaces the rules your Taxi has now."]
+            : []),
+    ].join(" ");
+}
+
+function wizardMove(by) {
+    if (by > 0) {
+        const problem = wizardProblem();
+        if (problem) return setNote("wiz-note", problem, true);
+    }
+    wizard.step += by;
+    if (wizard.step === 4) $("wiz-summary").textContent = wizardSummary(wizardPatch());
+    renderWizard();
+    $("wiz-h" + wizard.step).focus();
+}
+
+async function saveWizard(goLive) {
+    const patch = wizardPatch();
+    if (goLive) patch.paused = false;
+    try {
+        await patchPolicy(patch);
+        $("wizard").close();
+        setNote(
+            "setup-note",
+            goLive
+                ? "Saved, and your Taxi is live."
+                : "Saved. Your Taxi stays paused until you go live.",
+            false,
+        );
+        await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
+        renderAlarm();
+    } catch (e) {
+        setNote($("wizard").open ? "wiz-note" : "setup-note", e.message, true);
+    }
+}
+
+const firstRun = (policy) =>
+    policy.assetRules.length === 0 &&
+    policy.maxOutstandingSats === "0" &&
+    policy.maxPerPaymentTopupSats === "0" &&
+    policy.maxConcurrentAdvances === 0;
 
 function renderFunding(funding) {
     const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
@@ -2339,6 +2863,13 @@ const postAction = (path) =>
         body: "{}",
     });
 
+const patchPolicy = (patch) =>
+    api("/admin/api/policy", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+    });
+
 function wire() {
     const filter = $("state-filter");
     for (const s of STATES) {
@@ -2454,16 +2985,23 @@ function wire() {
             setNote("policy-note", "nothing changed", false);
             return;
         }
-        mutate(
-            () =>
-                api("/admin/api/policy", {
-                    method: "PATCH",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify(patch),
-                }),
-            "policy-note",
-        );
+        mutate(() => patchPolicy(patch), "policy-note");
     });
+
+    $("wizard-open").addEventListener("click", openWizard);
+    $("wiz-cancel").addEventListener("click", () => $("wizard").close());
+    $("wiz-back").addEventListener("click", () => wizardMove(-1));
+    $("wiz-next").addEventListener("click", () => wizardMove(1));
+    $("wiz-save").addEventListener("click", () => saveWizard(false));
+    $("wiz-save-live").addEventListener("click", () => saveWizard(true));
+    $("wiz-btc").addEventListener("change", renderWizard);
+    $("wiz-assets").addEventListener("input", renderWizard);
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values)
+            $("wiz-" + name + "-" + value).addEventListener("change", () => {
+                wizard[name] = value;
+                renderWizard();
+            });
 
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden) refresh();
@@ -2473,10 +3011,13 @@ function wire() {
 }
 
 wire();
-loadPolicy().catch((e) => setNote("policy-note", e.message, true));
+Promise.all([loadPolicy().catch((e) => setNote("policy-note", e.message, true)), refresh()]).then(
+    () => {
+        if (view.policy && view.status && firstRun(view.policy)) openWizard();
+    },
+);
 loadHistory().catch(() => {});
 loadFunding();
-refresh();
 window.setInterval(refresh, POLL_MS);
 `;
 

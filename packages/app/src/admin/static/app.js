@@ -500,16 +500,11 @@ function renderSetup() {
     );
 
     const on = policy.assetRules.filter((rule) => rule.enabled);
-    const assets = on.filter((rule) => rule.assetId !== null).length;
-    const carried = [
-        ...(on.length > assets ? ["small bitcoin payments"] : []),
-        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
-    ];
     step(
         "carry",
         on.length > 0,
         on.length
-            ? "It carries " + carried.join(" and ") + "."
+            ? "It carries " + carriedText(on) + "."
             : "It carries nothing until at least one rule is switched on.",
     );
 
@@ -530,6 +525,239 @@ function goLive() {
     $("go-live-confirm").hidden = true;
     mutate(() => postAction("/admin/api/policy/resume"), "setup-note");
 }
+
+function carriedText(rules) {
+    const assets = rules.filter((rule) => rule.assetId !== null).length;
+    return [
+        ...(rules.length > assets ? ["small bitcoin payments"] : []),
+        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
+    ].join(" and ");
+}
+
+const wizard = { step: 1, size: "small", fare: "free", claim: "recycle" };
+
+const WIZARD_CHOICES = {
+    size: ["small", "medium", "custom"],
+    fare: ["free", "flat", "percent"],
+    claim: ["recycle", "purchase", "either"],
+};
+
+// Per payment is always the dust: the most any one payment can need.
+const PRESETS = { small: [100n, 100], medium: [1000n, 1000] };
+
+const WHOLE = /^(0|[1-9][0-9]*)$/;
+const PERCENT = /^[0-9]+(\.[0-9]{1,2})?$/;
+
+const CLAIM_SUMMARY = {
+    recycle: "When a receiver claims, they repay the lent sats, so your Taxi gets them back.",
+    purchase: "When a receiver claims, they keep the lent sats; the fare is all your Taxi earns.",
+    either: "Each payer chooses whether the receiver repays the lent sats; without a choice, they do.",
+};
+
+const assetLines = () =>
+    $("wiz-assets")
+        .value.split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+function openWizard() {
+    if (!view.status)
+        return setNote("setup-note", "The console has not reached the Taxi yet.", true);
+    Object.assign(wizard, { step: 1, size: "small", fare: "free", claim: "recycle" });
+    $("wiz-btc").checked = true;
+    $("wiz-fare-asset").checked = false;
+    for (const id of [
+        "wiz-assets",
+        "wiz-per-payment",
+        "wiz-outstanding",
+        "wiz-concurrent",
+        "wiz-fare-flat-sats",
+        "wiz-fare-pct",
+        "wiz-fare-min",
+        "wiz-fare-max",
+    ])
+        $(id).value = "";
+    const dust = BigInt(view.status.dust);
+    $("wiz-dust").textContent = group(view.status.dust);
+    for (const [size, [total, count]] of Object.entries(PRESETS))
+        $("wiz-size-" + size + "-text").textContent =
+            group(dust.toString()) +
+            " sats per payment · " +
+            group((dust * total).toString()) +
+            " sats in total · " +
+            group(String(count)) +
+            " payments at once";
+    renderWizard();
+    $("wizard").showModal();
+    $("wiz-h1").focus();
+}
+
+function renderWizard() {
+    for (let n = 1; n <= 4; n++) $("wiz-step-" + n).hidden = n !== wizard.step;
+    $("wizard-progress").textContent = "Step " + wizard.step + " of 4";
+    $("wiz-back").hidden = wizard.step === 1;
+    $("wiz-next").hidden = wizard.step === 4;
+    $("wiz-save").hidden = wizard.step !== 4;
+    $("wiz-save-live").hidden = wizard.step !== 4;
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values) $("wiz-" + name + "-" + value).checked = wizard[name] === value;
+    $("wiz-custom").hidden = wizard.size !== "custom";
+    $("wiz-fare-flat-fields").hidden = wizard.fare !== "flat";
+    $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
+    $("wiz-fare-asset-row").hidden = wizard.fare === "free" || assetLines().length === 0;
+    $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
+    const giveaway = wizard.fare === "free" && wizard.claim !== "recycle";
+    $("wiz-claim-warn").hidden = !giveaway;
+    $("wiz-claim-warn").textContent =
+        wizard.claim === "purchase"
+            ? "With no fare, selling outright gives the lent sats away on every payment."
+            : "With no fare, a payer who chooses to sell outright gets the lent sats for nothing.";
+    setNote("wiz-note", "", false);
+}
+
+function wizardProblem() {
+    if (wizard.step === 1) {
+        const lines = assetLines();
+        const bad = lines.find((line) => !parseAssetId(line));
+        if (bad) return '"' + bad + '" is not an asset id. ' + ASSET_ID_HELP;
+        if (new Set(lines.map((line) => assetKey(parseAssetId(line)))).size < lines.length)
+            return "An asset is listed twice.";
+        if (!$("wiz-btc").checked && lines.length === 0)
+            return "Choose small bitcoin payments, at least one asset, or both.";
+    }
+    if (wizard.step === 2 && wizard.size === "custom") {
+        const limits = ["wiz-per-payment", "wiz-outstanding", "wiz-concurrent"];
+        if (!limits.every((id) => WHOLE.test($(id).value.trim()) && $(id).value.trim() !== "0"))
+            return "Each limit is a whole number above 0.";
+    }
+    if (wizard.step === 3 && wizard.fare === "flat") {
+        if (!WHOLE.test($("wiz-fare-flat-sats").value.trim()))
+            return "The flat fare is a whole number of sats.";
+    }
+    if (wizard.step === 3 && wizard.fare === "percent") {
+        const pct = $("wiz-fare-pct").value.trim();
+        const min = $("wiz-fare-min").value.trim() || "0";
+        const max = $("wiz-fare-max").value.trim();
+        if (!PERCENT.test(pct) || Number(pct) > 100)
+            return "The percentage is a number from 0 to 100, at most two decimals.";
+        if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
+            return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
+    }
+    return null;
+}
+
+function wizardFares(isAsset) {
+    const pricing =
+        wizard.fare === "free"
+            ? { kind: "flat", units: "0" }
+            : wizard.fare === "flat"
+              ? { kind: "flat", units: $("wiz-fare-flat-sats").value.trim() }
+              : {
+                    kind: "proportional",
+                    bps: Math.round(Number($("wiz-fare-pct").value.trim()) * 100),
+                    minUnits: $("wiz-fare-min").value.trim() || "0",
+                    maxUnits: $("wiz-fare-max").value.trim() || null,
+                };
+    const fares = [{ id: "sats", currency: { kind: "sats" }, pricing }];
+    if (isAsset && wizard.fare !== "free" && $("wiz-fare-asset").checked)
+        fares.push({ id: "asset", currency: { kind: "sameAsset" }, pricing });
+    return fares;
+}
+
+function wizardPatch() {
+    const dust = BigInt(view.status.dust);
+    const custom = wizard.size === "custom";
+    const [total, count] = custom ? [] : PRESETS[wizard.size];
+    const rule = (assetId) => ({
+        assetId,
+        enabled: true,
+        fares: wizardFares(assetId !== null),
+        claim: wizard.claim,
+        maxTopupSats: null,
+    });
+    return {
+        maxPerPaymentTopupSats: custom ? $("wiz-per-payment").value.trim() : dust.toString(),
+        maxOutstandingSats: custom ? $("wiz-outstanding").value.trim() : (dust * total).toString(),
+        maxConcurrentAdvances: custom ? Number($("wiz-concurrent").value.trim()) : count,
+        assetRules: [
+            ...($("wiz-btc").checked ? [rule(null)] : []),
+            ...assetLines().map((line) => rule(parseAssetId(line))),
+        ],
+    };
+}
+
+function wizardSummary(patch) {
+    const pricing = patch.assetRules[0].fares[0].pricing;
+    const fare =
+        wizard.fare === "free"
+            ? "Payers pay no fare."
+            : wizard.fare === "flat"
+              ? "Each payment pays a fare of " + group(pricing.units) + " sats."
+              : "Each payment pays " +
+                pricing.bps / 100 +
+                "% of the sats lent, at least " +
+                group(pricing.minUnits) +
+                " sats" +
+                (pricing.maxUnits === null
+                    ? ""
+                    : " and at most " + group(pricing.maxUnits) + " sats") +
+                ".";
+    return [
+        "Your Taxi will carry " + carriedText(patch.assetRules) + ".",
+        "It lends up to " +
+            group(patch.maxPerPaymentTopupSats) +
+            " sats per payment and " +
+            group(patch.maxOutstandingSats) +
+            " sats in total, to at most " +
+            group(String(patch.maxConcurrentAdvances)) +
+            " payments at once.",
+        fare,
+        ...(patch.assetRules.some((rule) => rule.fares.length > 1)
+            ? ["Asset payments may pay it in the asset they send instead."]
+            : []),
+        CLAIM_SUMMARY[wizard.claim],
+        ...(view.policy && view.policy.assetRules.length
+            ? ["This replaces the rules your Taxi has now."]
+            : []),
+    ].join(" ");
+}
+
+function wizardMove(by) {
+    if (by > 0) {
+        const problem = wizardProblem();
+        if (problem) return setNote("wiz-note", problem, true);
+    }
+    wizard.step += by;
+    if (wizard.step === 4) $("wiz-summary").textContent = wizardSummary(wizardPatch());
+    renderWizard();
+    $("wiz-h" + wizard.step).focus();
+}
+
+async function saveWizard(goLive) {
+    const patch = wizardPatch();
+    if (goLive) patch.paused = false;
+    try {
+        await patchPolicy(patch);
+        $("wizard").close();
+        setNote(
+            "setup-note",
+            goLive
+                ? "Saved, and your Taxi is live."
+                : "Saved. Your Taxi stays paused until you go live.",
+            false,
+        );
+        await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
+        renderAlarm();
+    } catch (e) {
+        setNote($("wizard").open ? "wiz-note" : "setup-note", e.message, true);
+    }
+}
+
+const firstRun = (policy) =>
+    policy.assetRules.length === 0 &&
+    policy.maxOutstandingSats === "0" &&
+    policy.maxPerPaymentTopupSats === "0" &&
+    policy.maxConcurrentAdvances === 0;
 
 function renderFunding(funding) {
     const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
@@ -1081,6 +1309,13 @@ const postAction = (path) =>
         body: "{}",
     });
 
+const patchPolicy = (patch) =>
+    api("/admin/api/policy", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+    });
+
 function wire() {
     const filter = $("state-filter");
     for (const s of STATES) {
@@ -1196,16 +1431,23 @@ function wire() {
             setNote("policy-note", "nothing changed", false);
             return;
         }
-        mutate(
-            () =>
-                api("/admin/api/policy", {
-                    method: "PATCH",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify(patch),
-                }),
-            "policy-note",
-        );
+        mutate(() => patchPolicy(patch), "policy-note");
     });
+
+    $("wizard-open").addEventListener("click", openWizard);
+    $("wiz-cancel").addEventListener("click", () => $("wizard").close());
+    $("wiz-back").addEventListener("click", () => wizardMove(-1));
+    $("wiz-next").addEventListener("click", () => wizardMove(1));
+    $("wiz-save").addEventListener("click", () => saveWizard(false));
+    $("wiz-save-live").addEventListener("click", () => saveWizard(true));
+    $("wiz-btc").addEventListener("change", renderWizard);
+    $("wiz-assets").addEventListener("input", renderWizard);
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values)
+            $("wiz-" + name + "-" + value).addEventListener("change", () => {
+                wizard[name] = value;
+                renderWizard();
+            });
 
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden) refresh();
@@ -1215,8 +1457,11 @@ function wire() {
 }
 
 wire();
-loadPolicy().catch((e) => setNote("policy-note", e.message, true));
+Promise.all([loadPolicy().catch((e) => setNote("policy-note", e.message, true)), refresh()]).then(
+    () => {
+        if (view.policy && view.status && firstRun(view.policy)) openWizard();
+    },
+);
 loadHistory().catch(() => {});
 loadFunding();
-refresh();
 window.setInterval(refresh, POLL_MS);

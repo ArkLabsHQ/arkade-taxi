@@ -6,7 +6,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
-import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
+import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness, type Harness } from "./fixtures.js";
 
 const asset = (name: string): string =>
@@ -779,7 +779,7 @@ describe("setup guidance", () => {
         expect(context.blockerText("no_such_blocker")).toBe("no_such_blocker");
     });
 
-    it("walks a fresh Taxi through the checklist in plain words", async () => {
+    it("walks a fresh Taxi through the checklist and the setup wizard in one PATCH", async () => {
         const admin: Harness = harness({
             operationalSnapshot: (options) =>
                 readiness([
@@ -789,12 +789,15 @@ describe("setup guidance", () => {
                     "operator_reserve_low",
                 ]),
         });
+        const before = admin.policy.get();
         const dashboard = runDashboard(() => dashboardPage([], "d".repeat(64), null), admin, {
             realStatus: true,
         });
         const text = (id: string) => dashboard.element(id).textContent;
+        const click = (id: string) => dashboard.element(id).fire("click");
         const steps = ["connected", "fund", "limits", "carry", "live"];
 
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
         await vi.waitFor(() => expect(text("step-fund-detail")).toContain("10 000"));
         expect(steps.map((step) => text(`step-${step}-state`))).toEqual([
             "Done",
@@ -811,15 +814,62 @@ describe("setup guidance", () => {
             "The Taxi is paused, so it refuses every new payment.",
         ]);
 
-        dashboard.element("step-live-fix").fire("click");
+        click("wiz-cancel");
+        expect(dashboard.element("wizard").open).toBe(false);
+        click("step-live-fix");
         expect(dashboard.element("go-live-confirm").hidden).toBe(false);
         expect(text("go-live-warning")).toBe(
             "Not done yet: fund your Taxi, set your limits, choose what to carry. It will refuse payments until they are.",
         );
         expect(dashboard.sent).toEqual([]);
-        dashboard.element("go-live-anyway").fire("click");
+        click("go-live-anyway");
         await vi.waitFor(() =>
             expect(dashboard.sent.map((r) => r.path)).toEqual(["/admin/api/policy/resume"]),
         );
+
+        click("wizard-open");
+        expect(dashboard.element("wizard").open).toBe(true);
+        dashboard.element("wiz-btc").checked = true;
+        dashboard.element("wiz-assets").value = `${"ab".repeat(32)}:0`;
+        click("wiz-next");
+        dashboard.element("wiz-size-small").fire("change");
+        expect(text("wiz-size-small-text")).toBe(
+            "330 sats per payment · 33 000 sats in total · 100 payments at once",
+        );
+        click("wiz-next");
+        dashboard.element("wiz-fare-free").fire("change");
+        dashboard.element("wiz-claim-recycle").fire("change");
+        click("wiz-next");
+        expect(text("wiz-summary")).toBe(
+            "Your Taxi will carry small bitcoin payments and 1 asset. It lends up to 330 sats per payment and 33 000 sats in total, to at most 100 payments at once. Payers pay no fare. When a receiver claims, they repay the lent sats, so your Taxi gets them back.",
+        );
+        click("wiz-save-live");
+        await vi.waitFor(() => expect(text("step-live-state")).toBe("Done"));
+
+        expect(dashboard.element("wizard").open).toBe(false);
+        expect(dashboard.sent.filter((r) => r.method === "PATCH")).toHaveLength(1);
+        const rule = {
+            enabled: true,
+            fares: [
+                { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units: 0n } },
+            ],
+            claim: "recycle",
+            maxTopupSats: null,
+        };
+        expect(admin.policy.get()).toEqual({
+            ...before,
+            paused: false,
+            maxPerPaymentTopupSats: DUST,
+            maxOutstandingSats: 100n * DUST,
+            maxConcurrentAdvances: 100,
+            assetRules: [
+                { assetId: null, ...rule },
+                { assetId: { txid: new Uint8Array(32).fill(0xab), groupIndex: 0 }, ...rule },
+            ],
+        });
+        expect(["limits", "carry"].map((step) => text(`step-${step}-state`))).toEqual([
+            "Done",
+            "Done",
+        ]);
     });
 });
