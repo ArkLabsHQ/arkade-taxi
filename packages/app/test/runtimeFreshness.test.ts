@@ -97,6 +97,7 @@ function setup() {
         },
         walletFactory: async () => wallet,
         reservedOutpoints: () => reservations.listReservedOutpoints(),
+        heldOutpoints: () => reservations.listReservedOutpoints(),
     });
     const builder = new FakeLockupBuilder(cfg, serverUnroll);
     const observed: unknown[] = [];

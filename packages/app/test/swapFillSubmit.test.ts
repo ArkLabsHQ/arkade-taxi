@@ -964,6 +964,7 @@ describe("submitSwapFill bound freshness gate", () => {
             });
             runtime = createOperatorRuntime(cfg, world.db, {
                 now: () => clockMs,
+                heldOutpoints: () => [],
                 providers: {
                     arkProvider: {
                         getInfo: async () => {

@@ -44,7 +44,7 @@ afterEach(() => {
     for (const db of databases.splice(0)) db.close();
 });
 
-function setup() {
+function setup({ withoutHeld = false } = {}) {
     const db = openDatabase(":memory:");
     databases.push(db);
     let now = 1000;
@@ -145,7 +145,8 @@ function setup() {
             if (reservationReadFails) throw new Error("reservation read failed");
             return taxiReserved;
         },
-        heldOutpoints: () => held,
+        // The e2e suite is not typechecked: a caller there could leave it out.
+        heldOutpoints: withoutHeld ? (undefined as never) : () => held,
     });
     return {
         runtime,
@@ -366,6 +367,7 @@ describe("persistent operator runtime safety", () => {
         const resolved = await resolveRuntimeConfig(config({ addressHrp: "tark" }), providers);
         const runtime = createOperatorRuntime(resolved, db, {
             providers,
+            heldOutpoints: () => [],
             onchainProvider: {
                 getChainTip: async () => ({ height: 100, time: 1789132000, hash: "aa".repeat(32) }),
             } as WalletConfig["onchainProvider"],
@@ -773,6 +775,18 @@ describe("the SDK's background settlement", () => {
             ),
         ).rejects.toThrow("proceeds_submission_not_authorized");
         expect(register).toHaveBeenCalledTimes(1);
+    });
+
+    it("does no background work when it cannot tell which coins the Taxi holds", async () => {
+        const s = setup({ withoutHeld: true });
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await s.runtime.refresh();
+
+        s.startBackground();
+        await expect(s.backgroundPoll).rejects.toThrow();
+        expect(register).not.toHaveBeenCalled();
     });
 
     it("stops renewing coins that cannot outlive the threshold, and keeps boarding", async () => {

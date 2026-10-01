@@ -62,14 +62,14 @@ export interface OperatorRuntimeOptions {
     walletFactory?: (config: WalletConfig) => Promise<Wallet>;
     onchainProvider?: WalletConfig["onchainProvider"];
     reservedOutpoints?: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
-    /** Coins the SDK's background settlement must never spend. */
-    heldOutpoints?: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
+    /** Coins the SDK's background settlement must never spend. Without it, it spends none. */
+    heldOutpoints: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
 }
 
 export function createOperatorRuntime(
     config: RuntimeConfig,
     db: Database,
-    options: OperatorRuntimeOptions = {},
+    options: OperatorRuntimeOptions,
 ) {
     const now = options.now ?? Date.now;
     const providers = createProviders(config);
@@ -92,7 +92,7 @@ export function createOperatorRuntime(
         turns = turn.catch(() => {});
         return turn;
     };
-    const held = async () => new Set(((await options.heldOutpoints?.()) ?? []).map(outpointKey));
+    const held = async () => new Set((await options.heldOutpoints()).map(outpointKey));
     const tooShort = (lifetime: bigint) =>
         lifetime - config.vtxoRenewalThresholdSeconds < RENEWAL_MARGIN_SECONDS;
     // arkd advertises no VTXO lifetime; a batch output's own span is it. Below 512 it counts blocks.

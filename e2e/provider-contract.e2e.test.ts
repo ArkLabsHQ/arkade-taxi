@@ -34,6 +34,7 @@ liveScenario("provider-contract", async () => {
     let db = openDatabase(path);
     let runtime = createOperatorRuntime(config, db, {
         onchainProvider: new EsploraProvider(esplora),
+        heldOutpoints: () => [],
     });
     try {
         const verified = await verifyProviders(config, runtime.providers);
@@ -121,6 +122,7 @@ liveScenario("provider-contract", async () => {
         db = openDatabase(path);
         runtime = createOperatorRuntime(config, db, {
             onchainProvider: new EsploraProvider(esplora),
+            heldOutpoints: () => [],
         });
         const durableAfterReopen = canonicalVtxoSnapshot(
             await runtime.storage.walletRepository.getVtxos(address),
