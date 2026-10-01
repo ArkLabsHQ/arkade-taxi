@@ -23,17 +23,23 @@
         "regtest:up:client": "node scripts/client-regtest.mjs up",
         "regtest:down:client": "node scripts/client-regtest.mjs down",
         "regtest:reset:client": "node scripts/client-regtest.mjs reset",
-        "regtest:test:client": "node scripts/client-regtest.mjs test"
+        "regtest:test:client": "node scripts/client-regtest.mjs test",
+        "lint": "eslint ."
     },
     "devDependencies": {
         "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz",
         "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz",
+        "@eslint/js": "^10.0.1",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
+        "eslint": "^10.11.0",
+        "eslint-config-prettier": "^10.1.8",
+        "globals": "^17.13.0",
         "prettier": "^3.9.6",
         "tsup": "^8.5.1",
         "typescript": "^5.9.3",
+        "typescript-eslint": "^8.71.0",
         "vitest": "^3.2.7"
     },
     "pnpm": {
