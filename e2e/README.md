@@ -98,8 +98,10 @@ having asserted nothing is worse than no suite.
 The suite exercises production HTTP and provider boundaries, real covenant
 purchase/recycle/refund/recovery flows, exposure and admission controls, packed
 client verification, persistent operator state, and restart reconciliation.
-An on-chain deposit to the operator's boarding address is mined, boarded through
-the admin API and counted as usable inventory.
+An on-chain deposit to the operator's boarding address is mined and boarded by
+the SDK's own background settlement, with no operator action, into usable
+inventory. The stack's VTXOs live two days, inside the SDK's three-day renewal
+default, so the harness sets `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to 36 hours.
 It also covers lost submit responses, duplicate requests, stale provider
 identity, warning/critical recovery deadlines before VTXO expiry, and one
 two-owner offer fill in which a solver and a sponsor each sign only their own

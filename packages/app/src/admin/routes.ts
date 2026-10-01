@@ -25,8 +25,8 @@ import {
     satsToWire,
 } from "@arkade-taxi/protocol";
 import { assetRuleToWire } from "../rulesWire.js";
-import type { BoardingDeposits, BoardingStatus } from "../boarding.js";
-import { sanitizeOperationalError, ServiceError } from "../errors.js";
+import type { BoardingDeposits } from "../boarding.js";
+import { sanitizeOperationalError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
 import type { RuntimeConfig } from "../config.js";
@@ -65,15 +65,9 @@ export interface AdminDeps {
         >;
         inventory: RuntimeSafety["inventory"];
         coins: readonly VirtualCoin[];
-        boarding: {
-            address: string;
-            /** Null when the on-chain read failed. */
-            deposits: BoardingDeposits | null;
-            job: BoardingStatus;
-        };
+        /** Each field is null when its read failed. */
+        boarding: { address: string | null; deposits: BoardingDeposits | null };
     }>;
-    /** Resolves once a boarding job is accepted; a refusal rejects with a ServiceError. */
-    board(actor: string): Promise<void>;
 }
 
 const MAX_LIMIT = 1_000;
@@ -516,7 +510,6 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                     confirmedSats: deposits && satsToWire(deposits.confirmedSats),
                     unconfirmedSats: deposits && satsToWire(deposits.unconfirmedSats),
                     expiredSats: deposits && satsToWire(deposits.expiredSats),
-                    job: boarding.job,
                 },
             });
         } catch (e) {
@@ -524,28 +517,6 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                 "cache-control": "no-store",
             });
         }
-    });
-
-    app.post(at("/api/funding/board"), async (c) => {
-        let who: string;
-        try {
-            who = await mutation(c);
-        } catch (e) {
-            return bad(c, message(e));
-        }
-        try {
-            await deps.board(who);
-        } catch (e) {
-            const refused =
-                e instanceof ServiceError
-                    ? e
-                    : new ServiceError("boarding_unavailable", 503, message(e));
-            return c.json({ code: refused.code, error: message(refused) }, refused.status, {
-                "cache-control": "no-store",
-            });
-        }
-        deps.policy.recordOperation("board", who);
-        return accepted(c, { accepted: true, action: "board" });
     });
 
     app.get(at("/api/policy"), (c) => ok(c, toPolicyWire(deps.policy.get())));

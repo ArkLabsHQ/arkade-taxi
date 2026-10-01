@@ -12,7 +12,7 @@ export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "cla
     sweeperIntervalMs: number;
     sweeperRunning: () => boolean;
     rescan(): Promise<void>;
-    boarding: Omit<ReturnType<typeof createBoarding>, "stop">;
+    boarding: ReturnType<typeof createBoarding>;
     accepting?: () => boolean;
     shutdownSignal?: AbortSignal;
 }
@@ -60,6 +60,7 @@ function fundingRead<T>(read: () => Promise<T>, nowMs: () => number): () => Prom
  */
 function adminDeps(deps: ServerDeps) {
     const coins = fundingRead(() => deps.inventory.getSpendableVtxos(), deps.nowMs);
+    const boardingAddress = fundingRead(() => deps.boarding.address(), deps.nowMs);
     const deposits = fundingRead(() => deps.boarding.deposits(), deps.nowMs);
     return {
         advances: deps.advances,
@@ -89,12 +90,10 @@ function adminDeps(deps: ServerDeps) {
             inventory: deps.runtime.safety().inventory,
             coins: await coins(),
             boarding: {
-                address: await deps.boarding.address(),
+                address: await boardingAddress().catch(() => null),
                 deposits: await deposits().catch(() => null),
-                job: deps.boarding.status(),
             },
         }),
-        board: (actor: string) => deps.boarding.start(actor),
     };
 }
 

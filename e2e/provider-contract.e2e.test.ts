@@ -152,8 +152,25 @@ liveScenario("provider-contract", async () => {
 
 liveScenario("onchain-boarding-topup", async () => {
     const config = await resolveRuntimeConfig(loadConfig(process.env));
-    const before = await admin("funding");
-    const boarded = BigInt(before.boarding.confirmedSats) + 123_000n;
+    const operatorScript = `5120${Buffer.from(config.operatorKey).toString("hex")}`;
+    const indexer = new RestIndexerProvider(required("TAXI_E2E_ARKD_URL"));
+    const spendable = async () =>
+        (await indexer.getVtxos({ scripts: [operatorScript], spendableOnly: true })).vtxos;
+    const coins = await spendable();
+    const known = new Set(coins.map(({ txid, vout }) => `${txid}:${vout}`));
+    const baseline = coins
+        .filter((coin) => !coin.assets?.length)
+        .reduce((sum, coin) => sum + BigInt(coin.value), 0n);
+    // Taxi re-reads its wallet once per reconcile interval, so it can lag the last scenario's coins.
+    const before = await poll(
+        `usable inventory of every operator coin, ${baseline} sats`,
+        () => admin("funding"),
+        (funding) =>
+            funding.usableSats !== null &&
+            BigInt(funding.usableSats) === baseline &&
+            funding.boarding.address !== null,
+        30_000,
+    );
     execFileSync(
         process.execPath,
         [
@@ -167,56 +184,22 @@ liveScenario("onchain-boarding-topup", async () => {
         { timeout: 120000, stdio: "pipe" },
     );
     await mineBlocks(1);
-    const funded = await poll(
-        "confirmed boarding deposit",
-        () => admin("funding"),
-        // usableSats is null while the runtime re-checks the wallet.
-        (funding) =>
-            funding.boarding.confirmedSats === boarded.toString() && funding.usableSats !== null,
-        120_000,
-    );
-    const usable = BigInt(funded.usableSats);
 
-    const response = await fetch(`${required("TAXI_E2E_ADMIN_URL")}/admin/api/funding/board`, {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },
-        body: "{}",
-    });
-    expect({ status: response.status, body: await response.json() }).toEqual({
-        status: 202,
-        body: { accepted: true, action: "board" },
-    });
-    const { boarding } = await poll(
-        "boarding job settles",
-        () => admin("funding"),
-        (funding) => funding.boarding.job.state !== "running",
-        240_000,
-    );
-    expect(boarding.job).toMatchObject({
-        state: "succeeded",
-        actor: "task13-e2e",
-        amountSats: boarded.toString(),
-        authorizedFeeSats: "0",
-        error: null,
-    });
-
-    const operatorScript = `5120${Buffer.from(config.operatorKey).toString("hex")}`;
-    const { vtxos } = await new RestIndexerProvider(required("TAXI_E2E_ARKD_URL")).getVtxos({
-        scripts: [operatorScript],
-        spendableOnly: true,
-    });
-    expect(
-        vtxos
-            .filter((coin) => coin.commitmentTxIds?.includes(boarding.job.commitmentTxid))
-            .map((coin) => coin.value),
-    ).toEqual([Number(boarded)]);
+    // The SDK polls every 60 s and boards in the next batch; three polls, inside testTimeout.
     await poll(
-        "boarded coin counted as usable inventory",
-        () => admin("funding"),
-        (funding) => funding.usableSats !== null && BigInt(funding.usableSats) === usable + boarded,
-        120_000,
+        "the SDK boards the confirmed deposit on its own",
+        async () =>
+            (await spendable())
+                .filter(({ txid, vout }) => !known.has(`${txid}:${vout}`))
+                .map((coin) => coin.value),
+        (values) => values.length === 1 && values[0] === 123_000,
+        180_000,
     );
-    expect((await admin("policy/history?limit=50")).history).toContainEqual(
-        expect.objectContaining({ field: "operation", newValue: "board", actor: "task13-e2e" }),
+    await poll(
+        `boarded coin counted as usable inventory, ${baseline + 123_000n} sats`,
+        () => admin("funding"),
+        (funding) =>
+            funding.usableSats !== null && BigInt(funding.usableSats) === baseline + 123_000n,
+        60_000,
     );
 });

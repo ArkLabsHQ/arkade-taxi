@@ -150,17 +150,12 @@
                         <button type="button" id="funding-boarding-copy" disabled>
                             Copy boarding address
                         </button>
-                        <button type="button" id="funding-board" disabled>Board</button>
-                        <span class="meta" id="funding-board-state">unknown</span>
                     </div>
                     <p class="note">
-                        Send bitcoin on-chain to this address. Board settles every confirmed deposit
-                        into the Arkade address above in the next batch.
+                        Send bitcoin on-chain to this address. Deposits move into the Arkade address
+                        above automatically shortly after they confirm; expired ones are swept back
+                        here automatically.
                     </p>
-                    <p class="note is-error" id="funding-boarding-sweep" hidden>
-                        Expired deposits must be swept on-chain with the operator key.
-                    </p>
-                    <p class="note" id="funding-board-note" aria-live="polite"></p>
                 </div>
                 <div class="scroll">
                     <table>

@@ -31,13 +31,6 @@ describe("loadConfig", () => {
                 /TAXI_PROCEEDS_MAX_FEE_SATS/,
             );
     });
-    it("defaults the boarding fee cap to zero and accepts only non-negative integers", () => {
-        expect(loadConfig(env()).boardingMaxFeeSats).toBe(0n);
-        expect(loadConfig(env({ TAXI_BOARDING_MAX_FEE_SATS: "12" })).boardingMaxFeeSats).toBe(12n);
-        expect(() => loadConfig(env({ TAXI_BOARDING_MAX_FEE_SATS: "-1" }))).toThrow(
-            /TAXI_BOARDING_MAX_FEE_SATS/,
-        );
-    });
     it("renews at the SDK's 3-day default, and only before admission headroom runs out", () => {
         expect(loadConfig(env()).vtxoRenewalThresholdSeconds).toBe(259200n);
         expect(() => loadConfig(env({ TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: "86400" }))).toThrow(

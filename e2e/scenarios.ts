@@ -8,7 +8,7 @@ export const SCENARIOS = [
     },
     {
         id: "onchain-boarding-topup",
-        title: "an on-chain deposit boards through the admin API into usable inventory",
+        title: "the SDK boards a mined on-chain deposit by itself into usable inventory",
     },
     { id: "329-sat-bitcoin-recycle", title: "Alice sends Bob 329 sats with Taxi's one-sat loan" },
     {

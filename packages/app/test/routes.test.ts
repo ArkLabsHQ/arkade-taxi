@@ -1644,10 +1644,8 @@ describe("CORS", () => {
             sweeperRunning: () => true,
             rescan: async () => {},
             boarding: {
-                status: () => boardingView().job,
                 address: async () => "bcrt1pboarding",
                 deposits: async () => boardingView().deposits!,
-                start: async () => {},
             },
         };
     };
@@ -1710,11 +1708,14 @@ describe("CORS", () => {
     it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
         let nowMs = 1_000_000;
         let reads = 0;
+        let addressReads = 0;
         let failing = false;
+        let addressFailing = false;
         let release!: () => void;
         const gate = new Promise<void>((resolve) => (release = resolve));
+        const base = serverDeps();
         const admin = createAdminApp({
-            ...serverDeps(),
+            ...base,
             nowMs: () => nowMs,
             inventory: {
                 getLockedVtxoOutpoints: async () => [],
@@ -1723,6 +1724,14 @@ describe("CORS", () => {
                     await gate;
                     if (failing) throw new Error("wallet unavailable");
                     return [fundingCoin()];
+                },
+            },
+            boarding: {
+                ...base.boarding,
+                address: async () => {
+                    addressReads++;
+                    if (addressFailing) throw new Error("wallet unavailable");
+                    return "bcrt1pboarding";
                 },
             },
         });
@@ -1735,10 +1744,10 @@ describe("CORS", () => {
         expect(await Promise.all(concurrent)).toEqual([200, 200]);
         nowMs += 9_999;
         expect(await funding()).toBe(200);
-        expect(reads).toBe(1);
+        expect([reads, addressReads]).toEqual([1, 1]);
         nowMs += 1;
         expect(await funding()).toBe(200);
-        expect(reads).toBe(2);
+        expect([reads, addressReads]).toEqual([2, 2]);
 
         nowMs += 10_000;
         failing = true;
@@ -1746,6 +1755,12 @@ describe("CORS", () => {
         failing = false;
         expect(await funding()).toBe(200);
         expect(reads).toBe(4);
+
+        nowMs += 10_000;
+        addressFailing = true;
+        const degraded = await admin.request("/api/funding");
+        expect(degraded.status).toBe(200);
+        expect((await degraded.json()).boarding.address).toBeNull();
     });
 
     it("gives /admin no CORS headers and does not answer its preflight", async () => {

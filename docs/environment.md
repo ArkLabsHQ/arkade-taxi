@@ -28,7 +28,6 @@ deliberate — it refuses to guess a price.
 | `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key) |
 | `TAXI_LOG_LEVEL`             | `info`     | no       | `trace`…`fatal`              |
 | `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats    |
-| `TAXI_BOARDING_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats    |
 
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
@@ -132,16 +131,6 @@ status reports `proceeds_fee_cap_exceeded`. Deliberately configure a higher cap
 and restart for a fee-charging deployment. Each created job persists its exact
 fee and authorization; changing the environment cannot widen an in-flight job.
 Ambiguous intents retain reservations for reconciliation, including after restart.
-
-### `TAXI_BOARDING_MAX_FEE_SATS`
-
-Maximum Arkade Service intent fee authorized for one on-chain top-up, which
-settles the operator's confirmed boarding deposits into its Arkade address.
-Defaults to `0`. The fee is deducted from the boarded amount. A higher quoted
-fee refuses the top-up with `boarding_fee_cap_exceeded`, naming the fee; set the
-cap deliberately and restart for a fee-charging deployment. It is separate from
-`TAXI_PROCEEDS_MAX_FEE_SATS`, so allowing one does not widen the other. See
-[on-chain top-up](runbook.md#on-chain-top-up).
 
 ### Provider identities and network parameters
 

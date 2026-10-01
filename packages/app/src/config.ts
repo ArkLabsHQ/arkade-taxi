@@ -23,7 +23,6 @@ export interface TaxiConfig {
     reconcileIntervalMs: number;
     operatorMinReserveSats: bigint;
     proceedsMaxFeeSats: bigint;
-    boardingMaxFeeSats: bigint;
     /** The operator signs its own funding inputs at lockup. It is never a
      * covenant signer — no leaf carries its key in a multisig. */
     operatorPrivkey: Uint8Array;
@@ -107,11 +106,6 @@ const SCHEMA = z
             .regex(DECIMAL, "must be a non-negative integer")
             .transform(BigInt)
             .default("0"),
-        TAXI_BOARDING_MAX_FEE_SATS: z
-            .string()
-            .regex(DECIMAL, "must be a non-negative integer")
-            .transform(BigInt)
-            .default("0"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
@@ -190,7 +184,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
-        boardingMaxFeeSats: v.TAXI_BOARDING_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
         logLevel: v.TAXI_LOG_LEVEL,
     };

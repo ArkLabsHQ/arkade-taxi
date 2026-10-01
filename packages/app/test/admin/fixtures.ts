@@ -13,15 +13,6 @@ type BoardingView = Awaited<ReturnType<AdminDeps["funding"]>>["boarding"];
 export const boardingView = (over: Partial<BoardingView> = {}): BoardingView => ({
     address: "bcrt1pboarding",
     deposits: { confirmedSats: 0n, unconfirmedSats: 0n, expiredSats: 0n },
-    job: {
-        state: "idle",
-        actor: null,
-        amountSats: null,
-        authorizedFeeSats: null,
-        maxFeeSats: "0",
-        commitmentTxid: null,
-        error: null,
-    },
     ...over,
 });
 
@@ -85,7 +76,6 @@ export function harness(
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
         funding?: AdminDeps["funding"];
-        board?: AdminDeps["board"];
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -115,7 +105,6 @@ export function harness(
                 coins: [],
                 boarding: boardingView(),
             })),
-        board: opts.board ?? (async () => {}),
     });
 
     const app = new Hono();

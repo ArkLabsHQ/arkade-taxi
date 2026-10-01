@@ -161,7 +161,9 @@ export function createOperatorRuntime(
                         onchainProvider:
                             options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
                         storage,
-                        settlementConfig: false,
+                        settlementConfig: {
+                            vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
+                        },
                     }),
                 );
                 const settle = created.settle.bind(created);

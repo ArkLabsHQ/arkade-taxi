@@ -71,7 +71,7 @@ async function runServe(): Promise<void> {
         receiveQuotes,
         jobs,
     });
-    const boarding = createBoarding({ config, runtime });
+    const boarding = createBoarding(runtime);
     const lockupSubmitter = productionLockupSubmitter(
         config,
         SingleKey.fromPrivateKey(config.operatorPrivkey),
@@ -330,7 +330,6 @@ async function runServe(): Promise<void> {
         abort() {
             submission.stop();
             proceeds.stop();
-            boarding.stop();
             sweeper.stop();
             watcherStop ??= watcher.stop();
         },

@@ -5,7 +5,6 @@ import { bytesToHex } from "@arkade-taxi/protocol";
 import { advance, boardingView, harness, healthySweeper, key } from "./fixtures.js";
 import { config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
-import { ServiceError } from "../../src/errors.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 
 const INT64_MAX = "9223372036854775807";
@@ -230,48 +229,22 @@ describe("GET /admin/api/funding", () => {
                     confirmedSats: "100000",
                     unconfirmedSats: "5000",
                     expiredSats: "40000",
-                    job: boarding.job,
                 },
             });
         }
-    });
-});
-
-describe("POST /admin/api/funding/board", () => {
-    it("starts a boarding job for the proxy actor, audits it and passes refusals through", async () => {
-        const actors: string[] = [];
-        let refusal: Error | undefined;
-        const h = harness({
-            board: async (actor) => {
-                if (refusal) throw refusal;
-                actors.push(actor);
-            },
+        const unread = harness({
+            funding: async () => ({
+                ...(await funding()),
+                boarding: { address: null, deposits: null },
+            }),
         });
-
-        expect(await h.send("/admin/api/funding/board", "POST", {}, "alice")).toEqual({
-            status: 202,
-            body: { accepted: true, action: "board" },
+        expect((await unread.json("/admin/api/funding")).body.boarding).toEqual({
+            address: null,
+            confirmedSats: null,
+            unconfirmedSats: null,
+            expiredSats: null,
         });
-        expect(actors).toEqual(["alice"]);
-        expect(h.policy.history(10)[0]).toMatchObject({
-            field: "operation",
-            newValue: "board",
-            actor: "alice",
-        });
-
-        refusal = new ServiceError("settlement_active", 409, "another settlement is running");
-        expect(await h.send("/admin/api/funding/board", "POST", {}, "bob")).toEqual({
-            status: 409,
-            body: { code: "settlement_active", error: "another settlement is running" },
-        });
-        refusal = new Error("esplora unreachable");
-        expect(await h.send("/admin/api/funding/board", "POST", {}, "bob")).toEqual({
-            status: 503,
-            body: { code: "boarding_unavailable", error: "esplora unreachable" },
-        });
-        expect((await h.send("/admin/api/funding/board", "POST", {}, " ")).status).toBe(400);
-        expect(actors).toEqual(["alice"]);
-        expect(h.policy.history(10)).toHaveLength(1);
+        expect((await unread.send("/admin/api/funding/board", "POST", {})).status).toBe(404);
     });
 });
 

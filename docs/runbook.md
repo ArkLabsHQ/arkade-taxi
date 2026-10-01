@@ -185,7 +185,6 @@ routes on the admin port accept `POST` with `Content-Type: application/json` and
 | `/admin/api/rescan`                        | Refresh runtime, reconcile and prompt recovery          |
 | `/admin/api/advances/:id/retry-submission` | Expedite the retained retryable submission phase        |
 | `/admin/api/advances/:id/retry-recovery`   | Expedite the retained retryable recovery graph          |
-| `/admin/api/funding/board`                 | Board confirmed on-chain deposits into Arkade           |
 
 The retry routes return 409 for live leases or incompatible phases. They do
 not replace a graph, release reservations, clear quarantine or force a terminal
@@ -206,45 +205,32 @@ Pause closes new admission, including new lockup acceptance. Existing durable
 work, claims, refunds and recovery continue. Let unsubmitted quotes expire and
 verify their reservations release before declaring the service drained.
 
-## On-chain top-up
+## Topping up the operator wallet
 
-The admin Funding card offers two ways to fund the operator wallet. Offchain,
-send sats or assets from any Arkade wallet to its Arkade address. On-chain:
+The admin Funding card shows two addresses, and both fund the operator wallet
+with no further step:
 
-1. Copy the card's boarding address and send bitcoin to it from any on-chain
-   wallet. The card counts it under "On-chain unconfirmed".
-2. Wait for one confirmation, then Refresh. The deposit moves to "On-chain
-   confirmed" and Board is enabled. The card loads only on demand; its "loaded"
-   stamp says how old the figures are.
-3. Press Board, or `POST /admin/api/funding/board` with body `{}`. The request
-   returns once Taxi holds the settlement lock and has authorized the fee; the
-   job then joins the next batch. It settles exactly the confirmed deposits,
-   never a VTXO, into the operator's own Arkade address, and audits the
-   operator header as the `board` operation.
-4. Refresh until the job reports the boarded amount; its commitment
-   transaction is the state's tooltip. The coin counts as usable inventory from
-   the next runtime refresh.
+- Offchain: send sats or assets from any Arkade wallet to the Arkade address.
+- On-chain: send bitcoin to the boarding address. The SDK's background
+  settlement checks every minute and moves each deposit into the Arkade address
+  in the next batch after it confirms, with the Arkade Service's intent fee
+  deducted. The card shows a deposit as "On-chain unconfirmed", then "On-chain
+  confirmed" until it is boarded. It loads only on demand; its "loaded" stamp
+  says how old the figures are.
 
-A refusal names its cause: `settlement_active` while the proceeds collector is
-settling (the two share one settlement lock, so the collector likewise waits
-while a boarding settles), `boarding_active` while a job runs,
-`boarding_nothing_confirmed`, and `boarding_fee_cap_exceeded` above
-[`TAXI_BOARDING_MAX_FEE_SATS`](environment.md#taxi_boarding_max_fee_sats). The
-fee is deducted from the boarded amount and checked again against the Arkade
-Service's current fee when the intent registers. A failed job leaves the deposit
-on-chain; press Board again.
+A deposit left past its boarding exit delay (arkd's `boardingExitDelay`) can no
+longer be boarded. The card counts it as "On-chain expired", and the SDK sweeps
+it back to the boarding address on-chain, paying the on-chain fee, which
+restarts its timelock. The same process does not board a swept deposit again;
+it is boarded after the service next restarts.
 
-Job state lives in memory: a restart forgets it but loses no funds. Before
-registration nothing was sent. A registered intent the restarted process no
-longer answers is dropped at the next batch, leaving the deposit on-chain to
-board again. A batch that had already finalized delivered the coin to the
-operator's Arkade address, where the wallet finds it.
-
-Board promptly. Once a deposit's boarding exit delay (arkd's
-`boardingExitDelay`) has passed, the Arkade Service no longer accepts it. The
-card then counts it under "On-chain expired" instead of confirmed, and Board
-leaves it out, the same filter the SDK's own `settle()` applies. Only the
-operator key's unilateral exit path can spend it: sweep it on-chain.
+The same background settlement renews operator coins once they are within
+[`TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS`](environment.md) of expiry, so they are
+replaced before they reach the expiry headroom that closes admission. It never
+runs alongside the proceeds collector's settlement and never spends a coin the
+Taxi holds for a quote, a lockup, a swap fill or a proceeds job, nor a subdust
+receipt the collector consolidates. The Taxi in turn never commits a coin inside
+the renewal window.
 
 ## Backup and restore
 

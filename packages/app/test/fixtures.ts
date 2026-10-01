@@ -217,7 +217,6 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     reconcileIntervalMs: 30000,
     operatorMinReserveSats: 10000n,
     proceedsMaxFeeSats: 0n,
-    boardingMaxFeeSats: 0n,
     operatorPrivkey,
     operatorKey,
     networkName: "regtest",
