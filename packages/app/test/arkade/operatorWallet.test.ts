@@ -87,7 +87,20 @@ function setup() {
     };
     const wallet = {
         settle,
-        getVtxoManager: async () => manager,
+        getVtxoManager: async () => {
+            // Born with a lazily created manager, like the SDK's poll timer: boards a deposit plus
+            // whatever renewal selects.
+            backgroundPoll ??= backgroundStart.then(async () =>
+                wallet.settle({
+                    inputs: [
+                        { txid: "bd".repeat(32), vout: 0 },
+                        ...(await wallet.getSpendableVtxos()),
+                    ],
+                    outputs: [],
+                }),
+            );
+            return manager;
+        },
         getAddress: async () => address,
         getSpendableVtxos: async () => {
             inventoryReads++;
@@ -126,16 +139,6 @@ function setup() {
         walletFactory: async (_cfg: WalletConfig) => {
             walletConfig = _cfg;
             created++;
-            // Born at creation, like the SDK's poll timer: boards a deposit plus what renewal selects.
-            backgroundPoll ??= backgroundStart.then(async () =>
-                wallet.settle({
-                    inputs: [
-                        { txid: "bd".repeat(32), vout: 0 },
-                        ...(await wallet.getSpendableVtxos()),
-                    ],
-                    outputs: [],
-                }),
-            );
             return wallet as unknown as Wallet;
         },
         reservedOutpoints: () => {

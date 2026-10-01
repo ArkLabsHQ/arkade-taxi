@@ -212,8 +212,8 @@ export function createOperatorRuntime(
                     };
                 });
                 retired.catch(() => {});
-                const created = await sdkBackground.run(true, () =>
-                    (options.walletFactory ?? Wallet.create)({
+                const created = await sdkBackground.run(true, async () => {
+                    const made = await (options.walletFactory ?? Wallet.create)({
                         identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
                         arkProvider: Object.assign(Object.create(providers.arkProvider), {
                             getInfo: async () => verified.info!,
@@ -243,8 +243,11 @@ export function createOperatorRuntime(
                             vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
                             deprecatedSignerMigration: false,
                         },
-                    }),
-                );
+                    });
+                    // Wallet.create builds it today; a lazy one must still start its timers in here.
+                    await made.getVtxoManager();
+                    return made;
+                });
                 const settle = created.settle.bind(created);
                 created.settle = (...args) =>
                     sdkBackground.getStore()
