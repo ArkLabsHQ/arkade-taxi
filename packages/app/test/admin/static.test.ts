@@ -874,6 +874,14 @@ describe("setup guidance", () => {
             "Done",
             "Done",
         ]);
+
+        click("wizard-open");
+        for (let n = 0; n < 3; n++) click("wiz-next");
+        expect(dashboard.element("wiz-save-live").hidden).toBe(true);
+        expect(text("wiz-save-hint")).toBe("Save keeps your Taxi live.");
+        click("wiz-save");
+        await vi.waitFor(() => expect(text("setup-note")).toBe("Saved. Your Taxi is still live."));
+        expect(admin.policy.get().paused).toBe(false);
     });
 
     it("explains refused changes in plain words and keeps the raw error for support", async () => {

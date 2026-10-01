@@ -658,10 +658,7 @@ export const INDEX_HTML = `<!doctype html>
                 <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
                     <h3 id="wiz-h4" tabindex="-1">Check and save</h3>
                     <p class="summary" id="wiz-summary"></p>
-                    <p class="hint">
-                        Save keeps your Taxi paused. Save &amp; go live also starts it: it takes
-                        payments as soon as every step of the checklist is done.
-                    </p>
+                    <p class="hint" id="wiz-save-hint"></p>
                 </section>
 
                 <div class="note" id="wiz-note" aria-live="polite"></div>
@@ -2155,7 +2152,7 @@ function renderSetup() {
                   " sats per payment, " +
                   group(policy.maxOutstandingSats) +
                   " sats in total, " +
-                  policy.maxConcurrentAdvances +
+                  group(String(policy.maxConcurrentAdvances)) +
                   " payments at once."
             : "It lends nothing while any of the three limits is 0.",
     );
@@ -2258,8 +2255,12 @@ function renderWizard() {
     $("wizard-progress").textContent = "Step " + wizard.step + " of 4";
     $("wiz-back").hidden = wizard.step === 1;
     $("wiz-next").hidden = wizard.step === 4;
+    const live = Boolean(view.status && !view.status.paused);
     $("wiz-save").hidden = wizard.step !== 4;
-    $("wiz-save-live").hidden = wizard.step !== 4;
+    $("wiz-save-live").hidden = wizard.step !== 4 || live;
+    $("wiz-save-hint").textContent = live
+        ? "Save keeps your Taxi live."
+        : "Save keeps your Taxi paused. Save & go live also starts it: it takes payments as soon as every step of the checklist is done.";
     for (const [name, values] of Object.entries(WIZARD_CHOICES))
         for (const value of values) $("wiz-" + name + "-" + value).checked = wizard[name] === value;
     $("wiz-custom").hidden = wizard.size !== "custom";
@@ -2397,6 +2398,7 @@ function wizardMove(by) {
 async function saveWizard(goLive) {
     const patch = wizardPatch();
     if (goLive) patch.paused = false;
+    const wasLive = Boolean(view.status && !view.status.paused);
     try {
         await patchPolicy(patch);
         $("wizard").close();
@@ -2404,7 +2406,9 @@ async function saveWizard(goLive) {
             "setup-note",
             goLive
                 ? "Saved, and your Taxi is live."
-                : "Saved. Your Taxi stays paused until you go live.",
+                : wasLive
+                  ? "Saved. Your Taxi is still live."
+                  : "Saved. Your Taxi stays paused until you go live.",
             false,
         );
         await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
