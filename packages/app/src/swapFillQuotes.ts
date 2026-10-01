@@ -1,6 +1,6 @@
+import type { CSVMultisigTapscript } from "@arkade-os/sdk";
 import {
     ArkAddress,
-    CSVMultisigTapscript,
     Transaction,
     VtxoScript,
     scriptFromTapLeafScript,
@@ -1110,7 +1110,7 @@ function assertTrustedGraph(args: {
     const change = args.taxiTotal - req.contributionSats;
     let changeSum = 0n;
     let fareSeen: { assetId: string; units: bigint } | undefined;
-    let receiverSats = receiver!.sats;
+    const receiverSats = receiver!.sats;
     const receiverAssets = new Map<string, bigint>();
     const outputAssets = new Map<string, bigint>();
     for (const a of receiver!.assets) {

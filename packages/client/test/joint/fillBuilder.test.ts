@@ -11,7 +11,7 @@ import {
     asset,
     type IWallet,
 } from "@arkade-os/sdk";
-import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph";
+import { digestJointGraph } from "../../src/joint/jointGraph";
 import { encodeOffer, fillOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
 import {
     OFFER_FILL_TEMPLATE,

@@ -1670,7 +1670,7 @@ describe("durable submission resumption", () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-finalize-"));
         const path = join(directory, "state.sqlite");
         try {
-            let db = openDatabase(path);
+            const db = openDatabase(path);
             const first = new AdvanceRepository(db);
             first.insert(await claimedAdvance());
             const submitter = productionLockupSubmitter(config(), operatorIdentity, external);

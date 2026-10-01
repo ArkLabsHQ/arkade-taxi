@@ -53,7 +53,6 @@ import {
     args,
     assetArgs,
     emulatorKey,
-    info,
     operatorKey,
     otherKey,
     params,

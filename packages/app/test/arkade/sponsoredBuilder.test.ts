@@ -12,14 +12,13 @@ import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psb
 import {
     config,
     fundingCoin,
-    operatorKey,
     receiverKey,
     senderKey,
     serverKey,
     DUST,
     VTXO_MIN,
 } from "../fixtures";
-import { operatorTree, senderTree, unroll } from "./lockupFixtures";
+import { senderTree, unroll } from "./lockupFixtures";
 
 const USDT = asset.AssetId.create("1234".repeat(16), 0);
 const usdtInternal = { txid: Uint8Array.from(USDT.txid).reverse(), groupIndex: USDT.groupIndex };

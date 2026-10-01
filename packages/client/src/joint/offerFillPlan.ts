@@ -1,6 +1,7 @@
 /** Build-only offer-fill plans: the unsigned joint spend as a serialized graph, never signed or submitted here. */
 import { base64, hex } from "@scure/base";
-import { ArkAddress, Extension, P2A, Transaction, type IWallet } from "@arkade-os/sdk";
+import type { Transaction } from "@arkade-os/sdk";
+import { ArkAddress, Extension, P2A, type IWallet } from "@arkade-os/sdk";
 import {
     ASSET_CARRIER_SATS,
     assembleOfferFill,

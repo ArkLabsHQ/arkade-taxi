@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt";
@@ -25,7 +25,6 @@ import {
     sponsoredAddress,
     sponsoredArgs,
     sponsoredAssetArgs,
-    sponsoredParams,
     sponsoredQuote,
     withExtraPacket,
 } from "./fixtures";

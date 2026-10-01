@@ -9,7 +9,6 @@ import {
     SwapFillClaimError,
     type AdvanceRepository,
     type SwapFill,
-    type SwapFillGraph,
     type SwapFillRepository,
 } from "@arkade-taxi/db";
 import {

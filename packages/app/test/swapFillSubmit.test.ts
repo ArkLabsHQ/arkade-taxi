@@ -24,7 +24,6 @@ import {
 import { createOperatorRuntime } from "../src/arkade/operatorWallet";
 import { arkInfo } from "./arkade/fixtures";
 import {
-    SWAP_FILL_SUBMIT_LEASE_OWNER,
     assertSolverAuthorised,
     assertSolverGraphMatchesTrusted,
     productionSwapFillJointOps,

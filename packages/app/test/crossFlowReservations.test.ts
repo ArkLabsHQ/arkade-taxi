@@ -24,7 +24,6 @@ import {
     fundingCoin,
     MemoryAdvances,
     NOW,
-    operatorKey,
     operatorTree,
     providerEmulatorKey,
     policy as basePolicy,
@@ -32,7 +31,6 @@ import {
     quoteInfrastructure,
     receiverKey,
     runtimeSafety,
-    senderKey,
     serverKey,
     serverUnroll,
 } from "./fixtures";

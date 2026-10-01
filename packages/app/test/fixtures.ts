@@ -15,7 +15,7 @@ import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt";
 import type { RuntimeSafety } from "../src/arkade/types";
 import type { QuoteDeps } from "../src/quotes";
 import { LockupClaimError } from "@arkade-taxi/db";
-import { isExposed, type Advance, type Outpoint, type Policy } from "@arkade-taxi/core";
+import { isExposed, type Advance, type Policy } from "@arkade-taxi/core";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config";
 
