@@ -427,8 +427,18 @@ async function readJson(c: Context): Promise<unknown> {
     }
 }
 
+// A basic-auth proxy (Traefik's default) forwards its Authorization header, and
+// only that proxy reaches this port; its user names the operator.
+function basicAuthUser(header: string | undefined): string {
+    const token = /^Basic\s+([A-Za-z0-9+/=]+)$/i.exec(header ?? "")?.[1];
+    const decoded = token ? Buffer.from(token, "base64").toString("utf8") : "";
+    return decoded.includes(":") ? decoded.slice(0, decoded.indexOf(":")) : "";
+}
+
 function proxyActor(c: Context): string {
-    const actor = c.req.header(PROXY_ACTOR_HEADER)?.trim() ?? "";
+    const actor =
+        c.req.header(PROXY_ACTOR_HEADER)?.trim() ||
+        basicAuthUser(c.req.header("authorization")).trim();
     if (!actor) throw new Error(`header ${PROXY_ACTOR_HEADER}: operator identity is required`);
     if (actor.length > MAX_ACTOR_LENGTH)
         throw new Error(`header ${PROXY_ACTOR_HEADER}: operator identity is too long`);
