@@ -97,6 +97,7 @@ function runDashboard(
     };
     const requests: string[] = [];
     const copied: string[] = [];
+    let poll = async () => {};
     const response = (body: unknown) => ({
         ok: true,
         status: 200,
@@ -170,7 +171,7 @@ function runDashboard(
         document,
         fetch,
         navigator: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
-        window: { setInterval() {} },
+        window: { setInterval: (tick: () => Promise<void>) => void (poll = tick) },
         URL,
         URLSearchParams,
         Date,
@@ -184,7 +185,7 @@ function runDashboard(
     });
     const renderedIds = () =>
         element("advances-body").children.map((row) => row.children[0]?.title);
-    return { element, renderedIds, requests, copied };
+    return { element, renderedIds, requests, copied, poll: () => poll() };
 }
 
 describe("static routes", () => {
@@ -580,7 +581,7 @@ describe("the dashboard is dependency-free", () => {
         expect(dashboard.requests).toHaveLength(sent);
     });
 
-    it("renders the funding card from the real router's funding view", async () => {
+    it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
         const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
         const admin = harness({
             funding: async () => ({
@@ -615,5 +616,13 @@ describe("the dashboard is dependency-free", () => {
 
         dashboard.element("funding-copy").fire("click");
         await vi.waitFor(() => expect(dashboard.copied).toEqual([address]));
+
+        const fundingLoads = () =>
+            dashboard.requests.filter((path) => path === "/admin/api/funding").length;
+        expect(fundingLoads()).toBe(1);
+        await dashboard.poll();
+        expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
+        dashboard.element("refresh").fire("click");
+        await vi.waitFor(() => expect(fundingLoads()).toBe(2));
     });
 });

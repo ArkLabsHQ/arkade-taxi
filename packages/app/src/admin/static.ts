@@ -1410,8 +1410,6 @@ async function loadHistory() {
     renderHistory((await api("/admin/api/policy/history?limit=50")).history);
 }
 
-// Funding 503s while the wallet is down but the service is up, so its failure
-// stays in this card instead of raising the console-unreachable alarm.
 async function loadFunding() {
     try {
         renderFunding(await api("/admin/api/funding"));
@@ -1422,7 +1420,7 @@ async function loadFunding() {
 
 async function refresh() {
     try {
-        await Promise.all([loadStatus(), loadAdvances(), loadFunding()]);
+        await Promise.all([loadStatus(), loadAdvances()]);
         view.offline = false;
     } catch (e) {
         view.offline = true;
@@ -1476,6 +1474,7 @@ function wire() {
     });
 
     $("refresh").addEventListener("click", refresh);
+    $("refresh").addEventListener("click", loadFunding);
     $("revert").addEventListener("click", () => {
         if (view.policy) fillPolicyForm(view.policy);
         setNote("policy-note", "", false);
@@ -1534,6 +1533,7 @@ function wire() {
 wire();
 loadPolicy().catch((e) => setNote("policy-note", e.message, true));
 loadHistory().catch(() => {});
+loadFunding();
 refresh();
 window.setInterval(refresh, POLL_MS);
 `;
