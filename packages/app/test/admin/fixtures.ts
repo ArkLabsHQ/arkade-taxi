@@ -2,7 +2,9 @@ import { Hono } from "hono";
 import type { Advance } from "@arkade-taxi/core";
 import { AdvanceRepository, PolicyRepository, openDatabase, type Database } from "@arkade-taxi/db";
 import { createAdminRouter, type SweeperStatus } from "../../src/admin/index.js";
+import type { AdminDeps } from "../../src/admin/routes.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
+import { config } from "../fixtures.js";
 
 export const key = (b: number): Uint8Array => new Uint8Array(32).fill(b);
 
@@ -65,6 +67,7 @@ export function harness(
         rescan?: () => Promise<void>;
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
+        funding?: AdminDeps["funding"];
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -86,6 +89,8 @@ export function harness(
                     body: { blockers: [], status: "ok" },
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
+        funding:
+            opts.funding ?? (async () => ({ config: config(), inventory: undefined, coins: [] })),
     });
 
     const app = new Hono();

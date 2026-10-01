@@ -214,6 +214,36 @@ function renderOperational(readiness) {
         : "No operational blockers.";
 }
 
+function renderFunding(funding) {
+    const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
+    $("funding-address").textContent = funding.arkAddress;
+    $("funding-copy").disabled = false;
+    $("funding-usable").textContent = sats(funding.usableSats);
+    $("funding-reserved").textContent = sats(funding.reservedSats);
+    $("funding-threshold").textContent = sats(funding.minReserveSats);
+    $("funding-state").textContent =
+        funding.usableSats === null
+            ? "inventory unknown"
+            : BigInt(funding.usableSats) < BigInt(funding.minReserveSats)
+              ? "below reserve"
+              : "reserve met";
+    const body = $("funding-assets");
+    body.textContent = "";
+    for (const a of funding.assets) {
+        const tr = document.createElement("tr");
+        const id = document.createElement("td");
+        id.append(cell("span", a.assetId.txid, "trunc"));
+        id.title = a.assetId.txid;
+        tr.append(
+            id,
+            cell("td", String(a.assetId.groupIndex), "n"),
+            cell("td", group(a.amount), "n"),
+        );
+        body.append(tr);
+    }
+    $("funding-assets-empty").hidden = funding.assets.length > 0;
+}
+
 function renderAdvances(rows) {
     const body = $("advances-body");
     body.textContent = "";
@@ -464,9 +494,19 @@ async function loadHistory() {
     renderHistory((await api("/admin/api/policy/history?limit=50")).history);
 }
 
+// Funding 503s while the wallet is down but the service is up, so its failure
+// stays in this card instead of raising the console-unreachable alarm.
+async function loadFunding() {
+    try {
+        renderFunding(await api("/admin/api/funding"));
+    } catch (e) {
+        $("funding-state").textContent = "unavailable: " + e.message;
+    }
+}
+
 async function refresh() {
     try {
-        await Promise.all([loadStatus(), loadAdvances()]);
+        await Promise.all([loadStatus(), loadAdvances(), loadFunding()]);
         view.offline = false;
     } catch (e) {
         view.offline = true;
@@ -534,6 +574,14 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
+    $("funding-copy").addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText($("funding-address").textContent);
+            $("funding-state").textContent = "address copied";
+        } catch (e) {
+            $("funding-state").textContent = "copy failed: select the address instead";
+        }
+    });
 
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();

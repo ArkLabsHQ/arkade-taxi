@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
+import { bytesToHex } from "@arkade-taxi/protocol";
 import { advance, harness, healthySweeper, key } from "./fixtures.js";
+import { config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
+import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 
 const INT64_MAX = "9223372036854775807";
 
@@ -178,6 +182,46 @@ describe("GET /admin/api/status", () => {
         expect(body.exposure.outstandingSats).toBe("42");
         expect(body.sweeper.healthy).toBe(false);
         expect(body.sweeper.lastError).toMatch(/sweeper handle is gone/);
+    });
+});
+
+describe("GET /admin/api/funding", () => {
+    it("derives the operator address and totals each asset across spendable coins", async () => {
+        const txid = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+        const held = (groupIndex: number, amount: bigint) => ({
+            assetId: taxiAssetIdToSwapId({ txid, groupIndex }),
+            amount,
+        });
+        const funding = async () => ({
+            config: config({ addressHrp: "tark" }),
+            inventory: {
+                usableSats: 25_000n,
+                reservedSats: 4_000n,
+                usableVtxos: 2,
+                reservedVtxos: 1,
+            },
+            coins: [
+                fundingCoin({ assets: [held(1, 300n)] }),
+                fundingCoin({ vout: 1, assets: [held(0, 7n), held(1, 200n)] }),
+                fundingCoin({ vout: 2 }),
+            ],
+        });
+
+        for (const mount of ["prefix", "root"] as const) {
+            const { status, body } = await harness({ mount, funding }).json("/admin/api/funding");
+
+            expect(status, mount).toBe(200);
+            expect(body).toEqual({
+                arkAddress: new ArkAddress(serverKey, operatorKey, "tark").encode(),
+                minReserveSats: "10000",
+                usableSats: "25000",
+                reservedSats: "4000",
+                assets: [
+                    { assetId: { txid: bytesToHex(txid), groupIndex: 0 }, amount: "7" },
+                    { assetId: { txid: bytesToHex(txid), groupIndex: 1 }, amount: "500" },
+                ],
+            });
+        }
     });
 });
 

@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
+import { ArkAddress, type VirtualCoin } from "@arkade-os/sdk";
 import {
     isExposed,
     validateFareOption,
@@ -16,9 +17,19 @@ import {
     type Policy,
 } from "@arkade-taxi/core";
 import { ADVANCE_STATES, type AdvanceRepository, type PolicyRepository } from "@arkade-taxi/db";
-import { assetIdFromWire, bytesToHex, fareToWire, satsToWire } from "@arkade-taxi/protocol";
+import {
+    assetIdFromWire,
+    assetIdToWire,
+    bytesToHex,
+    fareToWire,
+    satsToWire,
+} from "@arkade-taxi/protocol";
 import { assetRuleToWire } from "../rulesWire.js";
 import { sanitizeOperationalError } from "../errors.js";
+import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
+import type { RuntimeSafety } from "../arkade/types.js";
+import type { RuntimeConfig } from "../config.js";
+import { holdings } from "../proceeds.js";
 import type { OperationalSnapshot } from "../routes.js";
 import type { RecoveryDeadline } from "../sweeper.js";
 
@@ -45,6 +56,15 @@ export interface AdminDeps {
     rescan(): Promise<void>;
     operationalSnapshot(options?: { ignoreManualPause?: boolean }): OperationalSnapshot;
     now(): number;
+    /** Rejects while the operator wallet is unavailable. */
+    funding(): Promise<{
+        config: Pick<
+            RuntimeConfig,
+            "serverPubkey" | "operatorKey" | "addressHrp" | "operatorMinReserveSats"
+        >;
+        inventory: RuntimeSafety["inventory"];
+        coins: readonly VirtualCoin[];
+    }>;
 }
 
 const MAX_LIMIT = 1_000;
@@ -463,6 +483,30 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             sweeper: sweeperView(deps.sweeperStatus, Date.now()),
             readiness: deps.operationalSnapshot().body,
         });
+    });
+
+    app.get(at("/api/funding"), async (c) => {
+        try {
+            const { config, inventory, coins } = await deps.funding();
+            return ok(c, {
+                arkAddress: new ArkAddress(
+                    config.serverPubkey,
+                    config.operatorKey,
+                    config.addressHrp,
+                ).encode(),
+                minReserveSats: satsToWire(config.operatorMinReserveSats),
+                usableSats: inventory ? satsToWire(inventory.usableSats) : null,
+                reservedSats: inventory ? satsToWire(inventory.reservedSats) : null,
+                assets: holdings(coins).map(({ assetId, amount }) => ({
+                    assetId: assetIdToWire(swapIdToTaxiAssetId(assetId)),
+                    amount,
+                })),
+            });
+        } catch (e) {
+            return c.json({ code: "funding_unavailable", error: message(e) }, 503, {
+                "cache-control": "no-store",
+            });
+        }
     });
 
     app.get(at("/api/policy"), (c) => ok(c, toPolicyWire(deps.policy.get())));

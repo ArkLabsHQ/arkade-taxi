@@ -103,6 +103,53 @@
                 <p class="note" id="readiness-blockers"></p>
             </section>
 
+            <section class="panel" aria-labelledby="funding-heading">
+                <div class="panel__head">
+                    <h2 id="funding-heading">Funding</h2>
+                    <div class="actions">
+                        <button type="button" id="funding-copy" disabled>Copy address</button>
+                        <span class="meta" id="funding-state">unknown</span>
+                    </div>
+                </div>
+                <dl class="states operational">
+                    <div>
+                        <dt>Usable</dt>
+                        <dd id="funding-usable">—</dd>
+                    </div>
+                    <div>
+                        <dt>Reserved</dt>
+                        <dd id="funding-reserved">—</dd>
+                    </div>
+                    <div>
+                        <dt>Reserve threshold</dt>
+                        <dd id="funding-threshold">—</dd>
+                    </div>
+                </dl>
+                <div class="panel__body">
+                    <p class="label">Arkade address</p>
+                    <p class="address" id="funding-address">—</p>
+                    <p class="note">
+                        Send sats or assets offchain from any Arkade wallet to this address.
+                    </p>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Asset balances across the operator's spendable coins
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Asset</th>
+                                <th scope="col" class="n">Group</th>
+                                <th scope="col" class="n">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="funding-assets"></tbody>
+                    </table>
+                    <p class="empty" id="funding-assets-empty" hidden>No assets held.</p>
+                </div>
+            </section>
+
             <div class="cols">
                 <section class="panel" aria-labelledby="policy-heading">
                     <div class="panel__head">

@@ -62,6 +62,11 @@ function adminDeps(deps: ServerDeps) {
         operationalSnapshot: (options?: { ignoreManualPause?: boolean }) =>
             operationalSnapshot(deps, options),
         now: deps.now,
+        funding: async () => ({
+            config: deps.config,
+            inventory: deps.runtime.safety().inventory,
+            coins: await deps.inventory.getSpendableVtxos(),
+        }),
     };
 }
 

@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
-import { policy } from "../fixtures.js";
+import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness } from "./fixtures.js";
 
 const asset = (name: string): string =>
@@ -94,6 +96,7 @@ function runDashboard(
         return elements.get(id)!;
     };
     const requests: string[] = [];
+    const copied: string[] = [];
     const response = (body: unknown) => ({
         ok: true,
         status: 200,
@@ -166,6 +169,7 @@ function runDashboard(
     runInNewContext(APP_JS, {
         document,
         fetch,
+        navigator: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
         window: { setInterval() {} },
         URL,
         URLSearchParams,
@@ -180,7 +184,7 @@ function runDashboard(
     });
     const renderedIds = () =>
         element("advances-body").children.map((row) => row.children[0]?.title);
-    return { element, renderedIds, requests };
+    return { element, renderedIds, requests, copied };
 }
 
 describe("static routes", () => {
@@ -574,5 +578,42 @@ describe("the dashboard is dependency-free", () => {
         dashboard.element("policy-form").fire("submit");
         expect(note()).toMatch(/^Asset rules: /);
         expect(dashboard.requests).toHaveLength(sent);
+    });
+
+    it("renders the funding card from the real router's funding view", async () => {
+        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const admin = harness({
+            funding: async () => ({
+                config: config(),
+                inventory: {
+                    usableSats: 2_500n,
+                    reservedSats: 0n,
+                    usableVtxos: 1,
+                    reservedVtxos: 0,
+                },
+                coins: [
+                    fundingCoin({
+                        assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
+                    }),
+                ],
+            }),
+        });
+        const dashboard = runDashboard(() => dashboardPage([], "8".repeat(64), null), admin);
+        const text = (id: string) => dashboard.element(id).textContent;
+        const address = new ArkAddress(serverKey, operatorKey, "ark").encode();
+
+        await vi.waitFor(() => expect(text("funding-address")).toBe(address));
+        expect(text("funding-usable")).toBe("2 500 sats");
+        expect(text("funding-reserved")).toBe("0 sats");
+        expect(text("funding-threshold")).toBe("10 000 sats");
+        expect(text("funding-state")).toBe("below reserve");
+        expect(
+            dashboard
+                .element("funding-assets")
+                .children.map((row) => row.children.map((c) => c.title || c.textContent)),
+        ).toEqual([["cd".repeat(32), "1", "1 234 567"]]);
+
+        dashboard.element("funding-copy").fire("click");
+        await vi.waitFor(() => expect(dashboard.copied).toEqual([address]));
     });
 });
