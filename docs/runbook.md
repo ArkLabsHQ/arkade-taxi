@@ -245,6 +245,12 @@ stopped the SDK's renewal for now; deposits still board and recovery continues,
 but admission stays closed. Lower `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to at
 least 12 hours below the VTXO lifetime and restart.
 
+`operator_intent_stale` means a settlement intent has waited over an hour for a
+batch, locking the coins it spends; admission closes, recovery continues. At
+startup the Taxi cancels, with arkd and locally, any intent an earlier process
+left waiting for a batch, unless it belongs to a proceeds job, which reconciles
+its own. A restart therefore clears a stuck background settlement.
+
 The SDK's deprecated-signer migration is turned off. It moves coins with an
 offchain send, which would bypass that guard and the held-coin filter, and the
 Taxi already closes its wallet when arkd's signer changes.

@@ -90,8 +90,10 @@ const NOT_BLOCKERS = new Set([
     ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
     ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
     ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
-    // Refusals inside the SDK's own background settlement, which only the SDK sees and logs.
+    // Refusals inside the SDK's own background settlement, which only the SDK sees and logs,
+    // and the SDK's intent states.
     ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],
+    ...["waiting_to_submit", "waiting_for_batch", "batch_in_progress"],
 ]);
 
 function backendBlockerCodes(): string[] {

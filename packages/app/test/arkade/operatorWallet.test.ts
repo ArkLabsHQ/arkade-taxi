@@ -10,6 +10,7 @@ import {
     type WalletConfig,
     type ExtendedVirtualCoin,
     type ContractManager,
+    type ArkIntent,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
@@ -798,5 +799,77 @@ describe("the SDK's background settlement", () => {
         s.startBackground();
         await expect(s.backgroundPoll).rejects.toThrow("background_settlement_spends_held_coin");
         expect(register).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe("SDK intents left waiting", () => {
+    const coin = (id: string) => ({ txid: id.repeat(32), vout: 0 });
+    const intent = (id: string, over: Partial<ArkIntent> = {}): ArkIntent => ({
+        intentTxId: id.repeat(32),
+        state: "waiting_for_batch",
+        createdAt: 500,
+        updatedAt: 500,
+        registerProof: "register",
+        registerProofMessage: "{}",
+        deleteProof: `delete-${id}`,
+        deleteProofMessage: JSON.stringify({ type: "delete", expire_at: 0 }),
+        partialForfeits: [],
+        intentVtxos: [coin(id)],
+        ...over,
+    });
+
+    it("cancels an earlier process's unheld, unspent waiting intent at startup, and only that", async () => {
+        const s = setup();
+        const intents = s.runtime.storage.intentRepository;
+        for (const record of [
+            intent("a1"),
+            intent("a2"),
+            intent("a3", { state: "batch_in_progress" }),
+            intent("a4"),
+            intent("a5", { createdAt: 1000 }),
+        ])
+            await intents.saveIntent(record);
+        s.setHeld([coin("a2")]);
+        const remove = vi
+            .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
+            .mockResolvedValue();
+        vi.spyOn(s.runtime.providers.indexerProvider, "getVtxos").mockImplementation(
+            async (options) => ({
+                vtxos: options!.outpoints!.map(
+                    (o) => ({ ...o, isSpent: o.txid === coin("a4").txid }) as never,
+                ),
+            }),
+        );
+
+        await s.runtime.refresh();
+        expect(remove).toHaveBeenCalledTimes(1);
+        expect(remove).toHaveBeenCalledWith({
+            proof: "delete-a1",
+            message: { type: "delete", expire_at: 0 },
+        });
+        expect(
+            Object.fromEntries(
+                (await intents.getIntents()).map((i) => [i.intentTxId.slice(0, 2), i.state]),
+            ),
+        ).toEqual({
+            a1: "cancelled",
+            a2: "waiting_for_batch",
+            a3: "batch_in_progress",
+            a4: "waiting_for_batch",
+            a5: "waiting_for_batch",
+        });
+    });
+
+    it("reports an intent still waiting after an hour, without stopping recovery", async () => {
+        const s = setup();
+        await s.runtime.storage.intentRepository.saveIntent(intent("b1", { createdAt: 1000 }));
+        const stale = async () =>
+            (await s.runtime.refresh()).blockers.includes("operator_intent_stale");
+
+        s.setNow(1000 + 3_600_000);
+        expect(await stale()).toBe(false);
+        s.setNow(1000 + 3_600_001);
+        expect(await stale()).toBe(true);
+        await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
     });
 });

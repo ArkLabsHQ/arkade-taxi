@@ -7,8 +7,10 @@ import {
     Transaction,
     canSpendOffchain,
     isSubdust,
+    isVtxoSpent,
     type WalletConfig,
     type ArkInfo,
+    type ArkIntentState,
     type ArkProvider,
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
@@ -27,7 +29,10 @@ const admissionOnlyBlockers = new Set([
     "vtxo_expiry_unknown",
     "operator_reserve_low",
     "renewal_threshold_exceeds_vtxo_lifetime",
+    "operator_intent_stale",
 ]);
+const WAITING: ArkIntentState[] = ["waiting_to_submit", "waiting_for_batch", "batch_in_progress"];
+const STALE_INTENT_MS = 3_600_000;
 
 type SettlementGuard = (
     intent: Parameters<ArkProvider["registerIntent"]>[0],
@@ -90,6 +95,38 @@ export function createOperatorRuntime(
         info?.vtxoTreeExpiry !== undefined &&
         info.vtxoTreeExpiry >= 512n &&
         tooShort(info.vtxoTreeExpiry);
+    const startedAt = now();
+    let orphansCancelled = false;
+    // Settle intents never expire (expire_at 0), and one an earlier process registered waits for a
+    // batch nobody will sign, locking its coins. In a batch, or a proceeds job's, it is left alone.
+    const cancelOrphans = async () => {
+        const taken = await held();
+        const orphans = (
+            await storage.intentRepository.getIntents({ states: ["waiting_for_batch"] })
+        ).filter(
+            (i) => i.createdAt < startedAt && !i.intentVtxos.some((o) => taken.has(outpointKey(o))),
+        );
+        if (!orphans.length) return;
+        const { vtxos } = await providers.indexerProvider.getVtxos({
+            outpoints: orphans.flatMap((i) => i.intentVtxos),
+        });
+        const unspent = new Set(vtxos.filter((v) => !isVtxoSpent(v)).map(outpointKey));
+        for (const intent of orphans) {
+            if (!intent.intentVtxos.every((o) => unspent.has(outpointKey(o)))) continue;
+            await providers.arkProvider
+                .deleteIntent({
+                    proof: intent.deleteProof,
+                    message: JSON.parse(intent.deleteProofMessage),
+                })
+                .catch(() => {});
+            await storage.intentRepository.saveIntent({
+                ...intent,
+                state: "cancelled",
+                cancellationReason: "registered by an earlier Taxi process",
+                updatedAt: now(),
+            });
+        }
+    };
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -237,6 +274,11 @@ export function createOperatorRuntime(
                 wallet = created;
                 infoFingerprint = fingerprint;
             }
+            if (!orphansCancelled)
+                orphansCancelled = await cancelOrphans().then(
+                    () => true,
+                    () => false,
+                );
             if (stopped) {
                 await dropWallet();
                 return closed("runtime_stopped");
@@ -276,6 +318,9 @@ export function createOperatorRuntime(
                 let sdkLocks: readonly Outpoint[];
                 try {
                     sdkLocks = await storage.intentRepository.getLockedVtxoOutpoints();
+                    const waiting = await storage.intentRepository.getIntents({ states: WAITING });
+                    if (waiting.some((i) => now() - i.createdAt > STALE_INTENT_MS))
+                        result.blockers.push("operator_intent_stale");
                 } catch {
                     result.blockers.push("intent_locks_unavailable");
                     return result;

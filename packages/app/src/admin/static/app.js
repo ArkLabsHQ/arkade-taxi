@@ -93,6 +93,10 @@ const BLOCKER_GROUPS = [
         "renewal_threshold_exceeds_vtxo_lifetime",
     ],
     [
+        "A wallet settlement has waited over an hour for an Arkade batch, so the coins it spends stay locked. Restarting the Taxi cancels a stuck background settlement.",
+        "operator_intent_stale",
+    ],
+    [
         "The Taxi has not finished its first check of payments in progress.",
         "reconciler_not_started",
     ],
