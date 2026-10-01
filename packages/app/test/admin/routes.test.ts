@@ -397,6 +397,24 @@ describe("PATCH /admin/api/policy", () => {
         expect(h.policy.history(10)).toEqual([]);
     });
 
+    it("attributes a change to the proxy's basic-auth user when no operator header is sent", async () => {
+        const h = harness();
+        const patch = (headers: Record<string, string>, quoteTtlSeconds: number) =>
+            h.json("/admin/api/policy", {
+                method: "PATCH",
+                headers: { "content-type": "application/json", ...headers },
+                body: JSON.stringify({ quoteTtlSeconds }),
+            });
+        const basic = `Basic ${Buffer.from("taxi-ops:secret").toString("base64")}`;
+
+        expect((await patch({ authorization: basic }, 30)).status).toBe(200);
+        expect(
+            (await patch({ authorization: basic, "x-taxi-operator": "named-user" }, 31)).status,
+        ).toBe(200);
+        expect((await patch({}, 32)).status).toBe(400);
+        expect(h.policy.history(10).map((row) => row.actor)).toEqual(["named-user", "taxi-ops"]);
+    });
+
     it("rejects a field outside the Policy contract with 400", async () => {
         const h = harness();
 

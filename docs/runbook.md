@@ -106,7 +106,10 @@ only on [`TAXI_ADMIN_PORT`](environment.md#taxi_admin_port), never on the public
 port, and authenticates nothing: route operators to it through the proxy alone.
 Remove any inbound `X-Taxi-Operator`, replace it with the authenticated operator
 identity, and prevent direct access to the backend ports. Taxi validates and audits this
-header but does not authenticate it. Request JSON cannot choose the actor.
+header but does not authenticate it. Request JSON cannot choose the actor. A plain
+basic-auth proxy needs no header: without one, Taxi records the user name from the Basic
+`Authorization` header the proxy forwards (Traefik's `basicAuth` does unless
+`removeHeader` is set).
 
 Pin the Arkade Service public key independently of Taxi. Taxi obtains the
 emulator trust anchor from the SDK entry for arkd's advertised network and
