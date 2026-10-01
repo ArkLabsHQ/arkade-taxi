@@ -3577,7 +3577,14 @@ function wire() {
     $("rule-add-asset").addEventListener("click", () => {
         const id = parseAssetId($("rule-asset").value);
         if (!id) return setNote("policy-note", ASSET_ID_HELP, true);
-        if (view.rules.some((r) => r.assetId && assetKey(r.assetId) === assetKey(id)))
+        if (
+            view.rules.some(
+                (r) =>
+                    typeof r.assetId === "object" &&
+                    r.assetId &&
+                    assetKey(r.assetId) === assetKey(id),
+            )
+        )
             return setNote("policy-note", "That asset already has a rule.", true);
         editRules(() => view.rules.push(newRule(id)), true);
         $("rule-asset").value = "";

@@ -276,5 +276,7 @@ describe("resolveRuntimeConfig", () => {
             value: "https://arkd.example/v1",
         });
         expect(shown.find((entry) => entry.key === "adminPort")?.value).toBeNull();
+        const unparseable = shownConfig({ ...runtime, arkdUrl: "http://user:pass@" });
+        expect(unparseable.find((entry) => entry.key === "arkdUrl")?.value).toBeNull();
     });
 });
