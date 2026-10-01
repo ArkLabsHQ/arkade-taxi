@@ -22,11 +22,21 @@ const INT_FIELDS = [
 
 const POLL_MS = 5000;
 
+const CLAIMS = [
+    ["recycle", "Get my sats back"],
+    ["purchase", "Sell outright"],
+    ["either", "Payer chooses"],
+];
+
+const ASSET_ID_HELP =
+    "Write an asset id as the Funding card lists it: its 64-character txid, a colon, then its group number, e.g. 1f2e…:0.";
+
 const $ = (id) => document.getElementById(id);
 
 const view = {
     status: null,
     policy: null,
+    rules: [],
     offline: false,
     advances: [],
     nextAdvanceOffset: null,
@@ -349,8 +359,234 @@ function editableRules(rules) {
 
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
+    view.rules = JSON.parse(JSON.stringify(editableRules(policy.assetRules)));
+    editRules(() => {}, true);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
+}
+
+const assetKey = (id) => id.txid + ":" + id.groupIndex;
+const assetLabel = (id) =>
+    id === null ? "Bitcoin" : id.txid.slice(0, 8) + "…" + id.txid.slice(-4) + ":" + id.groupIndex;
+
+function parseAssetId(text) {
+    const m = /^([0-9a-f]{64}):([0-9]{1,5})$/.exec(text.trim().toLowerCase());
+    return m && Number(m[2]) <= 65535 ? { txid: m[1], groupIndex: Number(m[2]) } : null;
+}
+
+function newFare(fares, kind = "sats") {
+    const base = kind === "sats" ? "sats" : "asset";
+    let id = base;
+    for (let n = 2; fares.some((f) => f.id === id); n++) id = base + "-" + n;
+    return { id, currency: { kind }, pricing: { kind: "flat", units: "0" } };
+}
+
+const newRule = (assetId) => ({
+    assetId,
+    enabled: true,
+    fares: [newFare([])],
+    claim: "recycle",
+    maxTopupSats: null,
+});
+
+// The JSON view is the serialised form of view.rules; the table re-renders only
+// when the shape changed, so typing in a cell keeps its focus.
+function editRules(change, rerender) {
+    change();
+    $("assetRules").value = JSON.stringify(view.rules, null, 2);
+    if (rerender) renderRules();
+}
+
+function control(tag, name, label) {
+    const el = document.createElement(tag);
+    el.name = name;
+    if (tag === "button") el.type = "button";
+    if (label) el.ariaLabel = label;
+    return el;
+}
+
+function choice(name, options, value, label) {
+    const select = control("select", name, label);
+    for (const [key, text] of options) {
+        const option = cell("option", text);
+        option.value = key;
+        select.append(option);
+    }
+    select.value = value;
+    return select;
+}
+
+function amountInput(name, value, label, set) {
+    const input = control("input", name, label);
+    input.type = "text";
+    input.inputMode = "numeric";
+    input.value = value === null ? "" : value;
+    input.addEventListener("change", () => editRules(() => set(input.value.trim())));
+    return input;
+}
+
+function percentInput(pricing) {
+    const input = control("input", "percent", "Fare percentage");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.value = String(pricing.bps / 100);
+    input.addEventListener("change", () => {
+        const text = input.value.trim();
+        if (!/^[0-9]+(\.[0-9]{1,2})?$/.test(text) || Number(text) > 100) {
+            input.value = String(pricing.bps / 100);
+            setNote(
+                "policy-note",
+                "A percentage is a number from 0 to 100, at most two decimals.",
+                true,
+            );
+            return;
+        }
+        editRules(() => (pricing.bps = Math.round(Number(text) * 100)));
+    });
+    return input;
+}
+
+const wrap = (el) => {
+    const td = document.createElement("td");
+    td.append(el);
+    return td;
+};
+
+function fareEditor(rule, fare) {
+    const line = cell("div", "", "fare");
+    const remove = control("button", "remove-fare", "Remove fare " + fare.id);
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () =>
+        editRules(() => rule.fares.splice(rule.fares.indexOf(fare), 1), true),
+    );
+    if (fare.currency.kind === "token") {
+        line.append(cell("span", "in a fixed token: edit as JSON", "dim"), remove);
+        return line;
+    }
+    const unit = fare.currency.kind === "sats" ? "sats" : "units";
+    if (rule.assetId === null) line.append(cell("span", "in sats", "dim"));
+    else {
+        const currency = choice(
+            "currency",
+            [
+                ["sats", "in sats"],
+                ["sameAsset", "in this asset"],
+            ],
+            fare.currency.kind,
+            "Fare currency",
+        );
+        currency.addEventListener("change", () =>
+            editRules(() => (fare.currency = { kind: currency.value }), true),
+        );
+        line.append(currency);
+    }
+    const pricing = choice(
+        "pricing",
+        [
+            ["flat", "flat"],
+            ["proportional", "percent"],
+        ],
+        fare.pricing.kind,
+        "Fare pricing",
+    );
+    pricing.addEventListener("change", () =>
+        editRules(
+            () =>
+                (fare.pricing =
+                    pricing.value === "flat"
+                        ? { kind: "flat", units: "0" }
+                        : { kind: "proportional", bps: 0, minUnits: "0", maxUnits: null }),
+            true,
+        ),
+    );
+    line.append(pricing);
+    const p = fare.pricing;
+    if (p.kind === "flat")
+        line.append(
+            amountInput("units", p.units, "Fare in " + unit, (v) => (p.units = v)),
+            cell("span", unit, "dim"),
+        );
+    else
+        line.append(
+            percentInput(p),
+            cell("span", "%, min", "dim"),
+            amountInput("min", p.minUnits, "Minimum fare in " + unit, (v) => (p.minUnits = v)),
+            cell("span", "max", "dim"),
+            amountInput(
+                "max",
+                p.maxUnits,
+                "Maximum fare in " + unit + ", blank for none",
+                (v) => (p.maxUnits = v === "" ? null : v),
+            ),
+            cell("span", unit, "dim"),
+        );
+    line.append(remove);
+    return line;
+}
+
+function renderRules() {
+    const body = $("rules-body");
+    body.textContent = "";
+    view.rules.forEach((rule, index) => {
+        const label = assetLabel(rule.assetId);
+        const asset = cell("th", label);
+        asset.scope = "row";
+        if (rule.assetId) asset.title = assetKey(rule.assetId);
+
+        const on = control("input", "enabled", "Carry " + label);
+        on.type = "checkbox";
+        on.checked = rule.enabled;
+        on.addEventListener("change", () => editRules(() => (rule.enabled = on.checked)));
+
+        const fares = document.createElement("td");
+        for (const fare of rule.fares) fares.append(fareEditor(rule, fare));
+        if (rule.fares.length === 0)
+            fares.append(cell("p", "No fare: these payments are refused.", "warn"));
+        const add = control("button", "add-fare", "Add a fare for " + label);
+        add.textContent = "Add fare";
+        add.addEventListener("click", () =>
+            editRules(() => rule.fares.push(newFare(rule.fares)), true),
+        );
+        fares.append(add);
+
+        const claim = choice("claim", CLAIMS, rule.claim, "When the receiver claims " + label);
+        claim.addEventListener("change", () => editRules(() => (rule.claim = claim.value)));
+
+        const cap = amountInput(
+            "maxTopupSats",
+            rule.maxTopupSats,
+            "Max per payment for " + label + ", blank for the global limit",
+            (v) => (rule.maxTopupSats = v === "" ? null : v),
+        );
+        cap.placeholder = "global";
+
+        const remove = control("button", "remove-rule", "Remove " + label);
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => editRules(() => view.rules.splice(index, 1), true));
+
+        const tr = document.createElement("tr");
+        tr.append(asset, wrap(on), fares, wrap(claim), wrap(cap), wrap(remove));
+        body.append(tr);
+    });
+    $("rules-empty").hidden = view.rules.length > 0;
+}
+
+function readJsonRules() {
+    let rules;
+    try {
+        rules = JSON.parse($("assetRules").value);
+    } catch (e) {
+        return e.message;
+    }
+    const tableable =
+        Array.isArray(rules) &&
+        rules.every(
+            (r) =>
+                r && Array.isArray(r.fares) && r.fares.every((f) => f && f.currency && f.pricing),
+        );
+    if (!tableable) return "expected a list of rules, each with a list of fares";
+    view.rules = rules;
+    renderRules();
+    return null;
 }
 
 function renderServiceState(paused) {
@@ -383,6 +619,7 @@ async function loadStatus() {
     renderSweeper(status.sweeper);
     renderOperational(status.readiness);
     renderServiceState(status.paused);
+    $("hint-dust").textContent = group(status.dust);
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
 }
 
@@ -582,13 +819,45 @@ function wire() {
         }
     });
 
+    $("rule-add-bitcoin").addEventListener("click", () => {
+        if (view.rules.some((r) => r.assetId === null))
+            return setNote("policy-note", "Bitcoin already has a rule.", true);
+        editRules(() => view.rules.push(newRule(null)), true);
+    });
+    $("rule-add-asset").addEventListener("click", () => {
+        const id = parseAssetId($("rule-asset").value);
+        if (!id) return setNote("policy-note", ASSET_ID_HELP, true);
+        if (view.rules.some((r) => r.assetId && assetKey(r.assetId) === assetKey(id)))
+            return setNote("policy-note", "That asset already has a rule.", true);
+        editRules(() => view.rules.push(newRule(id)), true);
+        $("rule-asset").value = "";
+    });
+    $("assetRules").addEventListener("input", readJsonRules);
+    $("rules-json-toggle").addEventListener("click", () => {
+        const show = $("rules-json").hidden;
+        const problem = show ? null : readJsonRules();
+        if (problem)
+            return setNote(
+                "policy-note",
+                "Asset rules: the JSON is not valid (" + problem + ").",
+                true,
+            );
+        $("rules-json").hidden = !show;
+        $("rules-json-toggle").ariaExpanded = String(show);
+        $("rules-json-toggle").textContent = show ? "Hide JSON" : "Edit as JSON";
+    });
+
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
         let rules;
         try {
             rules = JSON.parse($("assetRules").value);
         } catch (err) {
-            setNote("policy-note", "Asset rules: " + err.message, true);
+            setNote(
+                "policy-note",
+                "Asset rules: the JSON is not valid (" + err.message + ").",
+                true,
+            );
             return;
         }
         const patch = policyPatch(rules);

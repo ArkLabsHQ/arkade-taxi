@@ -150,104 +150,234 @@
                 </div>
             </section>
 
-            <div class="cols">
-                <section class="panel" aria-labelledby="policy-heading">
-                    <div class="panel__head">
-                        <h2 id="policy-heading">Policy</h2>
+            <section class="panel" id="settings" aria-labelledby="policy-heading">
+                <div class="panel__head">
+                    <h2 id="policy-heading">Settings</h2>
+                    <div class="actions">
+                        <button type="button" id="pause" class="attention">Pause</button>
+                        <button type="button" id="resume">Resume</button>
                         <span class="meta" id="policy-loaded"></span>
                     </div>
-                    <div class="panel__body">
-                        <div class="actions">
-                            <button type="button" id="pause" class="attention">Pause</button>
-                            <button type="button" id="resume">Resume</button>
-                        </div>
-                        <p class="note" id="switch-note" aria-live="polite"></p>
+                </div>
+                <div class="panel__body">
+                    <p class="note" id="switch-note" aria-live="polite"></p>
 
-                        <form id="policy-form" class="form-grid" novalidate>
-                            <p class="field">
-                                <label for="maxOutstandingSats">Max outstanding (sats)</label>
-                                <input type="text" id="maxOutstandingSats" inputmode="numeric" />
+                    <form id="policy-form" novalidate>
+                        <fieldset class="group" id="limits">
+                            <legend>Limits</legend>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="maxPerPaymentTopupSats"
+                                        >Max per payment (sats)</label
+                                    >
+                                    <input
+                                        type="text"
+                                        id="maxPerPaymentTopupSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-per-payment"
+                                    />
+                                    <span class="hint" id="hint-per-payment"
+                                        >The most it lends to one payment, unless a rule below sets
+                                        its own. The network dust,
+                                        <span id="hint-dust">—</span> sats, covers any small
+                                        payment.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxOutstandingSats">Max outstanding (sats)</label>
+                                    <input
+                                        type="text"
+                                        id="maxOutstandingSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-outstanding"
+                                    />
+                                    <span class="hint" id="hint-outstanding"
+                                        >The most it has lent at once, across all payments. It is
+                                        lent from the balance above the reserve. Example: 33
+                                        000.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxConcurrentAdvances">Max payments at once</label>
+                                    <input
+                                        type="number"
+                                        id="maxConcurrentAdvances"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-concurrent"
+                                    />
+                                    <span class="hint" id="hint-concurrent"
+                                        >How many payments can wait to be claimed at the same time.
+                                        Example: 100.</span
+                                    >
+                                </p>
+                            </div>
+                            <p class="hint">
+                                At 0, any one of these makes the Taxi refuse every payment.
                             </p>
-                            <p class="field">
-                                <label for="maxPerPaymentTopupSats"
-                                    >Max topup per payment (sats)</label
-                                >
+                        </fieldset>
+
+                        <fieldset class="group" id="carry">
+                            <legend>What you carry</legend>
+                            <p class="hint">
+                                One rule per kind of payment. Each asset needs its own rule with its
+                                exact id: there is no rule for "any asset". A payer is offered the
+                                fares in order, and the first is the default. A flat 0 fare is free;
+                                a percent fare in sats is a share of the sats lent, and in an asset
+                                a share of the amount sent.
+                            </p>
+                            <div class="scroll">
+                                <table class="rules">
+                                    <caption class="sr-only">
+                                        Payments the Taxi carries, and on what terms
+                                    </caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Payment</th>
+                                            <th scope="col">On</th>
+                                            <th scope="col">Fares</th>
+                                            <th scope="col">When the receiver claims</th>
+                                            <th scope="col">Max per payment</th>
+                                            <th scope="col"><span class="sr-only">Remove</span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rules-body"></tbody>
+                                </table>
+                                <p class="empty" id="rules-empty" hidden>
+                                    No rules yet: the Taxi refuses every payment.
+                                </p>
+                            </div>
+                            <div class="actions">
+                                <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
+                                <label class="sr-only" for="rule-asset">Asset id to add</label>
                                 <input
                                     type="text"
-                                    id="maxPerPaymentTopupSats"
-                                    inputmode="numeric"
+                                    id="rule-asset"
+                                    class="asset-input"
+                                    placeholder="txid:group"
+                                    spellcheck="false"
                                 />
-                            </p>
-                            <p class="field">
-                                <label for="maxConcurrentAdvances">Max concurrent advances</label>
-                                <input type="number" id="maxConcurrentAdvances" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginBlocks">Locktime margin (blocks)</label>
-                                <input type="number" id="locktimeMarginBlocks" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginSeconds">Locktime margin (seconds)</label>
-                                <input type="number" id="locktimeMarginSeconds" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="quoteTtlSeconds">Quote TTL (seconds)</label>
-                                <input type="number" id="quoteTtlSeconds" min="1" step="1" />
-                            </p>
-                            <p class="field field--wide">
+                                <button type="button" id="rule-add-asset">Add asset</button>
+                                <button
+                                    type="button"
+                                    id="rules-json-toggle"
+                                    aria-expanded="false"
+                                    aria-controls="rules-json"
+                                >
+                                    Edit as JSON
+                                </button>
+                            </div>
+                            <p class="field" id="rules-json" hidden>
                                 <label for="assetRules">Asset rules (JSON)</label>
                                 <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
-                            <div class="actions">
-                                <button type="submit" class="primary" id="apply">Apply</button>
-                                <button type="button" id="revert">Revert</button>
-                            </div>
-                        </form>
-                        <p class="note" id="policy-note" aria-live="polite"></p>
-                    </div>
-                </section>
+                        </fieldset>
 
-                <section class="panel" aria-labelledby="advances-heading">
-                    <div class="panel__head">
-                        <h2 id="advances-heading">Advances</h2>
-                        <span class="actions">
-                            <label class="field-label" for="state-filter">State</label>
-                            <select id="state-filter">
-                                <option value="">all</option>
-                            </select>
-                            <span class="meta" id="advances-count"></span>
-                        </span>
-                    </div>
-                    <div class="scroll">
-                        <table>
-                            <caption class="sr-only">
-                                Advances ordered by safety urgency in the current snapshot
-                            </caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Id</th>
-                                    <th scope="col">State</th>
-                                    <th scope="col" class="n">Topup</th>
-                                    <th scope="col" class="n">Fee</th>
-                                    <th scope="col" class="n">Locktime</th>
-                                    <th scope="col" class="n">Age</th>
-                                    <th scope="col">Phase</th>
-                                    <th scope="col">Action</th>
-                                    <th scope="col">Covenant</th>
-                                </tr>
-                            </thead>
-                            <tbody id="advances-body"></tbody>
-                        </table>
-                        <p class="empty" id="advances-empty" hidden>No advances.</p>
-                    </div>
-                    <div class="pagination">
-                        <p class="note" id="advances-note" aria-live="polite">
-                            Current snapshot pagination starts on refresh.
-                        </p>
-                        <button type="button" id="advances-more" hidden>Load more</button>
-                    </div>
-                </section>
-            </div>
+                        <details class="group" id="advanced">
+                            <summary>Advanced</summary>
+                            <p class="hint">Leave these at their defaults unless you know why.</p>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="locktimeMarginBlocks"
+                                        >Locktime margin (blocks)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginBlocks"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-blocks"
+                                    />
+                                    <span class="hint" id="hint-margin-blocks"
+                                        >Headroom between a payment's recovery time and its coin's
+                                        expiry, so the Taxi recovers lent sats before the coin
+                                        expires. Must exceed the recovery budget
+                                        (TAXI_RECOVERY_BROADCAST_BLOCKS). Default 144.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="locktimeMarginSeconds"
+                                        >Locktime margin (seconds)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginSeconds"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-seconds"
+                                    />
+                                    <span class="hint" id="hint-margin-seconds"
+                                        >The same headroom for coins that expire at a time rather
+                                        than a block. Must exceed TAXI_RECOVERY_BROADCAST_SECONDS.
+                                        Default 86 400, one day.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="quoteTtlSeconds">Quote lifetime (seconds)</label>
+                                    <input
+                                        type="number"
+                                        id="quoteTtlSeconds"
+                                        min="1"
+                                        step="1"
+                                        aria-describedby="hint-quote-ttl"
+                                    />
+                                    <span class="hint" id="hint-quote-ttl"
+                                        >How long a price quote stays valid. The coins set aside for
+                                        a quote are freed when it expires. Default 60.</span
+                                    >
+                                </p>
+                            </div>
+                        </details>
+
+                        <div class="actions">
+                            <button type="submit" class="primary" id="apply">Apply</button>
+                            <button type="button" id="revert">Revert</button>
+                        </div>
+                    </form>
+                    <p class="note" id="policy-note" aria-live="polite"></p>
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="advances-heading">
+                <div class="panel__head">
+                    <h2 id="advances-heading">Advances</h2>
+                    <span class="actions">
+                        <label class="field-label" for="state-filter">State</label>
+                        <select id="state-filter">
+                            <option value="">all</option>
+                        </select>
+                        <span class="meta" id="advances-count"></span>
+                    </span>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Advances ordered by safety urgency in the current snapshot
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Id</th>
+                                <th scope="col">State</th>
+                                <th scope="col" class="n">Topup</th>
+                                <th scope="col" class="n">Fee</th>
+                                <th scope="col" class="n">Locktime</th>
+                                <th scope="col" class="n">Age</th>
+                                <th scope="col">Phase</th>
+                                <th scope="col">Action</th>
+                                <th scope="col">Covenant</th>
+                            </tr>
+                        </thead>
+                        <tbody id="advances-body"></tbody>
+                    </table>
+                    <p class="empty" id="advances-empty" hidden>No advances.</p>
+                </div>
+                <div class="pagination">
+                    <p class="note" id="advances-note" aria-live="polite">
+                        Current snapshot pagination starts on refresh.
+                    </p>
+                    <button type="button" id="advances-more" hidden>Load more</button>
+                </div>
+            </section>
 
             <section class="panel" aria-labelledby="history-heading">
                 <div class="panel__head">

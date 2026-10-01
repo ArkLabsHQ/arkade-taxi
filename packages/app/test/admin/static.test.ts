@@ -23,11 +23,21 @@ class DashboardElement {
     disabled = false;
     value: any = "";
     checked = false;
+    open = false;
+    name = "";
     title = "";
     scope = "";
     type = "";
     className = "";
     private text = "";
+
+    showModal() {
+        this.open = true;
+    }
+    close() {
+        this.open = false;
+    }
+    focus() {}
 
     set textContent(value: string) {
         this.text = String(value);
@@ -48,6 +58,11 @@ class DashboardElement {
             listener({ target: this, preventDefault() {} });
     }
 }
+
+const named = (root: DashboardElement, name: string): DashboardElement[] => [
+    ...(root.name === name ? [root] : []),
+    ...root.children.flatMap((child) => named(child, name)),
+];
 
 const dashboardRow = (id: string, state = "locked") => ({
     id,
@@ -88,6 +103,7 @@ function deferred<T>() {
 function runDashboard(
     fetchAdvances: (path: string) => unknown | Promise<unknown>,
     admin = harness(),
+    { realStatus = false } = {},
 ) {
     const elements = new Map<string, DashboardElement>();
     const element = (id: string) => {
@@ -96,6 +112,7 @@ function runDashboard(
         return elements.get(id)!;
     };
     const requests: string[] = [];
+    const sent: { method: string; path: string; body: any }[] = [];
     const copied: string[] = [];
     let poll = async () => {};
     const response = (body: unknown) => ({
@@ -104,8 +121,12 @@ function runDashboard(
         statusText: "OK",
         text: async () => JSON.stringify(body),
     });
-    const fetch = async (path: string, init?: { headers?: Record<string, string> }) => {
+    const fetch = async (
+        path: string,
+        init?: { method?: string; headers?: Record<string, string>; body?: string },
+    ) => {
         requests.push(path);
+        if (init?.method) sent.push({ method: init.method, path, body: JSON.parse(init.body!) });
         if (path.startsWith("/admin/api/advances")) {
             const result: any = await fetchAdvances(path);
             if (result?.httpStatus)
@@ -117,7 +138,7 @@ function runDashboard(
                 };
             return response(result);
         }
-        if (path === "/admin/api/status")
+        if (path === "/admin/api/status" && !realStatus)
             return response({
                 exposure: {
                     outstandingSats: "1",
@@ -126,6 +147,8 @@ function runDashboard(
                 },
                 counts: {},
                 paused: true,
+                dust: "330",
+                vtxoMinAmount: "10",
                 sweeper: {
                     healthy: true,
                     running: true,
@@ -167,7 +190,7 @@ function runDashboard(
         createElement: () => new DashboardElement(),
         addEventListener() {},
     };
-    runInNewContext(APP_JS, {
+    const context: Record<string, any> = {
         document,
         fetch,
         navigator: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
@@ -182,10 +205,11 @@ function runDashboard(
         Map,
         Array,
         String,
-    });
+    };
+    runInNewContext(APP_JS, context);
     const renderedIds = () =>
         element("advances-body").children.map((row) => row.children[0]?.title);
-    return { element, renderedIds, requests, copied, poll: () => poll() };
+    return { element, renderedIds, requests, sent, copied, context, poll: () => poll() };
 }
 
 describe("static routes", () => {
@@ -579,6 +603,58 @@ describe("the dashboard is dependency-free", () => {
         dashboard.element("policy-form").fire("submit");
         expect(note()).toMatch(/^Asset rules: /);
         expect(dashboard.requests).toHaveLength(sent);
+    });
+
+    it("edits rules from the settings table and keeps the JSON view on the same rules", async () => {
+        const admin = harness();
+        const [seeded] = admin.policy.update(policy(), "seed").assetRules;
+        const dashboard = runDashboard(() => dashboardPage([], "b".repeat(64), null), admin);
+        const row = () => dashboard.element("rules-body").children[0]!;
+        const json = () => JSON.parse(dashboard.element("assetRules").value);
+        await vi.waitFor(() => expect(named(row(), "claim")).toHaveLength(1));
+
+        const claim = named(row(), "claim")[0]!;
+        claim.value = "purchase";
+        claim.fire("change");
+        named(row(), "add-fare")[0]!.fire("click");
+        const units = named(row(), "units")[1]!;
+        units.value = "5";
+        units.fire("change");
+        const added = { id: "sats-2", currency: { kind: "sats" }, pricing: { kind: "flat" } };
+        expect(json()).toEqual([
+            {
+                assetId: null,
+                enabled: true,
+                fares: [
+                    {
+                        id: "sats",
+                        currency: { kind: "sats" },
+                        pricing: { kind: "flat", units: "0" },
+                    },
+                    { ...added, pricing: { kind: "flat", units: "5" } },
+                ],
+                claim: "purchase",
+                maxTopupSats: null,
+            },
+        ]);
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
+        );
+        expect(admin.policy.get().assetRules).toEqual([
+            {
+                ...seeded,
+                claim: "purchase",
+                fares: [...seeded!.fares, { ...added, pricing: { kind: "flat", units: 5n } }],
+            },
+        ]);
+
+        const edited = json();
+        edited[0].enabled = false;
+        dashboard.element("assetRules").value = JSON.stringify(edited);
+        dashboard.element("assetRules").fire("input");
+        expect(named(row(), "enabled")[0]!.checked).toBe(false);
     });
 
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {

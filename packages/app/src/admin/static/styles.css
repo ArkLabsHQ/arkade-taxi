@@ -149,19 +149,6 @@ main {
     gap: 16px;
 }
 
-.cols {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
-    align-items: stretch;
-}
-
-@media (max-width: 1040px) {
-    .cols {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
-
 .panel {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -400,15 +387,81 @@ body.is-alarm .headline__sweeper {
 
 .form-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 12px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px 16px;
     align-items: start;
-    margin-top: 14px;
 }
 
-.form-grid > .actions,
-.field--wide {
-    grid-column: 1 / -1;
+/* Settings groups. A fieldset defaults to min-width: min-content, which would
+ * stop the rules table from scrolling inside it. */
+.group {
+    min-width: 0;
+    margin: 0 0 18px;
+    padding: 0;
+    border: 0;
+}
+
+.group > legend,
+.group > summary {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--line);
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.group > summary {
+    cursor: pointer;
+}
+
+.group > summary::before {
+    content: "+ ";
+    font-family: var(--mono);
+}
+
+.group[open] > summary::before {
+    content: "− ";
+}
+
+.group > .hint,
+.group .actions {
+    margin: 8px 0;
+}
+
+.rules th,
+.rules td {
+    vertical-align: top;
+}
+
+.rules input[type="text"] {
+    width: 9ch;
+    padding: 3px 6px;
+}
+
+.rules select {
+    width: auto;
+    padding: 3px 6px;
+}
+
+.fare {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 6px;
+}
+
+.asset-input {
+    max-width: 44ch;
+}
+
+.warn {
+    margin: 0 0 6px;
+    color: var(--accent);
 }
 
 .field {
@@ -466,6 +519,10 @@ textarea:hover {
 .check input {
     width: 14px;
     height: 14px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
     accent-color: var(--accent);
 }
 
