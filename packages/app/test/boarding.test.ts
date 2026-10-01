@@ -51,6 +51,7 @@ function setup(boardingMaxFeeSats = 0n, info = withFees({})) {
         },
     };
     const wallet = {
+        getVtxoManager: async () => ({ renewVtxos: async () => "" }),
         getAddress: async () => address,
         getSpendableVtxos: async () => [fundingCoin()],
         getBoardingUtxos: async () => deposits,

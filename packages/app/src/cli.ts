@@ -54,8 +54,13 @@ async function runServe(): Promise<void> {
             .filter((advance) => advanceKind(advance) === "covenant"),
         config,
     );
+    const jobs = new ProceedsRepository(db);
     const runtime = createOperatorRuntime(config, db, {
         reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+        heldOutpoints: () => [
+            ...unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+            ...(jobs.active()?.plan.inputs ?? []),
+        ],
     });
     const proceeds = createProceedsCollector({
         config,
@@ -64,7 +69,7 @@ async function runServe(): Promise<void> {
         reservations,
         swapFills,
         receiveQuotes,
-        jobs: new ProceedsRepository(db),
+        jobs,
     });
     const boarding = createBoarding({ config, runtime });
     const lockupSubmitter = productionLockupSubmitter(

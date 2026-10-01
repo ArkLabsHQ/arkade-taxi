@@ -6,15 +6,24 @@ import {
     VtxoScript,
     CSVMultisigTapscript,
     networks,
+    Transaction,
     type WalletConfig,
     type ExtendedVirtualCoin,
     type ContractManager,
 } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { config, emulatorKey, operatorKey, providerEmulatorKey, serverKey } from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
 import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
 import { resolveRuntimeConfig } from "../../src/config.js";
+
+const proofOf = (inputs: { txid: string; vout: number }[]) => {
+    const tx = new Transaction();
+    tx.addInput({ txid: "00".repeat(32), index: 0 });
+    for (const { txid, vout } of inputs) tx.addInput({ txid, index: vout });
+    return { proof: base64.encode(tx.toPSBT()) } as never;
+};
 
 const databases: Database[] = [];
 afterEach(() => {
@@ -40,10 +49,32 @@ function setup() {
     let inventoryReads = 0;
     let coins: Partial<ExtendedVirtualCoin>[] = [{}];
     let taxiReserved: { txid: string; vout: number }[] = [];
+    let held: { txid: string; vout: number }[] = [];
     let reservationReadFails = false;
     let address = new ArkAddress(serverKey, operatorKey, "tark").encode();
     let walletConfig: WalletConfig;
+    const events: string[] = [];
+    let settleGate: Promise<void> | undefined;
+    let startBackground!: () => void;
+    const backgroundStart = new Promise<void>((resolve) => (startBackground = resolve));
+    let backgroundPoll: Promise<string> | undefined;
+    const settle = async (params: {
+        inputs: { txid: string; vout: number }[];
+        outputs: unknown[];
+    }) => {
+        events.push(`settle:${params.inputs.map(({ txid }) => txid.slice(0, 2)).join()}`);
+        const id = await walletConfig.arkProvider!.registerIntent(proofOf(params.inputs));
+        await settleGate;
+        events.push("settle:end");
+        return id;
+    };
+    const manager = {
+        renewVtxos: async () =>
+            wallet.settle({ inputs: await wallet.getSpendableVtxos(), outputs: [] }),
+    };
     const wallet = {
+        settle,
+        getVtxoManager: async () => manager,
         getAddress: async () => address,
         getSpendableVtxos: async () => {
             inventoryReads++;
@@ -82,18 +113,40 @@ function setup() {
         walletFactory: async (_cfg: WalletConfig) => {
             walletConfig = _cfg;
             created++;
+            // Born at creation, like the SDK's poll timer.
+            backgroundPoll ??= backgroundStart.then(() =>
+                wallet.settle({ inputs: [{ txid: "bd".repeat(32), vout: 0 }], outputs: [] }),
+            );
             return wallet as unknown as Wallet;
         },
         reservedOutpoints: () => {
             if (reservationReadFails) throw new Error("reservation read failed");
             return taxiReserved;
         },
+        heldOutpoints: () => held,
     });
     return {
         runtime,
         db,
+        events,
         get walletConfig() {
             return walletConfig;
+        },
+        get backgroundPoll() {
+            return backgroundPoll!;
+        },
+        startBackground: () => startBackground(),
+        renew: async () => (await runtime.wallet!.getVtxoManager()).renewVtxos(),
+        holdSettle: () => {
+            let open!: () => void;
+            settleGate = new Promise<void>((resolve) => (open = resolve));
+            return () => {
+                settleGate = undefined;
+                open();
+            };
+        },
+        setHeld: (value: { txid: string; vout: number }[]) => {
+            held = value;
         },
         setAddress: (value: string) => {
             address = value;
@@ -548,5 +601,120 @@ describe("persistent operator runtime safety", () => {
         const snapshot = await s.runtime.refresh();
         expect(snapshot.chainHeight).toBeNull();
         expect(snapshot.blockers).toContain("chain_tip_unavailable");
+    });
+});
+
+describe("the SDK's background settlement", () => {
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+    it("is the only intent source besides the proceeds worker", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await s.runtime.refresh();
+
+        await expect(
+            s.walletConfig.arkProvider!.registerIntent(
+                proofOf([{ txid: "aa".repeat(32), vout: 0 }]),
+            ),
+        ).rejects.toThrow("proceeds_submission_not_authorized");
+        await expect(s.runtime.wallet!.settle({ inputs: [], outputs: [] })).rejects.toThrow(
+            "proceeds_submission_not_authorized",
+        );
+        expect(register).not.toHaveBeenCalled();
+
+        s.startBackground();
+        await expect(s.backgroundPoll).resolves.toBe("intent");
+        await expect(s.renew()).resolves.toBe("intent");
+        expect(register).toHaveBeenCalledTimes(2);
+    });
+
+    it("never runs alongside the proceeds worker's settlement, in either order", async () => {
+        const s = setup();
+        vi.spyOn(s.runtime.providers.arkProvider, "registerIntent").mockResolvedValue("intent");
+        await s.runtime.refresh();
+        let finishProceeds!: () => void;
+        const proceeds = s.runtime.withSettlement(
+            async () => {
+                s.events.push("proceeds");
+                await new Promise<void>((resolve) => (finishProceeds = resolve));
+                s.events.push("proceeds:end");
+            },
+            async () => () => {},
+        );
+        await vi.waitFor(() => expect(s.events).toEqual(["proceeds"]));
+        const renewal = s.renew();
+        await tick();
+        expect(s.events).toEqual(["proceeds"]);
+        finishProceeds();
+        await Promise.all([proceeds, renewal]);
+        expect(s.events).toEqual(["proceeds", "proceeds:end", "settle:aa", "settle:end"]);
+
+        s.events.length = 0;
+        const finishBackground = s.holdSettle();
+        const background = s.renew();
+        await vi.waitFor(() => expect(s.events).toEqual(["settle:aa"]));
+        const next = s.runtime.withSettlement(
+            async () => void s.events.push("proceeds"),
+            async () => () => {},
+        );
+        await tick();
+        expect(s.events).toEqual(["settle:aa"]);
+        finishBackground();
+        await Promise.all([background, next]);
+        expect(s.events).toEqual(["settle:aa", "settle:end", "proceeds"]);
+    });
+
+    it("leaves the proceeds worker's own guard on its intents, and only on them", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await s.runtime.refresh();
+        const refusing = vi.fn(async () => {
+            throw new Error("proceeds_fee_authorization_changed");
+        });
+        await expect(
+            s.runtime.withSettlement(
+                (wallet) => wallet.settle({ inputs: [], outputs: [] }),
+                refusing,
+            ),
+        ).rejects.toThrow("proceeds_fee_authorization_changed");
+        expect(register).not.toHaveBeenCalled();
+        s.events.length = 0;
+
+        const guard = vi.fn(async () => () => {});
+        let renewal: Promise<string> | undefined;
+        await s.runtime.withSettlement(async (wallet) => {
+            renewal = s.renew();
+            return wallet.settle({
+                inputs: [{ txid: "cc".repeat(32), vout: 1 }] as never,
+                outputs: [],
+            });
+        }, guard);
+        await renewal;
+        expect(guard).toHaveBeenCalledTimes(1);
+        expect(register).toHaveBeenCalledTimes(2);
+        expect(s.events).toEqual(["settle:cc", "settle:end", "settle:aa", "settle:end"]);
+    });
+
+    it("never selects or registers a coin the Taxi holds, nor a subdust one", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        s.setCoins([{}, { txid: "cc".repeat(32), value: 1 }, { txid: "dd".repeat(32) }]);
+        s.setHeld([{ txid: "dd".repeat(32), vout: 0 }]);
+        await s.runtime.refresh();
+
+        expect(await s.runtime.wallet!.getSpendableVtxos()).toHaveLength(3);
+        await s.renew();
+        expect(s.events).toEqual(["settle:aa", "settle:end"]);
+
+        s.setHeld([{ txid: "bd".repeat(32), vout: 0 }]);
+        s.startBackground();
+        await expect(s.backgroundPoll).rejects.toThrow("background_settlement_spends_held_coin");
+        expect(register).toHaveBeenCalledTimes(1);
     });
 });

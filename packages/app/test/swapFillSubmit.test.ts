@@ -983,6 +983,8 @@ describe("submitSwapFill bound freshness gate", () => {
                 },
                 walletFactory: async () =>
                     ({
+                        settle: async () => "",
+                        getVtxoManager: async () => ({ renewVtxos: async () => "" }),
                         getAddress: async () =>
                             new ArkAddress(
                                 cfg.serverPubkey,
