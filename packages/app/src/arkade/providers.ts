@@ -5,7 +5,9 @@ import {
     assertValidServerUnrollScript,
     defaultCheckpointExitDelayPolicy,
     defaultEmulatorPubkey,
+    isVtxoExpiringSoon,
     networks,
+    type ExtendedVirtualCoin,
     type ArkProvider,
     type EmulatorProvider,
     type ArkInfo,
@@ -33,6 +35,11 @@ export function normalizeExpiry(coin: {
 export function withinVtxoMaxAmount(amount: bigint, vtxoMaxAmount: bigint): boolean {
     return vtxoMaxAmount < 0n || amount <= vtxoMaxAmount;
 }
+
+/** The SDK VtxoManager's own renewal test, so a coin the Taxi commits can never
+ * also be in a background renewal. */
+export const renewing = (coin: ExtendedVirtualCoin, thresholdSeconds: bigint): boolean =>
+    isVtxoExpiringSoon(coin, Number(thresholdSeconds) * 1000);
 
 export function normalizeSigner(key: string): string {
     if (/^[0-9a-f]{64}$/i.test(key)) return key.toLowerCase();

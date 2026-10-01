@@ -31,7 +31,12 @@ import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
 import { classifyObservedSpend } from "./watcher.js";
-import { normalizeExpiry, verifyProviders, withinVtxoMaxAmount } from "./arkade/providers.js";
+import {
+    normalizeExpiry,
+    renewing,
+    verifyProviders,
+    withinVtxoMaxAmount,
+} from "./arkade/providers.js";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
 const intentDigest = (proof: string, message: string) =>
@@ -83,7 +88,12 @@ const canonical = (c: ExtendedVirtualCoin, cfg: RuntimeConfig) => {
     }
 };
 const reserveValue = (c: ExtendedVirtualCoin, cfg: RuntimeConfig, clock: TimeHeight) => {
-    if (c.assets?.length || !canSpendOffchain(c, clock)) return 0n;
+    if (
+        c.assets?.length ||
+        !canSpendOffchain(c, clock) ||
+        renewing(c, cfg.vtxoRenewalThresholdSeconds)
+    )
+        return 0n;
     try {
         const expiry = normalizeExpiry(c);
         const height = expiry.kind === "height";
@@ -226,6 +236,7 @@ export function planProceeds(
             (c) =>
                 canonical(c, cfg) &&
                 canSpendOffchain(c, clock) &&
+                !renewing(c, cfg.vtxoRenewalThresholdSeconds) &&
                 !locked.has(key(c)) &&
                 !ids.has(key(c)),
         )

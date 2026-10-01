@@ -44,6 +44,12 @@ Runtime budgets are positive decimal integers. Height budgets are
 `TAXI_MIN_EXPIRY_HEADROOM_SECONDS=86400`, `TAXI_RECOVERY_BROADCAST_SECONDS=43200`,
 and `TAXI_RECOVERY_CRITICAL_SECONDS=7200`. Each set independently requires
 critical < broadcast < minimum headroom. No conversion between units occurs.
+`TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS=259200`, the SDK's own default, is how
+close to expiry an operator coin must be before the SDK renews it; it must
+exceed `TAXI_MIN_EXPIRY_HEADROOM_SECONDS`, so coins are renewed before they cost
+admission. The Taxi never commits a coin inside that window and does not count
+it as usable inventory. Lower it below the Arkade Service's VTXO lifetime when
+that is three days or less, or the SDK would renew every coin as it arrives.
 `TAXI_RECONCILE_INTERVAL_MS=30000` controls refresh and snapshot staleness;
 `TAXI_OPERATOR_MIN_RESERVE_SATS=10000` requires verified usable wallet capacity.
 The live policy has separate `locktimeMarginBlocks=144` and

@@ -472,6 +472,13 @@ describe("persistent operator runtime safety", () => {
         await expect(s.runtime.assertAdmission()).rejects.toMatchObject({ status: 503 });
         expect(s.runtime.safety().blockers).toContain("operator_reserve_low");
     });
+    it("does not count a coin the SDK is about to renew as usable inventory", async () => {
+        const s = setup();
+        s.setExpiryTime(new Date((Math.floor(Date.now() / 1000) + 2 * 86_400) * 1000));
+        const state = await s.runtime.refresh();
+        expect(state.inventory).toMatchObject({ usableSats: 0n, usableVtxos: 0 });
+        expect(state.blockers).not.toContain("vtxo_expiry_headroom");
+    });
     it("uses MTP and seconds budgets for timestamp expiry and rejects unknown MTP", async () => {
         const s = setup();
         s.setExpiryTime(new Date((1789132000 + 86401) * 1000));

@@ -1,7 +1,7 @@
 import { canSpendOffchain, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import type { ExpiryDeadline, Outpoint } from "@arkade-taxi/core";
 import { ServiceError } from "../errors.js";
-import { normalizeExpiry } from "./providers.js";
+import { normalizeExpiry, renewing } from "./providers.js";
 import type { RuntimeSafety } from "./types.js";
 
 export interface FundingSelection {
@@ -42,6 +42,7 @@ export function selectOperatorFunding(options: {
     maxSnapshotAgeMs: number;
     minExpiryHeadroomBlocks: bigint;
     minExpiryHeadroomSeconds: bigint;
+    renewalThresholdSeconds: bigint;
     minReserveSats: bigint;
     /** The floor the change this caller derives from `totalValue - requiredSats`
      * must clear; omitted where the operator's output is not that difference. */
@@ -81,6 +82,7 @@ export function selectOperatorFunding(options: {
                 : options.minExpiryHeadroomSeconds;
         if (
             expiry.value - clock < headroom ||
+            renewing(coin, options.renewalThresholdSeconds) ||
             !canSpendOffchain(coin, {
                 height: Number(safety.chainHeight),
                 timestamp: new Date(Number(safety.chainTime) * 1000),

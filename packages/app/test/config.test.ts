@@ -38,6 +38,12 @@ describe("loadConfig", () => {
             /TAXI_BOARDING_MAX_FEE_SATS/,
         );
     });
+    it("renews at the SDK's 3-day default, and only before admission headroom runs out", () => {
+        expect(loadConfig(env()).vtxoRenewalThresholdSeconds).toBe(259200n);
+        expect(() => loadConfig(env({ TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: "86400" }))).toThrow(
+            /TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS/,
+        );
+    });
     it("orders time budgets independently", () => {
         expect(() =>
             loadConfig(

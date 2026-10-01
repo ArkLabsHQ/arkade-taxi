@@ -12,7 +12,7 @@ import type { Outpoint } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../config.js";
 import { ServiceError } from "../errors.js";
-import { createProviders, verifyProviders, normalizeExpiry } from "./providers.js";
+import { createProviders, verifyProviders, normalizeExpiry, renewing } from "./providers.js";
 import { createOperatorStorage } from "./sqlExecutor.js";
 import type { RuntimeSafety } from "./types.js";
 
@@ -217,6 +217,7 @@ export function createOperatorRuntime(
                     if (isReserved) continue;
                     if (
                         !coin.assets?.length &&
+                        !renewing(coin, config.vtxoRenewalThresholdSeconds) &&
                         result.chainTime !== null &&
                         result.chainHeight !== null &&
                         canSpendOffchain(coin, {

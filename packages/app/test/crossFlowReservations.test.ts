@@ -149,6 +149,7 @@ describe("cross-flow reservations", () => {
             maxSnapshotAgeMs: cfg.reconcileIntervalMs,
             minExpiryHeadroomBlocks: cfg.minExpiryHeadroomBlocks,
             minExpiryHeadroomSeconds: cfg.minExpiryHeadroomSeconds,
+            renewalThresholdSeconds: cfg.vtxoRenewalThresholdSeconds,
             minReserveSats: 0n,
             dustSats: cfg.dust,
         });

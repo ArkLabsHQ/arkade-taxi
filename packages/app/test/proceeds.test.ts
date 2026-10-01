@@ -328,6 +328,28 @@ describe("proceeds planning", () => {
         expect(plan.fee).toBe("0");
         expect(plan.maxFee).toBe("0");
     });
+    it("never takes a sponsor the SDK is about to renew", () => {
+        const renewingSoon = fundingCoin({
+            txid: "cd".repeat(32),
+            value: 900,
+            expiresAtHeight: undefined,
+            expiresAt: new Date((Math.floor(Date.now() / 1000) + 2 * 86_400) * 1000),
+        });
+        const plan = planProceeds(
+            [receipt],
+            [renewingSoon, carrier, spare],
+            [],
+            cfg,
+            {},
+            address,
+            clock,
+            -1n,
+        );
+        expect(plan.inputs).toEqual([
+            { txid: receipt.txid, vout: 0 },
+            { txid: spare.txid, vout: 1 },
+        ]);
+    });
     it("never spends reserved or foreign sponsors", () => {
         expect(() =>
             planProceeds([receipt], [spare], [spare], cfg, {}, address, clock, -1n),
@@ -488,6 +510,7 @@ describe("proceeds planning", () => {
                 maxSnapshotAgeMs: 1000,
                 minExpiryHeadroomBlocks: cfg.minExpiryHeadroomBlocks,
                 minExpiryHeadroomSeconds: cfg.minExpiryHeadroomSeconds,
+                renewalThresholdSeconds: cfg.vtxoRenewalThresholdSeconds,
                 minReserveSats: protectedCfg.operatorMinReserveSats,
                 dustSats: cfg.dust,
             }).totalValue,
