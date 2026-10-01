@@ -46,6 +46,8 @@ function adminDeps(deps: ServerDeps) {
             height: deps.config.recoveryBroadcastBlocks,
             time: deps.config.recoveryBroadcastSeconds,
         },
+        dust: deps.config.dust,
+        vtxoMinAmount: deps.config.vtxoMinAmount,
         sweeperStatus: () => {
             const s = deps.sweeper.status();
             return {

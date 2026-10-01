@@ -32,10 +32,10 @@ Unix seconds; the tagged VTXO batch expiry and recovery locktime are separate.
 
 The lockup output is jointly funded: the sender brings the asset and any sats
 remainder, the operator brings `topup`. Outputs are the covenant at `dust`, the
-operator's fare output, and sender and operator change. In v1 the operator funds
-the sats fare itself: it is a self-payment, not customer revenue. An asset fare
-is funded by sender asset units and is operator revenue; the operator supplies
-its hosting sats. Omitting `assetUnits` transfers the sender's remaining units
+operator's fare output, and sender and operator change. A positive sats fare is
+funded from the sender's change, and the envelope marks it with
+`satsFarePayer: "sender"`. An asset fare is funded by sender asset units and is
+operator revenue; the operator supplies its hosting sats. Omitting `assetUnits` transfers the sender's remaining units
 of the payment asset after any fare in that asset. The envelope records that
 resolved quantity, which the client independently verifies before signing.
 

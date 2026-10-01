@@ -131,10 +131,13 @@ operator wallet, inspect synchronization and then resume. Resume refreshes
 state and refuses while any safety blocker remains. Policy and operation
 changes carry an audit actor.
 
-In v1 a sats fare is an operator-funded self-payment, not customer revenue.
-Budget operator liquidity for the topup, sats fare or asset-fare hosting sats,
-and change requirements. A sender-funded asset fare is operator revenue.
-Changing fare rules does not change these funding allocations.
+On a transfer, a positive sats fare is charged to the sender: the quote is
+refused unless the sender's own sats cover the dust carrier and the fare, and
+the lockup pays the fare to the operator out of the sender's change. A plain
+bitcoin transfer's payment is the sender's sats, so it cannot carry a sats fare.
+Budget operator liquidity for the topup, asset-fare hosting sats and change
+requirements. A sender-funded asset fare is operator revenue too. Changing fare
+rules does not change these funding allocations.
 
 The same asset rules also price receiver-paid fills. An asset fare rate at or
 above a typical delivery refuses every such fill at fill-creation time, even

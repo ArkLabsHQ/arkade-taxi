@@ -52,9 +52,9 @@ and is irrelevant afterwards.
 
 **Transfer principal stays with the receiver or sender.** The operator lends
 sats and receives the covenant's pinned sats repayment. A separately authorized
-fare at lockup can be denominated in sats or an allowed asset. In v1 a sats
-fare is an operator-funded self-payment, not customer revenue. An asset fare
-is paid from sender asset funding and is operator revenue.
+fare at lockup can be denominated in sats or an allowed asset. A sats fare is
+paid from the sender's change, and an asset fare from sender asset funding;
+both are operator revenue.
 
 **No fee is expressible inside the covenant.** `recycle` pins the operator's
 output to _exactly_ `topup`, not a satoshi more. A sender-funded asset fare is

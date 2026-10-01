@@ -39,6 +39,67 @@ export const INDEX_HTML = `<!doctype html>
         </header>
 
         <main>
+            <section class="panel" id="setup" aria-labelledby="setup-heading">
+                <div class="panel__head">
+                    <h2 id="setup-heading">Get started</h2>
+                    <button type="button" id="wizard-open">Run setup again</button>
+                </div>
+                <ol class="steps">
+                    <li class="step" id="step-connected">
+                        <span class="step__state" id="step-connected-state">…</span>
+                        <div>
+                            <p class="step__title" id="step-connected-title">
+                                Taxi is running and connected
+                            </p>
+                            <ul class="step__detail" id="step-connected-detail"></ul>
+                        </div>
+                        <button type="button" id="step-connected-fix">Check again</button>
+                    </li>
+                    <li class="step" id="step-fund">
+                        <span class="step__state" id="step-fund-state">…</span>
+                        <div>
+                            <p class="step__title">Fund your Taxi</p>
+                            <p class="step__detail" id="step-fund-detail"></p>
+                        </div>
+                        <a class="button" id="step-fund-fix" href="#funding">Show address</a>
+                    </li>
+                    <li class="step" id="step-limits">
+                        <span class="step__state" id="step-limits-state">…</span>
+                        <div>
+                            <p class="step__title">Set your limits</p>
+                            <p class="step__detail" id="step-limits-detail"></p>
+                        </div>
+                        <a class="button" id="step-limits-fix" href="#limits">Edit limits</a>
+                    </li>
+                    <li class="step" id="step-carry">
+                        <span class="step__state" id="step-carry-state">…</span>
+                        <div>
+                            <p class="step__title">Choose what to carry</p>
+                            <p class="step__detail" id="step-carry-detail"></p>
+                        </div>
+                        <a class="button" id="step-carry-fix" href="#carry">Edit rules</a>
+                    </li>
+                    <li class="step" id="step-live">
+                        <span class="step__state" id="step-live-state">…</span>
+                        <div>
+                            <p class="step__title">Go live</p>
+                            <p class="step__detail" id="step-live-detail"></p>
+                            <div class="step__confirm" id="go-live-confirm" role="alert" hidden>
+                                <p id="go-live-warning"></p>
+                                <div class="actions">
+                                    <button type="button" class="attention" id="go-live-anyway">
+                                        Go live anyway
+                                    </button>
+                                    <button type="button" id="go-live-cancel">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="primary" id="step-live-fix">Go live</button>
+                    </li>
+                </ol>
+                <div class="note setup__note" id="setup-note" aria-live="polite"></div>
+            </section>
+
             <section class="headline" aria-labelledby="exposure-heading">
                 <div>
                     <h2 class="label" id="exposure-heading">Outstanding exposure</h2>
@@ -111,10 +172,9 @@ export const INDEX_HTML = `<!doctype html>
                         <dd id="time-expiry">—</dd>
                     </div>
                 </dl>
-                <p class="note" id="readiness-blockers"></p>
             </section>
 
-            <section class="panel" aria-labelledby="funding-heading">
+            <section class="panel" id="funding" aria-labelledby="funding-heading">
                 <div class="panel__head">
                     <h2 id="funding-heading">Funding</h2>
                     <div class="actions">
@@ -161,104 +221,234 @@ export const INDEX_HTML = `<!doctype html>
                 </div>
             </section>
 
-            <div class="cols">
-                <section class="panel" aria-labelledby="policy-heading">
-                    <div class="panel__head">
-                        <h2 id="policy-heading">Policy</h2>
+            <section class="panel" id="settings" aria-labelledby="policy-heading">
+                <div class="panel__head">
+                    <h2 id="policy-heading">Settings</h2>
+                    <div class="actions">
+                        <button type="button" id="pause" class="attention">Pause</button>
+                        <button type="button" id="resume">Resume</button>
                         <span class="meta" id="policy-loaded"></span>
                     </div>
-                    <div class="panel__body">
-                        <div class="actions">
-                            <button type="button" id="pause" class="attention">Pause</button>
-                            <button type="button" id="resume">Resume</button>
-                        </div>
-                        <p class="note" id="switch-note" aria-live="polite"></p>
+                </div>
+                <div class="panel__body">
+                    <div class="note" id="switch-note" aria-live="polite"></div>
 
-                        <form id="policy-form" class="form-grid" novalidate>
-                            <p class="field">
-                                <label for="maxOutstandingSats">Max outstanding (sats)</label>
-                                <input type="text" id="maxOutstandingSats" inputmode="numeric" />
+                    <form id="policy-form" novalidate>
+                        <fieldset class="group" id="limits">
+                            <legend>Limits</legend>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="maxPerPaymentTopupSats"
+                                        >Max per payment (sats)</label
+                                    >
+                                    <input
+                                        type="text"
+                                        id="maxPerPaymentTopupSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-per-payment"
+                                    />
+                                    <span class="hint" id="hint-per-payment"
+                                        >The most it lends to one payment, unless a rule below sets
+                                        its own. The network dust,
+                                        <span id="hint-dust">—</span> sats, covers any small
+                                        payment.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxOutstandingSats">Max outstanding (sats)</label>
+                                    <input
+                                        type="text"
+                                        id="maxOutstandingSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-outstanding"
+                                    />
+                                    <span class="hint" id="hint-outstanding"
+                                        >The most it has lent at once, across all payments. It is
+                                        lent from the balance above the reserve. Example: 33
+                                        000.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxConcurrentAdvances">Max payments at once</label>
+                                    <input
+                                        type="number"
+                                        id="maxConcurrentAdvances"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-concurrent"
+                                    />
+                                    <span class="hint" id="hint-concurrent"
+                                        >How many payments can wait to be claimed at the same time.
+                                        Example: 100.</span
+                                    >
+                                </p>
+                            </div>
+                            <p class="hint">
+                                At 0, any one of these makes the Taxi refuse every payment.
                             </p>
-                            <p class="field">
-                                <label for="maxPerPaymentTopupSats"
-                                    >Max topup per payment (sats)</label
-                                >
+                        </fieldset>
+
+                        <fieldset class="group" id="carry">
+                            <legend>What you carry</legend>
+                            <p class="hint">
+                                One rule per kind of payment. Each asset needs its own rule with its
+                                exact id: there is no rule for "any asset". A payer is offered the
+                                fares in order, and the first is the default. A flat 0 fare is free;
+                                a percent fare in sats is a share of the sats lent, and in an asset
+                                a share of the amount sent.
+                            </p>
+                            <div class="scroll">
+                                <table class="rules">
+                                    <caption class="sr-only">
+                                        Payments the Taxi carries, and on what terms
+                                    </caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Payment</th>
+                                            <th scope="col">On</th>
+                                            <th scope="col">Fares</th>
+                                            <th scope="col">When the receiver claims</th>
+                                            <th scope="col">Max per payment</th>
+                                            <th scope="col"><span class="sr-only">Remove</span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rules-body"></tbody>
+                                </table>
+                                <p class="empty" id="rules-empty" hidden>
+                                    No rules yet: the Taxi refuses every payment.
+                                </p>
+                            </div>
+                            <div class="actions">
+                                <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
+                                <label class="sr-only" for="rule-asset">Asset id to add</label>
                                 <input
                                     type="text"
-                                    id="maxPerPaymentTopupSats"
-                                    inputmode="numeric"
+                                    id="rule-asset"
+                                    class="asset-input"
+                                    placeholder="asset id from your wallet"
+                                    spellcheck="false"
                                 />
-                            </p>
-                            <p class="field">
-                                <label for="maxConcurrentAdvances">Max concurrent advances</label>
-                                <input type="number" id="maxConcurrentAdvances" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginBlocks">Locktime margin (blocks)</label>
-                                <input type="number" id="locktimeMarginBlocks" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginSeconds">Locktime margin (seconds)</label>
-                                <input type="number" id="locktimeMarginSeconds" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="quoteTtlSeconds">Quote TTL (seconds)</label>
-                                <input type="number" id="quoteTtlSeconds" min="1" step="1" />
-                            </p>
-                            <p class="field field--wide">
+                                <button type="button" id="rule-add-asset">Add asset</button>
+                                <button
+                                    type="button"
+                                    id="rules-json-toggle"
+                                    aria-expanded="false"
+                                    aria-controls="rules-json"
+                                >
+                                    Edit as JSON
+                                </button>
+                            </div>
+                            <p class="field" id="rules-json" hidden>
                                 <label for="assetRules">Asset rules (JSON)</label>
                                 <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
-                            <div class="actions">
-                                <button type="submit" class="primary" id="apply">Apply</button>
-                                <button type="button" id="revert">Revert</button>
-                            </div>
-                        </form>
-                        <p class="note" id="policy-note" aria-live="polite"></p>
-                    </div>
-                </section>
+                        </fieldset>
 
-                <section class="panel" aria-labelledby="advances-heading">
-                    <div class="panel__head">
-                        <h2 id="advances-heading">Advances</h2>
-                        <span class="actions">
-                            <label class="field-label" for="state-filter">State</label>
-                            <select id="state-filter">
-                                <option value="">all</option>
-                            </select>
-                            <span class="meta" id="advances-count"></span>
-                        </span>
-                    </div>
-                    <div class="scroll">
-                        <table>
-                            <caption class="sr-only">
-                                Advances ordered by safety urgency in the current snapshot
-                            </caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Id</th>
-                                    <th scope="col">State</th>
-                                    <th scope="col" class="n">Topup</th>
-                                    <th scope="col" class="n">Fee</th>
-                                    <th scope="col" class="n">Locktime</th>
-                                    <th scope="col" class="n">Age</th>
-                                    <th scope="col">Phase</th>
-                                    <th scope="col">Action</th>
-                                    <th scope="col">Covenant</th>
-                                </tr>
-                            </thead>
-                            <tbody id="advances-body"></tbody>
-                        </table>
-                        <p class="empty" id="advances-empty" hidden>No advances.</p>
-                    </div>
-                    <div class="pagination">
-                        <p class="note" id="advances-note" aria-live="polite">
-                            Current snapshot pagination starts on refresh.
-                        </p>
-                        <button type="button" id="advances-more" hidden>Load more</button>
-                    </div>
-                </section>
-            </div>
+                        <details class="group" id="advanced">
+                            <summary>Advanced</summary>
+                            <p class="hint">Leave these at their defaults unless you know why.</p>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="locktimeMarginBlocks"
+                                        >Locktime margin (blocks)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginBlocks"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-blocks"
+                                    />
+                                    <span class="hint" id="hint-margin-blocks"
+                                        >Headroom between a payment's recovery time and its coin's
+                                        expiry, so the Taxi recovers lent sats before the coin
+                                        expires. Must exceed the recovery budget
+                                        (TAXI_RECOVERY_BROADCAST_BLOCKS). Default 144.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="locktimeMarginSeconds"
+                                        >Locktime margin (seconds)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginSeconds"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-seconds"
+                                    />
+                                    <span class="hint" id="hint-margin-seconds"
+                                        >The same headroom for coins that expire at a time rather
+                                        than a block. Must exceed TAXI_RECOVERY_BROADCAST_SECONDS.
+                                        Default 86 400, one day.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="quoteTtlSeconds">Quote lifetime (seconds)</label>
+                                    <input
+                                        type="number"
+                                        id="quoteTtlSeconds"
+                                        min="1"
+                                        step="1"
+                                        aria-describedby="hint-quote-ttl"
+                                    />
+                                    <span class="hint" id="hint-quote-ttl"
+                                        >How long a price quote stays valid. The coins set aside for
+                                        a quote are freed when it expires. Default 60.</span
+                                    >
+                                </p>
+                            </div>
+                        </details>
+
+                        <div class="actions">
+                            <button type="submit" class="primary" id="apply">Apply</button>
+                            <button type="button" id="revert">Revert</button>
+                        </div>
+                    </form>
+                    <div class="note" id="policy-note" aria-live="polite"></div>
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="advances-heading">
+                <div class="panel__head">
+                    <h2 id="advances-heading">Advances</h2>
+                    <span class="actions">
+                        <label class="field-label" for="state-filter">State</label>
+                        <select id="state-filter">
+                            <option value="">all</option>
+                        </select>
+                        <span class="meta" id="advances-count"></span>
+                    </span>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Advances ordered by safety urgency in the current snapshot
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Id</th>
+                                <th scope="col">State</th>
+                                <th scope="col" class="n">Topup</th>
+                                <th scope="col" class="n">Fee</th>
+                                <th scope="col" class="n">Locktime</th>
+                                <th scope="col" class="n">Age</th>
+                                <th scope="col">Phase</th>
+                                <th scope="col">Action</th>
+                                <th scope="col">Covenant</th>
+                            </tr>
+                        </thead>
+                        <tbody id="advances-body"></tbody>
+                    </table>
+                    <p class="empty" id="advances-empty" hidden>No advances.</p>
+                </div>
+                <div class="pagination">
+                    <p class="note" id="advances-note" aria-live="polite">
+                        Current snapshot pagination starts on refresh.
+                    </p>
+                    <button type="button" id="advances-more" hidden>Load more</button>
+                </div>
+            </section>
 
             <section class="panel" aria-labelledby="history-heading">
                 <div class="panel__head">
@@ -285,6 +475,197 @@ export const INDEX_HTML = `<!doctype html>
                 </div>
             </section>
         </main>
+
+        <dialog class="wizard" id="wizard" aria-labelledby="wizard-title">
+            <div class="panel__head">
+                <h2 id="wizard-title">Set up your Taxi</h2>
+                <span class="meta" id="wizard-progress">Step 1 of 4</span>
+            </div>
+            <div class="panel__body">
+                <section id="wiz-step-1" aria-labelledby="wiz-h1">
+                    <h3 id="wiz-h1" tabindex="-1">What should your Taxi carry?</h3>
+                    <p class="lede">
+                        Your Taxi lends the sats a payment is missing, so that it can be sent.
+                        Choose which payments it helps.
+                    </p>
+                    <label class="check" for="wiz-btc">
+                        <input type="checkbox" id="wiz-btc" aria-describedby="wiz-btc-hint" />
+                        Small bitcoin payments
+                    </label>
+                    <p class="hint" id="wiz-btc-hint">
+                        Payments below the network dust, <span id="wiz-dust">—</span> sats, which
+                        cannot be sent on their own.
+                    </p>
+                    <p class="field">
+                        <label for="wiz-assets">Specific assets (optional)</label>
+                        <textarea
+                            id="wiz-assets"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="asset id from your wallet, one per line"
+                            aria-describedby="wiz-assets-hint"
+                        ></textarea>
+                        <span class="hint" id="wiz-assets-hint"
+                            >One per line: the 68-character asset id your wallet shows. Each asset
+                            needs its own line; there is no "any asset".</span
+                        >
+                    </p>
+                </section>
+
+                <section id="wiz-step-2" aria-labelledby="wiz-h2" hidden>
+                    <h3 id="wiz-h2" tabindex="-1">How much should it lend?</h3>
+                    <p class="lede">
+                        Each payment borrows at most the network dust. Choose how much your Taxi may
+                        have lent out at once.
+                    </p>
+                    <fieldset class="choices">
+                        <legend class="sr-only">Lending limits</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-small" />
+                            <span class="choice__title">Small</span>
+                            <span class="choice__body" id="wiz-size-small-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-medium" />
+                            <span class="choice__title">Medium</span>
+                            <span class="choice__body" id="wiz-size-medium-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-custom" />
+                            <span class="choice__title">Custom</span>
+                            <span class="choice__body">Set the three limits yourself.</span>
+                        </label>
+                    </fieldset>
+                    <div class="form-grid" id="wiz-custom" hidden>
+                        <p class="field">
+                            <label for="wiz-per-payment">Per payment (sats)</label>
+                            <input type="text" id="wiz-per-payment" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-outstanding">In total (sats)</label>
+                            <input type="text" id="wiz-outstanding" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-concurrent">Payments at once</label>
+                            <input type="text" id="wiz-concurrent" inputmode="numeric" />
+                        </p>
+                    </div>
+                    <p class="hint">
+                        Lent sats stay locked until the receiver claims them or the Taxi recovers
+                        them. To lend the whole total, your Taxi needs it on top of the reserve it
+                        must keep.
+                    </p>
+                </section>
+
+                <section id="wiz-step-3" aria-labelledby="wiz-h3" hidden>
+                    <h3 id="wiz-h3" tabindex="-1">What should payers pay?</h3>
+                    <fieldset class="choices">
+                        <legend>Fare</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-free" />
+                            <span class="choice__title">Free</span>
+                            <span class="choice__body">Payers pay nothing extra.</span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-flat" />
+                            <span class="choice__title">A flat fare</span>
+                            <span class="choice__body"
+                                >The same number of sats on every payment.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-percent" />
+                            <span class="choice__title">A percentage</span>
+                            <span class="choice__body"
+                                >A share of the sats lent, with a minimum and an optional
+                                maximum.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="inline-fields" id="wiz-fare-flat-fields" hidden>
+                        <label for="wiz-fare-flat-sats">Fare</label>
+                        <input type="text" id="wiz-fare-flat-sats" inputmode="numeric" /> sats per
+                        payment
+                    </p>
+                    <p class="inline-fields" id="wiz-fare-percent-fields" hidden>
+                        <label for="wiz-fare-pct">Percentage</label>
+                        <input type="text" id="wiz-fare-pct" inputmode="decimal" /> %, at least
+                        <label class="sr-only" for="wiz-fare-min">Minimum fare in sats</label>
+                        <input type="text" id="wiz-fare-min" inputmode="numeric" placeholder="0" />
+                        and at most
+                        <label class="sr-only" for="wiz-fare-max">Maximum fare in sats</label>
+                        <input
+                            type="text"
+                            id="wiz-fare-max"
+                            inputmode="numeric"
+                            placeholder="none"
+                        />
+                        sats
+                    </p>
+                    <div id="wiz-fare-asset-row" hidden>
+                        <label class="check" for="wiz-fare-asset">
+                            <input type="checkbox" id="wiz-fare-asset" />
+                            Asset payments may pay the fare in the asset they send instead
+                        </label>
+                        <p class="hint">
+                            Same numbers, counted in the asset's own units; a percentage is then a
+                            share of the amount sent.
+                        </p>
+                    </div>
+                    <p class="hint warn" id="wiz-fare-btc-warn" hidden>
+                        A small bitcoin payment leaves its sender no sats to spare, so a fare the
+                        sender pays is refused on it. Free is the safe choice for bitcoin.
+                    </p>
+
+                    <fieldset class="choices">
+                        <legend>When the receiver claims</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-recycle" />
+                            <span class="choice__title"
+                                >Get my sats back when the receiver claims</span
+                            >
+                            <span class="choice__body"
+                                >The receiver repays the lent sats with their own, so they return to
+                                your Taxi.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-purchase" />
+                            <span class="choice__title">Sell the carrier outright</span>
+                            <span class="choice__body"
+                                >The receiver keeps the lent sats; the fare is all your Taxi earns.
+                                Receives quoted for a swap are refused, as they need the sats
+                                back.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-either" />
+                            <span class="choice__title">Let the payer choose</span>
+                            <span class="choice__body"
+                                >The payer picks one of the two; if they do not, the sats come back
+                                to you.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                </section>
+
+                <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
+                    <h3 id="wiz-h4" tabindex="-1">Check and save</h3>
+                    <p class="summary" id="wiz-summary"></p>
+                    <p class="hint" id="wiz-save-hint"></p>
+                </section>
+
+                <div class="note" id="wiz-note" aria-live="polite"></div>
+            </div>
+            <div class="actions wizard__foot">
+                <button type="button" id="wiz-cancel">Not now</button>
+                <button type="button" id="wiz-back">Back</button>
+                <button type="button" class="primary" id="wiz-next">Next</button>
+                <button type="button" id="wiz-save">Save</button>
+                <button type="button" class="primary" id="wiz-save-live">Save &amp; go live</button>
+            </div>
+        </dialog>
     </body>
 </html>
 `;
@@ -437,20 +818,8 @@ main {
     margin: 0 auto;
     padding: 16px;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
-}
-
-.cols {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
-    align-items: stretch;
-}
-
-@media (max-width: 1040px) {
-    .cols {
-        grid-template-columns: minmax(0, 1fr);
-    }
 }
 
 .panel {
@@ -483,6 +852,193 @@ main {
 
 .panel__body {
     padding: 14px;
+}
+
+.panel:target,
+.group:target {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+}
+
+/* Setup checklist */
+
+.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.step {
+    display: grid;
+    grid-template-columns: 9ch minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    align-items: start;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.step__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+    font: 600 11px/1.6 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.step__state::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+}
+
+.step.is-done .step__state {
+    color: var(--text-faint);
+}
+
+.step.is-done .step__state::before {
+    background: var(--line-strong);
+}
+
+.step__title {
+    margin: 0;
+    font: 600 13.5px/1.6 var(--sans);
+}
+
+.step__detail {
+    margin: 2px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-dim);
+    font: 400 12.5px/1.55 var(--sans);
+}
+
+.step__detail code {
+    margin-left: 8px;
+    color: var(--text-faint);
+    font: 400 11px/1.5 var(--mono);
+}
+
+.step__confirm {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    background: #1a1710;
+    color: var(--accent);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.step__confirm p {
+    margin: 0 0 8px;
+}
+
+.setup__note {
+    margin: 0;
+    padding: 0 14px 10px;
+}
+
+/* Setup wizard */
+
+.wizard {
+    width: min(720px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    padding: 0;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+}
+
+.wizard::backdrop {
+    background: rgb(8 9 11 / 0.75);
+}
+
+.wizard h3 {
+    margin: 0 0 6px;
+    font: 600 16px/1.4 var(--sans);
+}
+
+/* Focused only so a screen reader announces the new step; it is not a control. */
+.wizard h3:focus {
+    outline: none;
+}
+
+.lede {
+    margin: 0 0 14px;
+    color: var(--text-dim);
+}
+
+.choices {
+    margin: 14px 0 10px;
+    padding: 0;
+    border: 0;
+}
+
+.choices > legend {
+    margin-bottom: 8px;
+    padding: 0;
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.choice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 10px;
+    margin: 0 0 6px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+}
+
+.choice:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--panel-2);
+}
+
+.choice__title {
+    font: 600 13px/1.5 var(--sans);
+}
+
+.choice__body {
+    grid-column: 2;
+    color: var(--text-dim);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.inline-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 10px;
+    color: var(--text-dim);
+}
+
+.inline-fields input[type="text"] {
+    width: 9ch;
+}
+
+.summary {
+    margin: 0 0 10px;
+    font: 400 14px/1.6 var(--sans);
+}
+
+.wizard__foot {
+    justify-content: flex-end;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+}
+
+#wiz-cancel {
+    margin-right: auto;
 }
 
 /* Headline: exposure and sweeper */
@@ -691,15 +1247,82 @@ body.is-alarm .headline__sweeper {
 
 .form-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 12px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px 16px;
     align-items: start;
-    margin-top: 14px;
 }
 
-.form-grid > .actions,
-.field--wide {
-    grid-column: 1 / -1;
+/* Settings groups. A fieldset defaults to min-width: min-content, which would
+ * stop the rules table from scrolling inside it. */
+.group {
+    min-width: 0;
+    margin: 0 0 18px;
+    padding: 0;
+    border: 0;
+}
+
+.group > legend,
+.group > summary {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--line);
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.group > summary {
+    cursor: pointer;
+}
+
+.group > summary::before {
+    content: "+ ";
+    font-family: var(--mono);
+}
+
+.group[open] > summary::before {
+    content: "− ";
+}
+
+.group > .hint,
+.group .actions {
+    margin: 8px 0;
+}
+
+.rules th,
+.rules td {
+    vertical-align: top;
+}
+
+.rules input[type="text"] {
+    width: 9ch;
+    padding: 3px 6px;
+}
+
+.rules select {
+    width: auto;
+    padding: 3px 6px;
+}
+
+.fare {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 6px;
+}
+
+.asset-input {
+    max-width: 72ch;
+}
+
+.warn,
+.hint.warn {
+    margin: 0 0 6px;
+    color: var(--accent);
 }
 
 .field {
@@ -757,6 +1380,10 @@ textarea:hover {
 .check input {
     width: 14px;
     height: 14px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
     accent-color: var(--accent);
 }
 
@@ -767,7 +1394,8 @@ textarea:hover {
     align-items: center;
 }
 
-button {
+button,
+.button {
     padding: 6px 12px;
     background: transparent;
     color: var(--text);
@@ -779,6 +1407,13 @@ button {
     cursor: pointer;
 }
 
+.button {
+    display: inline-block;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.button:hover,
 button:hover:not(:disabled) {
     background: var(--panel-2);
     border-color: #4b545f;
@@ -809,6 +1444,16 @@ button.attention:not(:disabled) {
 
 .note.is-error {
     color: var(--accent);
+}
+
+.note details {
+    margin-top: 2px;
+    color: var(--text-faint);
+    font-size: 11px;
+}
+
+.note summary {
+    cursor: pointer;
 }
 
 /* Tables */
@@ -938,11 +1583,223 @@ const INT_FIELDS = [
 
 const POLL_MS = 5000;
 
+const CLAIMS = [
+    ["recycle", "Get my sats back"],
+    ["purchase", "Sell outright"],
+    ["either", "Payer chooses"],
+];
+
+const ATTENTION = " Check it under Advances.";
+const PROCEEDS_STUCK =
+    "Collecting the fares and repayments the Taxi received is stuck; the code beside this names the cause.";
+
+// Readiness blockers by meaning, one sentence each. A code missing here is shown raw.
+const BLOCKER_GROUPS = [
+    ["The Taxi is paused, so it refuses every new payment.", "manual_pause"],
+    ["The Taxi's spendable balance is below the reserve it must keep.", "operator_reserve_low"],
+    ["The Taxi is shutting down.", "shutdown_in_progress"],
+    ["The Taxi has stopped.", "runtime_stopped"],
+    ["The Taxi has not checked its wallet and the Arkade server yet.", "runtime_unchecked"],
+    ["The Taxi is checking its wallet and the Arkade server.", "runtime_checking"],
+    [
+        "The Taxi's last check of its wallet and the Arkade server failed; it tries again shortly.",
+        "runtime_check_failed",
+    ],
+    [
+        "The Taxi's last check of its wallet and the Arkade server is out of date; it checks again shortly.",
+        "runtime_stale",
+    ],
+    ["The Taxi cannot reach the Arkade server.", "server_unavailable"],
+    ["The Arkade server's key changed since the Taxi started.", "server_identity_mismatch"],
+    ["The Arkade server reports a network the Taxi does not know.", "network_unknown"],
+    ["The Arkade server's network changed since the Taxi started.", "network_mismatch"],
+    ["The Taxi knows no emulator key for this network.", "emulator_key_unavailable"],
+    ["The Taxi cannot reach the emulator.", "emulator_unavailable"],
+    [
+        "The emulator's key does not match the one this network expects.",
+        "emulator_identity_mismatch",
+    ],
+    ["The Arkade server's dust amount changed since the Taxi started.", "dust_mismatch"],
+    [
+        "The Arkade server's minimum coin amount changed since the Taxi started.",
+        "vtxo_min_amount_mismatch",
+    ],
+    [
+        "The Arkade server reports amount limits the Taxi cannot work with.",
+        "provider_limits_invalid",
+    ],
+    ["The Arkade server's exit script failed the Taxi's safety check.", "server_unroll_invalid"],
+    [
+        "The Arkade server changed while the Taxi was settling; it waits for the settlement to finish.",
+        "operator_settlement_provider_changed",
+    ],
+    [
+        "The wallet's address does not match the Taxi's configured operator key.",
+        "operator_payout_mismatch",
+    ],
+    ["The Taxi cannot read the latest block from its chain explorer.", "chain_tip_unavailable"],
+    ["The Taxi does not know the current block height.", "chain_height_unavailable"],
+    ["The Taxi does not know the current chain time.", "chain_time_unavailable"],
+    ["The Taxi's wallet is still syncing with the Arkade server.", "wallet_unsynced"],
+    ["The Taxi could not open or read its wallet.", "wallet_unavailable"],
+    [
+        "The Taxi cannot tell which of its coins are already in use.",
+        "intent_locks_unavailable reservation_locks_unavailable",
+    ],
+    ["The wallet reported a coin with an impossible amount.", "wallet_value_invalid"],
+    ["The wallet holds a coin whose expiry the Taxi cannot read.", "vtxo_expiry_unknown"],
+    ["Some of the Taxi's coins expire too soon to lend.", "vtxo_expiry_headroom"],
+    [
+        "The Taxi has not finished its first check of payments in progress.",
+        "reconciler_not_started",
+    ],
+    [
+        "The Taxi has not finished its first check of swap fills in progress.",
+        "swap_fill_reconciler_not_started",
+    ],
+    ["The recovery sweeper has not run yet.", "sweeper_not_started"],
+    [
+        "The recovery sweeper has stopped running on time. Lent sats are recovered only while it runs.",
+        "sweeper_stale",
+    ],
+    [
+        "A safety check reported a problem without a name.",
+        "startup_blocked runtime_blocked recovery_blocked reconciler_blocked proceeds_blocked",
+    ],
+    [
+        "Startup failed while starting background checks. Check again to retry.",
+        "startup_background_failed",
+    ],
+    [
+        "A payment tried to use coins that were already reserved." + ATTENTION,
+        "reserved_input_conflict",
+    ],
+    [
+        "A payment's lockup failed a safety check, so the Taxi stopped sending it." + ATTENTION,
+        "lockup_submission_invalid_prepared_artifact lockup_submission_invalid_pending_proof " +
+            "lockup_submission_invalid_provider_response lockup_submission_invalid_persisted_artifact " +
+            "lockup_submission_invalid_persisted_envelope",
+    ],
+    [
+        "The Taxi could not release the coins it held for a finished payment.",
+        "sponsored_release_failed",
+    ],
+    [
+        "The Taxi cannot read the chain tip to watch payments, so it paused itself.",
+        "canonical_tip_unavailable",
+    ],
+    [
+        "The live feed of Arkade transactions dropped; the Taxi keeps checking by polling.",
+        "transaction_stream_disconnected",
+    ],
+    [
+        "A payment's coin was spent in a way the Taxi does not recognise." + ATTENTION,
+        "covenant_spend_unknown",
+    ],
+    [
+        "The Taxi saw conflicting chain data about a payment." + ATTENTION,
+        "covenant_observation_disagreement",
+    ],
+    ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
+    ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
+    [
+        "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",
+        "covenant_unspent_at_expiry",
+    ],
+    [
+        "A payment's recovery deadline is very close, so the Taxi paused new payments.",
+        "recovery_deadline_critical",
+    ],
+    ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
+    ["A payment's lent sats can now be recovered.", "recovery_eligible"],
+    [
+        "A payment's recovery time is invalid, so the Taxi cannot recover its sats on its own.",
+        "recovery_locktime_invalid",
+    ],
+    [
+        "Recovering a payment's lent sats failed a safety check." + ATTENTION,
+        "recovery_quarantined recovery_artifact_invalid",
+    ],
+    [
+        "The emulator did not confirm a recovery; the Taxi retries it.",
+        "recovery_submission_ambiguous",
+    ],
+    [
+        "The Taxi is collecting the fares and repayments it received; new payments wait until it finishes.",
+        "proceeds_collecting proceeds_output_pending proceeds_intent_pending proceeds_worker_active",
+    ],
+    [
+        "Collecting the Taxi's earnings needs more balance above the reserve. Send it more sats.",
+        "proceeds_reserve_unavailable",
+    ],
+    [
+        "Collecting the Taxi's earnings costs a fee above TAXI_PROCEEDS_MAX_FEE_SATS.",
+        "proceeds_fee_cap_exceeded",
+    ],
+    [
+        PROCEEDS_STUCK,
+        "proceeds_submission_not_authorized proceeds_wallet_unavailable proceeds_output_limit_invalid " +
+            "proceeds_asset_invalid proceeds_plan_invalid proceeds_fee_invalid proceeds_ownership_invalid " +
+            "proceeds_duplicate_inventory proceeds_input_reserved proceeds_output_limit_exceeded " +
+            "proceeds_fee_authorization_changed proceeds_input_conflict proceeds_submission_ambiguous " +
+            "proceeds_ambiguous_intent proceeds_receipt_missing proceeds_receipt_mismatch " +
+            "proceeds_payout_key_changed proceeds_lockup_mismatch proceeds_covenant_missing " +
+            "proceeds_spend_mismatch proceeds_inputs_missing proceeds_input_facts_changed " +
+            "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
+            "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
+            "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
+            "proceeds_reservation_changed",
+    ],
+];
+
+const BLOCKERS = new Map(
+    BLOCKER_GROUPS.flatMap(([text, codes]) => codes.split(" ").map((code) => [code, text])),
+);
+
+// Startup blockers are built as startup_<phase>[_pending|_failed].
+const PHASES = new Map([
+    ["local", "starting"],
+    ["listening", "starting its checks"],
+    ["provider", "checking its wallet and the Arkade server"],
+    ["reconciliation", "catching up on payments in progress"],
+    ["recovery", "checking for lent sats that are due back"],
+    ["streams", "subscribing to live Arkade updates"],
+    ["background", "starting background checks"],
+    ["ready", "finishing startup"],
+    ["stopping", "shutting down"],
+    ["stopped", "stopping"],
+]);
+
+function blockerText(code) {
+    if (BLOCKERS.has(code)) return BLOCKERS.get(code);
+    const startup = /^startup_([a-z]+?)(_pending|_failed)?$/.exec(code);
+    if (startup && PHASES.has(startup[1]))
+        return startup[2] === "_failed"
+            ? "Startup failed while " + PHASES.get(startup[1]) + "; the Taxi keeps retrying."
+            : "Starting up: " + PHASES.get(startup[1]) + ".";
+    if (/^lockup_submission_[a-z]+_ambiguous$/.test(code))
+        return "The Arkade server did not confirm a payment's lockup." + ATTENTION;
+    return code;
+}
+
+const STEP_NAMES = {
+    connected: "get the Taxi running and connected",
+    fund: "fund your Taxi",
+    limits: "set your limits",
+    carry: "choose what to carry",
+};
+
+const ASSET_ID_HELP =
+    "Paste the asset id your wallet shows: 68 characters of 0-9 and a-f. The txid:group form also works.";
+
 const $ = (id) => document.getElementById(id);
 
 const view = {
     status: null,
     policy: null,
+    funding: null,
+    rules: [],
+    done: {},
     offline: false,
     advances: [],
     nextAdvanceOffset: null,
@@ -989,19 +1846,106 @@ async function api(path, options) {
     if (!res.ok) {
         const error = new Error((parsed && parsed.error) || res.status + " " + res.statusText);
         error.code = parsed && parsed.code;
+        error.status = res.status;
+        error.blockers = parsed && parsed.blockers;
         throw error;
     }
     return parsed;
+}
+
+const FIELD_LABELS = {
+    maxOutstandingSats: "Max outstanding",
+    maxPerPaymentTopupSats: "Max per payment",
+    maxConcurrentAdvances: "Max payments at once",
+    locktimeMarginBlocks: "Locktime margin (blocks)",
+    locktimeMarginSeconds: "Locktime margin (seconds)",
+    quoteTtlSeconds: "Quote lifetime",
+    units: "amount",
+    bps: "percentage",
+    minUnits: "minimum",
+    maxUnits: "maximum",
+    maxTopupSats: "max per payment",
+    claim: "claim mode",
+    groupIndex: "group",
+};
+
+// The router's validation messages, as predicates of the field they name.
+const ISSUE_RULES = [
+    [/decimal sats amount/, () => "must be a whole number of sats"],
+    [/Expected (number|integer)/, () => "must be a whole number"],
+    [/greater than or equal to ([0-9]+)/, (m) => "must be at least " + m[1]],
+    [/less than or equal to ([0-9]+)/, (m) => "must be at most " + m[1]],
+    [/Invalid enum value/, () => "is not one of the choices"],
+    [
+        /^Invalid( input)?$/,
+        (m, path) =>
+            /(units|Units|TopupSats)$/.test(path) ? "must be a whole number" : "is not valid",
+    ],
+    [/bps must be within/, () => "has a percentage outside 0 to 100"],
+    [/maxUnits must not be below minUnits/, () => "has a maximum below its minimum"],
+    [/token fare must be flat/, () => "is in a fixed token, so it must be flat"],
+    [/non-empty id/, () => "needs an id"],
+    [/Unrecognized key/, () => "has a field the Taxi does not know"],
+];
+
+function fieldLabel(path) {
+    const parts = path.split(".");
+    if (parts[0] !== "assetRules" || parts.length < 2) return FIELD_LABELS[path] || path;
+    const label = ["Rule " + (Number(parts[1]) + 1)];
+    const fare = parts[2] === "fares" && parts.length > 3;
+    if (fare) label.push("fare " + (Number(parts[3]) + 1));
+    const last = parts[parts.length - 1];
+    if (parts.length > (fare ? 4 : 2)) label.push(FIELD_LABELS[last] || last);
+    return label.join(", ");
+}
+
+function issueText(issue) {
+    const m = /^([A-Za-z0-9_.]+): (.+)$/.exec(issue);
+    if (!m) return issue;
+    for (const [pattern, say] of ISSUE_RULES) {
+        const hit = pattern.exec(m[2]);
+        if (hit) return fieldLabel(m[1]) + " " + say(hit, m[1]) + ".";
+    }
+    return fieldLabel(m[1]) + ": " + m[2] + ".";
+}
+
+function explain(error) {
+    const raw = (error.code ? error.code + ": " : "") + error.message;
+    let text = error.message;
+    if (error.code === "resume_blocked")
+        text =
+            "The Taxi cannot go live yet. " +
+            (error.blockers || [error.message]).map(blockerText).join(" ");
+    else if (error.code === "funding_unavailable")
+        text = "The Taxi cannot read its wallet right now.";
+    else if (/^header x-taxi-operator/.test(error.message))
+        text =
+            "The console could not tell who you are: the proxy in front of it must send the operator header.";
+    else if (/recovery execution budget/.test(error.message))
+        text =
+            "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.";
+    else if (error.status === 400) text = error.message.split("; ").map(issueText).join(" ");
+    return { text, raw };
+}
+
+function showError(id, error) {
+    const { text, raw } = explain(error);
+    setNote(id, text, true, raw);
 }
 
 function gateActions() {
     for (const id of ["apply", "pause", "resume", "rescan"]) $(id).disabled = false;
 }
 
-function setNote(id, text, isError) {
+function setNote(id, text, isError, raw) {
     const el = $(id);
     el.textContent = text;
     el.classList.toggle("is-error", Boolean(isError));
+    if (raw && raw !== text) {
+        const details = document.createElement("details");
+        details.append(cell("summary", "details"), cell("code", raw));
+        el.append(details);
+    }
 }
 
 function renderAlarm() {
@@ -1125,10 +2069,355 @@ function renderOperational(readiness) {
     $("time-expiry").textContent = deadlines.time
         ? deadlines.time.remaining + " seconds / " + deadlines.time.severity
         : "none";
-    $("readiness-blockers").textContent = readiness.blockers.length
-        ? "Blockers: " + readiness.blockers.join(", ")
-        : "No operational blockers.";
 }
+
+function step(id, done, detail) {
+    view.done[id] = done;
+    $("step-" + id).classList.toggle("is-done", done);
+    $("step-" + id + "-state").textContent = done ? "Done" : "To do";
+    $("step-" + id + "-fix").hidden = done;
+    if (detail !== undefined) $("step-" + id + "-detail").textContent = detail;
+}
+
+const SEND_TO = "offchain to its Arkade address.";
+
+function fundText(usable, reserve, funded) {
+    if (usable === undefined) return "Its balance is unknown until it can read its wallet.";
+    if (!reserve)
+        return funded
+            ? group(usable) + " sats usable."
+            : blockerText("operator_reserve_low") + " Send it sats " + SEND_TO;
+    const spare = BigInt(usable) - BigInt(reserve);
+    return funded
+        ? group(usable) +
+              " sats usable: the " +
+              group(spare.toString()) +
+              " above its " +
+              group(reserve) +
+              " sats reserve can be lent."
+        : group(usable) +
+              " sats usable, below the " +
+              group(reserve) +
+              " sats it must keep in reserve. Send it at least " +
+              group((-spare).toString()) +
+              " sats more, " +
+              SEND_TO;
+}
+
+function renderSetup() {
+    const status = view.status;
+    const policy = view.policy;
+    if (!status || !policy) return;
+    const blockers = status.readiness.blockers;
+    const runtime = status.readiness.runtime || {};
+    const others = view.offline
+        ? []
+        : blockers.filter((code) => code !== "manual_pause" && code !== "operator_reserve_low");
+
+    step("connected", !view.offline && others.length === 0);
+    const network = (runtime.provider || {}).network;
+    $("step-connected-title").textContent =
+        "Taxi is running and connected" + (network ? " (" + network + ")" : "");
+    const list = $("step-connected-detail");
+    list.textContent = "";
+    if (view.offline) list.append(cell("li", "The console cannot reach the Taxi."));
+    for (const code of others) {
+        const item = cell("li", blockerText(code));
+        item.append(cell("code", code));
+        list.append(item);
+    }
+
+    const usable = (runtime.inventory || {}).usableSats;
+    const reserve = view.funding && view.funding.minReserveSats;
+    const funded =
+        usable !== undefined &&
+        (reserve ? BigInt(usable) >= BigInt(reserve) : !blockers.includes("operator_reserve_low"));
+    step("fund", funded, fundText(usable, reserve, funded));
+
+    const limited =
+        policy.maxPerPaymentTopupSats !== "0" &&
+        policy.maxOutstandingSats !== "0" &&
+        policy.maxConcurrentAdvances !== 0;
+    step(
+        "limits",
+        limited,
+        limited
+            ? "Up to " +
+                  group(policy.maxPerPaymentTopupSats) +
+                  " sats per payment, " +
+                  group(policy.maxOutstandingSats) +
+                  " sats in total, " +
+                  group(String(policy.maxConcurrentAdvances)) +
+                  " payments at once."
+            : "It lends nothing while any of the three limits is 0.",
+    );
+
+    const on = policy.assetRules.filter((rule) => rule.enabled);
+    step(
+        "carry",
+        on.length > 0,
+        on.length
+            ? "It carries " + carriedText(on) + "."
+            : "It carries nothing until at least one rule is switched on.",
+    );
+
+    const ready = Object.keys(STEP_NAMES).every((id) => view.done[id]);
+    step(
+        "live",
+        !status.paused,
+        status.paused
+            ? blockerText("manual_pause")
+            : ready
+              ? "It is taking payments."
+              : "It is live, but refuses payments until the steps above are done.",
+    );
+    if (!status.paused) $("go-live-confirm").hidden = true;
+}
+
+function goLive() {
+    $("go-live-confirm").hidden = true;
+    mutate(() => postAction("/admin/api/policy/resume"), "setup-note");
+}
+
+function carriedText(rules) {
+    const assets = rules.filter((rule) => rule.assetId !== null).length;
+    return [
+        ...(rules.length > assets ? ["small bitcoin payments"] : []),
+        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
+    ].join(" and ");
+}
+
+const wizard = { step: 1, size: "small", fare: "free", claim: "recycle" };
+
+const WIZARD_CHOICES = {
+    size: ["small", "medium", "custom"],
+    fare: ["free", "flat", "percent"],
+    claim: ["recycle", "purchase", "either"],
+};
+
+// Per payment is always the dust: the most any one payment can need.
+const PRESETS = { small: [100n, 100], medium: [1000n, 1000] };
+
+const WHOLE = /^(0|[1-9][0-9]*)$/;
+const PERCENT = /^[0-9]+(\\.[0-9]{1,2})?$/;
+
+const CLAIM_SUMMARY = {
+    recycle: "When a receiver claims, they repay the lent sats, so your Taxi gets them back.",
+    purchase: "When a receiver claims, they keep the lent sats; the fare is all your Taxi earns.",
+    either: "Each payer chooses whether the receiver repays the lent sats; without a choice, they do.",
+};
+
+const assetLines = () =>
+    $("wiz-assets")
+        .value.split("\\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+function openWizard() {
+    if (!view.status)
+        return setNote("setup-note", "The console has not reached the Taxi yet.", true);
+    Object.assign(wizard, { step: 1, size: "small", fare: "free", claim: "recycle" });
+    $("wiz-btc").checked = true;
+    $("wiz-fare-asset").checked = false;
+    for (const id of [
+        "wiz-assets",
+        "wiz-per-payment",
+        "wiz-outstanding",
+        "wiz-concurrent",
+        "wiz-fare-flat-sats",
+        "wiz-fare-pct",
+        "wiz-fare-min",
+        "wiz-fare-max",
+    ])
+        $(id).value = "";
+    const dust = BigInt(view.status.dust);
+    $("wiz-dust").textContent = group(view.status.dust);
+    for (const [size, [total, count]] of Object.entries(PRESETS))
+        $("wiz-size-" + size + "-text").textContent =
+            group(dust.toString()) +
+            " sats per payment · " +
+            group((dust * total).toString()) +
+            " sats in total · " +
+            group(String(count)) +
+            " payments at once";
+    renderWizard();
+    $("wizard").showModal();
+    $("wiz-h1").focus();
+}
+
+function renderWizard() {
+    for (let n = 1; n <= 4; n++) $("wiz-step-" + n).hidden = n !== wizard.step;
+    $("wizard-progress").textContent = "Step " + wizard.step + " of 4";
+    $("wiz-back").hidden = wizard.step === 1;
+    $("wiz-next").hidden = wizard.step === 4;
+    const live = Boolean(view.status && !view.status.paused);
+    $("wiz-save").hidden = wizard.step !== 4;
+    $("wiz-save-live").hidden = wizard.step !== 4 || live;
+    $("wiz-save-hint").textContent = live
+        ? "Save keeps your Taxi live."
+        : "Save keeps your Taxi paused. Save & go live also starts it: it takes payments as soon as every step of the checklist is done.";
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values) $("wiz-" + name + "-" + value).checked = wizard[name] === value;
+    $("wiz-custom").hidden = wizard.size !== "custom";
+    $("wiz-fare-flat-fields").hidden = wizard.fare !== "flat";
+    $("wiz-fare-percent-fields").hidden = wizard.fare !== "percent";
+    $("wiz-fare-asset-row").hidden = wizard.fare === "free" || assetLines().length === 0;
+    $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
+    const giveaway = wizard.fare === "free" && wizard.claim !== "recycle";
+    $("wiz-claim-warn").hidden = !giveaway;
+    $("wiz-claim-warn").textContent =
+        wizard.claim === "purchase"
+            ? "With no fare, selling outright gives the lent sats away on every payment."
+            : "With no fare, a payer who chooses to sell outright gets the lent sats for nothing.";
+    setNote("wiz-note", "", false);
+}
+
+function wizardProblem() {
+    if (wizard.step === 1) {
+        const lines = assetLines();
+        const bad = lines.find((line) => !parseAssetId(line));
+        if (bad) return '"' + bad + '" is not an asset id. ' + ASSET_ID_HELP;
+        if (new Set(lines.map((line) => assetKey(parseAssetId(line)))).size < lines.length)
+            return "An asset is listed twice.";
+        if (!$("wiz-btc").checked && lines.length === 0)
+            return "Choose small bitcoin payments, at least one asset, or both.";
+    }
+    if (wizard.step === 2 && wizard.size === "custom") {
+        const limits = ["wiz-per-payment", "wiz-outstanding", "wiz-concurrent"];
+        if (!limits.every((id) => WHOLE.test($(id).value.trim()) && $(id).value.trim() !== "0"))
+            return "Each limit is a whole number above 0.";
+    }
+    if (wizard.step === 3 && wizard.fare === "flat") {
+        if (!WHOLE.test($("wiz-fare-flat-sats").value.trim()))
+            return "The flat fare is a whole number of sats.";
+    }
+    if (wizard.step === 3 && wizard.fare === "percent") {
+        const pct = $("wiz-fare-pct").value.trim();
+        const min = $("wiz-fare-min").value.trim() || "0";
+        const max = $("wiz-fare-max").value.trim();
+        if (!PERCENT.test(pct) || Number(pct) > 100)
+            return "The percentage is a number from 0 to 100, at most two decimals.";
+        if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
+            return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
+    }
+    return null;
+}
+
+function wizardFares(isAsset) {
+    const pricing =
+        wizard.fare === "free"
+            ? { kind: "flat", units: "0" }
+            : wizard.fare === "flat"
+              ? { kind: "flat", units: $("wiz-fare-flat-sats").value.trim() }
+              : {
+                    kind: "proportional",
+                    bps: Math.round(Number($("wiz-fare-pct").value.trim()) * 100),
+                    minUnits: $("wiz-fare-min").value.trim() || "0",
+                    maxUnits: $("wiz-fare-max").value.trim() || null,
+                };
+    const fares = [{ id: "sats", currency: { kind: "sats" }, pricing }];
+    if (isAsset && wizard.fare !== "free" && $("wiz-fare-asset").checked)
+        fares.push({ id: "asset", currency: { kind: "sameAsset" }, pricing });
+    return fares;
+}
+
+function wizardPatch() {
+    const dust = BigInt(view.status.dust);
+    const custom = wizard.size === "custom";
+    const [total, count] = custom ? [] : PRESETS[wizard.size];
+    const rule = (assetId) => ({
+        assetId,
+        enabled: true,
+        fares: wizardFares(assetId !== null),
+        claim: wizard.claim,
+        maxTopupSats: null,
+    });
+    return {
+        maxPerPaymentTopupSats: custom ? $("wiz-per-payment").value.trim() : dust.toString(),
+        maxOutstandingSats: custom ? $("wiz-outstanding").value.trim() : (dust * total).toString(),
+        maxConcurrentAdvances: custom ? Number($("wiz-concurrent").value.trim()) : count,
+        assetRules: [
+            ...($("wiz-btc").checked ? [rule(null)] : []),
+            ...assetLines().map((line) => rule(parseAssetId(line))),
+        ],
+    };
+}
+
+function wizardSummary(patch) {
+    const pricing = patch.assetRules[0].fares[0].pricing;
+    const fare =
+        wizard.fare === "free"
+            ? "Payers pay no fare."
+            : wizard.fare === "flat"
+              ? "Each payment pays a fare of " + group(pricing.units) + " sats."
+              : "Each payment pays " +
+                pricing.bps / 100 +
+                "% of the sats lent, at least " +
+                group(pricing.minUnits) +
+                " sats" +
+                (pricing.maxUnits === null
+                    ? ""
+                    : " and at most " + group(pricing.maxUnits) + " sats") +
+                ".";
+    return [
+        "Your Taxi will carry " + carriedText(patch.assetRules) + ".",
+        "It lends up to " +
+            group(patch.maxPerPaymentTopupSats) +
+            " sats per payment and " +
+            group(patch.maxOutstandingSats) +
+            " sats in total, to at most " +
+            group(String(patch.maxConcurrentAdvances)) +
+            " payments at once.",
+        fare,
+        ...(patch.assetRules.some((rule) => rule.fares.length > 1)
+            ? ["Asset payments may pay it in the asset they send instead."]
+            : []),
+        CLAIM_SUMMARY[wizard.claim],
+        ...(view.policy && view.policy.assetRules.length
+            ? ["This replaces the rules your Taxi has now."]
+            : []),
+    ].join(" ");
+}
+
+function wizardMove(by) {
+    if (by > 0) {
+        const problem = wizardProblem();
+        if (problem) return setNote("wiz-note", problem, true);
+    }
+    wizard.step += by;
+    if (wizard.step === 4) $("wiz-summary").textContent = wizardSummary(wizardPatch());
+    renderWizard();
+    $("wiz-h" + wizard.step).focus();
+}
+
+async function saveWizard(goLive) {
+    const patch = wizardPatch();
+    if (goLive) patch.paused = false;
+    const wasLive = Boolean(view.status && !view.status.paused);
+    try {
+        await patchPolicy(patch);
+        $("wizard").close();
+        setNote(
+            "setup-note",
+            goLive
+                ? "Saved, and your Taxi is live."
+                : wasLive
+                  ? "Saved. Your Taxi is still live."
+                  : "Saved. Your Taxi stays paused until you go live.",
+            false,
+        );
+        await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
+        renderAlarm();
+    } catch (e) {
+        showError($("wizard").open ? "wiz-note" : "setup-note", e);
+    }
+}
+
+const firstRun = (policy) =>
+    policy.assetRules.length === 0 &&
+    policy.maxOutstandingSats === "0" &&
+    policy.maxPerPaymentTopupSats === "0" &&
+    policy.maxConcurrentAdvances === 0;
 
 function renderFunding(funding) {
     const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
@@ -1148,8 +2437,8 @@ function renderFunding(funding) {
     for (const a of funding.assets) {
         const tr = document.createElement("tr");
         const id = document.createElement("td");
-        id.append(cell("span", a.assetId.txid, "trunc"));
-        id.title = a.assetId.txid;
+        id.append(cell("span", assetLabel(a.assetId)));
+        id.title = walletAssetId(a.assetId);
         tr.append(
             id,
             cell("td", String(a.assetId.groupIndex), "n"),
@@ -1265,8 +2554,248 @@ function editableRules(rules) {
 
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
+    view.rules = JSON.parse(JSON.stringify(editableRules(policy.assetRules)));
+    editRules(() => {}, true);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
+}
+
+const assetKey = (id) => id.txid + ":" + id.groupIndex;
+const reverseBytes = (hex) => hex.match(/../g).reverse().join("");
+const byteHex = (n) => n.toString(16).padStart(2, "0");
+
+// The wallet's id is the txid bytes then the group as uint16 little-endian; the
+// Taxi keeps those txid bytes reversed, as swapIdToTaxiAssetId does.
+const walletAssetId = (id) =>
+    reverseBytes(id.txid) + byteHex(id.groupIndex & 255) + byteHex(id.groupIndex >> 8);
+
+const assetLabel = (id) =>
+    id === null ? "Bitcoin" : walletAssetId(id).slice(0, 8) + "…" + walletAssetId(id).slice(-8);
+
+function parseAssetId(text) {
+    const s = text.trim().toLowerCase();
+    if (/^[0-9a-f]{68}$/.test(s))
+        return {
+            txid: reverseBytes(s.slice(0, 64)),
+            groupIndex: parseInt(s.slice(66, 68) + s.slice(64, 66), 16),
+        };
+    const m = /^([0-9a-f]{64}):([0-9]{1,5})$/.exec(s);
+    return m && Number(m[2]) <= 65535 ? { txid: m[1], groupIndex: Number(m[2]) } : null;
+}
+
+function newFare(fares, kind = "sats") {
+    const base = kind === "sats" ? "sats" : "asset";
+    let id = base;
+    for (let n = 2; fares.some((f) => f.id === id); n++) id = base + "-" + n;
+    return { id, currency: { kind }, pricing: { kind: "flat", units: "0" } };
+}
+
+const newRule = (assetId) => ({
+    assetId,
+    enabled: true,
+    fares: [newFare([])],
+    claim: "recycle",
+    maxTopupSats: null,
+});
+
+// The JSON view is the serialised form of view.rules; the table re-renders only
+// when the shape changed, so typing in a cell keeps its focus.
+function editRules(change, rerender) {
+    change();
+    $("assetRules").value = JSON.stringify(view.rules, null, 2);
+    if (rerender) renderRules();
+}
+
+function control(tag, name, label) {
+    const el = document.createElement(tag);
+    el.name = name;
+    if (tag === "button") el.type = "button";
+    if (label) el.ariaLabel = label;
+    return el;
+}
+
+function choice(name, options, value, label) {
+    const select = control("select", name, label);
+    for (const [key, text] of options) {
+        const option = cell("option", text);
+        option.value = key;
+        select.append(option);
+    }
+    select.value = value;
+    return select;
+}
+
+function amountInput(name, value, label, set) {
+    const input = control("input", name, label);
+    input.type = "text";
+    input.inputMode = "numeric";
+    input.value = value === null ? "" : value;
+    input.addEventListener("change", () => editRules(() => set(input.value.trim())));
+    return input;
+}
+
+function percentInput(pricing) {
+    const input = control("input", "percent", "Fare percentage");
+    input.type = "text";
+    input.inputMode = "decimal";
+    input.value = String(pricing.bps / 100);
+    input.addEventListener("change", () => {
+        const text = input.value.trim();
+        if (!/^[0-9]+(\\.[0-9]{1,2})?$/.test(text) || Number(text) > 100) {
+            input.value = String(pricing.bps / 100);
+            setNote(
+                "policy-note",
+                "A percentage is a number from 0 to 100, at most two decimals.",
+                true,
+            );
+            return;
+        }
+        editRules(() => (pricing.bps = Math.round(Number(text) * 100)));
+    });
+    return input;
+}
+
+const wrap = (el) => {
+    const td = document.createElement("td");
+    td.append(el);
+    return td;
+};
+
+function fareEditor(rule, fare) {
+    const line = cell("div", "", "fare");
+    const remove = control("button", "remove-fare", "Remove fare " + fare.id);
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () =>
+        editRules(() => rule.fares.splice(rule.fares.indexOf(fare), 1), true),
+    );
+    if (fare.currency.kind === "token") {
+        line.append(cell("span", "in a fixed token: edit as JSON", "dim"), remove);
+        return line;
+    }
+    const unit = fare.currency.kind === "sats" ? "sats" : "units";
+    if (rule.assetId === null) line.append(cell("span", "in sats", "dim"));
+    else {
+        const currency = choice(
+            "currency",
+            [
+                ["sats", "in sats"],
+                ["sameAsset", "in this asset"],
+            ],
+            fare.currency.kind,
+            "Fare currency",
+        );
+        currency.addEventListener("change", () =>
+            editRules(() => (fare.currency = { kind: currency.value }), true),
+        );
+        line.append(currency);
+    }
+    const pricing = choice(
+        "pricing",
+        [
+            ["flat", "flat"],
+            ["proportional", "percent"],
+        ],
+        fare.pricing.kind,
+        "Fare pricing",
+    );
+    pricing.addEventListener("change", () =>
+        editRules(
+            () =>
+                (fare.pricing =
+                    pricing.value === "flat"
+                        ? { kind: "flat", units: "0" }
+                        : { kind: "proportional", bps: 0, minUnits: "0", maxUnits: null }),
+            true,
+        ),
+    );
+    line.append(pricing);
+    const p = fare.pricing;
+    if (p.kind === "flat")
+        line.append(
+            amountInput("units", p.units, "Fare in " + unit, (v) => (p.units = v)),
+            cell("span", unit, "dim"),
+        );
+    else
+        line.append(
+            percentInput(p),
+            cell("span", "%, min", "dim"),
+            amountInput("min", p.minUnits, "Minimum fare in " + unit, (v) => (p.minUnits = v)),
+            cell("span", "max", "dim"),
+            amountInput(
+                "max",
+                p.maxUnits,
+                "Maximum fare in " + unit + ", blank for none",
+                (v) => (p.maxUnits = v === "" ? null : v),
+            ),
+            cell("span", unit, "dim"),
+        );
+    line.append(remove);
+    return line;
+}
+
+function renderRules() {
+    const body = $("rules-body");
+    body.textContent = "";
+    view.rules.forEach((rule, index) => {
+        const label = assetLabel(rule.assetId);
+        const asset = cell("th", label);
+        asset.scope = "row";
+        if (rule.assetId) asset.title = walletAssetId(rule.assetId);
+
+        const on = control("input", "enabled", "Carry " + label);
+        on.type = "checkbox";
+        on.checked = rule.enabled;
+        on.addEventListener("change", () => editRules(() => (rule.enabled = on.checked)));
+
+        const fares = document.createElement("td");
+        for (const fare of rule.fares) fares.append(fareEditor(rule, fare));
+        if (rule.fares.length === 0)
+            fares.append(cell("p", "No fare: these payments are refused.", "warn"));
+        const add = control("button", "add-fare", "Add a fare for " + label);
+        add.textContent = "Add fare";
+        add.addEventListener("click", () =>
+            editRules(() => rule.fares.push(newFare(rule.fares)), true),
+        );
+        fares.append(add);
+
+        const claim = choice("claim", CLAIMS, rule.claim, "When the receiver claims " + label);
+        claim.addEventListener("change", () => editRules(() => (rule.claim = claim.value)));
+
+        const cap = amountInput(
+            "maxTopupSats",
+            rule.maxTopupSats,
+            "Max per payment for " + label + ", blank for the global limit",
+            (v) => (rule.maxTopupSats = v === "" ? null : v),
+        );
+        cap.placeholder = "global";
+
+        const remove = control("button", "remove-rule", "Remove " + label);
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => editRules(() => view.rules.splice(index, 1), true));
+
+        const tr = document.createElement("tr");
+        tr.append(asset, wrap(on), fares, wrap(claim), wrap(cap), wrap(remove));
+        body.append(tr);
+    });
+    $("rules-empty").hidden = view.rules.length > 0;
+}
+
+function readJsonRules() {
+    let rules;
+    try {
+        rules = JSON.parse($("assetRules").value);
+    } catch (e) {
+        return e.message;
+    }
+    const tableable =
+        Array.isArray(rules) &&
+        rules.every(
+            (r) =>
+                r && Array.isArray(r.fares) && r.fares.every((f) => f && f.currency && f.pricing),
+        );
+    if (!tableable) return "expected a list of rules, each with a list of fares";
+    view.rules = rules;
+    renderRules();
+    return null;
 }
 
 function renderServiceState(paused) {
@@ -1299,6 +2828,8 @@ async function loadStatus() {
     renderSweeper(status.sweeper);
     renderOperational(status.readiness);
     renderServiceState(status.paused);
+    $("hint-dust").textContent = group(status.dust);
+    renderSetup();
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
 }
 
@@ -1401,9 +2932,11 @@ async function loadAdvances(append) {
 }
 
 async function loadPolicy() {
-    view.policy = await api("/admin/api/policy");
-    fillPolicyForm(view.policy);
+    const policy = await api("/admin/api/policy");
+    fillPolicyForm(policy);
+    view.policy = policy;
     if (view.status) renderExposure(view.status);
+    renderSetup();
 }
 
 async function loadHistory() {
@@ -1412,10 +2945,15 @@ async function loadHistory() {
 
 async function loadFunding() {
     try {
-        renderFunding(await api("/admin/api/funding"));
+        view.funding = await api("/admin/api/funding");
+        renderFunding(view.funding);
+        $("funding-state").title = "";
     } catch (e) {
-        $("funding-state").textContent = "unavailable: " + e.message;
+        const { text, raw } = explain(e);
+        $("funding-state").textContent = text;
+        $("funding-state").title = raw;
     }
+    renderSetup();
 }
 
 async function refresh() {
@@ -1427,6 +2965,7 @@ async function refresh() {
         $("updated").textContent = "unreachable: " + e.message;
     }
     renderAlarm();
+    renderSetup();
 }
 
 async function mutate(run, noteId) {
@@ -1436,7 +2975,7 @@ async function mutate(run, noteId) {
         await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
         renderAlarm();
     } catch (e) {
-        setNote(noteId, e.message, true);
+        showError(noteId, e);
     }
 }
 
@@ -1445,6 +2984,13 @@ const postAction = (path) =>
         method: "POST",
         headers: { "content-type": "application/json" },
         body: "{}",
+    });
+
+const patchPolicy = (patch) =>
+    api("/admin/api/policy", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
     });
 
 function wire() {
@@ -1489,6 +3035,24 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
+    $("step-connected-fix").addEventListener("click", () =>
+        mutate(() => postAction("/admin/api/rescan"), "setup-note"),
+    );
+    $("step-live-fix").addEventListener("click", () => {
+        const undone = Object.keys(STEP_NAMES).filter((id) => !view.done[id]);
+        if (undone.length === 0) return goLive();
+        $("go-live-warning").textContent =
+            "Not done yet: " +
+            undone.map((id) => STEP_NAMES[id]).join(", ") +
+            ". It will refuse payments until they are.";
+        $("go-live-confirm").hidden = false;
+        $("go-live-anyway").focus();
+    });
+    $("go-live-anyway").addEventListener("click", goLive);
+    $("go-live-cancel").addEventListener("click", () => {
+        $("go-live-confirm").hidden = true;
+        $("step-live-fix").focus();
+    });
     $("funding-copy").addEventListener("click", async () => {
         try {
             await navigator.clipboard.writeText($("funding-address").textContent);
@@ -1498,13 +3062,45 @@ function wire() {
         }
     });
 
+    $("rule-add-bitcoin").addEventListener("click", () => {
+        if (view.rules.some((r) => r.assetId === null))
+            return setNote("policy-note", "Bitcoin already has a rule.", true);
+        editRules(() => view.rules.push(newRule(null)), true);
+    });
+    $("rule-add-asset").addEventListener("click", () => {
+        const id = parseAssetId($("rule-asset").value);
+        if (!id) return setNote("policy-note", ASSET_ID_HELP, true);
+        if (view.rules.some((r) => r.assetId && assetKey(r.assetId) === assetKey(id)))
+            return setNote("policy-note", "That asset already has a rule.", true);
+        editRules(() => view.rules.push(newRule(id)), true);
+        $("rule-asset").value = "";
+    });
+    $("assetRules").addEventListener("input", readJsonRules);
+    $("rules-json-toggle").addEventListener("click", () => {
+        const show = $("rules-json").hidden;
+        const problem = show ? null : readJsonRules();
+        if (problem)
+            return setNote(
+                "policy-note",
+                "Asset rules: the JSON is not valid (" + problem + ").",
+                true,
+            );
+        $("rules-json").hidden = !show;
+        $("rules-json-toggle").ariaExpanded = String(show);
+        $("rules-json-toggle").textContent = show ? "Hide JSON" : "Edit as JSON";
+    });
+
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
         let rules;
         try {
             rules = JSON.parse($("assetRules").value);
         } catch (err) {
-            setNote("policy-note", "Asset rules: " + err.message, true);
+            setNote(
+                "policy-note",
+                "Asset rules: the JSON is not valid (" + err.message + ").",
+                true,
+            );
             return;
         }
         const patch = policyPatch(rules);
@@ -1512,16 +3108,23 @@ function wire() {
             setNote("policy-note", "nothing changed", false);
             return;
         }
-        mutate(
-            () =>
-                api("/admin/api/policy", {
-                    method: "PATCH",
-                    headers: { "content-type": "application/json" },
-                    body: JSON.stringify(patch),
-                }),
-            "policy-note",
-        );
+        mutate(() => patchPolicy(patch), "policy-note");
     });
+
+    $("wizard-open").addEventListener("click", openWizard);
+    $("wiz-cancel").addEventListener("click", () => $("wizard").close());
+    $("wiz-back").addEventListener("click", () => wizardMove(-1));
+    $("wiz-next").addEventListener("click", () => wizardMove(1));
+    $("wiz-save").addEventListener("click", () => saveWizard(false));
+    $("wiz-save-live").addEventListener("click", () => saveWizard(true));
+    $("wiz-btc").addEventListener("change", renderWizard);
+    $("wiz-assets").addEventListener("input", renderWizard);
+    for (const [name, values] of Object.entries(WIZARD_CHOICES))
+        for (const value of values)
+            $("wiz-" + name + "-" + value).addEventListener("change", () => {
+                wizard[name] = value;
+                renderWizard();
+            });
 
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden) refresh();
@@ -1531,10 +3134,13 @@ function wire() {
 }
 
 wire();
-loadPolicy().catch((e) => setNote("policy-note", e.message, true));
+Promise.all([loadPolicy().catch((e) => setNote("policy-note", e.message, true)), refresh()]).then(
+    () => {
+        if (view.policy && view.status && firstRun(view.policy)) openWizard();
+    },
+);
 loadHistory().catch(() => {});
 loadFunding();
-refresh();
 window.setInterval(refresh, POLL_MS);
 `;
 

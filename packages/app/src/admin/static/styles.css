@@ -146,20 +146,8 @@ main {
     margin: 0 auto;
     padding: 16px;
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 16px;
-}
-
-.cols {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: minmax(320px, 400px) minmax(0, 1fr);
-    align-items: stretch;
-}
-
-@media (max-width: 1040px) {
-    .cols {
-        grid-template-columns: minmax(0, 1fr);
-    }
 }
 
 .panel {
@@ -192,6 +180,193 @@ main {
 
 .panel__body {
     padding: 14px;
+}
+
+.panel:target,
+.group:target {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+}
+
+/* Setup checklist */
+
+.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.step {
+    display: grid;
+    grid-template-columns: 9ch minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    align-items: start;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.step__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+    font: 600 11px/1.6 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.step__state::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+}
+
+.step.is-done .step__state {
+    color: var(--text-faint);
+}
+
+.step.is-done .step__state::before {
+    background: var(--line-strong);
+}
+
+.step__title {
+    margin: 0;
+    font: 600 13.5px/1.6 var(--sans);
+}
+
+.step__detail {
+    margin: 2px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-dim);
+    font: 400 12.5px/1.55 var(--sans);
+}
+
+.step__detail code {
+    margin-left: 8px;
+    color: var(--text-faint);
+    font: 400 11px/1.5 var(--mono);
+}
+
+.step__confirm {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    background: #1a1710;
+    color: var(--accent);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.step__confirm p {
+    margin: 0 0 8px;
+}
+
+.setup__note {
+    margin: 0;
+    padding: 0 14px 10px;
+}
+
+/* Setup wizard */
+
+.wizard {
+    width: min(720px, calc(100vw - 32px));
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+    padding: 0;
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--line-strong);
+}
+
+.wizard::backdrop {
+    background: rgb(8 9 11 / 0.75);
+}
+
+.wizard h3 {
+    margin: 0 0 6px;
+    font: 600 16px/1.4 var(--sans);
+}
+
+/* Focused only so a screen reader announces the new step; it is not a control. */
+.wizard h3:focus {
+    outline: none;
+}
+
+.lede {
+    margin: 0 0 14px;
+    color: var(--text-dim);
+}
+
+.choices {
+    margin: 14px 0 10px;
+    padding: 0;
+    border: 0;
+}
+
+.choices > legend {
+    margin-bottom: 8px;
+    padding: 0;
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.choice {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 10px;
+    margin: 0 0 6px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    cursor: pointer;
+}
+
+.choice:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--panel-2);
+}
+
+.choice__title {
+    font: 600 13px/1.5 var(--sans);
+}
+
+.choice__body {
+    grid-column: 2;
+    color: var(--text-dim);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.inline-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 10px;
+    color: var(--text-dim);
+}
+
+.inline-fields input[type="text"] {
+    width: 9ch;
+}
+
+.summary {
+    margin: 0 0 10px;
+    font: 400 14px/1.6 var(--sans);
+}
+
+.wizard__foot {
+    justify-content: flex-end;
+    padding: 10px 14px;
+    border-top: 1px solid var(--line);
+}
+
+#wiz-cancel {
+    margin-right: auto;
 }
 
 /* Headline: exposure and sweeper */
@@ -400,15 +575,82 @@ body.is-alarm .headline__sweeper {
 
 .form-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px 12px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px 16px;
     align-items: start;
-    margin-top: 14px;
 }
 
-.form-grid > .actions,
-.field--wide {
-    grid-column: 1 / -1;
+/* Settings groups. A fieldset defaults to min-width: min-content, which would
+ * stop the rules table from scrolling inside it. */
+.group {
+    min-width: 0;
+    margin: 0 0 18px;
+    padding: 0;
+    border: 0;
+}
+
+.group > legend,
+.group > summary {
+    display: block;
+    width: 100%;
+    margin: 0 0 10px;
+    padding: 0 0 6px;
+    border-bottom: 1px solid var(--line);
+    font: 600 11px/1.4 var(--sans);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+}
+
+.group > summary {
+    cursor: pointer;
+}
+
+.group > summary::before {
+    content: "+ ";
+    font-family: var(--mono);
+}
+
+.group[open] > summary::before {
+    content: "− ";
+}
+
+.group > .hint,
+.group .actions {
+    margin: 8px 0;
+}
+
+.rules th,
+.rules td {
+    vertical-align: top;
+}
+
+.rules input[type="text"] {
+    width: 9ch;
+    padding: 3px 6px;
+}
+
+.rules select {
+    width: auto;
+    padding: 3px 6px;
+}
+
+.fare {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin: 0 0 6px;
+}
+
+.asset-input {
+    max-width: 72ch;
+}
+
+.warn,
+.hint.warn {
+    margin: 0 0 6px;
+    color: var(--accent);
 }
 
 .field {
@@ -466,6 +708,10 @@ textarea:hover {
 .check input {
     width: 14px;
     height: 14px;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
     accent-color: var(--accent);
 }
 
@@ -476,7 +722,8 @@ textarea:hover {
     align-items: center;
 }
 
-button {
+button,
+.button {
     padding: 6px 12px;
     background: transparent;
     color: var(--text);
@@ -488,6 +735,13 @@ button {
     cursor: pointer;
 }
 
+.button {
+    display: inline-block;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.button:hover,
 button:hover:not(:disabled) {
     background: var(--panel-2);
     border-color: #4b545f;
@@ -518,6 +772,16 @@ button.attention:not(:disabled) {
 
 .note.is-error {
     color: var(--accent);
+}
+
+.note details {
+    margin-top: 2px;
+    color: var(--text-faint);
+    font-size: 11px;
+}
+
+.note summary {
+    cursor: pointer;
 }
 
 /* Tables */
