@@ -107,36 +107,52 @@ export function createOperatorRuntime(
         info.vtxoTreeExpiry >= 512n &&
         tooShort(info.vtxoTreeExpiry);
     const startedAt = now();
-    let orphansCancelled = false;
-    // Settle intents never expire (expire_at 0), and one an earlier process registered waits for a
-    // batch nobody will sign, locking its coins. In a batch, or a proceeds job's, it is left alone.
-    const cancelOrphans = async () => {
+    // Earlier-process intents the startup pass has cancelled, or left because their batch went through.
+    const handled = new Set<string>();
+    let earlierIntentsHandled = false;
+    // Settle intents never expire (expire_at 0): one an earlier process left waiting for, or in, a
+    // batch locks its coins for good, since nobody here signs that batch. Once quiet for a few
+    // sessions it is cancelled, unless every VTXO it spends was consumed. A boarding input is
+    // on-chain, unknown to the indexer, and can't be double-spent, so it never stops this.
+    const handleEarlierIntents = async (info: ArkInfo) => {
         const taken = await held();
-        const orphans = (
-            await storage.intentRepository.getIntents({ states: ["waiting_for_batch"] })
+        const quiet = Math.max(60_000, 3 * Number(info.sessionDuration) * 1000);
+        const earlier = (
+            await storage.intentRepository.getIntents({
+                states: ["waiting_for_batch", "batch_in_progress"],
+            })
         ).filter(
-            (i) => i.createdAt < startedAt && !i.intentVtxos.some((o) => taken.has(outpointKey(o))),
+            (i) =>
+                i.createdAt < startedAt &&
+                !handled.has(i.intentTxId) &&
+                !i.intentVtxos.some((o) => taken.has(outpointKey(o))),
         );
-        if (!orphans.length) return;
-        const { vtxos } = await providers.indexerProvider.getVtxos({
-            outpoints: orphans.flatMap((i) => i.intentVtxos),
-        });
-        const unspent = new Set(vtxos.filter((v) => !isVtxoSpent(v)).map(outpointKey));
-        for (const intent of orphans) {
-            if (!intent.intentVtxos.every((o) => unspent.has(outpointKey(o)))) continue;
-            await providers.arkProvider
-                .deleteIntent({
-                    proof: intent.deleteProof,
-                    message: JSON.parse(intent.deleteProofMessage),
-                })
-                .catch(() => {});
-            await storage.intentRepository.saveIntent({
-                ...intent,
-                state: "cancelled",
-                cancellationReason: "registered by an earlier Taxi process",
-                updatedAt: now(),
+        const due = earlier.filter((i) => now() - i.updatedAt >= quiet);
+        if (due.length) {
+            const { vtxos } = await providers.indexerProvider.getVtxos({
+                outpoints: due.flatMap((i) => i.intentVtxos),
             });
+            const known = new Map(vtxos.map((v) => [outpointKey(v), v]));
+            for (const intent of due) {
+                const spends = intent.intentVtxos.flatMap((o) => known.get(outpointKey(o)) ?? []);
+                if (!spends.length || !spends.every(isVtxoSpent)) {
+                    await providers.arkProvider
+                        .deleteIntent({
+                            proof: intent.deleteProof,
+                            message: JSON.parse(intent.deleteProofMessage),
+                        })
+                        .catch(() => {});
+                    await storage.intentRepository.saveIntent({
+                        ...intent,
+                        state: "cancelled",
+                        cancellationReason: "registered by an earlier Taxi process",
+                        updatedAt: now(),
+                    });
+                }
+                handled.add(intent.intentTxId);
+            }
         }
+        return due.length === earlier.length;
     };
     let stopped = false;
     let infoFingerprint: string | undefined;
@@ -255,11 +271,15 @@ export function createOperatorRuntime(
                               if (live !== token)
                                   throw new Error("background_settlement_not_authorized");
                               backgroundSettling = true;
+                              const run = settle(...args);
                               try {
                                   // A retired wallet's settle may never return; its turn ends anyway.
-                                  return await Promise.race([settle(...args), retired]);
+                                  return await Promise.race([run, retired]);
                               } finally {
                                   backgroundSettling = false;
+                                  // Cut loose, it can rebuild a ContractManager on its way out.
+                                  if (live !== token)
+                                      void run.finally(() => created.dispose()).catch(() => {});
                               }
                           })
                         : settle(...args);
@@ -281,9 +301,8 @@ export function createOperatorRuntime(
                 wallet = created;
                 infoFingerprint = fingerprint;
             }
-            if (!orphansCancelled)
-                orphansCancelled = await cancelOrphans().then(
-                    () => true,
+            if (!earlierIntentsHandled)
+                earlierIntentsHandled = await handleEarlierIntents(verified.info!).catch(
                     () => false,
                 );
             if (stopped) {
@@ -325,13 +344,19 @@ export function createOperatorRuntime(
                 let sdkLocks: readonly Outpoint[];
                 try {
                     sdkLocks = await storage.intentRepository.getLockedVtxoOutpoints();
-                    const waiting = await storage.intentRepository.getIntents({ states: WAITING });
-                    if (waiting.some((i) => now() - i.createdAt > STALE_INTENT_MS))
-                        result.blockers.push("operator_intent_stale");
                 } catch {
                     result.blockers.push("intent_locks_unavailable");
                     return result;
                 }
+                const waiting = await storage.intentRepository
+                    .getIntents({ states: WAITING })
+                    .catch(() => []);
+                if (
+                    waiting.some(
+                        (i) => now() - i.createdAt > STALE_INTENT_MS && !handled.has(i.intentTxId),
+                    )
+                )
+                    result.blockers.push("operator_intent_stale");
                 let taxiLocks: readonly Outpoint[] = [];
                 try {
                     taxiLocks = (await options.reservedOutpoints?.()) ?? [];
@@ -439,9 +464,14 @@ export function createOperatorRuntime(
         return queuedRefresh;
     };
 
+    let retiring: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
         stopped = true;
         snapshot = closed("runtime_stopped");
+        // An in-flight background batch gets one interval, half the shutdown budget, to finish;
+        // a hung one can hold the drain no longer.
+        retiring ??= setTimeout(() => retire(), config.reconcileIntervalMs);
+        retiring.unref?.();
     };
 
     return {
@@ -544,8 +574,8 @@ export function createOperatorRuntime(
             await admission;
             await pending;
             await settlement;
-            retire();
             await turns;
+            clearTimeout(retiring);
             await dropWallet();
         },
     };

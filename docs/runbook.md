@@ -258,13 +258,20 @@ coins outlive the threshold by less than 12 hours, so renewing them would cost a
 fee soon after every renewal, or every minute past the lifetime. The Taxi has
 stopped the SDK's renewal for now; deposits still board and recovery continues,
 but admission stays closed. Lower `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to at
-least 12 hours below the VTXO lifetime and restart.
+least 12 hours below the VTXO lifetime and restart. The threshold must also stay
+above `TAXI_MIN_EXPIRY_HEADROOM_SECONDS` (one day by default), so on a network
+whose coins live 36 hours or less, lower that headroom too.
 
 `operator_intent_stale` means a settlement intent has waited over an hour for a
-batch, locking the coins it spends; admission closes, recovery continues. At
-startup the Taxi cancels, with arkd and locally, any intent an earlier process
-left waiting for a batch, unless it belongs to a proceeds job, which reconciles
-its own. A restart therefore clears a stuck background settlement.
+batch, locking the coins it spends; admission closes, recovery continues. After
+a restart the Taxi deals with every intent an earlier process left waiting for,
+or in, a batch, once the intent has been quiet for a few batch sessions: it
+cancels it with arkd and locally, unless every coin it spends has already moved,
+in which case the batch went through and the record is left as it is. Either way
+the intent no longer counts toward `operator_intent_stale`. A proceeds job's
+intent is the exception: the proceeds collector reconciles its own. On shutdown
+an in-flight background batch gets one reconcile interval to finish before the
+Taxi lets it go.
 
 The SDK's deprecated-signer migration is turned off. It moves coins with an
 offchain send, which would bypass that guard and the held-coin filter, and the
