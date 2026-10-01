@@ -1,5 +1,6 @@
 import {
     SingleKey,
+    Transaction,
     VtxoScript,
     MultisigTapscript,
     CSVMultisigTapscript,
@@ -9,6 +10,8 @@ import {
     type ExtendedVirtualCoin,
     type VirtualCoin,
 } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import type { RuntimeSafety } from "../src/arkade/types.js";
 import type { QuoteDeps } from "../src/quotes.js";
 import { LockupClaimError } from "@arkade-taxi/db";
@@ -47,6 +50,27 @@ const senderCoins = new Map<string, VirtualCoin>();
 export const registerSenderCoin = (txid: string, vout: number, coin: VirtualCoin): void => {
     senderCoins.set(`${txid}:${vout}`, coin);
 };
+
+export async function signedEnvelope(encoded: string): Promise<string> {
+    const envelope = decodeLockupEnvelope(encoded);
+    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
+    const arkTx = await sender.sign(
+        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
+        envelope.senderInputIndexes,
+    );
+    const checkpoints = await Promise.all(
+        envelope.checkpoints.map(async (checkpoint, index) =>
+            envelope.senderInputIndexes.includes(index)
+                ? base64.encode(
+                      (
+                          await sender.sign(Transaction.fromPSBT(base64.decode(checkpoint)), [0])
+                      ).toPSBT(),
+                  )
+                : checkpoint,
+        ),
+    );
+    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(arkTx.toPSBT()), checkpoints });
+}
 
 export const NOW = 1_757_000_000;
 export const DUST = 330n;

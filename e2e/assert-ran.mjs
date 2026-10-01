@@ -2,6 +2,32 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const SWAP_SCENARIOS = [
+    "joint-fill-two-owner",
+    "receiver-paid-sats-fare-claim",
+    "receiver-paid-asset-fare-claim",
+    "receiver-paid-mode1-reclaim",
+];
+
+export function readScenarioIds(mode = "full") {
+    if (!["full", "direct"].includes(mode)) throw new Error(`unknown E2E mode: ${mode}`);
+    const manifest = readFileSync(
+        join(dirname(fileURLToPath(import.meta.url)), "scenarios.ts"),
+        "utf8",
+    );
+    const ids = [...manifest.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
+    const total = Number(/EXPECTED_TOTAL\s*=\s*(\d+)/.exec(manifest)?.[1]);
+    if (
+        !Number.isSafeInteger(total) ||
+        total < 1 ||
+        ids.length !== total ||
+        new Set(ids).size !== total ||
+        SWAP_SCENARIOS.some((id) => !ids.includes(id))
+    )
+        throw new Error("manifest count must match unique live scenarios and swap classification");
+    return mode === "direct" ? ids.filter((id) => !SWAP_SCENARIOS.includes(id)) : ids;
+}
+
 export function validateResults(result, ids, integrityCount = 0) {
     const problems = [];
     if (result.success !== true) problems.push("suite did not succeed");
@@ -31,24 +57,17 @@ export function validateResults(result, ids, integrityCount = 0) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
-        const manifest = readFileSync(
-            join(dirname(fileURLToPath(import.meta.url)), "scenarios.ts"),
-            "utf8",
-        );
-        const ids = [...manifest.matchAll(/\bid:\s*"([^"]+)"/g)].map((match) => match[1]);
-        const total = Number(/EXPECTED_TOTAL\s*=\s*(\d+)/.exec(manifest)?.[1]);
-        if (
-            !Number.isSafeInteger(total) ||
-            total < 1 ||
-            ids.length !== total ||
-            new Set(ids).size !== total
-        )
-            throw new Error("manifest count must match unique live scenarios");
-        const results = JSON.parse(readFileSync(process.argv[2] ?? "e2e-results.json", "utf8"));
+        const args = process.argv.slice(2);
+        const mode = args[0] === "--direct" ? "direct" : "full";
+        if (mode === "direct") args.shift();
+        if (args.length > 1 || args[0]?.startsWith("--"))
+            throw new Error("usage: assert-ran.mjs [--direct] [results.json]");
+        const ids = readScenarioIds(mode);
+        const results = JSON.parse(readFileSync(args[0] ?? "e2e-results.json", "utf8"));
         const problems = validateResults(results, ids, 2);
         if (problems.length) throw new Error(problems.join("; "));
         console.log(
-            `e2e: ${ids.length} scenarios passed, 0 failed, 0 skipped; ${results.numPassedTests} total assertions`,
+            `e2e (${mode}): ${ids.length} scenarios passed, 0 failed, 0 skipped; ${results.numPassedTests} total assertions`,
         );
     } catch (error) {
         console.error(`e2e: ${error.message}`);

@@ -186,14 +186,16 @@ export async function bootstrapActors(config = process.env) {
             renew: (amount) => renewFunding(actors.sender, "sender", amount, 100_000n),
         });
         const operatorFundingResult = await ensureFreshAssetFreeFunding({
-            minimum: 500_000n,
+            minimum: 490_000n,
             minHeadroomBlocks: BigInt(minHeadroomBlocks),
             minHeadroomSeconds: BigInt(minHeadroomSeconds),
             requiredDomain: "time",
             list: (filter) => actors.operator.wallet.getSpendableVtxos(filter),
             tip: () => actors.operator.wallet.onchainProvider.getChainTip(),
-            renew: (amount) => renewFunding(actors.operator, "operator", amount, 500_000n),
+            renew: (amount) => renewFunding(actors.operator, "operator", amount, 490_000n),
         });
+        await renewFunding(actors.operator, "operator-reserve", 10_000n, 10_000n);
+        operatorFundingResult.tip = await actors.operator.wallet.onchainProvider.getChainTip();
 
         const fixtures = {};
         for (const [name, actor] of Object.entries(actors))
@@ -214,6 +216,22 @@ export async function bootstrapActors(config = process.env) {
         if (!operatorFunding) throw new Error("operator has no fresh asset-free funding VTXO");
         if (operatorFunding.expiry.kind !== "time")
             throw new Error("operator funding VTXO is not time-domain");
+        const operatorReserve = fixtures.operator.vtxos.find(
+            (coin) =>
+                (coin.txid !== operatorFunding.txid || coin.vout !== operatorFunding.vout) &&
+                coin.value === "10000" &&
+                coin.assets.length === 0 &&
+                coin.expiry.kind === "time" &&
+                BigInt(coin.expiry.value) - BigInt(operatorFundingResult.tip.time) >=
+                    BigInt(minHeadroomSeconds),
+        );
+        if (
+            operatorFunding.value !== "490000" ||
+            BigInt(operatorFunding.expiry.value) - BigInt(operatorFundingResult.tip.time) <
+                BigInt(minHeadroomSeconds) ||
+            !operatorReserve
+        )
+            throw new Error("operator requires distinct 490000-sat funding and 10000-sat reserve");
         fixtures.asset = { assetId: minted.assetId, supply: "10000", receiverUnits: "1000" };
         fixtures.senderFunding = senderFunding;
         fixtures.senderFundingTip = {

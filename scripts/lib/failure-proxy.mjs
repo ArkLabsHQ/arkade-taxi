@@ -6,8 +6,10 @@ export async function createFailureProxy(targets) {
     const paused = new Set();
     const sockets = new Set();
     const record = (event) => {
-        events.push({ at: Date.now(), ...event });
+        const recorded = { at: Date.now(), ...event };
+        events.push(recorded);
         if (events.length > 10000) events.shift();
+        return recorded;
     };
     const reset = () => {
         rules = [];
@@ -30,8 +32,14 @@ export async function createFailureProxy(targets) {
                     new URL(path, "http://proxy").searchParams.getAll(key).includes(value),
                 ),
         );
-        if (rule?.mode === "drop") rules = rules.filter((item) => item !== rule);
-        record({ target, path: path.split("?")[0], method: request.method, action: "forwarded" });
+        if (rule?.mode === "drop" && rule.once !== false)
+            rules = rules.filter((item) => item !== rule);
+        const forwarded = record({
+            target,
+            path: path.split("?")[0],
+            method: request.method,
+            action: "forwarded",
+        });
         const send = () => {
             const upstream = httpRequest(
                 `${targets[target].replace(/\/$/, "")}${path}`,
@@ -40,6 +48,8 @@ export async function createFailureProxy(targets) {
                     headers: { ...request.headers, host: new URL(targets[target]).host },
                 },
                 (result) => {
+                    forwarded.responseStatus = result.statusCode;
+                    forwarded.responseAt = Date.now();
                     const forward = () => {
                         response.writeHead(result.statusCode, result.headers);
                         result.pipe(response);
@@ -98,6 +108,7 @@ export async function createFailureProxy(targets) {
             if (
                 !Object.hasOwn(targets, rule.target) ||
                 !["drop", "pause", "identity"].includes(rule.mode) ||
+                (rule.once !== undefined && typeof rule.once !== "boolean") ||
                 typeof rule.path !== "string" ||
                 !rule.path.startsWith("/")
             )

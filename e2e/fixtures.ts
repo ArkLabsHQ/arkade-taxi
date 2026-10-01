@@ -1,4 +1,5 @@
 import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect } from "vitest";
 import {
     ArkAddress,
@@ -7,6 +8,7 @@ import {
     RestEmulatorProvider,
     RestIndexerProvider,
     Transaction,
+    VtxoScript,
     asset,
     assertValidServerUnrollScript,
     defaultCheckpointExitDelayPolicy,
@@ -28,6 +30,9 @@ import {
     unwindAll,
     ownedPayoutOutpoints,
 } from "../scripts/lib/scenario-cleanup.mjs";
+
+export const artifactPath = (name: string) =>
+    join(process.env.TAXI_E2E_ARTIFACTS || "e2e-artifacts", name);
 
 export async function control(action: string, rule?: unknown) {
     const response = await fetch(required("TAXI_E2E_CONTROL_URL"), {
@@ -70,7 +75,7 @@ export async function boundary(label: string) {
         at: Date.now(),
         health: await health(),
     };
-    appendFileSync("e2e-artifacts/boundary-diagnostics.jsonl", `${JSON.stringify(snapshot)}\n`);
+    appendFileSync(artifactPath("boundary-diagnostics.jsonl"), `${JSON.stringify(snapshot)}\n`);
     return snapshot.health;
 }
 
@@ -156,6 +161,19 @@ export const walletBalance = async (actor: any, assetId: string) => {
             0n,
         ),
     };
+};
+
+export const walletAssetBalances = async (actor: { wallet: Wallet }, operatorKey: string) => {
+    const balances = new Map<string, bigint>();
+    for (const coin of await actor.wallet.getSpendableVtxos({ withRecoverable: false })) {
+        expect(coin.script).toBe(`5120${operatorKey}`);
+        expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(operatorKey);
+        for (const { assetId, amount } of coin.assets ?? []) {
+            expect(amount).toBeGreaterThan(0n);
+            balances.set(assetId, (balances.get(assetId) ?? 0n) + amount);
+        }
+    }
+    return new Map([...balances].sort(([a], [b]) => a.localeCompare(b)));
 };
 
 export async function openLive() {

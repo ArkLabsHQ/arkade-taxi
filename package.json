@@ -21,7 +21,7 @@
         "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs"
     },
     "devDependencies": {
-        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",
+        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.77-23c6d353.tgz",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
@@ -35,8 +35,8 @@
             "esbuild"
         ],
         "overrides": {
-            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",
-            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz"
+            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.77-23c6d353.tgz",
+            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.23-23c6d353.tgz"
         }
     }
 }

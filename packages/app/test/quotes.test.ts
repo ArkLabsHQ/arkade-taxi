@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
-import { SingleKey, Transaction } from "@arkade-os/sdk";
+import { Transaction } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { ServiceError } from "../src/errors.js";
@@ -30,6 +30,7 @@ import {
     runtimeSafety,
     quoteInfrastructure,
     serverUnroll,
+    signedEnvelope,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
@@ -99,16 +100,6 @@ beforeEach(() => {
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     ids = 0;
 });
-
-const signedEnvelope = async (encoded: string): Promise<string> => {
-    const envelope = decodeLockupEnvelope(encoded);
-    const sender = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
-    const signed = await sender.sign(
-        Transaction.fromPSBT(base64.decode(envelope.arkTx)),
-        envelope.senderInputIndexes,
-    );
-    return encodeLockupEnvelope({ ...envelope, arkTx: base64.encode(signed.toPSBT()) });
-};
 
 describe("createQuote", () => {
     it.each([
@@ -1095,8 +1086,10 @@ describe("submitLockup", () => {
         const response = await createQuote(deps(), quoteBody());
         const d = deps();
         let admissionCalls = 0;
-        d.runtime!.assertAdmission = async () => {
+        const withAdmission = d.runtime.withAdmission;
+        d.runtime.withAdmission = async (work) => {
             admissionCalls += 1;
+            return withAdmission(work);
         };
 
         await expect(
@@ -1113,12 +1106,17 @@ describe("submitLockup", () => {
 
         const first = await submitLockup(deps(), response.transferId, signed);
         const duplicateDeps = deps();
-        duplicateDeps.runtime!.assertAdmission = async () => {
+        duplicateDeps.runtime.withAdmission = async () => {
             throw new Error("runtime offline");
         };
         const duplicate = await submitLockup(duplicateDeps, response.transferId, signed);
 
         expect(duplicate).toEqual(first);
+        await expect(
+            submitLockup(duplicateDeps, response.transferId, signed, () => {
+                throw new Error("service not ready");
+            }),
+        ).rejects.toThrow("service not ready");
         expect(lockupBuilder.submitted).toEqual([]);
     });
 

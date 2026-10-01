@@ -32,6 +32,13 @@ pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
 ```
 
+For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
+--direct`. Add `--emulator-image <local-image>` to exercise a local emulator
+build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
+same stack before the SDK actor scenarios. This explicit local mode requires
+17 named scenarios and both integrity assertions, stores each run in
+`e2e-artifacts/direct-<run>/`, and is rejected in CI.
+
 Check registration integrity without starting network services:
 
 ```bash
@@ -82,7 +89,7 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-four
+- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-one
   scenarios and both integrity assertions must pass with zero failures, skips,
   or todos.
 

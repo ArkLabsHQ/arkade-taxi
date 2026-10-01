@@ -10,6 +10,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { MANIFEST_PATH, PINNED_SOURCES, VENDOR_DIR, readJson } from "./lib.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const at = (p) => join(REPO, p);
@@ -18,12 +19,18 @@ const CI = ".github/workflows/ci.yml";
 const REL = ".github/workflows/release.yml";
 const E2E = ".github/workflows/e2e.yml";
 const DF = "Dockerfile";
-const MAN = "vendor/carrier/manifest.json";
+const MAN = MANIFEST_PATH;
 const ROOT = "package.json";
 const CLIENT = "packages/client/package.json";
 const CORE = "packages/core/package.json";
 const WS = "pnpm-workspace.yaml";
-const SWAP_TGZ = "vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz";
+const { artifacts } = readJson(at(MAN));
+const sdk = artifacts.find((entry) => entry.package === "@arkade-os/sdk");
+const swap = artifacts.find((entry) => entry.package === "@arkade-os/swap");
+if (!sdk || !swap) throw new Error("fault battery requires the frozen SDK and swap artifacts");
+const SWAP_TGZ = `${VENDOR_DIR}/${swap.file}`;
+const SDK_SPEC = `file:./${VENDOR_DIR}/${sdk.file}`;
+const SWAP_SPEC = `file:./${SWAP_TGZ}`;
 const TOUCHED = [CI, REL, E2E, DF, MAN, ROOT, CLIENT, CORE, WS, SWAP_TGZ];
 
 const text = (p) => readFileSync(at(p), "utf8");
@@ -53,11 +60,7 @@ const faults = [
         "root override of swap back to a registry coordinate",
         [ROOT],
         () =>
-            sub(
-                ROOT,
-                '"@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz"',
-                '"@arkade-os/swap": "0.0.20"',
-            ),
+            sub(ROOT, `"@arkade-os/swap": "${SWAP_SPEC}"`, `"@arkade-os/swap": "${swap.version}"`),
     ],
     [
         "C",
@@ -66,7 +69,7 @@ const faults = [
         () =>
             sub(
                 MAN,
-                "adc6b32958c36a7f9c39d6e30efdd945af874f84",
+                PINNED_SOURCES["@arkade-os/sdk"].commit,
                 "0123456789abcdef0123456789abcdef01234567",
             ),
     ],
@@ -77,8 +80,8 @@ const faults = [
         () =>
             sub(
                 ROOT,
-                '"@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.74-adc6b329.tgz",\n        "@noble/curves"',
-                '"@arkade-os/sdk": "0.4.74",\n        "@noble/curves"',
+                `"@arkade-os/sdk": "${SDK_SPEC}",\n        "@noble/curves"`,
+                `"@arkade-os/sdk": "${sdk.version}",\n        "@noble/curves"`,
             ),
     ],
     [
@@ -88,8 +91,8 @@ const faults = [
         () =>
             sub(
                 CLIENT,
-                '"@arkade-os/swap": "0.0.20"',
-                '"@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-0.0.20.tgz"',
+                `"@arkade-os/swap": "${swap.version}"`,
+                `"@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-${swap.version}.tgz"`,
             ),
     ],
     ["F", "ci.yml gates verify step deleted", [CI], () => sub(CI, `${VERIFY_CI}\n`, "")],
@@ -171,7 +174,11 @@ const faults = [
         "Q",
         "pnpm-workspace.yaml grows an overrides block",
         [WS],
-        () => writeFileSync(at(WS), `${text(WS)}\noverrides:\n    '@arkade-os/swap': 0.0.20\n`),
+        () =>
+            writeFileSync(
+                at(WS),
+                `${text(WS)}\noverrides:\n    '@arkade-os/swap': ${swap.version}\n`,
+            ),
     ],
     [
         "Q2",
@@ -180,7 +187,7 @@ const faults = [
         () =>
             writeFileSync(
                 at(WS),
-                `${text(WS)}\noverrides: # pinned upstream\n    '@arkade-os/swap': 0.0.20\n`,
+                `${text(WS)}\noverrides: # pinned upstream\n    '@arkade-os/swap': ${swap.version}\n`,
             ),
     ],
     [
@@ -208,8 +215,8 @@ const faults = [
         () =>
             sub(
                 ROOT,
-                "file:./vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz",
-                "file:./.reference/vendor/arkade-os-swap-0.0.20.tgz",
+                SWAP_SPEC,
+                `file:./.reference/vendor/arkade-os-swap-${swap.version}.tgz`,
                 true,
             ),
     ],
@@ -232,7 +239,7 @@ const faults = [
             sub(
                 CORE,
                 '"@arkade-taxi/covenant": "workspace:*"',
-                '"@arkade-taxi/covenant": "workspace:*",\n        "@arkade-os/swap": "0.0.20"',
+                `"@arkade-taxi/covenant": "workspace:*",\n        "@arkade-os/swap": "${swap.version}"`,
             ),
     ],
 
@@ -325,7 +332,12 @@ const faults = [
         "AF",
         "a published coordinate widened to a range",
         [CLIENT],
-        () => sub(CLIENT, '"@arkade-os/swap": "0.0.20"', '"@arkade-os/swap": "^0.0.20"'),
+        () =>
+            sub(
+                CLIENT,
+                `"@arkade-os/swap": "${swap.version}"`,
+                `"@arkade-os/swap": "^${swap.version}"`,
+            ),
     ],
     [
         "AG",
@@ -334,8 +346,8 @@ const faults = [
         () =>
             sub(
                 CLIENT,
-                '"@arkade-os/swap": "0.0.20",',
-                '"@noble/hashes": "^2.0.1"\n    },\n    "peerDependencies": {\n        "@arkade-os/swap": "file:../../vendor/carrier/arkade-os-swap-0.0.20-adc6b329.tgz",',
+                `"@arkade-os/swap": "${swap.version}",`,
+                `"@noble/hashes": "^2.0.1"\n    },\n    "peerDependencies": {\n        "@arkade-os/swap": "file:../../${VENDOR_DIR}/${swap.file}",`,
             ),
     ],
     // --- the scan unit: a `- ` line is not always a step ---

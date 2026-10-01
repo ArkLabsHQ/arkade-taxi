@@ -10,6 +10,7 @@ import { preEffectRequest, submitWithReadiness } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    artifactPath,
     assetOutputs,
     control,
     expectReceipt,
@@ -23,6 +24,7 @@ import {
     terminal,
     transaction,
     walletBalance,
+    walletAssetBalances,
 } from "./fixtures.js";
 
 async function smallBitcoinPayment() {
@@ -187,10 +189,11 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 },
             ],
         });
-        const [aliceBefore, bobBefore, operatorBefore] = await Promise.all([
+        const [aliceBefore, bobBefore, operatorBefore, operatorAssetsBefore] = await Promise.all([
             walletBalance(alice, minted.assetId),
             walletBalance(bob, minted.assetId),
             walletBalance(live.actors.operator, minted.assetId),
+            walletAssetBalances(live.actors.operator, live.info.operatorKey),
         ]);
         expect(bobBefore.units).toBe(0n);
         const { verified, senderInputs } = await preEffectRequest(
@@ -368,6 +371,17 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 balance.sats === expectedOperator.sats && balance.units === expectedOperator.units,
         );
         expect(operatorAfter).toEqual(expectedOperator);
+        const expectedAssets = new Map(operatorAssetsBefore);
+        if (mode === "purchase")
+            expectedAssets.set(
+                minted.assetId,
+                (expectedAssets.get(minted.assetId) ?? 0n) + 1_000_000n,
+            );
+        const operatorAssetsAfter = await walletAssetBalances(
+            live.actors.operator,
+            live.info.operatorKey,
+        );
+        expect(operatorAssetsAfter).toEqual(expectedAssets);
         // Only a sub-dust fare receipt needs the proceeds collector to be spendable.
         const repaid = mode === "recycle";
         const receiptPoint = repaid ? { txid, vout: 0 } : { txid: lockup.txid, vout: 1 };
@@ -389,13 +403,26 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                 ? coin.txid === receiptPoint.txid && coin.vout === receiptPoint.vout
                 : coin.commitmentTxIds?.includes(receipt!.settledBy!),
         );
-        expect(collected).toHaveLength(1);
-        expect(hex.encode(VtxoScript.decode(collected[0]!.tapTree).tweakedPublicKey)).toBe(
-            live.info.operatorKey,
-        );
-        expect(collected[0]!.assets ?? []).toEqual(
-            repaid ? [] : [{ assetId: minted.assetId, amount: 1_000_000n }],
-        );
+        for (const coin of collected)
+            expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(
+                live.info.operatorKey,
+            );
+        const payout = repaid
+            ? collected[0]
+            : collected.find((coin) =>
+                  coin.assets?.some((item) => item.assetId === minted.assetId),
+              );
+        expect(payout).toBeDefined();
+        if (repaid) expect(payout!.assets ?? []).toEqual([]);
+        const plainChange = repaid ? [] : collected.filter((coin) => !coin.assets?.length);
+        expect(collected).toHaveLength(plainChange.length ? 2 : 1);
+        if (plainChange.length) {
+            expect(plainChange).toHaveLength(1);
+            expect(payout!.value).toBe(330);
+            expect(BigInt(plainChange[0]!.value)).toBeGreaterThanOrEqual(
+                BigInt(required("TAXI_OPERATOR_MIN_RESERVE_SATS")),
+            );
+        }
         const collectionStatus = await poll(
             "service completes its proceeds job",
             () => admin("status"),
@@ -509,14 +536,22 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             operatorSatsAfter: operatorAfter.sats.toString(),
             operatorUnitsBefore: operatorBefore.units.toString(),
             operatorUnitsAfter: operatorAfter.units.toString(),
+            operatorAssetsBefore: [...operatorAssetsBefore].map(([assetId, units]) => ({
+                assetId,
+                units: units.toString(),
+            })),
+            operatorAssetsAfter: [...operatorAssetsAfter].map(([assetId, units]) => ({
+                assetId,
+                units: units.toString(),
+            })),
             secondTransferId: second.quote.transferId,
             secondSpendTxid: secondTxid,
             collectionCommitmentTxid: receipt!.settledBy,
-            collectedOutpoint: { txid: collected[0]!.txid, vout: collected[0]!.vout },
+            collectedOutpoint: { txid: payout!.txid, vout: payout!.vout },
         };
         assertArtifactSafe(evidence);
         writeFileSync(
-            `e2e-artifacts/receiver-sse-${mode}.json`,
+            artifactPath(`receiver-sse-${mode}.json`),
             `${JSON.stringify(evidence, null, 2)}\n`,
         );
     } finally {

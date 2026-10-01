@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { ArkAddress, Transaction, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
+import { ArkAddress, Transaction, VtxoScript, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
 import { signSponsoredPayment } from "@arkade-taxi/client";
 import { base64, hex } from "@scure/base";
 import { preEffectRequest } from "./admission.js";
@@ -12,6 +12,7 @@ import {
     poll,
     required,
     walletBalance,
+    walletAssetBalances,
 } from "./fixtures.js";
 
 liveScenario("sponsored-direct-send", async () => {
@@ -63,10 +64,11 @@ liveScenario("sponsored-direct-send", async () => {
                 },
             ],
         });
-        const [aliceBefore, bobBefore, operatorBefore] = await Promise.all([
+        const [aliceBefore, bobBefore, operatorBefore, operatorAssetsBefore] = await Promise.all([
             walletBalance(alice, minted.assetId),
             walletBalance(bob, minted.assetId),
             walletBalance(live.actors.operator, minted.assetId),
+            walletAssetBalances(live.actors.operator, live.info.operatorKey),
         ]);
         expect(bobBefore.units).toBe(0n);
         const { verified, senderInputs } = await preEffectRequest(
@@ -164,20 +166,61 @@ liveScenario("sponsored-direct-send", async () => {
             sats: aliceBefore.sats,
             units: 0n,
         });
-        // The 1 USDT fare output is subdust-hosted, so like a covenant
-        // purchase fare it never enters the operator wallet balance: the
-        // operator's wallet effect is exactly the fronted contribution and
-        // the fare hosting. The fare itself is proven by the accepted joint
-        // transaction asserted above (output 1: 1 sat + 1M USDT to Taxi).
         expect(
             await poll(
-                "operator financial effect",
+                "Taxi collects its sponsored 1 USDT fare",
                 () => walletBalance(live.actors.operator, minted.assetId),
                 (value) =>
-                    value.sats === operatorBefore.sats - 331n &&
-                    value.units === operatorBefore.units,
+                    value.sats === operatorBefore.sats - 330n &&
+                    value.units === operatorBefore.units + 1_000_000n,
             ),
-        ).toEqual({ sats: operatorBefore.sats - 331n, units: operatorBefore.units });
+        ).toEqual({ sats: operatorBefore.sats - 330n, units: operatorBefore.units + 1_000_000n });
+        const expectedAssets = new Map(operatorAssetsBefore);
+        expectedAssets.set(minted.assetId, (expectedAssets.get(minted.assetId) ?? 0n) + 1_000_000n);
+        expect(await walletAssetBalances(live.actors.operator, live.info.operatorKey)).toEqual(
+            expectedAssets,
+        );
+        const farePoint = { txid: lockup.outpoint.txid, vout: 1 };
+        const receipt = (await live.indexer.getVtxos({ outpoints: [farePoint] })).vtxos.find(
+            (coin) => coin.txid === farePoint.txid && coin.vout === farePoint.vout,
+        );
+        expect(receipt).toBeDefined();
+        expect(receipt!.value).toBe(1);
+        expect(receipt!.script).toBe(`5120${live.info.operatorKey}`);
+        expect(receipt!.assets).toEqual([{ assetId: minted.assetId, amount: 1_000_000n }]);
+        expect(receipt!.isSpent).toBe(true);
+        expect(receipt!.settledBy).toMatch(/^[0-9a-f]{64}$/);
+        const collected = (
+            await live.actors.operator.wallet.getSpendableVtxos({ withRecoverable: false })
+        ).filter((coin) => coin.commitmentTxIds?.includes(receipt!.settledBy!));
+        for (const coin of collected)
+            expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(
+                live.info.operatorKey,
+            );
+        const assetCarriers = collected.filter((coin) =>
+            coin.assets?.some((item) => item.assetId === minted.assetId),
+        );
+        expect(assetCarriers).toHaveLength(1);
+        const plainChange = collected.filter((coin) => !coin.assets?.length);
+        expect(collected).toHaveLength(plainChange.length ? 2 : 1);
+        if (plainChange.length) {
+            expect(plainChange).toHaveLength(1);
+            expect(assetCarriers[0]!.value).toBe(330);
+            expect(assetCarriers[0]!.assets).toEqual([
+                { assetId: minted.assetId, amount: 1_000_000n },
+            ]);
+            expect(BigInt(plainChange[0]!.value)).toBeGreaterThanOrEqual(
+                BigInt(required("TAXI_OPERATOR_MIN_RESERVE_SATS")),
+            );
+        }
+        const status = await poll(
+            "service completes sponsored fare collection",
+            () => admin("status"),
+            (value) =>
+                value.readiness?.proceeds?.state === "idle" &&
+                value.readiness.proceeds.blocker === null,
+        );
+        expect(status.readiness.proceeds.maxFeeSats).toBe("0");
     } finally {
         await live.close();
     }

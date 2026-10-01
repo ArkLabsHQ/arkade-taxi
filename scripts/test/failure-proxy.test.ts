@@ -11,6 +11,7 @@ async function setup() {
     let effects = 0;
     const upstream = createServer((request, response) => {
         if (request.method === "POST") effects++;
+        response.statusCode = request.url === "/unavailable" ? 503 : 200;
         response.setHeader("content-type", "application/json");
         response.end(JSON.stringify({ signerPubkey: "02" + "11".repeat(32), effects }));
     });
@@ -34,6 +35,15 @@ it("drops exactly one response after the upstream mutation completed", async () 
     const next = await fetch(`${proxy.url}/arkd/submit`, { method: "POST" });
     expect(await next.json()).toMatchObject({ effects: 2 });
     expect(proxy.events.filter((event: any) => event.action === "dropped")).toHaveLength(1);
+    const unavailable = await fetch(`${proxy.url}/arkd/unavailable`);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.text()).toBe(
+        JSON.stringify({ signerPubkey: "02" + "11".repeat(32), effects: 2 }),
+    );
+    const event = proxy.events.at(-1);
+    expect(event).toMatchObject({ action: "forwarded", responseStatus: 503 });
+    expect(Number.isFinite(event.responseAt)).toBe(true);
+    expect(event.responseAt).toBeGreaterThanOrEqual(event.at);
 });
 
 it("replaces only provider identity while preserving the real response", async () => {
