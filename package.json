@@ -26,6 +26,7 @@
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
         "prettier": "^3.9.6",
+        "tsup": "^8.5.1",
         "typescript": "^5.9.3",
         "vitest": "^3.2.7"
     },
