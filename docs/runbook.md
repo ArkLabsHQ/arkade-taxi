@@ -236,10 +236,14 @@ replaced before they reach the expiry headroom that closes admission. It never
 runs alongside the proceeds collector's settlement and never spends a coin the
 Taxi holds for a quote, a lockup, a swap fill or a proceeds job, nor a subdust
 receipt the collector consolidates. The Taxi in turn never commits a coin inside
-the renewal window. If the network's coins live no longer than that threshold,
-every coin would be renewed as it arrives: readiness reports
-`renewal_threshold_exceeds_vtxo_lifetime` and admission stays closed, while
-recovery continues, until the threshold is lowered below the VTXO lifetime.
+the renewal window.
+
+If readiness reports `renewal_threshold_exceeds_vtxo_lifetime`, the network's
+coins outlive the threshold by less than 12 hours, so renewing them would cost a
+fee soon after every renewal, or every minute past the lifetime. The Taxi has
+stopped the SDK's renewal for now; deposits still board and recovery continues,
+but admission stays closed. Lower `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to at
+least 12 hours below the VTXO lifetime and restart.
 
 The SDK's deprecated-signer migration is turned off. It moves coins with an
 offchain send, which would bypass that guard and the held-coin filter, and the

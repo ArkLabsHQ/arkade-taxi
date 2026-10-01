@@ -85,8 +85,8 @@ export function assertZeroIntentFees(fees) {
 }
 const MIN_EXPIRY_HEADROOM_BLOCKS = "144";
 const MIN_EXPIRY_HEADROOM_SECONDS = "86400";
-// Inside ARKD_VTXO_TREE_EXPIRY: the SDK's 3-day default would renew every coin at birth.
-const VTXO_RENEWAL_THRESHOLD_SECONDS = "129600";
+// Above the headroom and 18 h inside ARKD_VTXO_TREE_EXPIRY, clear of the Taxi's 12 h renewal margin.
+const VTXO_RENEWAL_THRESHOLD_SECONDS = "108000";
 const RECOVERY_BROADCAST_SECONDS = "43200";
 const RECOVERY_CRITICAL_SECONDS = "7200";
 const SERVICES = [

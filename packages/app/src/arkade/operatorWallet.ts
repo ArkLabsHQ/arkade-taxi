@@ -8,7 +8,9 @@ import {
     canSpendOffchain,
     isSubdust,
     type WalletConfig,
+    type ArkInfo,
     type ArkProvider,
+    type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Database } from "@arkade-taxi/db";
@@ -35,6 +37,8 @@ type SettlementGuard = (
  * inherit it from wallet creation, and its event-driven renewal is wrapped in it. */
 const sdkBackground = new AsyncLocalStorage<true>();
 const outpointKey = (o: Outpoint) => `${o.txid}:${o.vout}`;
+/** How long past the renewal threshold a coin must live, or the SDK renews it soon after birth. */
+const RENEWAL_MARGIN_SECONDS = 43_200n;
 
 export interface OperatorRuntimeOptions {
     now?: () => number;
@@ -70,6 +74,19 @@ export function createOperatorRuntime(
         return turn;
     };
     const held = async () => new Set(((await options.heldOutpoints?.()) ?? []).map(outpointKey));
+    const tooShort = (lifetime: bigint) =>
+        lifetime - config.vtxoRenewalThresholdSeconds < RENEWAL_MARGIN_SECONDS;
+    // arkd advertises no VTXO lifetime; a batch output's own span is it. Below 512 it counts blocks.
+    const shortLived = (coin: ExtendedVirtualCoin) => {
+        if (coin.isPreconfirmed !== false || coin.expiresAt === undefined) return false;
+        const born = new Date(coin.createdAt).getTime();
+        const span = Math.floor((new Date(coin.expiresAt).getTime() - born) / 1000);
+        return Number.isSafeInteger(span) && tooShort(BigInt(span));
+    };
+    const advertisesShortLife = (info?: ArkInfo) =>
+        info?.vtxoTreeExpiry !== undefined &&
+        info.vtxoTreeExpiry >= 512n &&
+        tooShort(info.vtxoTreeExpiry);
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -181,9 +198,12 @@ export function createOperatorRuntime(
                           })
                         : settle(...args);
                 const spendable = created.getSpendableVtxos.bind(created);
+                const shortLife = advertisesShortLife(verified.info);
                 created.getSpendableVtxos = async (filter) => {
                     const coins = await spendable(filter);
                     if (!sdkBackground.getStore()) return coins;
+                    // Renewing such a coin only buys another, a fee each minute; boarding goes on.
+                    if (shortLife || coins.some(shortLived)) return [];
                     const taken = await held();
                     return coins.filter(
                         (c) => !taken.has(outpointKey(c)) && !isSubdust(c, config.dust),
@@ -271,14 +291,7 @@ export function createOperatorRuntime(
                         result.blockers.push("vtxo_expiry_unknown");
                         continue;
                     }
-                    // arkd advertises no VTXO lifetime; a batch output's own span is it.
-                    const born = Math.floor(new Date(coin.createdAt).getTime() / 1000);
-                    if (
-                        expiry.kind === "time" &&
-                        coin.isPreconfirmed === false &&
-                        Number.isSafeInteger(born) &&
-                        expiry.value - BigInt(born) <= config.vtxoRenewalThresholdSeconds
-                    )
+                    if (shortLived(coin))
                         result.blockers.push("renewal_threshold_exceeds_vtxo_lifetime");
                     const clock = expiry.kind === "height" ? result.chainHeight : result.chainTime;
                     const headroom =
@@ -317,6 +330,8 @@ export function createOperatorRuntime(
             result.walletSynced = false;
             result.blockers.push("wallet_unavailable");
         }
+        if (advertisesShortLife(verified.info))
+            result.blockers.push("renewal_threshold_exceeds_vtxo_lifetime");
         result.blockers = [...new Set(result.blockers)];
         return result;
     };

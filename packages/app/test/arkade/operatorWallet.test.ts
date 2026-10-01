@@ -25,6 +25,17 @@ const proofOf = (inputs: { txid: string; vout: number }[]) => {
     return { proof: base64.encode(tx.toPSBT()) } as never;
 };
 
+/** A batch output (or, preconfirmed, an offchain receipt) whose expiry is `seconds` after birth. */
+const livingFor = (seconds: number, isPreconfirmed = false): Partial<ExtendedVirtualCoin> => {
+    const born = Math.floor(Date.now() / 1000);
+    return {
+        isPreconfirmed,
+        createdAt: new Date(born * 1000),
+        expiresAtHeight: undefined,
+        expiresAt: new Date((born + seconds) * 1000),
+    };
+};
+
 const databases: Database[] = [];
 afterEach(() => {
     vi.restoreAllMocks();
@@ -113,9 +124,15 @@ function setup() {
         walletFactory: async (_cfg: WalletConfig) => {
             walletConfig = _cfg;
             created++;
-            // Born at creation, like the SDK's poll timer.
-            backgroundPoll ??= backgroundStart.then(() =>
-                wallet.settle({ inputs: [{ txid: "bd".repeat(32), vout: 0 }], outputs: [] }),
+            // Born at creation, like the SDK's poll timer: boards a deposit plus what renewal selects.
+            backgroundPoll ??= backgroundStart.then(async () =>
+                wallet.settle({
+                    inputs: [
+                        { txid: "bd".repeat(32), vout: 0 },
+                        ...(await wallet.getSpendableVtxos()),
+                    ],
+                    outputs: [],
+                }),
             );
             return wallet as unknown as Wallet;
         },
@@ -532,29 +549,28 @@ describe("persistent operator runtime safety", () => {
         expect(state.inventory).toMatchObject({ usableSats: 0n, usableVtxos: 0 });
         expect(state.blockers).not.toContain("vtxo_expiry_headroom");
     });
-    it("closes admission, not recovery, when batch coins live no longer than the renewal threshold", async () => {
+    it("closes admission, not recovery, unless batch coins outlive the renewal threshold by 12 h", async () => {
         const s = setup();
-        const born = Math.floor(Date.now() / 1000);
-        const coin = (lifetime: number, isPreconfirmed: boolean) => ({
-            isPreconfirmed,
-            createdAt: new Date(born * 1000),
-            expiresAtHeight: undefined,
-            expiresAt: new Date((born + lifetime) * 1000),
-        });
         const flagged = async () =>
             (await s.runtime.refresh()).blockers.includes(
                 "renewal_threshold_exceeds_vtxo_lifetime",
             );
 
-        s.setCoin(coin(259_201, false));
+        s.setCoin(livingFor(259_200 + 43_200));
         expect(await flagged()).toBe(false);
         // Received offchain, a coin keeps its batch's expiry: its own span is not the lifetime.
-        s.setCoin(coin(3_600, true));
+        s.setCoin(livingFor(3_600, true));
         expect(await flagged()).toBe(false);
-        s.setCoin(coin(259_200, false));
+        s.setCoin(livingFor(259_200 + 43_199));
         expect(await flagged()).toBe(true);
         await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
         await expect(s.runtime.assertAdmission()).rejects.toMatchObject({ status: 503 });
+
+        s.setCoin({});
+        s.setInfo(arkInfo({ vtxoTreeExpiry: 259_200n + 43_199n }));
+        expect(await flagged()).toBe(true);
+        s.setInfo(arkInfo({ vtxoTreeExpiry: 180n }));
+        expect(await flagged()).toBe(false);
     });
     it("uses MTP and seconds budgets for timestamp expiry and rejects unknown MTP", async () => {
         const s = setup();
@@ -729,6 +745,17 @@ describe("the SDK's background settlement", () => {
         expect(guard).toHaveBeenCalledTimes(1);
         expect(register).toHaveBeenCalledTimes(2);
         expect(s.events).toEqual(["settle:cc", "settle:end", "settle:aa", "settle:end"]);
+    });
+
+    it("stops renewing coins that cannot outlive the threshold, and keeps boarding", async () => {
+        const s = setup();
+        vi.spyOn(s.runtime.providers.arkProvider, "registerIntent").mockResolvedValue("intent");
+        s.setCoin(livingFor(259_200));
+        await s.runtime.refresh();
+
+        s.startBackground();
+        await s.backgroundPoll;
+        expect(s.events).toEqual(["settle:bd", "settle:end"]);
     });
 
     it("never selects or registers a coin the Taxi holds, nor a subdust one", async () => {
