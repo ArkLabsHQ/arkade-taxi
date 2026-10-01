@@ -824,8 +824,11 @@ describe("setup guidance", () => {
         expect(dashboard.sent).toEqual([]);
         click("go-live-anyway");
         await vi.waitFor(() =>
-            expect(dashboard.sent.map((r) => r.path)).toEqual(["/admin/api/policy/resume"]),
+            expect(text("setup-note")).toBe(
+                "The Taxi cannot go live yet. The Taxi's spendable balance is below the reserve it must keep.",
+            ),
         );
+        expect(dashboard.sent.map((r) => r.path)).toEqual(["/admin/api/policy/resume"]);
 
         click("wizard-open");
         expect(dashboard.element("wizard").open).toBe(true);
@@ -871,5 +874,46 @@ describe("setup guidance", () => {
             "Done",
             "Done",
         ]);
+    });
+
+    it("explains refused changes in plain words and keeps the raw error for support", async () => {
+        const dashboard = runDashboard(() => dashboardPage([], "e".repeat(64), null));
+        const note = dashboard.element("policy-note");
+        const raw = () => note.children[0]?.children[1]?.textContent;
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
+        );
+
+        dashboard.element("locktimeMarginBlocks").value = "10";
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(note.textContent).toBe(
+                "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.",
+            ),
+        );
+        expect(raw()).toBe("policy margin must exceed the configured recovery execution budget");
+
+        dashboard.element("locktimeMarginBlocks").value = "144";
+        dashboard.element("maxOutstandingSats").value = "lots";
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(note.textContent).toBe("Max outstanding must be a whole number of sats."),
+        );
+        expect(raw()).toMatch(/^maxOutstandingSats: expected a decimal sats amount/);
+
+        const broken = runDashboard(
+            () => dashboardPage([], "f".repeat(64), null),
+            harness({
+                funding: async () => {
+                    throw new Error("indexer timeout");
+                },
+            }),
+        );
+        await vi.waitFor(() =>
+            expect(broken.element("funding-state").textContent).toBe(
+                "The Taxi cannot read its wallet right now.",
+            ),
+        );
+        expect(broken.element("funding-state").title).toBe("funding_unavailable: indexer timeout");
     });
 });

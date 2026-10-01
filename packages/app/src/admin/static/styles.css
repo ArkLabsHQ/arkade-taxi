@@ -773,6 +773,16 @@ button.attention:not(:disabled) {
     color: var(--accent);
 }
 
+.note details {
+    margin-top: 2px;
+    color: var(--text-faint);
+    font-size: 11px;
+}
+
+.note summary {
+    cursor: pointer;
+}
+
 /* Tables */
 
 .scroll {

@@ -101,7 +101,7 @@ export const INDEX_HTML = `<!doctype html>
                         <button type="button" class="primary" id="step-live-fix">Go live</button>
                     </li>
                 </ol>
-                <p class="note setup__note" id="setup-note" aria-live="polite"></p>
+                <div class="note setup__note" id="setup-note" aria-live="polite"></div>
             </section>
 
             <section class="headline" aria-labelledby="exposure-heading">
@@ -235,7 +235,7 @@ export const INDEX_HTML = `<!doctype html>
                     </div>
                 </div>
                 <div class="panel__body">
-                    <p class="note" id="switch-note" aria-live="polite"></p>
+                    <div class="note" id="switch-note" aria-live="polite"></div>
 
                     <form id="policy-form" novalidate>
                         <fieldset class="group" id="limits">
@@ -409,7 +409,7 @@ export const INDEX_HTML = `<!doctype html>
                             <button type="button" id="revert">Revert</button>
                         </div>
                     </form>
-                    <p class="note" id="policy-note" aria-live="polite"></p>
+                    <div class="note" id="policy-note" aria-live="polite"></div>
                 </div>
             </section>
 
@@ -664,7 +664,7 @@ export const INDEX_HTML = `<!doctype html>
                     </p>
                 </section>
 
-                <p class="note" id="wiz-note" aria-live="polite"></p>
+                <div class="note" id="wiz-note" aria-live="polite"></div>
             </div>
             <div class="actions wizard__foot">
                 <button type="button" id="wiz-cancel">Not now</button>
@@ -1453,6 +1453,16 @@ button.attention:not(:disabled) {
     color: var(--accent);
 }
 
+.note details {
+    margin-top: 2px;
+    color: var(--text-faint);
+    font-size: 11px;
+}
+
+.note summary {
+    cursor: pointer;
+}
+
 /* Tables */
 
 .scroll {
@@ -1843,19 +1853,106 @@ async function api(path, options) {
     if (!res.ok) {
         const error = new Error((parsed && parsed.error) || res.status + " " + res.statusText);
         error.code = parsed && parsed.code;
+        error.status = res.status;
+        error.blockers = parsed && parsed.blockers;
         throw error;
     }
     return parsed;
+}
+
+const FIELD_LABELS = {
+    maxOutstandingSats: "Max outstanding",
+    maxPerPaymentTopupSats: "Max per payment",
+    maxConcurrentAdvances: "Max payments at once",
+    locktimeMarginBlocks: "Locktime margin (blocks)",
+    locktimeMarginSeconds: "Locktime margin (seconds)",
+    quoteTtlSeconds: "Quote lifetime",
+    units: "amount",
+    bps: "percentage",
+    minUnits: "minimum",
+    maxUnits: "maximum",
+    maxTopupSats: "max per payment",
+    claim: "claim mode",
+    groupIndex: "group",
+};
+
+// The router's validation messages, as predicates of the field they name.
+const ISSUE_RULES = [
+    [/decimal sats amount/, () => "must be a whole number of sats"],
+    [/Expected (number|integer)/, () => "must be a whole number"],
+    [/greater than or equal to ([0-9]+)/, (m) => "must be at least " + m[1]],
+    [/less than or equal to ([0-9]+)/, (m) => "must be at most " + m[1]],
+    [/Invalid enum value/, () => "is not one of the choices"],
+    [
+        /^Invalid( input)?$/,
+        (m, path) =>
+            /(units|Units|TopupSats)$/.test(path) ? "must be a whole number" : "is not valid",
+    ],
+    [/bps must be within/, () => "has a percentage outside 0 to 100"],
+    [/maxUnits must not be below minUnits/, () => "has a maximum below its minimum"],
+    [/token fare must be flat/, () => "is in a fixed token, so it must be flat"],
+    [/non-empty id/, () => "needs an id"],
+    [/Unrecognized key/, () => "has a field the Taxi does not know"],
+];
+
+function fieldLabel(path) {
+    const parts = path.split(".");
+    if (parts[0] !== "assetRules" || parts.length < 2) return FIELD_LABELS[path] || path;
+    const label = ["Rule " + (Number(parts[1]) + 1)];
+    const fare = parts[2] === "fares" && parts.length > 3;
+    if (fare) label.push("fare " + (Number(parts[3]) + 1));
+    const last = parts[parts.length - 1];
+    if (parts.length > (fare ? 4 : 2)) label.push(FIELD_LABELS[last] || last);
+    return label.join(", ");
+}
+
+function issueText(issue) {
+    const m = /^([A-Za-z0-9_.]+): (.+)$/.exec(issue);
+    if (!m) return issue;
+    for (const [pattern, say] of ISSUE_RULES) {
+        const hit = pattern.exec(m[2]);
+        if (hit) return fieldLabel(m[1]) + " " + say(hit, m[1]) + ".";
+    }
+    return fieldLabel(m[1]) + ": " + m[2] + ".";
+}
+
+function explain(error) {
+    const raw = (error.code ? error.code + ": " : "") + error.message;
+    let text = error.message;
+    if (error.code === "resume_blocked")
+        text =
+            "The Taxi cannot go live yet. " +
+            (error.blockers || [error.message]).map(blockerText).join(" ");
+    else if (error.code === "funding_unavailable")
+        text = "The Taxi cannot read its wallet right now.";
+    else if (/^header x-taxi-operator/.test(error.message))
+        text =
+            "The console could not tell who you are: the proxy in front of it must send the operator header.";
+    else if (/recovery execution budget/.test(error.message))
+        text =
+            "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.";
+    else if (error.status === 400) text = error.message.split("; ").map(issueText).join(" ");
+    return { text, raw };
+}
+
+function showError(id, error) {
+    const { text, raw } = explain(error);
+    setNote(id, text, true, raw);
 }
 
 function gateActions() {
     for (const id of ["apply", "pause", "resume", "rescan"]) $(id).disabled = false;
 }
 
-function setNote(id, text, isError) {
+function setNote(id, text, isError, raw) {
     const el = $(id);
     el.textContent = text;
     el.classList.toggle("is-error", Boolean(isError));
+    if (raw && raw !== text) {
+        const details = document.createElement("details");
+        details.append(cell("summary", "details"), cell("code", raw));
+        el.append(details);
+    }
 }
 
 function renderAlarm() {
@@ -2312,7 +2409,7 @@ async function saveWizard(goLive) {
         await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
         renderAlarm();
     } catch (e) {
-        setNote($("wizard").open ? "wiz-note" : "setup-note", e.message, true);
+        showError($("wizard").open ? "wiz-note" : "setup-note", e);
     }
 }
 
@@ -2836,8 +2933,11 @@ async function loadFunding() {
     try {
         view.funding = await api("/admin/api/funding");
         renderFunding(view.funding);
+        $("funding-state").title = "";
     } catch (e) {
-        $("funding-state").textContent = "unavailable: " + e.message;
+        const { text, raw } = explain(e);
+        $("funding-state").textContent = text;
+        $("funding-state").title = raw;
     }
     renderSetup();
 }
@@ -2861,7 +2961,7 @@ async function mutate(run, noteId) {
         await Promise.all([loadPolicy(), loadHistory(), loadStatus()]);
         renderAlarm();
     } catch (e) {
-        setNote(noteId, e.message, true);
+        showError(noteId, e);
     }
 }
 
