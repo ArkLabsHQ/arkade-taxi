@@ -277,10 +277,12 @@ async function createAdmitted(
     const initial = deps.policy.getSnapshot();
     const terms = immutableTerms(req, initial.policy, deps.config);
     try {
-        deriveCovenant(deps.config, {
+        const probe: ReceiveQuote["params"] = {
             receiverKey: req.receiverKey,
             senderKey: req.makerKey,
             operatorKey: deps.config.operatorKey,
+            operatorSignerKey: deps.config.operatorSignerKey,
+            exitDelay: deps.config.exitDelay,
             dust: deps.config.dust,
             topup: terms.loan,
             assetId: req.assetId,
@@ -290,7 +292,8 @@ async function createAdmitted(
             ...(terms.payer === "receiver"
                 ? { receiverFare: toCovenantFare(terms.receiverFare) }
                 : {}),
-        });
+        };
+        deriveCovenant(deps.config, probe);
     } catch (cause) {
         throw badRequest("makerPublicKey or receiverAddress is not a valid covenant identity");
     }
@@ -362,6 +365,8 @@ async function createReserved(
         receiverKey: req.receiverKey,
         senderKey: req.makerKey,
         operatorKey: deps.config.operatorKey,
+        operatorSignerKey: deps.config.operatorSignerKey,
+        exitDelay: deps.config.exitDelay,
         dust: deps.config.dust,
         topup: terms.loan,
         assetId: req.assetId,

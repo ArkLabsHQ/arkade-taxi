@@ -25,6 +25,9 @@ export interface ReceiveQuoteParams {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
+    /** The Taxi's bare x-only signing key. `operatorKey` is a taproot output key. */
+    operatorSignerKey: Uint8Array;
+    exitDelay: { value: bigint; type: "blocks" | "seconds" };
     dust: bigint;
     topup: bigint;
     assetId: { txid: Uint8Array; groupIndex: number };
@@ -170,6 +173,8 @@ const encodeParams = (params: ReceiveQuoteParams): string =>
         receiverKey: hex(params.receiverKey),
         senderKey: hex(params.senderKey),
         operatorKey: hex(params.operatorKey),
+        operatorSignerKey: hex(params.operatorSignerKey),
+        exitDelay: { value: params.exitDelay.value.toString(10), type: params.exitDelay.type },
         dust: params.dust.toString(10),
         topup: params.topup.toString(10),
         assetId: { txid: hex(params.assetId.txid), groupIndex: params.assetId.groupIndex },
@@ -194,6 +199,8 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
             "receiverKey",
             "senderKey",
             "operatorKey",
+            "operatorSignerKey",
+            "exitDelay",
             "dust",
             "topup",
             "assetId",
@@ -204,6 +211,9 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
         ["receiverFare"],
         "params",
     );
+    const exit = object(value.exitDelay, "params.exitDelay");
+    exact(exit, ["value", "type"], [], "params.exitDelay");
+    if (exit.type !== "blocks" && exit.type !== "seconds") fail("params.exitDelay");
     const asset = object(value.assetId, "params.assetId");
     exact(asset, ["txid", "groupIndex"], [], "params.assetId");
     if (!Number.isSafeInteger(asset.groupIndex) || Number(asset.groupIndex) < 0)
@@ -222,6 +232,11 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
         receiverKey: bytes(value.receiverKey, 32, "params.receiverKey"),
         senderKey: bytes(value.senderKey, 32, "params.senderKey"),
         operatorKey: bytes(value.operatorKey, 32, "params.operatorKey"),
+        operatorSignerKey: bytes(value.operatorSignerKey, 32, "params.operatorSignerKey"),
+        exitDelay: {
+            value: amount(exit.value, "params.exitDelay.value"),
+            type: exit.type as "blocks" | "seconds",
+        },
         dust: amount(value.dust, "params.dust"),
         topup: amount(value.topup, "params.topup"),
         assetId: {

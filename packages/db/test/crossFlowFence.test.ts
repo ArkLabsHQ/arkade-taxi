@@ -86,6 +86,8 @@ const receive = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
         receiverKey: new Uint8Array(32).fill(0x11),
         senderKey: new Uint8Array(32).fill(0x22),
         operatorKey: new Uint8Array(32).fill(0x33),
+        operatorSignerKey: new Uint8Array(32).fill(0x44),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 329n,
         assetId: ASSET,

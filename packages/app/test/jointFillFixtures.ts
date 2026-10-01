@@ -139,6 +139,8 @@ export function insertReceiveQuote(opts: {
         receiverKey,
         senderKey: makerKey,
         operatorKey: cfg.operatorKey,
+        operatorSignerKey: cfg.operatorSignerKey,
+        exitDelay: cfg.exitDelay,
         dust: 330n,
         topup: loan,
         assetId: WANTED_ASSET,

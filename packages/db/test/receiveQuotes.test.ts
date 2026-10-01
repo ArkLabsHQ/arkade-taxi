@@ -29,6 +29,8 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
         receiverKey: new Uint8Array(32).fill(0x11),
         senderKey: new Uint8Array(32).fill(0x22),
         operatorKey: new Uint8Array(32).fill(0x33),
+        operatorSignerKey: new Uint8Array(32).fill(0x44),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 329n,
         assetId: ASSET,
@@ -192,6 +194,41 @@ describe("receive quote repository", () => {
             JSON.stringify({ dust: "330" }),
             "receive-1",
         );
+        expect(() => repo.get("receive-1")).toThrow(/params/);
+        db.close();
+    });
+
+    it("round-trips the exit params through params_json", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(
+            repo,
+            policy,
+            quote({
+                params: {
+                    ...quote().params,
+                    operatorSignerKey: new Uint8Array(32).fill(9),
+                    exitDelay: { value: 86_016n, type: "seconds" as const },
+                },
+            }),
+        );
+        const { params } = repo.get("receive-1")!;
+        expect(params.operatorSignerKey).toEqual(new Uint8Array(32).fill(9));
+        expect(params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+        db.close();
+    });
+
+    it("refuses a stored params object missing the exit params", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        const { params_json } = db
+            .prepare<[], { params_json: string }>("SELECT params_json FROM receive_quotes")
+            .get()!;
+        const { operatorSignerKey, exitDelay, ...legacy } = JSON.parse(params_json);
+        db.prepare("UPDATE receive_quotes SET params_json = ?").run(JSON.stringify(legacy));
         expect(() => repo.get("receive-1")).toThrow(/params/);
         db.close();
     });
