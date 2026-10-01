@@ -71,7 +71,6 @@ import {
     assetArgs,
     drive,
     emulatorKey,
-    info,
     operatorKey,
     otherKey,
     params,

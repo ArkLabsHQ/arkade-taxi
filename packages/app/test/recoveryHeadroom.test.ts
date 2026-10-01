@@ -13,10 +13,13 @@ import {
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
 import type { Database } from "@arkade-taxi/db";
+// Loading these modules eagerly is what lets the mocks below apply; do not make them type-only.
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 import { createOperatorRuntime } from "../src/arkade/operatorWallet";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
 import { decodeLockupEnvelope } from "../src/arkade/psbt";
 import { buildRecoveryIntent } from "../src/arkade/recovery";
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports
 import { createServiceLifecycle } from "../src/lifecycle";
 import type { ServerDeps } from "../src/server";
 import { createRoutes } from "../src/routes";

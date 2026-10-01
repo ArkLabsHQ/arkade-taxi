@@ -710,7 +710,7 @@ export function createRecoveryRunner(deps: {
             }
             const token = randomUUID();
             const started = deps.now();
-            let advance = deps.advances.claimRecoveryLease(
+            const advance = deps.advances.claimRecoveryLease(
                 latest.id,
                 deps.workerId,
                 token,

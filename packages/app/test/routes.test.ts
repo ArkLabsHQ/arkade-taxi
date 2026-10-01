@@ -13,7 +13,6 @@ import {
     type InsertReceiveQuoteRequest,
     type ReceiveQuote,
 } from "@arkade-taxi/db";
-import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
 import type {
     ErrorResponse,

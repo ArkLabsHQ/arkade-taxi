@@ -12,7 +12,6 @@ import type {
     ClaimsSnapshotResponse,
     FareWire,
     QuoteParams,
-    ReceiveQuoteResponse,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,

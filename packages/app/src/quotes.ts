@@ -17,7 +17,6 @@ import {
     hexToBytes,
     quoteParamsToWire,
     satsFromWire,
-    satsToWire,
     type LockupResponse,
     type QuoteRequestBody,
     type QuoteResponse,
