@@ -123,4 +123,4 @@ export {
     type ValidatedSubmissionResponse,
     type ValidatedLockupSubmission,
 } from "./arkade/submit.js";
-export { ADMIN_PREFIX, createApp, type ServerDeps } from "./server.js";
+export { createAdminApp, createApp, type ServerDeps } from "./server.js";

@@ -15,8 +15,6 @@ export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "cla
     shutdownSignal?: AbortSignal;
 }
 
-export const ADMIN_PREFIX = "/admin";
-
 /**
  * Hand-rolled: `hono/cors` reads `c.res` before `next()`, which double-wraps
  * the `/v1/claims/events` SSE stream on finalize and breaks shutdown drain.
@@ -67,20 +65,30 @@ function adminDeps(deps: ServerDeps) {
     };
 }
 
-/** No /v1 handler reads a cookie, so `origin: "*"` is safe here; /admin gets
- * no CORS headers and never Allow-Credentials. */
-export function createApp(deps: ServerDeps): Hono {
-    const app = new Hono();
-    app.use("/v1/*", v1Cors());
-    app.use("*", async (c, next) => {
+function acceptingOnly(deps: ServerDeps) {
+    return async (c: Context, next: Next) => {
         if (deps.shutdownSignal?.aborted || deps.accepting?.() === false)
             return c.json({ code: "shutting_down", error: "service is shutting down" }, 503);
         await next();
-    });
+    };
+}
+
+/** No /v1 handler reads a cookie, so `origin: "*"` is safe here. */
+export function createApp(deps: ServerDeps): Hono {
+    const app = new Hono();
+    app.use("/v1/*", v1Cors());
+    app.use("*", acceptingOnly(deps));
     const claimFeed = new ReceiverClaimFeed(deps);
     deps.shutdownSignal?.addEventListener("abort", () => claimFeed.close(), { once: true });
     if (deps.shutdownSignal?.aborted) claimFeed.close();
     app.route("/", createRoutes({ ...deps, claimFeed }));
-    app.route(ADMIN_PREFIX, createAdminRouter(adminDeps(deps)));
+    return app;
+}
+
+/** Unauthenticated: serve it only where an authenticating proxy is the way in. */
+export function createAdminApp(deps: ServerDeps): Hono {
+    const app = new Hono();
+    app.use("*", acceptingOnly(deps));
+    app.route("/", createAdminRouter(adminDeps(deps)));
     return app;
 }

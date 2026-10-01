@@ -29,7 +29,8 @@ import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
-import { createApp } from "../src/server.js";
+import { createAdminApp, createApp } from "../src/server.js";
+import { INDEX_HTML } from "../src/admin/static.js";
 import type { SweeperStatus } from "../src/sweeper.js";
 import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
@@ -1619,18 +1620,18 @@ describe("GET /ready", () => {
 describe("CORS", () => {
     const wallet = { origin: "https://wallet.example" };
 
-    // createApp, not createRoutes, so /admin is reachable too.
-    const corsApp = () => {
+    const serverDeps = () => {
         const db = openDatabase(":memory:");
-        return createApp({
+        return {
             ...deps(),
             advances: new AdvanceRepository(db),
             policy: new PolicyRepository(db),
             sweeperIntervalMs: 1_000,
             sweeperRunning: () => true,
             rescan: async () => {},
-        });
+        };
     };
+    const corsApp = () => createApp(serverDeps());
 
     it("stamps Access-Control-Allow-Origin on a /v1 GET, with no credentials header", async () => {
         const res = await corsApp().request("/v1/info", { headers: wallet });
@@ -1673,9 +1674,23 @@ describe("CORS", () => {
         }
     });
 
-    it("gives /admin no CORS headers and does not answer its preflight", async () => {
+    it("serves the admin only from the admin app, behind the same shutdown guard", async () => {
         const app = corsApp();
+        expect((await app.request("/v1/info")).status).toBe(200);
+        expect((await app.request("/admin/api/status")).status).toBe(404);
+
+        const admin = createAdminApp(serverDeps());
+        expect((await admin.request("/api/status")).status).toBe(200);
+        expect((await admin.request("/admin/api/status")).status).toBe(200);
+        expect(await (await admin.request("/")).text()).toBe(INDEX_HTML);
+        const closing = createAdminApp({ ...serverDeps(), accepting: () => false });
+        expect((await closing.request("/api/status")).status).toBe(503);
+    });
+
+    it("gives /admin no CORS headers and does not answer its preflight", async () => {
+        const app = createAdminApp(serverDeps());
         const get = await app.request("/admin", { headers: wallet });
+        expect(get.status).toBe(200);
         expect(get.headers.get("access-control-allow-origin")).toBeNull();
 
         const preflight = await app.request("/admin", {

@@ -9,6 +9,7 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 export interface TaxiConfig {
     dbPath: string;
     httpPort: number;
+    adminPort?: number;
     arkdUrl: string;
     indexerUrl: string;
     emulatorUrl: string;
@@ -75,8 +76,7 @@ const port = z
     .string()
     .regex(DECIMAL, "must be a decimal port number")
     .transform((s) => Number(s))
-    .refine((n) => n >= 1 && n <= 65535, "must be between 1 and 65535")
-    .default("8080");
+    .refine((n) => n >= 1 && n <= 65535, "must be between 1 and 65535");
 
 const url = z.string().url("must be an absolute URL");
 const interval = positiveSats
@@ -86,7 +86,8 @@ const interval = positiveSats
 const SCHEMA = z
     .object({
         TAXI_DB_PATH: z.string().min(1, "must not be empty").default(":memory:"),
-        TAXI_HTTP_PORT: port,
+        TAXI_HTTP_PORT: port.default("8080"),
+        TAXI_ADMIN_PORT: port.optional(),
         TAXI_ARKD_URL: url,
         TAXI_EMULATOR_URL: url,
         TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
@@ -106,6 +107,13 @@ const SCHEMA = z
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
+        if (v.TAXI_ADMIN_PORT === v.TAXI_HTTP_PORT) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_ADMIN_PORT"],
+                message: "must differ from TAXI_HTTP_PORT",
+            });
+        }
         if (v.TAXI_RECOVERY_CRITICAL_SECONDS >= v.TAXI_RECOVERY_BROADCAST_SECONDS) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -152,6 +160,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
     return {
         dbPath: v.TAXI_DB_PATH,
         httpPort: v.TAXI_HTTP_PORT,
+        adminPort: v.TAXI_ADMIN_PORT,
         arkdUrl: v.TAXI_ARKD_URL,
         indexerUrl: v.TAXI_ARKD_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,

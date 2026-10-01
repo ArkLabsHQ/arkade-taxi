@@ -22,6 +22,7 @@ deliberate — it refuses to guess a price.
 | ---------------------------- | ---------- | -------- | ---------------------------- |
 | `TAXI_DB_PATH`               | `:memory:` | no       | path                         |
 | `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                      |
+| `TAXI_ADMIN_PORT`            | —          | no       | 1–65535                      |
 | `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                 |
 | `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                 |
 | `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key) |
@@ -63,6 +64,18 @@ The listener. The image's healthcheck reads the same variable, so they follow
 each other; what does not follow is the `EXPOSE`d port and any published mapping.
 A mismatch there shows up as a container that keeps being restarted by a probe
 that cannot reach it.
+
+### `TAXI_ADMIN_PORT`
+
+The admin console's listener: the dashboard at `/` and `/admin/`, its API under
+`/api/*` and `/admin/api/*`. Optional, with no default. Unset, Taxi opens no
+admin listener and there is no console; the public `TAXI_HTTP_PORT` never
+serves it. It must differ from `TAXI_HTTP_PORT`, or startup fails.
+
+The console has **no authentication**. Whoever reaches this port can pause
+admission and rewrite caps and fares, so keep it behind an authenticating
+reverse proxy and never publish it directly. The
+[runbook](runbook.md#deployment) covers the operator header that proxy sets.
 
 ### `TAXI_ARKD_URL` and `TAXI_EMULATOR_URL`
 
