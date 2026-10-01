@@ -12,9 +12,8 @@ const STATES = [
     "expired",
 ];
 
-const SATS_FIELDS = ["feeFlatSats", "maxOutstandingSats", "maxPerPaymentTopupSats"];
+const SATS_FIELDS = ["maxOutstandingSats", "maxPerPaymentTopupSats"];
 const INT_FIELDS = [
-    "feeBps",
     "maxConcurrentAdvances",
     "locktimeMarginBlocks",
     "locktimeMarginSeconds",
@@ -305,12 +304,22 @@ function renderHistory(rows) {
     $("history-empty").hidden = rows.length > 0;
 }
 
+// The wire spells a fare's currency as its bare kind, a token's assetId beside
+// it; PATCH wants { kind, assetId }. unclaimedMode is output-only.
+function editableRules(rules) {
+    return rules.map(({ unclaimedMode, ...rule }) => ({
+        ...rule,
+        fares: rule.fares.map(({ id, currency, assetId, ...fare }) => ({
+            id,
+            currency: currency === "token" ? { kind: currency, assetId } : { kind: currency },
+            ...fare,
+        })),
+    }));
+}
+
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("allowAnyAsset").checked = policy.assetAllowlist === null;
-    $("assetAllowlist").value =
-        policy.assetAllowlist === null ? "" : policy.assetAllowlist.join(", ");
-    $("assetAllowlist").disabled = policy.assetAllowlist === null;
+    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
@@ -320,7 +329,7 @@ function renderServiceState(paused) {
     pill.classList.toggle("pill--attention", paused);
 }
 
-function policyPatch() {
+function policyPatch(rules) {
     const patch = {};
     for (const f of SATS_FIELDS) {
         const v = $(f).value.trim();
@@ -330,14 +339,8 @@ function policyPatch() {
         const v = Number($(f).value);
         if (v !== view.policy[f]) patch[f] = v;
     }
-    const allow = $("allowAnyAsset").checked
-        ? null
-        : $("assetAllowlist")
-              .value.split(",")
-              .map((s) => s.trim())
-              .filter((s) => s !== "");
-    if (JSON.stringify(allow) !== JSON.stringify(view.policy.assetAllowlist)) {
-        patch.assetAllowlist = allow;
+    if (JSON.stringify(rules) !== JSON.stringify(editableRules(view.policy.assetRules))) {
+        patch.assetRules = rules;
     }
     return patch;
 }
@@ -499,10 +502,6 @@ function wire() {
         filter.append(opt);
     }
 
-    $("allowAnyAsset").addEventListener("change", (e) => {
-        $("assetAllowlist").disabled = e.target.checked;
-    });
-
     filter.addEventListener("change", () => {
         loadAdvances(false).catch((e) => setNote("advances-note", e.message, true));
     });
@@ -538,7 +537,14 @@ function wire() {
 
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        const patch = policyPatch();
+        let rules;
+        try {
+            rules = JSON.parse($("assetRules").value);
+        } catch (err) {
+            setNote("policy-note", "Asset rules: " + err.message, true);
+            return;
+        }
+        const patch = policyPatch(rules);
         if (Object.keys(patch).length === 0) {
             setNote("policy-note", "nothing changed", false);
             return;

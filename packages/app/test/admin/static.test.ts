@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
+import { policy } from "../fixtures.js";
 import { harness } from "./fixtures.js";
 
 const asset = (name: string): string =>
@@ -82,9 +83,13 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown>) {
+function runDashboard(
+    fetchAdvances: (path: string) => unknown | Promise<unknown>,
+    admin = harness(),
+) {
     const elements = new Map<string, DashboardElement>();
     const element = (id: string) => {
+        if (!INDEX_HTML.includes(`id="${id}"`)) throw new Error(`index.html has no #${id}`);
         if (!elements.has(id)) elements.set(id, new DashboardElement());
         return elements.get(id)!;
     };
@@ -95,7 +100,7 @@ function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown
         statusText: "OK",
         text: async () => JSON.stringify(body),
     });
-    const fetch = async (path: string) => {
+    const fetch = async (path: string, init?: { headers?: Record<string, string> }) => {
         requests.push(path);
         if (path.startsWith("/admin/api/advances")) {
             const result: any = await fetchAdvances(path);
@@ -144,17 +149,10 @@ function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown
                     sweeper: { nearestDeadline: { height: null, time: null } },
                 },
             });
-        if (path === "/admin/api/policy/history?limit=50") return response({ history: [] });
-        return response({
-            feeFlatSats: "0",
-            feeBps: 0,
-            maxOutstandingSats: "0",
-            maxPerPaymentTopupSats: "0",
-            maxConcurrentAdvances: 0,
-            locktimeMarginBlocks: 73,
-            locktimeMarginSeconds: 43_201,
-            quoteTtlSeconds: 60,
-            assetAllowlist: null,
+        // The authenticating proxy, not the page, supplies the operator header.
+        return admin.app.request(path, {
+            ...init,
+            headers: { ...init?.headers, "x-taxi-operator": "console-operator" },
         });
     };
     const document = {
@@ -520,5 +518,61 @@ describe("the dashboard is dependency-free", () => {
         expect(advanceRequests[1]).toContain("snapshot=" + firstToken);
         expect(dashboard.element("advances-count").textContent).toContain("1 loaded · 1");
         expect(dashboard.element("advances-more").hidden).toBe(true);
+    });
+
+    it("edits the real policy wire's asset rules into a PATCH the router accepts", async () => {
+        const admin = harness();
+        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const seeded = admin.policy.update(
+            policy({
+                assetRules: [
+                    ...policy().assetRules,
+                    {
+                        assetId: token,
+                        enabled: true,
+                        fares: [
+                            {
+                                id: "token",
+                                currency: { kind: "token", assetId: token },
+                                pricing: { kind: "flat", units: 1n },
+                            },
+                        ],
+                        claim: "recycle",
+                        maxTopupSats: 500n,
+                    },
+                ],
+            }),
+            "seed",
+        );
+        const dashboard = runDashboard(() => dashboardPage([], "7".repeat(64), null), admin);
+        const note = () => dashboard.element("policy-note").textContent;
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent, note()).toMatch(/^loaded/),
+        );
+        expect(note()).toBe("");
+        expect(dashboard.element("maxConcurrentAdvances").value).toBe(seeded.maxConcurrentAdvances);
+
+        const rules = JSON.parse(dashboard.element("assetRules").value);
+        rules[1].enabled = false;
+        const edited = JSON.stringify(rules);
+        dashboard.element("assetRules").value = edited;
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("assetRules").value, note()).not.toBe(edited),
+        );
+        expect(note()).toBe("request accepted");
+        expect(JSON.parse(dashboard.element("assetRules").value)).toEqual(rules);
+        expect(admin.policy.get().assetRules).toEqual([
+            seeded.assetRules[0],
+            { ...seeded.assetRules[1], enabled: false },
+        ]);
+
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toBe("nothing changed");
+        const sent = dashboard.requests.length;
+        dashboard.element("assetRules").value = "[";
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toMatch(/^Asset rules: /);
+        expect(dashboard.requests).toHaveLength(sent);
     });
 });

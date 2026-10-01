@@ -129,14 +129,6 @@ export const INDEX_HTML = `<!doctype html>
 
                         <form id="policy-form" class="form-grid" novalidate>
                             <p class="field">
-                                <label for="feeFlatSats">Flat fee (sats)</label>
-                                <input type="text" id="feeFlatSats" inputmode="numeric" />
-                            </p>
-                            <p class="field">
-                                <label for="feeBps">Fee (bps)</label>
-                                <input type="number" id="feeBps" min="0" max="10000" step="1" />
-                            </p>
-                            <p class="field">
                                 <label for="maxOutstandingSats">Max outstanding (sats)</label>
                                 <input type="text" id="maxOutstandingSats" inputmode="numeric" />
                             </p>
@@ -167,17 +159,8 @@ export const INDEX_HTML = `<!doctype html>
                                 <input type="number" id="quoteTtlSeconds" min="1" step="1" />
                             </p>
                             <p class="field field--wide">
-                                <label for="assetAllowlist">Asset allowlist</label>
-                                <input
-                                    type="text"
-                                    id="assetAllowlist"
-                                    spellcheck="false"
-                                    placeholder="comma separated"
-                                />
-                                <label class="check">
-                                    <input type="checkbox" id="allowAnyAsset" />
-                                    Accept every asset
-                                </label>
+                                <label for="assetRules">Asset rules (JSON)</label>
+                                <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
                             <div class="actions">
                                 <button type="submit" class="primary" id="apply">Apply</button>
@@ -688,7 +671,8 @@ body.is-alarm .headline__sweeper {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
     width: 100%;
     padding: 6px 8px;
     background: #0c0e11;
@@ -699,7 +683,8 @@ select {
 }
 
 input[type="text"]:hover,
-select:hover {
+select:hover,
+textarea:hover {
     border-color: #48515b;
 }
 
@@ -889,9 +874,8 @@ const STATES = [
     "expired",
 ];
 
-const SATS_FIELDS = ["feeFlatSats", "maxOutstandingSats", "maxPerPaymentTopupSats"];
+const SATS_FIELDS = ["maxOutstandingSats", "maxPerPaymentTopupSats"];
 const INT_FIELDS = [
-    "feeBps",
     "maxConcurrentAdvances",
     "locktimeMarginBlocks",
     "locktimeMarginSeconds",
@@ -1182,12 +1166,22 @@ function renderHistory(rows) {
     $("history-empty").hidden = rows.length > 0;
 }
 
+// The wire spells a fare's currency as its bare kind, a token's assetId beside
+// it; PATCH wants { kind, assetId }. unclaimedMode is output-only.
+function editableRules(rules) {
+    return rules.map(({ unclaimedMode, ...rule }) => ({
+        ...rule,
+        fares: rule.fares.map(({ id, currency, assetId, ...fare }) => ({
+            id,
+            currency: currency === "token" ? { kind: currency, assetId } : { kind: currency },
+            ...fare,
+        })),
+    }));
+}
+
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("allowAnyAsset").checked = policy.assetAllowlist === null;
-    $("assetAllowlist").value =
-        policy.assetAllowlist === null ? "" : policy.assetAllowlist.join(", ");
-    $("assetAllowlist").disabled = policy.assetAllowlist === null;
+    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
@@ -1197,7 +1191,7 @@ function renderServiceState(paused) {
     pill.classList.toggle("pill--attention", paused);
 }
 
-function policyPatch() {
+function policyPatch(rules) {
     const patch = {};
     for (const f of SATS_FIELDS) {
         const v = $(f).value.trim();
@@ -1207,14 +1201,8 @@ function policyPatch() {
         const v = Number($(f).value);
         if (v !== view.policy[f]) patch[f] = v;
     }
-    const allow = $("allowAnyAsset").checked
-        ? null
-        : $("assetAllowlist")
-              .value.split(",")
-              .map((s) => s.trim())
-              .filter((s) => s !== "");
-    if (JSON.stringify(allow) !== JSON.stringify(view.policy.assetAllowlist)) {
-        patch.assetAllowlist = allow;
+    if (JSON.stringify(rules) !== JSON.stringify(editableRules(view.policy.assetRules))) {
+        patch.assetRules = rules;
     }
     return patch;
 }
@@ -1376,10 +1364,6 @@ function wire() {
         filter.append(opt);
     }
 
-    $("allowAnyAsset").addEventListener("change", (e) => {
-        $("assetAllowlist").disabled = e.target.checked;
-    });
-
     filter.addEventListener("change", () => {
         loadAdvances(false).catch((e) => setNote("advances-note", e.message, true));
     });
@@ -1415,7 +1399,14 @@ function wire() {
 
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        const patch = policyPatch();
+        let rules;
+        try {
+            rules = JSON.parse($("assetRules").value);
+        } catch (err) {
+            setNote("policy-note", "Asset rules: " + err.message, true);
+            return;
+        }
+        const patch = policyPatch(rules);
         if (Object.keys(patch).length === 0) {
             setNote("policy-note", "nothing changed", false);
             return;

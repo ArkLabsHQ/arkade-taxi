@@ -427,7 +427,8 @@ body.is-alarm .headline__sweeper {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
     width: 100%;
     padding: 6px 8px;
     background: #0c0e11;
@@ -438,7 +439,8 @@ select {
 }
 
 input[type="text"]:hover,
-select:hover {
+select:hover,
+textarea:hover {
     border-color: #48515b;
 }
 

@@ -118,14 +118,6 @@
 
                         <form id="policy-form" class="form-grid" novalidate>
                             <p class="field">
-                                <label for="feeFlatSats">Flat fee (sats)</label>
-                                <input type="text" id="feeFlatSats" inputmode="numeric" />
-                            </p>
-                            <p class="field">
-                                <label for="feeBps">Fee (bps)</label>
-                                <input type="number" id="feeBps" min="0" max="10000" step="1" />
-                            </p>
-                            <p class="field">
                                 <label for="maxOutstandingSats">Max outstanding (sats)</label>
                                 <input type="text" id="maxOutstandingSats" inputmode="numeric" />
                             </p>
@@ -156,17 +148,8 @@
                                 <input type="number" id="quoteTtlSeconds" min="1" step="1" />
                             </p>
                             <p class="field field--wide">
-                                <label for="assetAllowlist">Asset allowlist</label>
-                                <input
-                                    type="text"
-                                    id="assetAllowlist"
-                                    spellcheck="false"
-                                    placeholder="comma separated"
-                                />
-                                <label class="check">
-                                    <input type="checkbox" id="allowAnyAsset" />
-                                    Accept every asset
-                                </label>
+                                <label for="assetRules">Asset rules (JSON)</label>
+                                <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
                             <div class="actions">
                                 <button type="submit" class="primary" id="apply">Apply</button>
