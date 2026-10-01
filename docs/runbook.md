@@ -241,6 +241,10 @@ every coin would be renewed as it arrives: readiness reports
 `renewal_threshold_exceeds_vtxo_lifetime` and admission stays closed, while
 recovery continues, until the threshold is lowered below the VTXO lifetime.
 
+The SDK's deprecated-signer migration is turned off. It moves coins with an
+offchain send, which would bypass that guard and the held-coin filter, and the
+Taxi already closes its wallet when arkd's signer changes.
+
 ## Backup and restore
 
 1. Pause admission and inspect every active deadline. Schedule a backup only

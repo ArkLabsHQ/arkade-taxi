@@ -164,6 +164,7 @@ export function createOperatorRuntime(
                         storage,
                         settlementConfig: {
                             vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
+                            deprecatedSignerMigration: false,
                         },
                     }),
                 );

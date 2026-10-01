@@ -567,10 +567,13 @@ describe("persistent operator runtime safety", () => {
         expect((await s.runtime.refresh()).chainTime).toBeNull();
         expect(s.runtime.safety().blockers).toContain("chain_tip_unavailable");
     });
-    it("runs the SDK's background settlement, renewing at the configured threshold", async () => {
+    it("runs the SDK's background settlement at the configured threshold, without signer migration", async () => {
         const s = setup();
         await s.runtime.refresh();
-        expect(s.walletConfig.settlementConfig).toEqual({ vtxoThreshold: 259_200 });
+        expect(s.walletConfig.settlementConfig).toEqual({
+            vtxoThreshold: 259_200,
+            deprecatedSignerMigration: false,
+        });
     });
     it("starts closed, opens only after fresh provider/wallet/tip checks, and preserves DB ownership", async () => {
         const { runtime, db } = setup();
