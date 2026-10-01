@@ -49,6 +49,9 @@ exceed `TAXI_MIN_EXPIRY_HEADROOM_SECONDS`, so coins are renewed before they cost
 admission. The Taxi never commits a coin inside that window and does not count
 it as usable inventory. Lower it below the Arkade Service's VTXO lifetime when
 that is three days or less, or the SDK would renew every coin as it arrives.
+arkd does not advertise that lifetime, so the Taxi reads it off its own batch
+coins (expiry minus creation) and closes admission with
+`renewal_threshold_exceeds_vtxo_lifetime` when it is at or below the threshold.
 `TAXI_RECONCILE_INTERVAL_MS=30000` controls refresh and snapshot staleness;
 `TAXI_OPERATOR_MIN_RESERVE_SATS=10000` requires verified usable wallet capacity.
 The live policy has separate `locktimeMarginBlocks=144` and

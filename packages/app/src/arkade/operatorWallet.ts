@@ -24,6 +24,7 @@ const admissionOnlyBlockers = new Set([
     "vtxo_expiry_headroom",
     "vtxo_expiry_unknown",
     "operator_reserve_low",
+    "renewal_threshold_exceeds_vtxo_lifetime",
 ]);
 
 type SettlementGuard = (
@@ -269,6 +270,15 @@ export function createOperatorRuntime(
                         result.blockers.push("vtxo_expiry_unknown");
                         continue;
                     }
+                    // arkd advertises no VTXO lifetime; a batch output's own span is it.
+                    const born = Math.floor(new Date(coin.createdAt).getTime() / 1000);
+                    if (
+                        expiry.kind === "time" &&
+                        coin.isPreconfirmed === false &&
+                        Number.isSafeInteger(born) &&
+                        expiry.value - BigInt(born) <= config.vtxoRenewalThresholdSeconds
+                    )
+                        result.blockers.push("renewal_threshold_exceeds_vtxo_lifetime");
                     const clock = expiry.kind === "height" ? result.chainHeight : result.chainTime;
                     const headroom =
                         expiry.kind === "height"

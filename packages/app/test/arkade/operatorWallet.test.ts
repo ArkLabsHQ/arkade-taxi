@@ -532,6 +532,30 @@ describe("persistent operator runtime safety", () => {
         expect(state.inventory).toMatchObject({ usableSats: 0n, usableVtxos: 0 });
         expect(state.blockers).not.toContain("vtxo_expiry_headroom");
     });
+    it("closes admission, not recovery, when batch coins live no longer than the renewal threshold", async () => {
+        const s = setup();
+        const born = Math.floor(Date.now() / 1000);
+        const coin = (lifetime: number, isPreconfirmed: boolean) => ({
+            isPreconfirmed,
+            createdAt: new Date(born * 1000),
+            expiresAtHeight: undefined,
+            expiresAt: new Date((born + lifetime) * 1000),
+        });
+        const flagged = async () =>
+            (await s.runtime.refresh()).blockers.includes(
+                "renewal_threshold_exceeds_vtxo_lifetime",
+            );
+
+        s.setCoin(coin(259_201, false));
+        expect(await flagged()).toBe(false);
+        // Received offchain, a coin keeps its batch's expiry: its own span is not the lifetime.
+        s.setCoin(coin(3_600, true));
+        expect(await flagged()).toBe(false);
+        s.setCoin(coin(259_200, false));
+        expect(await flagged()).toBe(true);
+        await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
+        await expect(s.runtime.assertAdmission()).rejects.toMatchObject({ status: 503 });
+    });
     it("uses MTP and seconds budgets for timestamp expiry and rejects unknown MTP", async () => {
         const s = setup();
         s.setExpiryTime(new Date((1789132000 + 86401) * 1000));

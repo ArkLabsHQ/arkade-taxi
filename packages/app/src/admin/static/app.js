@@ -89,6 +89,10 @@ const BLOCKER_GROUPS = [
     ["The wallet holds a coin whose expiry the Taxi cannot read.", "vtxo_expiry_unknown"],
     ["Some of the Taxi's coins expire too soon to lend.", "vtxo_expiry_headroom"],
     [
+        "This network's coins live no longer than TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS, so every coin is renewed as it arrives and none can be lent. Lower TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS below the network's VTXO lifetime.",
+        "renewal_threshold_exceeds_vtxo_lifetime",
+    ],
+    [
         "The Taxi has not finished its first check of payments in progress.",
         "reconciler_not_started",
     ],

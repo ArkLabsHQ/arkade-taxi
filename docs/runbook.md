@@ -236,7 +236,10 @@ replaced before they reach the expiry headroom that closes admission. It never
 runs alongside the proceeds collector's settlement and never spends a coin the
 Taxi holds for a quote, a lockup, a swap fill or a proceeds job, nor a subdust
 receipt the collector consolidates. The Taxi in turn never commits a coin inside
-the renewal window.
+the renewal window. If the network's coins live no longer than that threshold,
+every coin would be renewed as it arrives: readiness reports
+`renewal_threshold_exceeds_vtxo_lifetime` and admission stays closed, while
+recovery continues, until the threshold is lowered below the VTXO lifetime.
 
 ## Backup and restore
 
