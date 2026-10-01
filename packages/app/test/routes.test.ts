@@ -1700,6 +1700,47 @@ describe("CORS", () => {
         expect((await closing.request("/api/status")).status).toBe(503);
     });
 
+    it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
+        let nowMs = 1_000_000;
+        let reads = 0;
+        let failing = false;
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        const admin = createAdminApp({
+            ...serverDeps(),
+            nowMs: () => nowMs,
+            inventory: {
+                getLockedVtxoOutpoints: async () => [],
+                getSpendableVtxos: async () => {
+                    reads++;
+                    await gate;
+                    if (failing) throw new Error("wallet unavailable");
+                    return [fundingCoin()];
+                },
+            },
+        });
+        const funding = async () => (await admin.request("/api/funding")).status;
+
+        const concurrent = [funding(), funding()];
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(reads).toBe(1);
+        release();
+        expect(await Promise.all(concurrent)).toEqual([200, 200]);
+        nowMs += 9_999;
+        expect(await funding()).toBe(200);
+        expect(reads).toBe(1);
+        nowMs += 1;
+        expect(await funding()).toBe(200);
+        expect(reads).toBe(2);
+
+        nowMs += 10_000;
+        failing = true;
+        expect(await funding()).toBe(503);
+        failing = false;
+        expect(await funding()).toBe(200);
+        expect(reads).toBe(4);
+    });
+
     it("gives /admin no CORS headers and does not answer its preflight", async () => {
         const app = createAdminApp(serverDeps());
         const get = await app.request("/admin", { headers: wallet });

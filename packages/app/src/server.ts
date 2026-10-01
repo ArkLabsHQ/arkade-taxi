@@ -32,6 +32,24 @@ function v1Cors() {
     };
 }
 
+const FUNDING_TTL_MS = 10_000;
+
+/** Concurrent and repeated funding requests share one wallet read for
+ * FUNDING_TTL_MS. A rejected read is dropped, so the next request retries. */
+function fundingRead<T>(read: () => Promise<T>, nowMs: () => number): () => Promise<T> {
+    let entry: { at: number; value: Promise<T> } | undefined;
+    return () => {
+        if (!entry || nowMs() - entry.at >= FUNDING_TTL_MS) {
+            const current = { at: nowMs(), value: read() };
+            current.value.catch(() => {
+                if (entry === current) entry = undefined;
+            });
+            entry = current;
+        }
+        return entry.value;
+    };
+}
+
 /**
  * The admin surface reads `lastTickAt` as epoch MILLISECONDS, while the ledger
  * — and so the sweeper — keeps unix seconds to match `QuoteResponse.expiresAt`.
@@ -39,6 +57,7 @@ function v1Cors() {
  * other's unit.
  */
 function adminDeps(deps: ServerDeps) {
+    const coins = fundingRead(() => deps.inventory.getSpendableVtxos(), deps.nowMs);
     return {
         advances: deps.advances,
         policy: deps.policy,
@@ -65,7 +84,7 @@ function adminDeps(deps: ServerDeps) {
         funding: async () => ({
             config: deps.config,
             inventory: deps.runtime.safety().inventory,
-            coins: await deps.inventory.getSpendableVtxos(),
+            coins: await coins(),
         }),
     };
 }
