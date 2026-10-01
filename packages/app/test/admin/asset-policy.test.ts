@@ -49,6 +49,27 @@ describe("admin asset policy wire boundary", () => {
         ).toEqual({ ok: false, reason: "asset_not_served" });
     });
 
+    it("accepts a free purchase rule and audits exactly what was saved", async () => {
+        const h = harness();
+        const free = {
+            ...rule(),
+            claim: "purchase",
+            fares: [
+                { id: "free", currency: { kind: "sats" }, pricing: { kind: "flat", units: "0" } },
+            ],
+        };
+        const response = await h.send(
+            "/admin/api/policy",
+            "PATCH",
+            { assetRules: [free] },
+            "alice",
+        );
+        expect(response.status).toBe(200);
+        const [row] = h.policy.history(1);
+        expect(row).toMatchObject({ field: "assetRules", actor: "alice" });
+        expect(JSON.parse(row!.newValue)).toEqual([free]);
+    });
+
     it("round-trips the any-asset rule through PATCH, SQLite and GET", async () => {
         const h = harness();
         const response = await h.send("/admin/api/policy", "PATCH", {

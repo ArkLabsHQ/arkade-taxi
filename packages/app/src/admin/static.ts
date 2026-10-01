@@ -319,6 +319,16 @@ export const INDEX_HTML = `<!doctype html>
                                     No rules yet: the Taxi refuses every payment.
                                 </p>
                             </div>
+                            <div class="confirm" id="rules-giveaway" role="alert" hidden>
+                                <p>
+                                    Payers could take the carrier sats for free; you would pay every
+                                    carrier yourself. <span id="rules-giveaway-which"></span>
+                                </p>
+                                <label class="check" for="rules-giveaway-ok">
+                                    <input type="checkbox" id="rules-giveaway-ok" />
+                                    Give carriers away for free
+                                </label>
+                            </div>
                             <div class="actions">
                                 <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
                                 <button type="button" id="rule-add-any">Add any asset</button>
@@ -656,7 +666,16 @@ export const INDEX_HTML = `<!doctype html>
                             >
                         </label>
                     </fieldset>
-                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                    <div class="confirm" id="wiz-giveaway" role="alert" hidden>
+                        <p>
+                            Payers could take the carrier sats for free; you would pay every carrier
+                            yourself.
+                        </p>
+                        <label class="check" for="wiz-giveaway-ok">
+                            <input type="checkbox" id="wiz-giveaway-ok" />
+                            Give carriers away for free
+                        </label>
+                    </div>
                 </section>
 
                 <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
@@ -933,7 +952,8 @@ main {
     font: 400 11px/1.5 var(--mono);
 }
 
-.step__confirm {
+.step__confirm,
+.confirm {
     margin-top: 8px;
     padding: 8px 10px;
     border-left: 2px solid var(--accent);
@@ -942,7 +962,8 @@ main {
     font: 400 12.5px/1.5 var(--sans);
 }
 
-.step__confirm p {
+.step__confirm p,
+.confirm p {
     margin: 0 0 8px;
 }
 
@@ -2222,6 +2243,37 @@ const CLAIM_SUMMARY = {
     either: "Each payer chooses whether the receiver repays the lent sats; without a choice, they do.",
 };
 
+const GIVEAWAY =
+    "Payers could take the carrier sats for free; you would pay every carrier yourself.";
+
+const isZero = (units) => /^0*$/.test(String(units));
+
+// A fare a payer can bring to 0: flat 0, or a percentage with no minimum of a
+// base they can shrink. An asset fare's base is the amount sent; a sats fare's
+// is the loan, which is the whole dust for an asset and down to vtxoMinAmount
+// for bitcoin.
+function canBeFree(rule, fare) {
+    const p = fare.pricing;
+    if (p.kind === "flat") return isZero(p.units);
+    if (!isZero(p.minUnits)) return false;
+    if (fare.currency.kind !== "sats") return p.bps < 10000;
+    const status = view.status || {};
+    return (
+        p.bps * Number((rule.assetId === null ? status.vtxoMinAmount : status.dust) || 1) < 10000
+    );
+}
+
+// A purchased carrier is never repaid, so a free fare under purchase or either
+// hands the payer the Taxi's sats.
+function giveaways(rules) {
+    return rules.filter(
+        (rule) =>
+            rule.enabled &&
+            rule.claim !== "recycle" &&
+            rule.fares.some((fare) => canBeFree(rule, fare)),
+    );
+}
+
 const assetLines = () =>
     $("wiz-assets")
         .value.split("\\n")
@@ -2235,6 +2287,7 @@ function openWizard() {
     $("wiz-btc").checked = true;
     $("wiz-any").checked = false;
     $("wiz-fare-asset").checked = false;
+    $("wiz-giveaway-ok").checked = false;
     for (const id of [
         "wiz-assets",
         "wiz-per-payment",
@@ -2280,12 +2333,8 @@ function renderWizard() {
     $("wiz-fare-asset-row").hidden =
         wizard.fare === "free" || (assetLines().length === 0 && !$("wiz-any").checked);
     $("wiz-fare-btc-warn").hidden = wizard.fare === "free" || !$("wiz-btc").checked;
-    const giveaway = wizard.fare === "free" && wizard.claim !== "recycle";
-    $("wiz-claim-warn").hidden = !giveaway;
-    $("wiz-claim-warn").textContent =
-        wizard.claim === "purchase"
-            ? "With no fare, selling outright gives the lent sats away on every payment."
-            : "With no fare, a payer who chooses to sell outright gets the lent sats for nothing.";
+    $("wiz-giveaway").hidden =
+        wizard.step !== 3 || giveaways(wizardPatch().assetRules).length === 0;
     setNote("wiz-note", "", false);
 }
 
@@ -2317,6 +2366,12 @@ function wizardProblem() {
         if (!WHOLE.test(min) || (max && (!WHOLE.test(max) || BigInt(max) < BigInt(min))))
             return "The minimum and maximum are whole numbers of sats, the maximum not below the minimum.";
     }
+    if (
+        wizard.step === 3 &&
+        giveaways(wizardPatch().assetRules).length &&
+        !$("wiz-giveaway-ok").checked
+    )
+        return GIVEAWAY;
     return null;
 }
 
@@ -2572,6 +2627,7 @@ function editableRules(rules) {
 
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
+    $("rules-giveaway-ok").checked = false;
     view.rules = JSON.parse(JSON.stringify(editableRules(policy.assetRules)));
     editRules(() => {}, true);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
@@ -2625,6 +2681,15 @@ function editRules(change, rerender) {
     change();
     $("assetRules").value = JSON.stringify(view.rules, null, 2);
     if (rerender) renderRules();
+    renderGiveaway();
+}
+
+function renderGiveaway() {
+    const free = giveaways(view.rules);
+    $("rules-giveaway").hidden = free.length === 0;
+    $("rules-giveaway-which").textContent = free.length
+        ? "Affects: " + free.map((rule) => assetLabel(rule.assetId)).join(", ") + "."
+        : "";
 }
 
 function control(tag, name, label) {
@@ -2817,6 +2882,7 @@ function readJsonRules() {
     if (!tableable) return "expected a list of rules, each with a list of fares";
     view.rules = rules;
     renderRules();
+    renderGiveaway();
     return null;
 }
 
@@ -3135,6 +3201,12 @@ function wire() {
             setNote("policy-note", "nothing changed", false);
             return;
         }
+        if (
+            patch.assetRules &&
+            giveaways(patch.assetRules).length &&
+            !$("rules-giveaway-ok").checked
+        )
+            return setNote("policy-note", GIVEAWAY, true);
         mutate(() => patchPolicy(patch), "policy-note");
     });
 

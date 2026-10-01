@@ -652,6 +652,8 @@ describe("the dashboard is dependency-free", () => {
         rules[1].enabled = false;
         const edited = JSON.stringify(rules);
         dashboard.element("assetRules").value = edited;
+        // The fixture's bitcoin rule is "either" with a free fare.
+        dashboard.element("rules-giveaway-ok").checked = true;
         dashboard.element("policy-form").fire("submit");
         await vi.waitFor(() =>
             expect(dashboard.element("assetRules").value, note()).not.toBe(edited),
@@ -705,6 +707,7 @@ describe("the dashboard is dependency-free", () => {
             },
         ]);
 
+        dashboard.element("rules-giveaway-ok").checked = true;
         dashboard.element("policy-form").fire("submit");
         await vi.waitFor(() =>
             expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
@@ -798,17 +801,18 @@ describe("the dashboard is dependency-free", () => {
     });
 });
 
-describe("the any-asset rule", () => {
-    const loaded = async (admin: Harness, realStatus = false) => {
-        const dashboard = runDashboard(() => dashboardPage([], "9".repeat(64), null), admin, {
-            realStatus,
-        });
-        await vi.waitFor(() =>
-            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
-        );
-        return dashboard;
-    };
+const loaded = async (admin: Harness, realStatus = false) => {
+    const dashboard = runDashboard(() => dashboardPage([], "9".repeat(64), null), admin, {
+        realStatus,
+    });
+    await vi.waitFor(() => {
+        expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/);
+        expect(dashboard.element("updated").textContent).toMatch(/^updated/);
+    });
+    return dashboard;
+};
 
+describe("the any-asset rule", () => {
     it("is added from the settings table once, and saved as *", async () => {
         const admin = harness();
         const dashboard = await loaded(admin);
@@ -842,6 +846,111 @@ describe("the any-asset rule", () => {
         await vi.waitFor(() =>
             expect(admin.policy.get().assetRules.map((rule) => rule.assetId)).toEqual(["*"]),
         );
+    });
+});
+
+describe("giving carriers away", () => {
+    const GIVEAWAY =
+        "Payers could take the carrier sats for free; you would pay every carrier yourself.";
+
+    it("is refused in the wizard until the operator ticks the override", async () => {
+        const admin = harness({ operationalSnapshot: () => readiness([]) });
+        const dashboard = await loaded(admin, true);
+        const click = (id: string) => dashboard.element(id).fire("click");
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        click("wiz-next");
+        click("wiz-next");
+        dashboard.element("wiz-claim-either").fire("change");
+        expect(dashboard.element("wiz-giveaway").hidden).toBe(false);
+        click("wiz-next");
+        expect(dashboard.element("wiz-note").textContent).toBe(GIVEAWAY);
+        expect(dashboard.element("wizard-progress").textContent).toBe("Step 3 of 4");
+
+        dashboard.element("wiz-claim-recycle").fire("change");
+        expect(dashboard.element("wiz-giveaway").hidden).toBe(true);
+        dashboard.element("wiz-claim-purchase").fire("change");
+        dashboard.element("wiz-giveaway-ok").checked = true;
+        click("wiz-next");
+        click("wiz-save");
+        await vi.waitFor(() =>
+            expect(admin.policy.get().assetRules).toMatchObject([
+                { assetId: null, claim: "purchase" },
+            ]),
+        );
+    });
+
+    it("is refused in the settings table until the operator ticks the override", async () => {
+        const admin = harness();
+        const dashboard = await loaded(admin);
+        const note = () => dashboard.element("policy-note").textContent;
+        dashboard.element("rule-add-bitcoin").fire("click");
+        const claim = named(dashboard.element("rules-body").children[0]!, "claim")[0]!;
+        claim.value = "purchase";
+        claim.fire("change");
+        expect(dashboard.element("rules-giveaway").hidden).toBe(false);
+
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toBe(GIVEAWAY);
+        expect(dashboard.sent).toEqual([]);
+
+        dashboard.element("rules-giveaway-ok").checked = true;
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() => expect(note()).toBe("request accepted"));
+        expect(admin.policy.get().assetRules[0]!.claim).toBe("purchase");
+    });
+
+    const paid = { id: "paid", currency: { kind: "sats" }, pricing: { kind: "flat", units: "1" } };
+    const free = { ...paid, id: "free", pricing: { kind: "flat", units: "0" } };
+    const percent = (kind: string, bps: number, minUnits: string) => ({
+        id: "percent",
+        currency: { kind },
+        pricing: { kind: "proportional", bps, minUnits, maxUnits: null },
+    });
+    const rule = (over: object) => ({
+        assetId: null,
+        enabled: true,
+        claim: "purchase",
+        maxTopupSats: null,
+        fares: [free],
+        ...over,
+    });
+
+    // The fake status says dust 330 and vtxoMinAmount 10: an asset payment
+    // borrows the whole dust, a bitcoin one as little as 10 sats.
+    it.each([
+        ["purchase with a flat 0 fare", rule({}), true],
+        [
+            "either with a flat 0 fare among others",
+            rule({ claim: "either", fares: [paid, free] }),
+            true,
+        ],
+        ["recycle with a flat 0 fare", rule({ claim: "recycle" }), false],
+        ["a switched-off rule", rule({ enabled: false }), false],
+        ["a flat 1 fare", rule({ fares: [paid] }), false],
+        [
+            "a share of the asset sent, no minimum",
+            rule({ fares: [percent("sameAsset", 500, "0")] }),
+            true,
+        ],
+        [
+            "a share of the asset sent, minimum 1",
+            rule({ fares: [percent("sameAsset", 500, "1")] }),
+            false,
+        ],
+        [
+            "0.3% of the dust an asset borrows",
+            rule({ assetId: "*", fares: [percent("sats", 30, "0")] }),
+            true,
+        ],
+        [
+            "1% of the dust an asset borrows",
+            rule({ assetId: "*", fares: [percent("sats", 100, "0")] }),
+            false,
+        ],
+        ["1% of the least bitcoin borrows", rule({ fares: [percent("sats", 100, "0")] }), true],
+    ])("decides whether %s is free to take", async (_label, value, flagged) => {
+        const dashboard = await loaded(harness());
+        expect(dashboard.context.giveaways([value]).length > 0).toBe(flagged);
     });
 });
 

@@ -308,6 +308,16 @@
                                     No rules yet: the Taxi refuses every payment.
                                 </p>
                             </div>
+                            <div class="confirm" id="rules-giveaway" role="alert" hidden>
+                                <p>
+                                    Payers could take the carrier sats for free; you would pay every
+                                    carrier yourself. <span id="rules-giveaway-which"></span>
+                                </p>
+                                <label class="check" for="rules-giveaway-ok">
+                                    <input type="checkbox" id="rules-giveaway-ok" />
+                                    Give carriers away for free
+                                </label>
+                            </div>
                             <div class="actions">
                                 <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
                                 <button type="button" id="rule-add-any">Add any asset</button>
@@ -645,7 +655,16 @@
                             >
                         </label>
                     </fieldset>
-                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                    <div class="confirm" id="wiz-giveaway" role="alert" hidden>
+                        <p>
+                            Payers could take the carrier sats for free; you would pay every carrier
+                            yourself.
+                        </p>
+                        <label class="check" for="wiz-giveaway-ok">
+                            <input type="checkbox" id="wiz-giveaway-ok" />
+                            Give carriers away for free
+                        </label>
+                    </div>
                 </section>
 
                 <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
