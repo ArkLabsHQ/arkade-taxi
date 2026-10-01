@@ -26,7 +26,7 @@ import type {
     SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
-import type { createOperatorRuntime } from "./arkade/operatorWallet.js";
+import { proofInputs, type createOperatorRuntime } from "./arkade/operatorWallet.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
@@ -721,6 +721,8 @@ export function createProceedsCollector(deps: Deps) {
                     await confirmOutput(id, plan, commitment);
                 },
                 async (intent) => {
+                    if (proofInputs(intent).sort().join() !== plan.inputs.map(key).sort().join())
+                        fail("proceeds_intent_inputs_changed");
                     const digest = intentDigest(intent.proof, Intent.encodeMessage(intent.message));
                     jobs.rememberLocalIntent(id, owner, now(), digest);
                     await guard(true);

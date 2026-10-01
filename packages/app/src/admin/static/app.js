@@ -195,7 +195,7 @@ const BLOCKER_GROUPS = [
             "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
             "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
             "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
-            "proceeds_reservation_changed",
+            "proceeds_reservation_changed proceeds_intent_inputs_changed",
     ],
 ];
 

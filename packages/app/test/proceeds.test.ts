@@ -12,6 +12,7 @@ import {
     asset,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
+import type { Outpoint } from "@arkade-taxi/core";
 import {
     openDatabase,
     AdvanceRepository,
@@ -23,6 +24,7 @@ import {
     config,
     advance,
     fundingCoin,
+    intentProof,
     operatorTree,
     providerEmulatorKey,
     receiverKey,
@@ -97,6 +99,7 @@ function setup(
     let outputs = inventory;
     let tip = { height: clock.height, time: Math.floor(clock.timestamp.getTime() / 1000) };
     let submitGuard: ((intent: typeof sdkIntent) => Promise<() => void>) | undefined;
+    let intentInputs = (inputs: Outpoint[]) => inputs;
     let beforeSubmit = () => {};
     let beforeEntry = () => {};
     const info = arkInfo({ fees: { intentFee: {}, txFeeRate: "0" } });
@@ -111,9 +114,12 @@ function setup(
         onchainProvider: {
             getChainTip: async () => tip,
         },
-        settle: async (params: unknown) => {
+        settle: async (params: { inputs: Outpoint[] }) => {
             beforeSubmit();
-            const enter = await submitGuard?.(sdkIntent);
+            const enter = await submitGuard?.({
+                ...sdkIntent,
+                proof: intentProof(intentInputs(params.inputs)),
+            });
             beforeEntry();
             enter?.();
             return settle(params);
@@ -175,7 +181,10 @@ function setup(
             const remove = vi.fn(async () => {
                 throw new Error("delete unavailable");
             });
-            const sign = vi.fn(async (..._args: unknown[]) => sdkIntent);
+            const sign = vi.fn(async (coins: Outpoint[], ..._args: unknown[]) => ({
+                ...sdkIntent,
+                proof: intentProof(coins),
+            }));
             const sdk: any = Object.assign(Object.create(Wallet.prototype), {
                 getAddress: wallet.getAddress,
                 logUngatedInputs: () => {},
@@ -222,6 +231,9 @@ function setup(
         },
         beforeEntry(work: () => void) {
             beforeEntry = work;
+        },
+        tamperIntentInputs(change: (inputs: Outpoint[]) => Outpoint[]) {
+            intentInputs = change;
         },
         setNow(value: number) {
             now = value;
@@ -792,6 +804,14 @@ describe("durable proceeds collector", () => {
         expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
         expect(s.settle).not.toHaveBeenCalled();
         expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+    it("refuses to register an intent that spends anything but the plan's inputs", async () => {
+        const s = setup();
+        s.tamperIntentInputs((inputs) => [...inputs, { txid: "ee".repeat(32), vout: 0 }]);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_intent_inputs_changed");
+        expect(s.settle).not.toHaveBeenCalled();
     });
     it("revalidates exact canonical inputs when the SDK pending spend hides them from wallet reads", async () => {
         const s = setup();

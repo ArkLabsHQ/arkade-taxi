@@ -42,6 +42,17 @@ type SettlementGuard = (
  * inherit it from wallet creation, and its event-driven renewal is wrapped in it. */
 const sdkBackground = new AsyncLocalStorage<true>();
 const outpointKey = (o: Outpoint) => `${o.txid}:${o.vout}`;
+
+/** The coins an intent spends: its proof's inputs after input 0, the BIP-322 toSpend reference. */
+export function proofInputs(intent: { proof: string }): string[] {
+    const proof = Transaction.fromPSBT(base64.decode(intent.proof));
+    const coins: string[] = [];
+    for (let i = 1; i < proof.inputsLength; i++) {
+        const { txid, index } = proof.getInput(i);
+        coins.push(`${hex.encode(txid!)}:${index}`);
+    }
+    return coins;
+}
 /** How long past the renewal threshold a coin must live, or the SDK renews it soon after birth. */
 const RENEWAL_MARGIN_SECONDS = 43_200n;
 
@@ -212,16 +223,9 @@ export function createOperatorRuntime(
                                 if (sdkBackground.getStore()) {
                                     if (!backgroundSettling || stopped || live !== token)
                                         throw new Error("background_settlement_not_authorized");
-                                    const proof = Transaction.fromPSBT(base64.decode(intent.proof));
                                     const taken = await held();
-                                    // Input 0 is the proof's BIP-322 toSpend reference.
-                                    for (let i = 1; i < proof.inputsLength; i++) {
-                                        const { txid, index } = proof.getInput(i);
-                                        if (taken.has(`${hex.encode(txid!)}:${index}`))
-                                            throw new Error(
-                                                "background_settlement_spends_held_coin",
-                                            );
-                                    }
+                                    if (proofInputs(intent).some((coin) => taken.has(coin)))
+                                        throw new Error("background_settlement_spends_held_coin");
                                     return providers.arkProvider.registerIntent(intent);
                                 }
                                 if (!settlementGuard || live !== token)

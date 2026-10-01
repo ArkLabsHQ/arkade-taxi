@@ -6,25 +6,26 @@ import {
     VtxoScript,
     CSVMultisigTapscript,
     networks,
-    Transaction,
     type WalletConfig,
     type ExtendedVirtualCoin,
     type ContractManager,
     type ArkIntent,
 } from "@arkade-os/sdk";
-import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { config, emulatorKey, operatorKey, providerEmulatorKey, serverKey } from "../fixtures.js";
+import {
+    config,
+    emulatorKey,
+    intentProof,
+    operatorKey,
+    providerEmulatorKey,
+    serverKey,
+} from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
 import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
 import { resolveRuntimeConfig } from "../../src/config.js";
 
-const proofOf = (inputs: { txid: string; vout: number }[]) => {
-    const tx = new Transaction();
-    tx.addInput({ txid: "00".repeat(32), index: 0 });
-    for (const { txid, vout } of inputs) tx.addInput({ txid, index: vout });
-    return { proof: base64.encode(tx.toPSBT()) } as never;
-};
+const proofOf = (inputs: { txid: string; vout: number }[]) =>
+    ({ proof: intentProof(inputs) }) as never;
 
 /** A batch output (or, preconfirmed, an offchain receipt) whose expiry is `seconds` after birth. */
 const livingFor = (seconds: number, isPreconfirmed = false): Partial<ExtendedVirtualCoin> => {
