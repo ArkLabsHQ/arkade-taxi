@@ -87,9 +87,14 @@ const shownValue = (value: unknown): string | null => {
     if (value instanceof Uint8Array) return bytesToHex(value);
     const text = String(value);
     if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
-    // A URL can carry credentials in its userinfo or query; neither is shown.
-    const url = new URL(text);
-    return `${url.protocol}//${url.host}${url.pathname}`;
+    // A URL can carry credentials in its userinfo or query; neither is shown, and
+    // an unparseable one is withheld rather than echoed with them.
+    try {
+        const url = new URL(text);
+        return `${url.protocol}//${url.host}${url.pathname}`;
+    } catch {
+        return null;
+    }
 };
 
 export const shownConfig = (cfg: RuntimeConfig): ShownConfigEntry[] =>

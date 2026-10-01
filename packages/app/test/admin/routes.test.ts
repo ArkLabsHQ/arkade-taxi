@@ -401,6 +401,36 @@ describe("PATCH /admin/api/policy", () => {
         expect(h.policy.history(10).map((row) => row.actor)).toEqual(["named-user", "taxi-ops"]);
     });
 
+    it("refuses two rules for the same asset", async () => {
+        const h = harness();
+        const before = h.policy.get();
+        const rule = (assetId: unknown) => ({
+            assetId,
+            enabled: true,
+            claim: "recycle",
+            maxTopupSats: null,
+            fares: [
+                { id: "free", currency: { kind: "sats" }, pricing: { kind: "flat", units: "0" } },
+            ],
+        });
+        const id = { txid: "ab".repeat(32), groupIndex: 1 };
+
+        for (const ids of [
+            [null, null],
+            ["*", "*"],
+            [id, { ...id }],
+        ]) {
+            const { status } = await h.send(
+                "/admin/api/policy",
+                "PATCH",
+                { assetRules: ids.map(rule) },
+                "alice",
+            );
+            expect(status, JSON.stringify(ids)).toBe(400);
+        }
+        expect(h.policy.get()).toEqual(before);
+    });
+
     it("rejects a field outside the Policy contract with 400", async () => {
         const h = harness();
 

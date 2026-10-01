@@ -10,6 +10,7 @@ import type { Context, Hono } from "hono";
 import { z } from "zod";
 import { ArkAddress, type VirtualCoin } from "@arkade-os/sdk";
 import {
+    assetIdKey,
     isExposed,
     validateFareOption,
     type Advance,
@@ -155,7 +156,21 @@ const policyPatch = z
         // Rules are replaced wholesale rather than patched member-by-member: a
         // partial edit of a nested list has no unambiguous meaning, and the
         // console reads the whole table before it writes.
-        assetRules: z.array(assetRule).optional(),
+        assetRules: z
+            .array(assetRule)
+            .superRefine((rules, ctx) => {
+                const keys = rules.map((r) =>
+                    r.assetId === null || r.assetId === "*"
+                        ? String(r.assetId)
+                        : assetIdKey(r.assetId),
+                );
+                if (new Set(keys).size !== keys.length)
+                    ctx.addIssue({
+                        code: z.ZodIssueCode.custom,
+                        message: "two rules name the same asset",
+                    });
+            })
+            .optional(),
         quoteTtlSeconds: z.number().int().min(1).optional(),
     })
     .strict();
