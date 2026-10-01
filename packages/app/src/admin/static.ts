@@ -2437,8 +2437,8 @@ function renderFunding(funding) {
     for (const a of funding.assets) {
         const tr = document.createElement("tr");
         const id = document.createElement("td");
-        id.append(cell("span", a.assetId.txid, "trunc"));
-        id.title = a.assetId.txid;
+        id.append(cell("span", assetLabel(a.assetId)));
+        id.title = walletAssetId(a.assetId);
         tr.append(
             id,
             cell("td", String(a.assetId.groupIndex), "n"),

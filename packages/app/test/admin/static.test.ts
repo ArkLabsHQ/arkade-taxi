@@ -753,7 +753,7 @@ describe("the dashboard is dependency-free", () => {
     });
 
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
-        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const token = { txid: Uint8Array.from({ length: 32 }, (_, i) => 32 - i), groupIndex: 258 };
         const admin = harness({
             funding: async () => ({
                 config: config(),
@@ -783,7 +783,7 @@ describe("the dashboard is dependency-free", () => {
             dashboard
                 .element("funding-assets")
                 .children.map((row) => row.children.map((c) => c.title || c.textContent)),
-        ).toEqual([["cd".repeat(32), "1", "1 234 567"]]);
+        ).toEqual([[taxiAssetIdToSwapId(token), "258", "1 234 567"]]);
 
         dashboard.element("funding-copy").fire("click");
         await vi.waitFor(() => expect(dashboard.copied).toEqual([address]));
