@@ -8,8 +8,8 @@ import {
     type InfoResponse,
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
-import { TaxiClient } from "../src/client.js";
-import { verifyReceiveQuote } from "../src/receiveQuote.js";
+import { TaxiClient } from "../src/client";
+import { verifyReceiveQuote } from "../src/receiveQuote";
 import {
     emulatorKey,
     HRP,
@@ -19,7 +19,7 @@ import {
     recordingFetch,
     senderKey,
     serverKey,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, HRP).encode();

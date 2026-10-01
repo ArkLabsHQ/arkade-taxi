@@ -28,11 +28,11 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { fundingInputFromWire } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import { sanitizeOperationalError } from "../errors.js";
-import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt.js";
-import { validatePersistedLockupGraph } from "./submit.js";
-import { readFundingSource } from "./fundingSource.js";
+import type { RuntimeConfig } from "../config";
+import { sanitizeOperationalError } from "../errors";
+import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt";
+import { validatePersistedLockupGraph } from "./submit";
+import { readFundingSource } from "./fundingSource";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 

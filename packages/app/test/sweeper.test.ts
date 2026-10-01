@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Advance } from "@arkade-taxi/core";
-import { createSweeper, type RecoveryRunner, type SweeperDeps } from "../src/sweeper.js";
-import { RecoveryArtifactError } from "../src/arkade/recovery.js";
-import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures.js";
+import { createSweeper, type RecoveryRunner, type SweeperDeps } from "../src/sweeper";
+import { RecoveryArtifactError } from "../src/arkade/recovery";
+import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures";
 
 const HEIGHT = 900_000n;
 

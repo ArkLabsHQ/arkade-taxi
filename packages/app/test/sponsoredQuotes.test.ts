@@ -2,17 +2,17 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { ArkAddress, SingleKey, Transaction, asset } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import type { ServiceError } from "../src/errors.js";
-import { getTransfer, submitLockup, type QuoteDeps } from "../src/quotes.js";
+import type { ServiceError } from "../src/errors";
+import { getTransfer, submitLockup, type QuoteDeps } from "../src/quotes";
 import {
     createSponsoredQuote,
     FakeSponsoredLockupBuilder,
     type SponsoredQuoteDeps,
-} from "../src/sponsoredQuotes.js";
-import { listReceiverClaims } from "../src/claims.js";
-import { validatePersistedLockupGraph } from "../src/arkade/submit.js";
-import { buildSponsoredEnvelope } from "../src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
+} from "../src/sponsoredQuotes";
+import { listReceiverClaims } from "../src/claims";
+import { validatePersistedLockupGraph } from "../src/arkade/submit";
+import { buildSponsoredEnvelope } from "../src/arkade/sponsoredBuilder";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt";
 import {
     config,
     DUST,
@@ -26,8 +26,8 @@ import {
     serverKey,
     quoteInfrastructure,
     serverUnroll,
-} from "./fixtures.js";
-import { senderTree } from "./arkade/lockupFixtures.js";
+} from "./fixtures";
+import { senderTree } from "./arkade/lockupFixtures";
 import type { Policy } from "@arkade-taxi/core";
 
 const USDT_DISPLAY = "1234".repeat(16);

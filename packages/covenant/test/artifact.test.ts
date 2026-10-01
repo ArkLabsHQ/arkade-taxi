@@ -3,9 +3,9 @@ import { hex } from "@scure/base";
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
-import { artifactArgs, emitArtifact, type ArkadeProgram } from "../src/artifact.js";
-import { DustCovenantScript, Leaf } from "../src/vtxo.js";
-import type { DustCovenantParams } from "../src/params.js";
+import { artifactArgs, emitArtifact, type ArkadeProgram } from "../src/artifact";
+import { DustCovenantScript, Leaf } from "../src/vtxo";
+import type { DustCovenantParams } from "../src/params";
 
 type Vector = {
     name: string;

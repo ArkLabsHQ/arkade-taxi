@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { advance, harness, healthySweeper, key } from "./fixtures.js";
-import { config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
-import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
-import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { advance, harness, healthySweeper, key } from "./fixtures";
+import { config, fundingCoin, operatorKey, serverKey } from "../fixtures";
+import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes";
+import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder";
 
 const INT64_MAX = "9223372036854775807";
 

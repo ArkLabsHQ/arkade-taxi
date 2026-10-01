@@ -23,16 +23,16 @@ import {
     PolicyRepository,
     ReservationRepository,
 } from "@arkade-taxi/db";
-import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder.js";
+import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder";
 import {
     createLockupSubmitter,
     createSubmissionResumer,
     productionLockupSubmitter,
     validateLockupSubmission,
     validatePersistedLockupGraph,
-} from "../../src/arkade/submit.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt.js";
-import { createLockupReconciler } from "../../src/reconciler.js";
+} from "../../src/arkade/submit";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt";
+import { createLockupReconciler } from "../../src/reconciler";
 import {
     config,
     NOW,
@@ -41,8 +41,8 @@ import {
     receiverKey,
     senderKey,
     serverKey,
-} from "../fixtures.js";
-import { buildRequest, operatorTree, receiverPays, unroll } from "./lockupFixtures.js";
+} from "../fixtures";
+import { buildRequest, operatorTree, receiverPays, unroll } from "./lockupFixtures";
 
 const senderIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
 const operatorIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(3));

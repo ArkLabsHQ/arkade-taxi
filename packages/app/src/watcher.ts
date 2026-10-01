@@ -30,9 +30,9 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import type { RuntimeConfig } from "./config.js";
-import { decodeLockupEnvelope } from "./arkade/psbt.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
+import type { RuntimeConfig } from "./config";
+import { decodeLockupEnvelope } from "./arkade/psbt";
+import { readFundingSource } from "./arkade/fundingSource";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;

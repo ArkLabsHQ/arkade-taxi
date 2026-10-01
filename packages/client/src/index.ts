@@ -10,8 +10,8 @@ export {
     type SponsoredQuoteRequest,
     type SubscribeClaimsArgs,
     type TaxiClientOptions,
-} from "./client.js";
-export { fundingInputsFromVtxos } from "./funding.js";
+} from "./client";
+export { fundingInputsFromVtxos } from "./funding";
 export {
     ClientErrorCode,
     QuoteVerificationError,
@@ -19,21 +19,21 @@ export {
     VerificationErrorCode,
     type ClientErrorCodeValue,
     type VerificationCode,
-} from "./errors.js";
+} from "./errors";
 export {
     verifyQuote,
     type QuoteExpectation,
     type VerifiedQuote,
     type VerifyQuoteArgs,
-} from "./verify.js";
+} from "./verify";
 export {
     verifyReceiveQuote,
     type ReceiveQuoteExpectation,
     type RecycleCarrierQuote,
     type VerifiedReceiveQuote,
     type VerifyReceiveQuoteArgs,
-} from "./receiveQuote.js";
-export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup.js";
+} from "./receiveQuote";
+export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup";
 export {
     assertSignedSponsoredPayment,
     signSponsoredPayment,
@@ -46,7 +46,7 @@ export {
     type ValidatedSponsoredPayment,
     type VerifiedSponsoredQuote,
     type VerifySponsoredQuoteArgs,
-} from "./sponsored.js";
+} from "./sponsored";
 export {
     purchase,
     recycle,
@@ -61,7 +61,7 @@ export {
     type ReceiverWalletInput,
     type VerifyCovenantTransferArgs,
     type VerifyIncomingClaimArgs,
-} from "./spend.js";
+} from "./spend";
 export {
     decodeInfo,
     decodeClaimsChanged,
@@ -78,7 +78,7 @@ export {
     type DecodedReceiveQuote,
     type DecodedSponsoredQuote,
     type DecodedSwapFillQuote,
-} from "./decode.js";
+} from "./decode";
 export {
     activeSwapFillStateFor,
     assertSubmittableSwapFill,
@@ -101,7 +101,7 @@ export {
     type SwapFillQuoteExpectation,
     type VerifiedSwapFillQuote,
     type VerifySwapFillQuoteArgs,
-} from "./swapFill.js";
+} from "./swapFill";
 export {
     deepFreeze,
     digestJointGraph,
@@ -133,4 +133,4 @@ export {
     setTapScriptSigEntries,
     tapLeavesOfInput,
     assertDefaultTapScriptSigs,
-} from "./joint/index.js";
+} from "./joint/index";

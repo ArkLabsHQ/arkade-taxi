@@ -23,10 +23,10 @@ import {
     jointGraphFromWire,
     protocolGraphToStored,
     storedGraphToJoint,
-} from "./arkade/swapFillBuilder.js";
-import { deriveJointInputs, JointGraphDerivationError } from "./arkade/jointGraphDerivation.js";
-import type { RuntimeConfig } from "./config.js";
-import { ErrorCode, ServiceError } from "./errors.js";
+} from "./arkade/swapFillBuilder";
+import { deriveJointInputs, JointGraphDerivationError } from "./arkade/jointGraphDerivation";
+import type { RuntimeConfig } from "./config";
+import { ErrorCode, ServiceError } from "./errors";
 import {
     JointSigningError,
     JointSubmissionAmbiguousError,
@@ -43,8 +43,8 @@ import {
     type SubmittedJointFill,
     unsignedPsbtBytes,
 } from "@arkade-taxi/client";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import { buildRecoveryIntent } from "./arkade/recovery.js";
+import { readFundingSource } from "./arkade/fundingSource";
+import { buildRecoveryIntent } from "./arkade/recovery";
 import { isDeepStrictEqual } from "node:util";
 
 export const SWAP_FILL_SUBMIT_LEASE_OWNER = "swap-fill-submit";

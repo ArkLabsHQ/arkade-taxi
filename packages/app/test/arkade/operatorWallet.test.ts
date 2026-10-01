@@ -11,10 +11,10 @@ import {
     type ContractManager,
 } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { config, emulatorKey, operatorKey, providerEmulatorKey, serverKey } from "../fixtures.js";
-import { arkInfo } from "./fixtures.js";
-import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
-import { resolveRuntimeConfig } from "../../src/config.js";
+import { config, emulatorKey, operatorKey, providerEmulatorKey, serverKey } from "../fixtures";
+import { arkInfo } from "./fixtures";
+import { createOperatorRuntime } from "../../src/arkade/operatorWallet";
+import { resolveRuntimeConfig } from "../../src/config";
 
 const databases: Database[] = [];
 afterEach(() => {

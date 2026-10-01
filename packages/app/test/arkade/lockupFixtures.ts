@@ -1,14 +1,7 @@
 import { CSVMultisigTapscript, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
 import { DustCovenantScript, type ReceiverFare } from "@arkade-taxi/covenant";
-import {
-    config,
-    fundingCoin,
-    operatorKey,
-    receiverKey,
-    senderKey,
-    serverKey,
-} from "../fixtures.js";
-import type { LockupBuildRequest } from "../../src/quotes.js";
+import { config, fundingCoin, operatorKey, receiverKey, senderKey, serverKey } from "../fixtures";
+import type { LockupBuildRequest } from "../../src/quotes";
 
 export const senderTree = new VtxoScript([
     MultisigTapscript.encode({ pubkeys: [serverKey, senderKey] }).script,

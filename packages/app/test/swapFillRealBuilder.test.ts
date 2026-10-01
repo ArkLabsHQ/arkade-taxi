@@ -15,12 +15,12 @@ import {
     ProductionSwapFillGraphBuilder,
     revalidateBoundSwapFill,
     type SwapFillQuoteDeps,
-} from "../src/swapFillQuotes.js";
-import { readFundingSource } from "../src/arkade/fundingSource.js";
-import type { ServiceError } from "../src/errors.js";
-import { fundingCoin, NOW, runtimeSafety, serverKey, serverUnroll } from "./fixtures.js";
-import { insertReceiveQuote, WANTED_ASSET, WANTED_SWAP_ID } from "./jointFillFixtures.js";
-import { asIndexed, solverTaproot } from "./swapFillFixtures.js";
+} from "../src/swapFillQuotes";
+import { readFundingSource } from "../src/arkade/fundingSource";
+import type { ServiceError } from "../src/errors";
+import { fundingCoin, NOW, runtimeSafety, serverKey, serverUnroll } from "./fixtures";
+import { insertReceiveQuote, WANTED_ASSET, WANTED_SWAP_ID } from "./jointFillFixtures";
+import { asIndexed, solverTaproot } from "./swapFillFixtures";
 
 // Only the SDK's REST providers are stubbed: the Taxi's own checks, the offer
 // codec, the swap library's assembly and the fill builder all run for real.

@@ -14,10 +14,10 @@ import {
     type SwapFill,
 } from "@arkade-taxi/db";
 import type { SwapFillQuoteResponse } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../src/config.js";
-import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
-import { encodeJointFillSource, type JointFillFundingSource } from "../src/arkade/fundingSource.js";
-import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
+import type { RuntimeConfig } from "../src/config";
+import { operatorFundingInput } from "../src/arkade/lockupBuilder";
+import { encodeJointFillSource, type JointFillFundingSource } from "../src/arkade/fundingSource";
+import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes";
 import {
     config,
     fundingCoin,
@@ -26,7 +26,7 @@ import {
     receiverKey,
     runtimeSafety,
     serverUnroll,
-} from "./fixtures.js";
+} from "./fixtures";
 import {
     asIndexed,
     FakeSwapFillGraphBuilder,
@@ -34,7 +34,7 @@ import {
     offerTaprootOf,
     solverCoin,
     solverTaproot,
-} from "./swapFillFixtures.js";
+} from "./swapFillFixtures";
 
 export const BOUND_DEPOSIT = { txid: "dd".repeat(32), vout: 3 };
 export const BOUND_SOLVER = { txid: "ee".repeat(32), vout: 1 };

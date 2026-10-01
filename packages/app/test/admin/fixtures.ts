@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import type { Advance } from "@arkade-taxi/core";
 import { AdvanceRepository, PolicyRepository, openDatabase, type Database } from "@arkade-taxi/db";
-import { createAdminRouter, type SweeperStatus } from "../../src/admin/index.js";
-import type { AdminDeps } from "../../src/admin/routes.js";
-import type { OperationalSnapshot } from "../../src/routes.js";
-import { config } from "../fixtures.js";
+import { createAdminRouter, type SweeperStatus } from "../../src/admin/index";
+import type { AdminDeps } from "../../src/admin/routes";
+import type { OperationalSnapshot } from "../../src/routes";
+import { config } from "../fixtures";
 
 export const key = (b: number): Uint8Array => new Uint8Array(32).fill(b);
 

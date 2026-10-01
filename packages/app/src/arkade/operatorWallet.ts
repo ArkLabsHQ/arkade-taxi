@@ -10,11 +10,11 @@ import {
 import type { Database } from "@arkade-taxi/db";
 import type { Outpoint } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import { ServiceError } from "../errors.js";
-import { createProviders, verifyProviders, normalizeExpiry } from "./providers.js";
-import { createOperatorStorage } from "./sqlExecutor.js";
-import type { RuntimeSafety } from "./types.js";
+import type { RuntimeConfig } from "../config";
+import { ServiceError } from "../errors";
+import { createProviders, verifyProviders, normalizeExpiry } from "./providers";
+import { createOperatorStorage } from "./sqlExecutor";
+import type { RuntimeSafety } from "./types";
 
 const admissionOnlyBlockers = new Set([
     "vtxo_expiry_headroom",

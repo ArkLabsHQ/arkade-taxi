@@ -7,8 +7,8 @@ import {
     sponsoredGraphId,
     sponsoredPlan,
     type SponsoredBuildRequest,
-} from "../../src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt.js";
+} from "../../src/arkade/sponsoredBuilder";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../src/arkade/psbt";
 import {
     config,
     fundingCoin,
@@ -18,8 +18,8 @@ import {
     serverKey,
     DUST,
     VTXO_MIN,
-} from "../fixtures.js";
-import { operatorTree, senderTree, unroll } from "./lockupFixtures.js";
+} from "../fixtures";
+import { operatorTree, senderTree, unroll } from "./lockupFixtures";
 
 const USDT = asset.AssetId.create("1234".repeat(16), 0);
 const usdtInternal = { txid: Uint8Array.from(USDT.txid).reverse(), groupIndex: USDT.groupIndex };

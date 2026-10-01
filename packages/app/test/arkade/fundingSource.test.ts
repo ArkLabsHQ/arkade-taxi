@@ -10,12 +10,12 @@ import {
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { createHash } from "node:crypto";
 import { base64, hex } from "@scure/base";
-import { checkpointSpending, sealGraph } from "../swapFillFixtures.js";
+import { checkpointSpending, sealGraph } from "../swapFillFixtures";
 import {
     encodeJointFillSource,
     readFundingSource,
     type JointFillFundingSource,
-} from "../../src/arkade/fundingSource.js";
+} from "../../src/arkade/fundingSource";
 
 const graph = () => {
     const tx = new Transaction({ version: 3 });

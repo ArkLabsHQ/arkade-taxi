@@ -1,4 +1,4 @@
-import type { AdmissionDecision, Exposure, Policy, QuoteRequest } from "./types.js";
+import type { AdmissionDecision, Exposure, Policy, QuoteRequest } from "./types";
 import {
     FareError,
     resolveFare,
@@ -6,7 +6,7 @@ import {
     ruleFor,
     selectFare,
     type FareSpec,
-} from "./fares.js";
+} from "./fares";
 
 /** A bitcoin transfer nets the sender's sats against the shortfall; an asset
  * transfer fronts the whole unit, since there the sats are only the carrier. */

@@ -10,9 +10,9 @@ import {
     decodeLockupEnvelope,
     encodeLockupEnvelope,
     unsignedGraphId,
-} from "../../app/src/arkade/psbt.js";
-import { assertSignedLockup, signLockup } from "../src/lockup.js";
-import { verifyQuote, type VerifiedQuote } from "../src/verify.js";
+} from "../../app/src/arkade/psbt";
+import { assertSignedLockup, signLockup } from "../src/lockup";
+import { verifyQuote, type VerifiedQuote } from "../src/verify";
 import {
     args,
     assetArgs,
@@ -23,7 +23,7 @@ import {
     senderIdentity,
     senderPaidAssetArgs,
     otherKey,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const signer = (sign: Identity["sign"]): Identity =>
     Object.assign(Object.create(senderIdentity), { sign }) as Identity;

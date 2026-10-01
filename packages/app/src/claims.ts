@@ -7,11 +7,11 @@ import {
     type ReceiverClaimState,
     type ReceiverClaimWire,
 } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "./config.js";
-import { ServiceError } from "./errors.js";
-import type { RouteDeps } from "./routes.js";
-import { validatePersistedLockupGraph } from "./arkade/submit.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
+import type { RuntimeConfig } from "./config";
+import { ServiceError } from "./errors";
+import type { RouteDeps } from "./routes";
+import { validatePersistedLockupGraph } from "./arkade/submit";
+import { readFundingSource } from "./arkade/fundingSource";
 
 export const ACTIVE_CLAIM_STATES = ["locking", "locked", "recovering"] as const;
 

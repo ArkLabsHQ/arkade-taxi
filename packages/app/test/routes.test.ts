@@ -35,17 +35,17 @@ import {
     decodeSwapFillQuote,
     decodeSwapFillStatus,
 } from "@arkade-taxi/client";
-import { openApiDocument, type Schema } from "../src/openapi.js";
-import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
-import { FakeLockupBuilder } from "../src/quotes.js";
-import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
-import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
-import { ServiceError } from "../src/errors.js";
-import { createServiceLifecycle } from "../src/lifecycle.js";
-import { createAdminApp, createApp } from "../src/server.js";
-import { INDEX_HTML } from "../src/admin/static.js";
-import type { SweeperStatus } from "../src/sweeper.js";
-import type { ReconcilerStatus } from "../src/reconciler.js";
+import { openApiDocument, type Schema } from "../src/openapi";
+import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes";
+import { FakeLockupBuilder } from "../src/quotes";
+import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes";
+import type { SwapFillJointOps } from "../src/swapFillSubmit";
+import { ServiceError } from "../src/errors";
+import { createServiceLifecycle } from "../src/lifecycle";
+import { createAdminApp, createApp } from "../src/server";
+import { INDEX_HTML } from "../src/admin/static";
+import type { SweeperStatus } from "../src/sweeper";
+import type { ReconcilerStatus } from "../src/reconciler";
 import {
     advance,
     config,
@@ -65,7 +65,7 @@ import {
     quoteInfrastructure,
     serverUnroll,
     signedEnvelope,
-} from "./fixtures.js";
+} from "./fixtures";
 import type { Policy } from "@arkade-taxi/core";
 import {
     asIndexed,
@@ -76,7 +76,7 @@ import {
     MemorySwapFills,
     solverCoin,
     solverTaproot,
-} from "./swapFillFixtures.js";
+} from "./swapFillFixtures";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;

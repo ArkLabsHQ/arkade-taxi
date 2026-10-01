@@ -9,8 +9,8 @@ import {
     getSwapFill,
     revalidateBoundSwapFill,
     type SwapFillQuoteDeps,
-} from "../src/swapFillQuotes.js";
-import type { ServiceError } from "../src/errors.js";
+} from "../src/swapFillQuotes";
+import type { ServiceError } from "../src/errors";
 import {
     config,
     fundingCoin,
@@ -21,7 +21,7 @@ import {
     runtimeSafety,
     senderTree,
     serverUnroll,
-} from "./fixtures.js";
+} from "./fixtures";
 import {
     asIndexed,
     FAKE_COVENANT_SCRIPT,
@@ -34,14 +34,14 @@ import {
     solverCoin,
     solverTaproot,
     solverTreeOf,
-} from "./swapFillFixtures.js";
+} from "./swapFillFixtures";
 import {
     createBoundJointFill,
     insertReceiveQuote,
     WANTED_ASSET,
     WANTED_SWAP_ID,
-} from "./jointFillFixtures.js";
-import { readFundingSource } from "../src/arkade/fundingSource.js";
+} from "./jointFillFixtures";
+import { readFundingSource } from "../src/arkade/fundingSource";
 
 const DEP = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_COIN = { txid: "ee".repeat(32), vout: 1 };

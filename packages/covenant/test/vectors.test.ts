@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { hex } from "@scure/base";
 import { describe, expect, it } from "vitest";
-import { buildReclaim, buildScripts } from "../src/scripts.js";
-import type { DustCovenantParams } from "../src/params.js";
+import { buildReclaim, buildScripts } from "../src/scripts";
+import type { DustCovenantParams } from "../src/params";
 
 type Vector = {
     name: string;

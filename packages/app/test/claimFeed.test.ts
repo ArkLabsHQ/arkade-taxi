@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Advance } from "@arkade-taxi/core";
 import { bytesToHex, type ClaimsChangedEvent } from "@arkade-taxi/protocol";
-import { ReceiverClaimFeed } from "../src/claimFeed.js";
-import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
-import { advance, config, MemoryAdvances, receiverKey, senderKey } from "./fixtures.js";
+import { ReceiverClaimFeed } from "../src/claimFeed";
+import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
+import { buildRequest, unroll } from "./arkade/lockupFixtures";
+import { advance, config, MemoryAdvances, receiverKey, senderKey } from "./fixtures";
 
 function locked(): Advance {
     const request = buildRequest();

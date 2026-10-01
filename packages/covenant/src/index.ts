@@ -7,10 +7,10 @@ export {
     type DustCovenantParams,
     type RecycleFare,
     type ReceiverFare,
-} from "./params.js";
-export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
-export { appendAssetLookup } from "./asset.js";
-export { artifactArgs, emitArtifact } from "./artifact.js";
+} from "./params";
+export { payoutPkScript, pinOutput, subDustScript } from "./pin";
+export { appendAssetLookup } from "./asset";
+export { artifactArgs, emitArtifact } from "./artifact";
 export {
     buildPurchase,
     buildReclaim,
@@ -18,13 +18,13 @@ export {
     buildRefund,
     buildScripts,
     type CovenantScripts,
-} from "./scripts.js";
+} from "./scripts";
 export {
     claimLeafDisabled,
     DISABLED_CLAIM_SCRIPT,
     DustCovenantScript,
     Leaf,
     type DustCovenantOptions,
-} from "./vtxo.js";
-export { covenantSpendInput, type CovenantSpendInput } from "./spend.js";
-export { copyByteView, signerTransaction } from "./signer.js";
+} from "./vtxo";
+export { covenantSpendInput, type CovenantSpendInput } from "./spend";
+export { copyByteView, signerTransaction } from "./signer";

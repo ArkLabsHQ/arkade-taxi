@@ -6,7 +6,7 @@ import {
     deriveJointOutputs,
     JointGraphDerivationError,
     type DerivedJointOutput,
-} from "./arkade/jointGraphDerivation.js";
+} from "./arkade/jointGraphDerivation";
 
 export interface SwapFillReconcilerStatus {
     lastTickAt: number | null;

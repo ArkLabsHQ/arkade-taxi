@@ -10,9 +10,9 @@ import {
     satsToWire,
     sponsoredParamsFromWire,
     sponsoredParamsToWire,
-} from "../src/codec.js";
-import type { AssetIdWire, QuoteParams, SponsoredQuoteParams } from "../src/index.js";
-import { covenantSpendInputFromWire, covenantSpendInputToWire } from "../src/codec.js";
+} from "../src/codec";
+import type { AssetIdWire, QuoteParams, SponsoredQuoteParams } from "../src/index";
+import { covenantSpendInputFromWire, covenantSpendInputToWire } from "../src/codec";
 
 const bytes = (...b: number[]) => new Uint8Array(b);
 const hex32 = (byte: string) => byte.repeat(32);
@@ -254,7 +254,7 @@ describe("sponsoredParamsFromWire", () => {
         );
     });
 });
-import * as fundingCodec from "../src/codec.js";
+import * as fundingCodec from "../src/codec";
 describe("funding input wire", () => {
     const wire = {
         txid: "ab".repeat(32),

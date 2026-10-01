@@ -13,7 +13,7 @@ import {
     type Database,
     type ReceiveQuote,
     type SwapFill,
-} from "../src/index.js";
+} from "../src/index";
 import type { Advance } from "@arkade-taxi/core";
 
 const NOW = 1_757_000_000;

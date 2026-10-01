@@ -16,10 +16,10 @@ import {
     type SwapFillQuoteResponse,
     type SwapFillStatusResponse,
 } from "@arkade-taxi/protocol";
-import { QuoteVerificationError, TaxiError, VerificationErrorCode } from "./errors.js";
-import type { VerificationCode } from "./errors.js";
-import { causeMessage, decodeSwapFillQuote, type DecodedSwapFillQuote } from "./decode.js";
-import { canonical, immutablePlainCopy, rewrap, sameAsset, sameBytes } from "./lockup.js";
+import { QuoteVerificationError, TaxiError, VerificationErrorCode } from "./errors";
+import type { VerificationCode } from "./errors";
+import { causeMessage, decodeSwapFillQuote, type DecodedSwapFillQuote } from "./decode";
+import { canonical, immutablePlainCopy, rewrap, sameAsset, sameBytes } from "./lockup";
 
 declare const swapFillVerified: unique symbol;
 

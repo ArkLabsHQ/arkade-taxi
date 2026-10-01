@@ -13,7 +13,7 @@ import {
     type FillOutpoint,
     type SponsorFillInput,
 } from "@arkade-os/swap";
-import { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph.js";
+import { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph";
 
 export type { JointGraph };
 

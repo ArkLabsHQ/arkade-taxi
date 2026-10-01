@@ -17,11 +17,11 @@ import {
     SwapFillBuilderError,
     taxiAssetIdToSwapId,
     type SwapFillBuildRequest,
-} from "../../src/arkade/swapFillBuilder.js";
-import { checkpointSpending, sealGraph } from "../swapFillFixtures.js";
-import { operatorKey, receiverKey } from "../fixtures.js";
+} from "../../src/arkade/swapFillBuilder";
+import { checkpointSpending, sealGraph } from "../swapFillFixtures";
+import { operatorKey, receiverKey } from "../fixtures";
 import type { SwapFillGraphWire } from "@arkade-taxi/protocol";
-import { fundingCoin } from "../fixtures.js";
+import { fundingCoin } from "../fixtures";
 import { type BuildOfferFillPlanOpts, type JointGraph } from "@arkade-taxi/client";
 
 const USDT = asset.AssetId.create("1234".repeat(16), 0);

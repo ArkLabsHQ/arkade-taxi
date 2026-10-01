@@ -12,28 +12,28 @@ import {
     ReceiveQuoteRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
-import { loadConfig, resolveRuntimeConfig } from "./config.js";
-import { sanitizeOperationalError, ServiceError } from "./errors.js";
-import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
-import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
+import { loadConfig, resolveRuntimeConfig } from "./config";
+import { sanitizeOperationalError, ServiceError } from "./errors";
+import { ProductionLockupBuilder } from "./arkade/lockupBuilder";
+import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes";
 import {
     admitBoundSwapFill,
     createSwapOfferCodec,
     ProductionSwapFillGraphBuilder,
-} from "./swapFillQuotes.js";
-import { createSweeper } from "./sweeper.js";
-import { createAdminApp, createApp, type ServerDeps } from "./server.js";
-import { createOperatorRuntime } from "./arkade/operatorWallet.js";
+} from "./swapFillQuotes";
+import { createSweeper } from "./sweeper";
+import { createAdminApp, createApp, type ServerDeps } from "./server";
+import { createOperatorRuntime } from "./arkade/operatorWallet";
 import { SingleKey } from "@arkade-os/sdk";
 import { advanceKind } from "@arkade-taxi/core";
-import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
-import { createLockupReconciler } from "./reconciler.js";
-import { createSwapFillReconciler } from "./swapFillReconciler.js";
-import { createSpendWatcher } from "./watcher.js";
-import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
-import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
-import { createProceedsCollector } from "./proceeds.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
+import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit";
+import { createLockupReconciler } from "./reconciler";
+import { createSwapFillReconciler } from "./swapFillReconciler";
+import { createSpendWatcher } from "./watcher";
+import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery";
+import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle";
+import { createProceedsCollector } from "./proceeds";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
 
 const seconds = () => Math.floor(Date.now() / 1000);
 

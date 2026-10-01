@@ -22,8 +22,8 @@ import {
 } from "@arkade-os/sdk";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { base64, hex } from "@scure/base";
-import { verifyQuote } from "../src/verify.js";
-import { activeQuoteStateFor } from "../src/lockup.js";
+import { verifyQuote } from "../src/verify";
+import { activeQuoteStateFor } from "../src/lockup";
 import {
     Leaf,
     covenantSpendInput,
@@ -33,9 +33,9 @@ import {
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
 import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
-import { classifyObservedSpend } from "../../app/src/watcher.js";
-import { config as serverConfig } from "../../app/test/fixtures.js";
-import { TaxiClient } from "../src/client.js";
+import { classifyObservedSpend } from "../../app/src/watcher";
+import { config as serverConfig } from "../../app/test/fixtures";
+import { TaxiClient } from "../src/client";
 import {
     purchase,
     recycle,
@@ -47,7 +47,7 @@ import {
     type CovenantTransfer,
     type ReceiverWalletInput,
     type VerifyIncomingClaimArgs,
-} from "../src/spend.js";
+} from "../src/spend";
 import {
     NOW,
     args,
@@ -63,7 +63,7 @@ import {
     serverKey,
     unroll,
     VTXO_MIN,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
 const numberToBytes = (value: bigint): Uint8Array =>

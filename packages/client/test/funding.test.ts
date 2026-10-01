@@ -1,7 +1,7 @@
 import { ArkAddress, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
-import * as client from "../src/index.js";
+import * as client from "../src/index";
 import {
     args,
     assetArgs,
@@ -14,7 +14,7 @@ import {
     recordingFetch,
     senderTree,
     serverKey,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const coin = (): ExtendedVirtualCoin => ({
     txid: "aa".repeat(32),

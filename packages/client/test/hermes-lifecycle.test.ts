@@ -10,7 +10,7 @@ describe("Hermes lifecycle support", () => {
         vi.stubGlobal("FinalizationRegistry", undefined);
         vi.resetModules();
 
-        const { WeakValueRegistry } = await import("../src/lifecycle.js");
+        const { WeakValueRegistry } = await import("../src/lifecycle");
         const registry = new WeakValueRegistry<string, { name: string }>();
         const first = registry.getOrCreate("outpoint", () => ({ name: "first" }));
 

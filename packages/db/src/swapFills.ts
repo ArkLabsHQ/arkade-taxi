@@ -1,8 +1,8 @@
 import type { Database } from "better-sqlite3";
 import { ruleFor } from "@arkade-taxi/core";
-import { assertNativeAccess } from "./coordination.js";
-import { PolicyRepository } from "./policy.js";
-import { PolicyRevisionConflictError, expireReceiveQuotes, totalExposure } from "./reservations.js";
+import { assertNativeAccess } from "./coordination";
+import { PolicyRepository } from "./policy";
+import { PolicyRevisionConflictError, expireReceiveQuotes, totalExposure } from "./reservations";
 
 export type SwapFillState = "quoted" | "submitting" | "settled" | "expired" | "cancelled";
 

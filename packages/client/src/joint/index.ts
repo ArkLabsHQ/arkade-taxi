@@ -6,8 +6,8 @@ export {
     tapLeavesOfInput,
     tapScriptSigEntries,
     unsignedPsbtBytes,
-} from "./arkTransaction.js";
-export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph.js";
+} from "./arkTransaction";
+export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph";
 // The generic signer takes an explicit template; offerFillSigning binds ours.
 export {
     JointSigningError,
@@ -16,7 +16,7 @@ export {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
-} from "./jointSigning.js";
+} from "./jointSigning";
 export {
     prepareJointSubmission,
     providerCosignerKey,
@@ -24,7 +24,7 @@ export {
     submitJointFill,
     type JointFundingOwner,
     type JointOwnerKeys,
-} from "./offerFillSigning.js";
+} from "./offerFillSigning";
 export {
     buildOfferFillPlan,
     verifyOfferFillPlan,
@@ -33,4 +33,4 @@ export {
     type BuildOfferFillPlanOpts,
     type FillSponsor,
     type FillSponsorFare,
-} from "./offerFillPlan.js";
+} from "./offerFillPlan";

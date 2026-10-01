@@ -8,9 +8,9 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import type { SwapFill, SwapFillGraph } from "@arkade-taxi/db";
-import { createSwapFillReconciler } from "../src/swapFillReconciler.js";
-import { fundingCoin, NOW } from "./fixtures.js";
-import { MemorySwapFills } from "./swapFillFixtures.js";
+import { createSwapFillReconciler } from "../src/swapFillReconciler";
+import { fundingCoin, NOW } from "./fixtures";
+import { MemorySwapFills } from "./swapFillFixtures";
 
 const OFFER = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_IN = { txid: "ee".repeat(32), vout: 1 };

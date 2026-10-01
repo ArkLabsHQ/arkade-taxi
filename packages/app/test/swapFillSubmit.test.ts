@@ -20,9 +20,9 @@ import {
     createSwapFillQuote,
     admitBoundSwapFill,
     type SwapFillQuoteDeps,
-} from "../src/swapFillQuotes.js";
-import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
-import { arkInfo } from "./arkade/fixtures.js";
+} from "../src/swapFillQuotes";
+import { createOperatorRuntime } from "../src/arkade/operatorWallet";
+import { arkInfo } from "./arkade/fixtures";
 import {
     SWAP_FILL_SUBMIT_LEASE_OWNER,
     assertSolverAuthorised,
@@ -31,10 +31,10 @@ import {
     submitSwapFill,
     type SwapFillJointOps,
     type SwapFillSubmitDeps,
-} from "../src/swapFillSubmit.js";
-import { ServiceError } from "../src/errors.js";
-import { operationalSnapshot } from "../src/routes.js";
-import type { RuntimeSafety } from "../src/arkade/types.js";
+} from "../src/swapFillSubmit";
+import { ServiceError } from "../src/errors";
+import { operationalSnapshot } from "../src/routes";
+import type { RuntimeSafety } from "../src/arkade/types";
 import { base64, hex } from "@scure/base";
 import {
     config,
@@ -46,7 +46,7 @@ import {
     providerEmulatorKey,
     runtimeSafety,
     serverUnroll,
-} from "./fixtures.js";
+} from "./fixtures";
 import {
     asIndexed,
     checkpointSpending,
@@ -58,15 +58,15 @@ import {
     sealGraph,
     solverCoin,
     solverTaproot,
-} from "./swapFillFixtures.js";
+} from "./swapFillFixtures";
 import {
     createBoundJointFill,
     foreignRecoveryPreflight,
     patchJointSource,
     type BoundJointFill,
-} from "./jointFillFixtures.js";
-import { jointGraphFromWire } from "../src/arkade/swapFillBuilder.js";
-import { storedGraphToJoint } from "../src/arkade/swapFillBuilder.js";
+} from "./jointFillFixtures";
+import { jointGraphFromWire } from "../src/arkade/swapFillBuilder";
+import { storedGraphToJoint } from "../src/arkade/swapFillBuilder";
 import type { Policy } from "@arkade-taxi/core";
 import type { SwapFillGraphWire, SwapFillQuoteResponse } from "@arkade-taxi/protocol";
 import {
@@ -481,7 +481,7 @@ describe("submitSwapFill", () => {
 
     it("rejects a caller-recomputed graph that passes integrity but diverts sponsor change", async () => {
         const q = await quote();
-        const { jointGraphToWire } = await import("../src/arkade/swapFillBuilder.js");
+        const { jointGraphToWire } = await import("../src/arkade/swapFillBuilder");
         const recomputed = jointGraphFromWire(structuredClone(q.graph));
         const tx = Transaction.fromPSBT(base64.decode(recomputed.arkTx));
         let changeVout = -1;

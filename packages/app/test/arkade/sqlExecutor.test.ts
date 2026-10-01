@@ -9,8 +9,8 @@ import {
 import { SQLiteIntentRepository } from "@arkade-os/sdk/repositories/sqlite";
 import { CSVMultisigTapscript, VtxoScript, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { serverKey, advance } from "../fixtures.js";
-import { createSqlExecutor, createOperatorStorage } from "../../src/arkade/sqlExecutor.js";
+import { serverKey, advance } from "../fixtures";
+import { createSqlExecutor, createOperatorStorage } from "../../src/arkade/sqlExecutor";
 
 const databases: Database[] = [];
 const open = () => {

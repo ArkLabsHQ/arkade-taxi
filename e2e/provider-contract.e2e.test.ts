@@ -5,8 +5,8 @@ import { execFileSync } from "node:child_process";
 import { expect } from "vitest";
 import { EsploraProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
 import { openDatabase } from "@arkade-taxi/db";
-import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
-import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
+import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config";
+import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet";
 import {
     assertVtxoSnapshotContains,
     buildArkFundingArgs,
@@ -16,8 +16,8 @@ import {
     normalizeSigner,
     normalizeExpiry,
     verifyProviders,
-} from "../packages/app/src/arkade/providers.js";
-import { liveScenario } from "./scenarios.js";
+} from "../packages/app/src/arkade/providers";
+import { liveScenario } from "./scenarios";
 
 liveScenario("provider-contract", async () => {
     const config = await resolveRuntimeConfig(loadConfig(process.env));

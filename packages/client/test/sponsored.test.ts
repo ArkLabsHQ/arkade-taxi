@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
-import { sponsoredGraphId } from "../../app/src/arkade/sponsoredBuilder.js";
-import { TaxiClient } from "../src/client.js";
-import { VerificationErrorCode } from "../src/errors.js";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt";
+import { sponsoredGraphId } from "../../app/src/arkade/sponsoredBuilder";
+import { TaxiClient } from "../src/client";
+import { VerificationErrorCode } from "../src/errors";
 import {
     assertSignedSponsoredPayment,
     signSponsoredPayment,
     verifySponsoredQuote,
-} from "../src/sponsored.js";
+} from "../src/sponsored";
 import {
     HRP,
     jsonResponse,
@@ -28,7 +28,7 @@ import {
     sponsoredParams,
     sponsoredQuote,
     withExtraPacket,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const coin = (): ExtendedVirtualCoin => ({
     txid: "aa".repeat(32),

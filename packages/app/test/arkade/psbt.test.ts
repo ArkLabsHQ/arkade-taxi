@@ -1,14 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Transaction } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
-import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder.js";
-import {
-    decodeLockupEnvelope,
-    parseLockupEnvelope,
-    unsignedGraphId,
-} from "../../src/arkade/psbt.js";
-import { config } from "../fixtures.js";
-import { buildRequest, unroll } from "./lockupFixtures.js";
+import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope, parseLockupEnvelope, unsignedGraphId } from "../../src/arkade/psbt";
+import { config } from "../fixtures";
+import { buildRequest, unroll } from "./lockupFixtures";
 
 describe("independent envelope validation", () => {
     it("rejects a recomputed hash with a below-minimum fare independently", () => {

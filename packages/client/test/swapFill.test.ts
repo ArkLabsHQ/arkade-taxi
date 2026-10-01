@@ -4,8 +4,8 @@ import type {
     SwapFillQuoteResponse,
     SwapFillStatusResponse,
 } from "@arkade-taxi/protocol";
-import { TaxiClient } from "../src/client.js";
-import { ClientErrorCode } from "../src/errors.js";
+import { TaxiClient } from "../src/client";
+import { ClientErrorCode } from "../src/errors";
 import {
     assertSubmittableSwapFill,
     isSwapFillOperationConflict,
@@ -18,8 +18,8 @@ import {
     verifySwapFillQuote,
     SwapFillSubmitAmbiguousError,
     type SwapFillQuoteExpectation,
-} from "../src/swapFill.js";
-import { jsonResponse, recordingFetch } from "./fixtures.js";
+} from "../src/swapFill";
+import { jsonResponse, recordingFetch } from "./fixtures";
 
 const BASE = "https://taxi.example";
 const NOW = 1_000_000_000;

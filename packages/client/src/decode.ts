@@ -41,7 +41,7 @@ import {
     type SwapFillStatusResponse,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
-import { ClientErrorCode, TaxiError } from "./errors.js";
+import { ClientErrorCode, TaxiError } from "./errors";
 
 export interface DecodedInfo {
     protocolVersion: number;

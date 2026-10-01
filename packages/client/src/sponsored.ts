@@ -25,8 +25,8 @@ import {
 } from "@arkade-taxi/protocol";
 import { hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
-import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
-import { decodeInfo, decodeSponsoredQuote } from "./decode.js";
+import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors";
+import { decodeInfo, decodeSponsoredQuote } from "./decode";
 import {
     assetId,
     decodeLockupEnvelope,
@@ -39,7 +39,7 @@ import {
     sameBytes,
     unsignedCopy,
     type LockupEnvelope,
-} from "./lockup.js";
+} from "./lockup";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 

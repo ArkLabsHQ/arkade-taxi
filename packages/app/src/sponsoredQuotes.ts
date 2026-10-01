@@ -20,14 +20,14 @@ import {
     buildSponsoredEnvelope,
     parseSponsoredEnvelope,
     type SponsoredBuildRequest,
-} from "./arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope } from "./arkade/psbt.js";
-import { operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { LockupShapeError } from "./lockup.js";
-import { verifySenderFunding } from "./arkade/senderFunding.js";
-import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import { admissionError, ErrorCode, ServiceError } from "./errors.js";
+} from "./arkade/sponsoredBuilder";
+import { decodeLockupEnvelope } from "./arkade/psbt";
+import { operatorFundingInput } from "./arkade/lockupBuilder";
+import { LockupShapeError } from "./lockup";
+import { verifySenderFunding } from "./arkade/senderFunding";
+import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import { admissionError, ErrorCode, ServiceError } from "./errors";
 import {
     createAdmittedQuote,
     decodeSenderFunding,
@@ -36,7 +36,7 @@ import {
     validateFakeLockup,
     withQuoteAdmission,
     type QuoteDeps,
-} from "./quotes.js";
+} from "./quotes";
 
 export type SponsoredQuoteDeps = Omit<QuoteDeps, "lockupBuilder" | "lockupSubmitter"> & {
     sponsoredBuilder: SponsoredLockupBuilder;

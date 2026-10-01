@@ -7,11 +7,11 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { decodeLockupEnvelope } from "./arkade/psbt.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import type { SubmissionResumer } from "./arkade/submit.js";
-import type { SpendWatcher, WatcherBlocker } from "./watcher.js";
-import { sanitizeOperationalError } from "./errors.js";
+import { decodeLockupEnvelope } from "./arkade/psbt";
+import { readFundingSource } from "./arkade/fundingSource";
+import type { SubmissionResumer } from "./arkade/submit";
+import type { SpendWatcher, WatcherBlocker } from "./watcher";
+import { sanitizeOperationalError } from "./errors";
 
 export interface ReconcilerStatus {
     lastTickAt: number | null;

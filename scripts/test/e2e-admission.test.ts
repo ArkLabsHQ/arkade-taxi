@@ -3,8 +3,8 @@ import { once } from "node:events";
 import { describe, expect, it } from "vitest";
 import { TaxiClient, TaxiError, verifyQuote } from "@arkade-taxi/client";
 import type { Identity } from "@arkade-os/sdk";
-import { args, senderIdentity } from "../../packages/client/test/fixtures.js";
-import { preEffectRequest, submitWithReadiness } from "../../e2e/admission.js";
+import { args, senderIdentity } from "../../packages/client/test/fixtures";
+import { preEffectRequest, submitWithReadiness } from "../../e2e/admission";
 
 const ready = { status: "ok", paused: false, blockers: [] };
 

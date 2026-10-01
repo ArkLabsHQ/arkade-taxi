@@ -1,7 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { arkade } from "@arkade-os/sdk";
-import { subDustScript } from "./pin.js";
-import { refundTopup, validateParams, type DustCovenantParams } from "./params.js";
+import { subDustScript } from "./pin";
+import { refundTopup, validateParams, type DustCovenantParams } from "./params";
 
 /**
  * The SDK declarations emit `Program`, `AsmToken`, `InputDef` and friends into the

@@ -10,15 +10,15 @@ import {
 } from "@arkade-taxi/db";
 import { ArkAddress } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { unionReservedOutpoints } from "../src/arkade/reservedOutpoints.js";
-import { selectOperatorFunding } from "../src/arkade/inventory.js";
-import { createProceedsCollector, planProceeds } from "../src/proceeds.js";
-import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
+import { unionReservedOutpoints } from "../src/arkade/reservedOutpoints";
+import { selectOperatorFunding } from "../src/arkade/inventory";
+import { createProceedsCollector, planProceeds } from "../src/proceeds";
+import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes";
 import {
     createSponsoredQuote,
     FakeSponsoredLockupBuilder,
     type SponsoredQuoteDeps,
-} from "../src/sponsoredQuotes.js";
+} from "../src/sponsoredQuotes";
 import {
     config,
     fundingCoin,
@@ -35,8 +35,8 @@ import {
     senderKey,
     serverKey,
     serverUnroll,
-} from "./fixtures.js";
-import { arkInfo } from "./arkade/fixtures.js";
+} from "./fixtures";
+import { arkInfo } from "./arkade/fixtures";
 
 const COIN_A = { txid: "aa".repeat(32), vout: 0 };
 const COIN_B = { txid: "bb".repeat(32), vout: 7 };

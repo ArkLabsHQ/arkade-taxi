@@ -37,26 +37,22 @@ import {
     senderTree,
     serverKey,
     serverUnroll,
-} from "../fixtures.js";
+} from "../fixtures";
 import {
     createBoundJointFill,
     foreignRecoveryPreflight,
     patchJointSource,
     type BoundJointFill,
-} from "../jointFillFixtures.js";
-import { buildLockupEnvelope, operatorFundingInput } from "../../src/arkade/lockupBuilder.js";
-import { validatePersistedLockupGraph } from "../../src/arkade/submit.js";
-import {
-    decodeLockupEnvelope,
-    encodeLockupEnvelope,
-    unsignedGraphId,
-} from "../../src/arkade/psbt.js";
+} from "../jointFillFixtures";
+import { buildLockupEnvelope, operatorFundingInput } from "../../src/arkade/lockupBuilder";
+import { validatePersistedLockupGraph } from "../../src/arkade/submit";
+import { decodeLockupEnvelope, encodeLockupEnvelope, unsignedGraphId } from "../../src/arkade/psbt";
 import {
     assertRecoveryStartupInvariants,
     buildRecoveryIntent,
     createRecoveryRunner,
     type RecoveryIntent,
-} from "../../src/arkade/recovery.js";
+} from "../../src/arkade/recovery";
 
 const directories: string[] = [];
 const databases: Database[] = [];

@@ -6,10 +6,10 @@ import {
     SingleKey,
     VtxoScript,
 } from "@arkade-os/sdk";
-import { buildLockupEnvelope } from "../../app/src/arkade/lockupBuilder.js";
-import { buildSponsoredEnvelope } from "../../app/src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
-import { config, fundingCoin, operatorTree } from "../../app/test/fixtures.js";
+import { buildLockupEnvelope } from "../../app/src/arkade/lockupBuilder";
+import { buildSponsoredEnvelope } from "../../app/src/arkade/sponsoredBuilder";
+import { decodeLockupEnvelope } from "../../app/src/arkade/psbt";
+import { config, fundingCoin, operatorTree } from "../../app/test/fixtures";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import {
     bytesToHex,
@@ -19,8 +19,8 @@ import {
     type SponsoredParamsValue,
 } from "@arkade-taxi/protocol";
 import type { InfoResponse, QuoteResponse, SponsoredQuoteResponse } from "@arkade-taxi/protocol";
-import type { VerifyQuoteArgs } from "../src/verify.js";
-import type { VerifySponsoredQuoteArgs } from "../src/sponsored.js";
+import type { VerifyQuoteArgs } from "../src/verify";
+import type { VerifySponsoredQuoteArgs } from "../src/sponsored";
 
 type FareSpec =
     | { currency: "sats"; units: bigint }

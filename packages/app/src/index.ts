@@ -7,24 +7,24 @@ export {
     type LogLevel,
     type RuntimeConfig,
     type TaxiConfig,
-} from "./config.js";
-export { createSqlExecutor, createOperatorStorage } from "./arkade/sqlExecutor.js";
+} from "./config";
+export { createSqlExecutor, createOperatorStorage } from "./arkade/sqlExecutor";
 export {
     createProviders,
     verifyProviders,
     normalizeSigner,
     normalizeExpiry,
-} from "./arkade/providers.js";
-export { createOperatorRuntime, type OperatorRuntimeOptions } from "./arkade/operatorWallet.js";
-export { ProductionLockupBuilder, buildLockupEnvelope } from "./arkade/lockupBuilder.js";
+} from "./arkade/providers";
+export { createOperatorRuntime, type OperatorRuntimeOptions } from "./arkade/operatorWallet";
+export { ProductionLockupBuilder, buildLockupEnvelope } from "./arkade/lockupBuilder";
 export {
     parseLockupEnvelope,
     decodeLockupEnvelope,
     encodeLockupEnvelope,
     unsignedGraphId,
     type LockupEnvelope,
-} from "./arkade/psbt.js";
-export type { RuntimeSafety, RuntimeGate } from "./arkade/types.js";
+} from "./arkade/psbt";
+export type { RuntimeSafety, RuntimeGate } from "./arkade/types";
 export {
     ADMISSION_REASONS,
     admissionError,
@@ -33,7 +33,7 @@ export {
     toErrorResponse,
     type AdmissionReason,
     type ErrorCodeValue,
-} from "./errors.js";
+} from "./errors";
 export {
     createQuote,
     FakeLockupBuilder,
@@ -43,8 +43,8 @@ export {
     type LockupBuilder,
     type LockupBuildRequest,
     type QuoteDeps,
-} from "./quotes.js";
-export { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
+} from "./quotes";
+export { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes";
 export {
     assertRecoveryStartupInvariants,
     buildRecoveryIntent,
@@ -52,7 +52,7 @@ export {
     RecoveryArtifactError,
     type RecoveryIntent,
     type RecoverySubmission,
-} from "./arkade/recovery.js";
+} from "./arkade/recovery";
 export {
     createSweeper,
     type DeadlineSeverity,
@@ -63,9 +63,9 @@ export {
     type SweeperDeps,
     type SweeperStatus,
     type TickResult,
-} from "./sweeper.js";
-export { createRoutes, type HealthResponse, type RouteDeps } from "./routes.js";
-export { unionReservedOutpoints, type ReservedOutpointSource } from "./arkade/reservedOutpoints.js";
+} from "./sweeper";
+export { createRoutes, type HealthResponse, type RouteDeps } from "./routes";
+export { unionReservedOutpoints, type ReservedOutpointSource } from "./arkade/reservedOutpoints";
 export {
     createSwapFillQuote,
     createSwapOfferCodec,
@@ -76,7 +76,7 @@ export {
     type SwapFillGraphBuilder,
     type SwapFillQuoteDeps,
     type SwapFillStore,
-} from "./swapFillQuotes.js";
+} from "./swapFillQuotes";
 export {
     SWAP_FILL_SUBMIT_LEASE_OWNER,
     assertSolverAuthorised,
@@ -88,20 +88,20 @@ export {
     type SwapFillJointOps,
     type SwapFillSubmitDeps,
     type SwapFillSubmitStore,
-} from "./swapFillSubmit.js";
+} from "./swapFillSubmit";
 export {
     createLockupReconciler,
     type LockupReconciler,
     type LockupReconcilerDeps,
     type ReconcilerStatus,
-} from "./reconciler.js";
+} from "./reconciler";
 export {
     createSwapFillReconciler,
     type SwapFillReconciler,
     type SwapFillReconcilerDeps,
     type SwapFillReconcilerStatus,
     type SwapFillReconcilerStore,
-} from "./swapFillReconciler.js";
+} from "./swapFillReconciler";
 export {
     classifyObservedSpend,
     createSpendWatcher,
@@ -110,7 +110,7 @@ export {
     type SpendWatcherDeps,
     type SpendWatcherStatus,
     type WatcherBlocker,
-} from "./watcher.js";
+} from "./watcher";
 export {
     createLockupSubmitter,
     createSubmissionResumer,
@@ -122,5 +122,5 @@ export {
     type SubmissionResumer,
     type ValidatedSubmissionResponse,
     type ValidatedLockupSubmission,
-} from "./arkade/submit.js";
-export { createAdminApp, createApp, type ServerDeps } from "./server.js";
+} from "./arkade/submit";
+export { createAdminApp, createApp, type ServerDeps } from "./server";
