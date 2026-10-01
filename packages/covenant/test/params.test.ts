@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+    exitDelayEncodable,
+    exitTimelock,
     refundTopup,
     unrecoveredTopup,
     validateParams,
@@ -147,5 +149,23 @@ describe("refundTopup", () => {
         expect(unrecoveredTopup(full, 1n)).toBe(1n);
         expect(unrecoveredTopup(precharged, 1n)).toBe(0n);
         expect(precharged.dust - refundTopup(precharged, 1n)).toBe(1n);
+    });
+});
+
+describe("exitTimelock", () => {
+    it("types the delay the way DefaultVtxo does, at the 512 boundary", () => {
+        expect(exitTimelock(511n)).toEqual({ value: 511n, type: "blocks" });
+        expect(exitTimelock(512n)).toEqual({ value: 512n, type: "seconds" });
+        expect(exitTimelock(86_016n)).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    // arkd rounds seconds DOWN to a multiple of 512 before advertising
+    // (arklib.ParseRelativeLocktime), so a live value is encodable; 0 is not.
+    it("refuses what BIP68 cannot encode", () => {
+        expect(exitDelayEncodable(0n)).toBe(false);
+        expect(exitDelayEncodable(86_400n)).toBe(false);
+        expect(exitDelayEncodable(86_016n)).toBe(true);
+        expect(exitDelayEncodable(5n)).toBe(true);
+        expect(exitDelayEncodable(33_554_432n)).toBe(false);
     });
 });

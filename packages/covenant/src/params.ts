@@ -1,3 +1,7 @@
+import { timelockToSequence, type RelativeTimelock } from "@arkade-os/sdk";
+
+export type { RelativeTimelock };
+
 export type AssetIdRef = {
     /** Genesis txid in internal byte order, never reversed display hex. */
     txid: Uint8Array;
@@ -118,4 +122,21 @@ export function recycleFare(p: DustCovenantParams): RecycleFare {
         operatorSats: fare?.currency === "sats" ? p.topup + fare.units : p.topup,
         assetFare: fare?.currency === "asset" ? fare.units : 0n,
     };
+}
+
+/** arkd couples the delay's domain to its own VtxoTreeExpiry, so the `< 512`
+ * split it advertises is the one it will accept. Same rule as DefaultVtxo. */
+export const exitTimelock = (delay: bigint): RelativeTimelock => ({
+    value: delay,
+    type: delay < 512n ? "blocks" : "seconds",
+});
+
+export function exitDelayEncodable(delay: bigint): boolean {
+    if (delay <= 0n) return false;
+    try {
+        timelockToSequence(exitTimelock(delay));
+        return true;
+    } catch {
+        return false;
+    }
 }
