@@ -8,6 +8,23 @@ import { config } from "../fixtures.js";
 
 export const key = (b: number): Uint8Array => new Uint8Array(32).fill(b);
 
+type BoardingView = Awaited<ReturnType<AdminDeps["funding"]>>["boarding"];
+
+export const boardingView = (over: Partial<BoardingView> = {}): BoardingView => ({
+    address: "bcrt1pboarding",
+    utxos: [],
+    job: {
+        state: "idle",
+        actor: null,
+        amountSats: null,
+        authorizedFeeSats: null,
+        maxFeeSats: "0",
+        commitmentTxid: null,
+        error: null,
+    },
+    ...over,
+});
+
 let seq = 0;
 
 export function advance(over: Partial<Advance> = {}): Advance {
@@ -68,6 +85,7 @@ export function harness(
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
         funding?: AdminDeps["funding"];
+        board?: AdminDeps["board"];
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -90,7 +108,14 @@ export function harness(
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
         funding:
-            opts.funding ?? (async () => ({ config: config(), inventory: undefined, coins: [] })),
+            opts.funding ??
+            (async () => ({
+                config: config(),
+                inventory: undefined,
+                coins: [],
+                boarding: boardingView(),
+            })),
+        board: opts.board ?? (async () => {}),
     });
 
     const app = new Hono();

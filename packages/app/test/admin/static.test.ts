@@ -6,7 +6,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { harness } from "./fixtures.js";
+import { boardingView, harness } from "./fixtures.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -599,6 +599,7 @@ describe("the dashboard is dependency-free", () => {
                         assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
                     }),
                 ],
+                boarding: boardingView(),
             }),
         });
         const opened = new Date(2026, 0, 1, 9, 0, 0);
@@ -614,6 +615,9 @@ describe("the dashboard is dependency-free", () => {
         expect(text("funding-reserved")).toBe("0 sats");
         expect(text("funding-threshold")).toBe("10 000 sats");
         expect(text("funding-state")).toBe("below reserve");
+        expect(dashboard.element("funding-board").disabled, "nothing confirmed to board").toBe(
+            true,
+        );
         expect(
             dashboard
                 .element("funding-assets")
@@ -635,5 +639,48 @@ describe("the dashboard is dependency-free", () => {
         await vi.waitFor(() =>
             expect(text("funding-loaded")).toBe("loaded " + later.toLocaleTimeString()),
         );
+    });
+
+    it("boards confirmed on-chain deposits from the funding card, then reloads it", async () => {
+        const boarded: string[] = [];
+        let job = boardingView().job;
+        const deposit = (vout: number, value: number, confirmed: boolean) => ({
+            txid: "dd".repeat(32),
+            vout,
+            value,
+            status: { confirmed },
+        });
+        const admin = harness({
+            funding: async () => ({
+                config: config(),
+                inventory: undefined,
+                coins: [],
+                boarding: boardingView({
+                    utxos: [deposit(0, 60_000, true), deposit(1, 5_000, false)],
+                    job,
+                }),
+            }),
+            board: async (actor) => {
+                boarded.push(actor);
+                job = { ...job, state: "running", actor, amountSats: "60000" };
+            },
+        });
+        const dashboard = runDashboard(() => dashboardPage([], "9".repeat(64), null), admin);
+        const text = (id: string) => dashboard.element(id).textContent;
+
+        await vi.waitFor(() => expect(text("funding-boarding-address")).toBe("bcrt1pboarding"));
+        expect(text("funding-boarding-confirmed")).toBe("60 000 sats");
+        expect(text("funding-boarding-unconfirmed")).toBe("5 000 sats");
+        expect(text("funding-board-state")).toBe("idle");
+        expect(dashboard.element("funding-board").disabled).toBe(false);
+        dashboard.element("funding-boarding-copy").fire("click");
+        await vi.waitFor(() => expect(dashboard.copied).toEqual(["bcrt1pboarding"]));
+
+        dashboard.element("funding-board").fire("click");
+        await vi.waitFor(() => expect(text("funding-board-state")).toBe("boarding 60 000 sats"));
+        expect(boarded).toEqual(["console-operator"]);
+        expect(text("funding-board-note")).toBe("request accepted");
+        expect(dashboard.element("funding-board").disabled, "a job is running").toBe(true);
+        expect(dashboard.requests.filter((path) => path === "/admin/api/funding")).toHaveLength(2);
     });
 });

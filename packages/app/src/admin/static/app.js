@@ -242,7 +242,25 @@ function renderFunding(funding) {
         body.append(tr);
     }
     $("funding-assets-empty").hidden = funding.assets.length > 0;
+    const boarding = funding.boarding;
+    $("funding-boarding-address").textContent = boarding.address;
+    $("funding-boarding-copy").disabled = false;
+    $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
+    $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
+    $("funding-board").disabled =
+        boarding.confirmedSats === null ||
+        BigInt(boarding.confirmedSats) === 0n ||
+        boarding.job.state === "running";
+    $("funding-board-state").textContent = boardingState(boarding.job);
+    $("funding-board-state").title = boarding.job.commitmentTxid || "";
     $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
+}
+
+function boardingState(job) {
+    if (job.state === "running") return "boarding " + group(job.amountSats) + " sats";
+    if (job.state === "succeeded") return "boarded " + group(job.amountSats) + " sats";
+    if (job.state === "failed") return "boarding failed: " + job.error;
+    return "idle";
 }
 
 function renderAdvances(rows) {
@@ -574,13 +592,23 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
-    $("funding-copy").addEventListener("click", async () => {
-        try {
-            await navigator.clipboard.writeText($("funding-address").textContent);
-            $("funding-state").textContent = "address copied";
-        } catch (e) {
-            $("funding-state").textContent = "copy failed: select the address instead";
-        }
+    for (const [button, address] of [
+        ["funding-copy", "funding-address"],
+        ["funding-boarding-copy", "funding-boarding-address"],
+    ])
+        $(button).addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText($(address).textContent);
+                $("funding-state").textContent = "address copied";
+            } catch (e) {
+                $("funding-state").textContent = "copy failed: select the address instead";
+            }
+        });
+    $("funding-board").addEventListener("click", () => {
+        $("funding-board").disabled = true;
+        mutate(() => postAction("/admin/api/funding/board"), "funding-board-note").then(
+            loadFunding,
+        );
     });
 
     $("policy-form").addEventListener("submit", (e) => {

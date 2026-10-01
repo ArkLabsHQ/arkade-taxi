@@ -31,6 +31,13 @@ describe("loadConfig", () => {
                 /TAXI_PROCEEDS_MAX_FEE_SATS/,
             );
     });
+    it("defaults the boarding fee cap to zero and accepts only non-negative integers", () => {
+        expect(loadConfig(env()).boardingMaxFeeSats).toBe(0n);
+        expect(loadConfig(env({ TAXI_BOARDING_MAX_FEE_SATS: "12" })).boardingMaxFeeSats).toBe(12n);
+        expect(() => loadConfig(env({ TAXI_BOARDING_MAX_FEE_SATS: "-1" }))).toThrow(
+            /TAXI_BOARDING_MAX_FEE_SATS/,
+        );
+    });
     it("orders time budgets independently", () => {
         expect(() =>
             loadConfig(

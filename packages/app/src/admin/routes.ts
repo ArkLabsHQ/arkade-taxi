@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { ArkAddress, type VirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, type Coin, type VirtualCoin } from "@arkade-os/sdk";
 import {
     isExposed,
     validateFareOption,
@@ -25,7 +25,8 @@ import {
     satsToWire,
 } from "@arkade-taxi/protocol";
 import { assetRuleToWire } from "../rulesWire.js";
-import { sanitizeOperationalError } from "../errors.js";
+import type { BoardingStatus } from "../boarding.js";
+import { sanitizeOperationalError, ServiceError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
 import type { RuntimeConfig } from "../config.js";
@@ -64,7 +65,15 @@ export interface AdminDeps {
         >;
         inventory: RuntimeSafety["inventory"];
         coins: readonly VirtualCoin[];
+        boarding: {
+            address: string;
+            /** Null when the on-chain read failed. */
+            utxos: readonly Coin[] | null;
+            job: BoardingStatus;
+        };
     }>;
+    /** Resolves once a boarding job is accepted; a refusal rejects with a ServiceError. */
+    board(actor: string): Promise<void>;
 }
 
 const MAX_LIMIT = 1_000;
@@ -84,6 +93,15 @@ const MAX_ACTOR_LENGTH = 128;
 const message = (e: unknown): string => sanitizeOperationalError(e, "operation failed");
 
 const isSats = (s: string): boolean => /^[0-9]+$/.test(s) && BigInt(s) <= INT64_MAX;
+
+const boardingSats = (utxos: readonly Coin[] | null, confirmed: boolean) =>
+    utxos === null
+        ? null
+        : satsToWire(
+              utxos
+                  .filter((u) => u.status.confirmed === confirmed)
+                  .reduce((sum, u) => sum + BigInt(u.value), 0n),
+          );
 
 // zod runs a transform even when an earlier refinement failed, so this one has
 // to be total. The fallback is discarded along with the 400.
@@ -487,7 +505,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
 
     app.get(at("/api/funding"), async (c) => {
         try {
-            const { config, inventory, coins } = await deps.funding();
+            const { config, inventory, coins, boarding } = await deps.funding();
             return ok(c, {
                 arkAddress: new ArkAddress(
                     config.serverPubkey,
@@ -501,12 +519,40 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                     assetId: assetIdToWire(swapIdToTaxiAssetId(assetId)),
                     amount,
                 })),
+                boarding: {
+                    address: boarding.address,
+                    confirmedSats: boardingSats(boarding.utxos, true),
+                    unconfirmedSats: boardingSats(boarding.utxos, false),
+                    job: boarding.job,
+                },
             });
         } catch (e) {
             return c.json({ code: "funding_unavailable", error: message(e) }, 503, {
                 "cache-control": "no-store",
             });
         }
+    });
+
+    app.post(at("/api/funding/board"), async (c) => {
+        let who: string;
+        try {
+            who = await mutation(c);
+        } catch (e) {
+            return bad(c, message(e));
+        }
+        try {
+            await deps.board(who);
+        } catch (e) {
+            const refused =
+                e instanceof ServiceError
+                    ? e
+                    : new ServiceError("boarding_unavailable", 503, message(e));
+            return c.json({ code: refused.code, error: message(refused) }, refused.status, {
+                "cache-control": "no-store",
+            });
+        }
+        deps.policy.recordOperation("board", who);
+        return accepted(c, { accepted: true, action: "board" });
     });
 
     app.get(at("/api/policy"), (c) => ok(c, toPolicyWire(deps.policy.get())));

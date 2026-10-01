@@ -185,6 +185,7 @@ routes on the admin port accept `POST` with `Content-Type: application/json` and
 | `/admin/api/rescan`                        | Refresh runtime, reconcile and prompt recovery          |
 | `/admin/api/advances/:id/retry-submission` | Expedite the retained retryable submission phase        |
 | `/admin/api/advances/:id/retry-recovery`   | Expedite the retained retryable recovery graph          |
+| `/admin/api/funding/board`                 | Board confirmed on-chain deposits into Arkade           |
 
 The retry routes return 409 for live leases or incompatible phases. They do
 not replace a graph, release reservations, clear quarantine or force a terminal
@@ -204,6 +205,42 @@ transaction. The watcher verifies its leaf and outputs before classifying it.
 Pause closes new admission, including new lockup acceptance. Existing durable
 work, claims, refunds and recovery continue. Let unsubmitted quotes expire and
 verify their reservations release before declaring the service drained.
+
+## On-chain top-up
+
+The admin Funding card offers two ways to fund the operator wallet. Offchain,
+send sats or assets from any Arkade wallet to its Arkade address. On-chain:
+
+1. Copy the card's boarding address and send bitcoin to it from any on-chain
+   wallet. The card counts it under "On-chain unconfirmed".
+2. Wait for one confirmation, then Refresh. The deposit moves to "On-chain
+   confirmed" and Board is enabled. The card loads only on demand; its "loaded"
+   stamp says how old the figures are.
+3. Press Board, or `POST /admin/api/funding/board` with body `{}`. The request
+   returns once Taxi holds the settlement lock and has authorized the fee; the
+   job then joins the next batch. It settles exactly the confirmed deposits,
+   never a VTXO, into the operator's own Arkade address, and audits the
+   operator header as the `board` operation.
+4. Refresh until the job reports the boarded amount; its commitment
+   transaction is the state's tooltip. The coin counts as usable inventory from
+   the next runtime refresh.
+
+A refusal names its cause: `settlement_active` while the proceeds collector is
+settling (the two share one settlement lock, so the collector likewise waits
+while a boarding settles), `boarding_active` while a job runs,
+`boarding_nothing_confirmed`, and `boarding_fee_cap_exceeded` above
+[`TAXI_BOARDING_MAX_FEE_SATS`](environment.md#taxi_boarding_max_fee_sats). The
+fee is deducted from the boarded amount and checked again against the Arkade
+Service's current fee when the intent registers. A failed job leaves the deposit
+on-chain; press Board again.
+
+Job state lives in memory: a restart forgets it but loses no funds. Before
+registration nothing was sent. A registered intent the restarted process no
+longer answers is dropped at the next batch, leaving the deposit on-chain to
+board again. A batch that had already finalized delivered the coin to the
+operator's Arkade address, where the wallet finds it. Board promptly: once a
+deposit's boarding exit delay has passed, the Arkade Service no longer accepts
+it, and only the operator key's unilateral exit path can spend it.
 
 ## Backup and restore
 

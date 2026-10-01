@@ -3,6 +3,7 @@ import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import { createAdminRouter } from "./admin/index.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes.js";
 import { ReceiverClaimFeed } from "./claimFeed.js";
+import type { createBoarding } from "./boarding.js";
 
 export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
     advances: AdvanceRepository;
@@ -11,6 +12,7 @@ export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "cla
     sweeperIntervalMs: number;
     sweeperRunning: () => boolean;
     rescan(): Promise<void>;
+    boarding: Omit<ReturnType<typeof createBoarding>, "stop">;
     accepting?: () => boolean;
     shutdownSignal?: AbortSignal;
 }
@@ -58,6 +60,7 @@ function fundingRead<T>(read: () => Promise<T>, nowMs: () => number): () => Prom
  */
 function adminDeps(deps: ServerDeps) {
     const coins = fundingRead(() => deps.inventory.getSpendableVtxos(), deps.nowMs);
+    const deposits = fundingRead(() => deps.boarding.utxos(), deps.nowMs);
     return {
         advances: deps.advances,
         policy: deps.policy,
@@ -85,11 +88,17 @@ function adminDeps(deps: ServerDeps) {
             config: deps.config,
             inventory: deps.runtime.safety().inventory,
             coins: await coins(),
+            boarding: {
+                address: await deps.boarding.address(),
+                utxos: await deposits().catch(() => null),
+                job: deps.boarding.status(),
+            },
         }),
+        board: (actor: string) => deps.boarding.start(actor),
     };
 }
 
-function acceptingOnly(deps: ServerDeps) {
+function acceptingOnly(deps: Pick<ServerDeps, "shutdownSignal" | "accepting">) {
     return async (c: Context, next: Next) => {
         if (deps.shutdownSignal?.aborted || deps.accepting?.() === false)
             return c.json({ code: "shutting_down", error: "service is shutting down" }, 503);
@@ -98,7 +107,7 @@ function acceptingOnly(deps: ServerDeps) {
 }
 
 /** No /v1 handler reads a cookie, so `origin: "*"` is safe here. */
-export function createApp(deps: ServerDeps): Hono {
+export function createApp(deps: Omit<ServerDeps, "boarding">): Hono {
     const app = new Hono();
     app.use("/v1/*", v1Cors());
     app.use("*", acceptingOnly(deps));

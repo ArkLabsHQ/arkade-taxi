@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { advance, harness, healthySweeper, key } from "./fixtures.js";
+import { advance, boardingView, harness, healthySweeper, key } from "./fixtures.js";
 import { config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
+import { ServiceError } from "../../src/errors.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 
 const INT64_MAX = "9223372036854775807";
@@ -192,6 +193,15 @@ describe("GET /admin/api/funding", () => {
             assetId: taxiAssetIdToSwapId({ txid, groupIndex }),
             amount,
         });
+        const deposit = (vout: number, value: number, confirmed: boolean) => ({
+            txid: "dd".repeat(32),
+            vout,
+            value,
+            status: { confirmed },
+        });
+        const boarding = boardingView({
+            utxos: [deposit(0, 60_000, true), deposit(1, 40_000, true), deposit(2, 5_000, false)],
+        });
         const funding = async () => ({
             config: config({ addressHrp: "tark" }),
             inventory: {
@@ -205,6 +215,7 @@ describe("GET /admin/api/funding", () => {
                 fundingCoin({ vout: 1, assets: [held(0, 7n), held(1, 200n)] }),
                 fundingCoin({ vout: 2 }),
             ],
+            boarding,
         });
 
         for (const mount of ["prefix", "root"] as const) {
@@ -220,8 +231,52 @@ describe("GET /admin/api/funding", () => {
                     { assetId: { txid: bytesToHex(txid), groupIndex: 0 }, amount: "7" },
                     { assetId: { txid: bytesToHex(txid), groupIndex: 1 }, amount: "500" },
                 ],
+                boarding: {
+                    address: "bcrt1pboarding",
+                    confirmedSats: "100000",
+                    unconfirmedSats: "5000",
+                    job: boarding.job,
+                },
             });
         }
+    });
+});
+
+describe("POST /admin/api/funding/board", () => {
+    it("starts a boarding job for the proxy actor, audits it and passes refusals through", async () => {
+        const actors: string[] = [];
+        let refusal: Error | undefined;
+        const h = harness({
+            board: async (actor) => {
+                if (refusal) throw refusal;
+                actors.push(actor);
+            },
+        });
+
+        expect(await h.send("/admin/api/funding/board", "POST", {}, "alice")).toEqual({
+            status: 202,
+            body: { accepted: true, action: "board" },
+        });
+        expect(actors).toEqual(["alice"]);
+        expect(h.policy.history(10)[0]).toMatchObject({
+            field: "operation",
+            newValue: "board",
+            actor: "alice",
+        });
+
+        refusal = new ServiceError("settlement_active", 409, "another settlement is running");
+        expect(await h.send("/admin/api/funding/board", "POST", {}, "bob")).toEqual({
+            status: 409,
+            body: { code: "settlement_active", error: "another settlement is running" },
+        });
+        refusal = new Error("esplora unreachable");
+        expect(await h.send("/admin/api/funding/board", "POST", {}, "bob")).toEqual({
+            status: 503,
+            body: { code: "boarding_unavailable", error: "esplora unreachable" },
+        });
+        expect((await h.send("/admin/api/funding/board", "POST", {}, " ")).status).toBe(400);
+        expect(actors).toEqual(["alice"]);
+        expect(h.policy.history(10)).toHaveLength(1);
     });
 });
 

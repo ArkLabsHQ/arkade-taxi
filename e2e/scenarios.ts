@@ -6,6 +6,10 @@ export const SCENARIOS = [
         id: "provider-contract",
         title: "live provider identities and persistent operator wallet contract",
     },
+    {
+        id: "onchain-boarding-topup",
+        title: "an on-chain deposit boards through the admin API into usable inventory",
+    },
     { id: "329-sat-bitcoin-recycle", title: "Alice sends Bob 329 sats with Taxi's one-sat loan" },
     {
         id: "receiver-sse-recycle",
@@ -82,7 +86,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 21;
+export const EXPECTED_TOTAL = 22;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

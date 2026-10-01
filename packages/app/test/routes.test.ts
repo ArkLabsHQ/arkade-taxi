@@ -44,6 +44,7 @@ import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createAdminApp, createApp } from "../src/server.js";
 import { INDEX_HTML } from "../src/admin/static.js";
+import { boardingView } from "./admin/fixtures.js";
 import type { SweeperStatus } from "../src/sweeper.js";
 import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
@@ -1642,6 +1643,12 @@ describe("CORS", () => {
             sweeperIntervalMs: 1_000,
             sweeperRunning: () => true,
             rescan: async () => {},
+            boarding: {
+                status: () => boardingView().job,
+                address: async () => "bcrt1pboarding",
+                utxos: async () => [],
+                start: async () => {},
+            },
         };
     };
     const corsApp = () => createApp(serverDeps());

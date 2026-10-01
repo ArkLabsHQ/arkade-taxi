@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { expect } from "vitest";
-import { EsploraProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
+import { EsploraProvider, RestIndexerProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
 import { openDatabase } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
@@ -17,6 +17,8 @@ import {
     normalizeExpiry,
     verifyProviders,
 } from "../packages/app/src/arkade/providers.js";
+import { mineBlocks } from "../scripts/e2e-mine.mjs";
+import { admin, poll, required } from "./fixtures.js";
 import { liveScenario } from "./scenarios.js";
 
 liveScenario("provider-contract", async () => {
@@ -146,4 +148,75 @@ liveScenario("provider-contract", async () => {
             throw new Error("refusing cleanup outside temp");
         rmSync(target, { recursive: true });
     }
+});
+
+liveScenario("onchain-boarding-topup", async () => {
+    const config = await resolveRuntimeConfig(loadConfig(process.env));
+    const before = await admin("funding");
+    const boarded = BigInt(before.boarding.confirmedSats) + 123_000n;
+    execFileSync(
+        process.execPath,
+        [
+            required("ARKADE_REGTEST_CLI"),
+            "faucet",
+            before.boarding.address,
+            "0.00123",
+            "--env",
+            required("ARKADE_REGTEST_ENV"),
+        ],
+        { timeout: 120000, stdio: "pipe" },
+    );
+    await mineBlocks(1);
+    const funded = await poll(
+        "confirmed boarding deposit",
+        () => admin("funding"),
+        // usableSats is null while the runtime re-checks the wallet.
+        (funding) =>
+            funding.boarding.confirmedSats === boarded.toString() && funding.usableSats !== null,
+        120_000,
+    );
+    const usable = BigInt(funded.usableSats);
+
+    const response = await fetch(`${required("TAXI_E2E_ADMIN_URL")}/admin/api/funding/board`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },
+        body: "{}",
+    });
+    expect({ status: response.status, body: await response.json() }).toEqual({
+        status: 202,
+        body: { accepted: true, action: "board" },
+    });
+    const { boarding } = await poll(
+        "boarding job settles",
+        () => admin("funding"),
+        (funding) => funding.boarding.job.state !== "running",
+        240_000,
+    );
+    expect(boarding.job).toMatchObject({
+        state: "succeeded",
+        actor: "task13-e2e",
+        amountSats: boarded.toString(),
+        authorizedFeeSats: "0",
+        error: null,
+    });
+
+    const operatorScript = `5120${Buffer.from(config.operatorKey).toString("hex")}`;
+    const { vtxos } = await new RestIndexerProvider(required("TAXI_E2E_ARKD_URL")).getVtxos({
+        scripts: [operatorScript],
+        spendableOnly: true,
+    });
+    expect(
+        vtxos
+            .filter((coin) => coin.commitmentTxIds?.includes(boarding.job.commitmentTxid))
+            .map((coin) => coin.value),
+    ).toEqual([Number(boarded)]);
+    await poll(
+        "boarded coin counted as usable inventory",
+        () => admin("funding"),
+        (funding) => funding.usableSats !== null && BigInt(funding.usableSats) === usable + boarded,
+        120_000,
+    );
+    expect((await admin("policy/history?limit=50")).history).toContainEqual(
+        expect.objectContaining({ field: "operation", newValue: "board", actor: "task13-e2e" }),
+    );
 });
