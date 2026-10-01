@@ -23,6 +23,19 @@ import type {
     SwapFillStatusResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
+import {
+    decodeClaimsChanged,
+    decodeClaimsSnapshot,
+    decodeInfo,
+    decodeLockup,
+    decodeQuote,
+    decodeReceiveQuote,
+    decodeSponsoredQuote,
+    decodeStatus,
+    decodeSwapFillQuote,
+    decodeSwapFillStatus,
+} from "@arkade-taxi/client";
+import { openApiDocument, type Schema } from "../src/openapi.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
@@ -1700,5 +1713,130 @@ describe("CORS", () => {
         expect(preflight.status).not.toBe(204);
         expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
         expect(preflight.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+});
+
+describe("API documentation", () => {
+    const mismatches = (value: unknown, schema: Schema, at = "$"): string[] => {
+        if (schema.$ref)
+            return mismatches(
+                value,
+                openApiDocument.components.schemas[schema.$ref.split("/").pop()!]!,
+                at,
+            );
+        if (schema.oneOf)
+            return schema.oneOf.some((branch) => !mismatches(value, branch, at).length)
+                ? []
+                : [`${at} matches no oneOf branch`];
+        const type =
+            value === null
+                ? "null"
+                : Array.isArray(value)
+                  ? "array"
+                  : Number.isInteger(value)
+                    ? "integer"
+                    : typeof value;
+        const allowed = [schema.type ?? type].flat() as string[];
+        if (!allowed.includes(type) && !(type === "integer" && allowed.includes("number")))
+            return [`${at} is ${type}, not ${allowed.join(" | ")}`];
+        if (schema.const !== undefined && value !== schema.const)
+            return [`${at} is not ${schema.const}`];
+        if (schema.enum && !schema.enum.includes(value as string))
+            return [`${at} is outside its enum`];
+        if (schema.pattern && typeof value === "string" && !new RegExp(schema.pattern).test(value))
+            return [`${at} does not match ${schema.pattern}`];
+        if (Array.isArray(value))
+            return value.flatMap((item, i) => mismatches(item, schema.items!, `${at}[${i}]`));
+        if (type !== "object") return [];
+        const record = value as Record<string, unknown>;
+        return [
+            ...(schema.required ?? [])
+                .filter((key) => !(key in record))
+                .map((key) => `${at}.${key} is missing`),
+            ...Object.entries(record).flatMap(([key, item]) =>
+                schema.properties?.[key]
+                    ? mismatches(item, schema.properties[key], `${at}.${key}`)
+                    : schema.additionalProperties === false
+                      ? [`${at}.${key} is undocumented`]
+                      : [],
+            ),
+        ];
+    };
+
+    it("documents exactly the public routes the app registers", () => {
+        const registered = app()
+            .routes.map(({ method, path }) => `${method} ${path.replace(/:(\w+)/g, "{$1}")}`)
+            .filter((route) => route !== "GET /" && route !== "GET /openapi.json");
+        const documented = Object.entries(openApiDocument.paths).flatMap(([path, item]) =>
+            Object.keys(item).map((method) => `${method.toUpperCase()} ${path}`),
+        );
+        expect(documented.sort()).toEqual(registered.sort());
+    });
+
+    it("gives every success response a real example that its schema and the client decoder accept", () => {
+        const decoders: Record<string, (body: never) => unknown> = {
+            "GET /v1/info 200": decodeInfo,
+            "POST /v1/transfers 200": decodeQuote,
+            "POST /v1/transfers/{id}/lockup 200": decodeLockup,
+            "POST /v1/transfers/{id}/lockup 202": decodeLockup,
+            "GET /v1/transfers/{id} 200": decodeStatus,
+            "POST /v1/receive-quotes 200": decodeReceiveQuote,
+            "GET /v1/receive-quotes/{id} 200": decodeReceiveQuote,
+            "POST /v1/sponsored-transfers 200": decodeSponsoredQuote,
+            "POST /v1/sponsored-transfers/{id}/lockup 200": decodeLockup,
+            "POST /v1/sponsored-transfers/{id}/lockup 202": decodeLockup,
+            "GET /v1/sponsored-transfers/{id} 200": decodeStatus,
+            "POST /v1/swap-fills 200": decodeSwapFillQuote,
+            "GET /v1/swap-fills/{id} 200": decodeSwapFillStatus,
+            "POST /v1/swap-fills/{id}/submit 202": decodeSwapFillStatus,
+            "GET /v1/claims 200": decodeClaimsSnapshot,
+            "GET /v1/claims/events 200 claims-snapshot": decodeClaimsSnapshot,
+            "GET /v1/claims/events 200 claims-changed": decodeClaimsChanged,
+        };
+        const decoded: string[] = [];
+        for (const [path, item] of Object.entries(openApiDocument.paths))
+            for (const [method, operation] of Object.entries(item))
+                for (const [status, response] of Object.entries(operation!.responses)) {
+                    if (!status.startsWith("2")) continue;
+                    const key = `${method.toUpperCase()} ${path} ${status}`;
+                    for (const [type, { schema, example }] of Object.entries(response.content!)) {
+                        expect(example, key).toBeDefined();
+                        const bodies: [string, unknown, Schema][] =
+                            type === "text/event-stream"
+                                ? [...String(example).matchAll(/^event: (\S+)\ndata: (.+)$/gm)].map(
+                                      ([, event, data]) => [
+                                          `${key} ${event}`,
+                                          JSON.parse(data!),
+                                          { $ref: "#/components/schemas/ClaimsSnapshot" },
+                                      ],
+                                  )
+                                : [[key, example, schema]];
+                        for (const [name, body, bodySchema] of bodies) {
+                            expect(mismatches(body, bodySchema), name).toEqual([]);
+                            if (!decoders[name]) continue;
+                            expect(() => decoders[name]!(body as never), name).not.toThrow();
+                            decoded.push(name);
+                        }
+                    }
+                }
+        expect(decoded.sort()).toEqual(Object.keys(decoders).sort());
+    });
+
+    it("serves the document as JSON and a Redoc page that loads it with a pinned integrity", async () => {
+        const spec = await app().request("/openapi.json");
+        expect(spec.status).toBe(200);
+        expect(spec.headers.get("content-type")).toMatch(/^application\/json/);
+        expect(await spec.json()).toEqual(openApiDocument);
+        expect(openApiDocument.info.title).toBe("Arkade Taxi API");
+
+        const page = await app().request("/");
+        expect(page.status).toBe(200);
+        expect(page.headers.get("content-type")).toMatch(/^text\/html/);
+        const html = await page.text();
+        expect(html).toContain("<title>Arkade Taxi API</title>");
+        expect(html).toContain('spec-url="/openapi.json"');
+        expect(html).toMatch(
+            /<script\s+src="https:\/\/cdn\.jsdelivr\.net\/npm\/redoc@2\.\d+\.\d+\/bundles\/redoc\.standalone\.js"\s+integrity="sha384-[A-Za-z0-9+/]{64}"\s+crossorigin="anonymous"\s*><\/script>/,
+        );
     });
 });

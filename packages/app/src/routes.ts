@@ -28,6 +28,7 @@ import type { SwapFillReconciler } from "./swapFillReconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
+import { DOCS_HTML, openApiDocument } from "./openapi.js";
 
 export interface RouteDeps extends QuoteDeps {
     receiveQuotes: ReceiveQuoteDeps["receiveQuotes"];
@@ -571,6 +572,9 @@ export function createRoutes(deps: RouteDeps): Hono {
         const { body, ready } = operationalSnapshot(deps);
         return c.json(body, ready ? 200 : 503);
     });
+
+    app.get("/openapi.json", (c) => c.json(openApiDocument));
+    app.get("/", (c) => c.html(DOCS_HTML));
 
     return app;
 }
