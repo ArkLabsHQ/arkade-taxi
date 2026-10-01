@@ -124,11 +124,12 @@ pnpm verify:artifacts
 pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
+pnpm lint
 pnpm test
 pnpm format:check
 ```
 
-Run all four gates. `build` passing while `typecheck` fails, and the reverse,
+Run all five gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
 A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.4.74` and

@@ -7,11 +7,12 @@ Working notes for anyone — human or agent — changing this repository.
 ```
 pnpm -r build
 pnpm typecheck
+pnpm lint
 pnpm test
 pnpm format:check
 ```
 
-Run all four. `build` passing while `typecheck` fails, and the reverse, both
+Run all five. `build` passing while `typecheck` fails, and the reverse, both
 happen.
 
 ## The covenant is ported, not authored
