@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, type ExtendedCoin, type Wallet, type WalletConfig } from "@arkade-os/sdk";
+import {
+    ArkAddress,
+    CSVMultisigTapscript,
+    type ExtendedCoin,
+    type Wallet,
+    type WalletConfig,
+} from "@arkade-os/sdk";
 import { openDatabase, type Database } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
@@ -14,8 +20,14 @@ afterEach(() => {
 });
 
 const address = new ArkAddress(serverKey, operatorKey, "tark").encode();
-const deposit = (vout: number, value: number, confirmed = true) =>
-    ({ txid: "dd".repeat(32), vout, value, status: { confirmed } }) as ExtendedCoin;
+const deposit = (vout: number, value: number, confirmed = true, block_time?: number) =>
+    ({
+        txid: "dd".repeat(32),
+        vout,
+        value,
+        status: block_time === undefined ? { confirmed } : { confirmed, block_time },
+    }) as ExtendedCoin;
+const EXIT_DELAY = 604_672;
 const withFees = (intentFee: Record<string, string>) =>
     arkInfo({ fees: { intentFee, txFeeRate: "0" } });
 const fees = withFees({ onchainInput: "100.0", offchainOutput: "50.0" });
@@ -26,6 +38,7 @@ function setup(boardingMaxFeeSats = 0n, info = withFees({})) {
     const cfg = config({ addressHrp: "tark", boardingMaxFeeSats });
     let walletConfig!: WalletConfig;
     let held: Promise<void> | undefined;
+    let deposits = [deposit(0, 60_000), deposit(1, 40_000), deposit(2, 5_000, false)];
     const settle = vi.fn(async (_params: unknown) => {
         await walletConfig.arkProvider!.registerIntent({} as never);
         await held;
@@ -40,11 +53,15 @@ function setup(boardingMaxFeeSats = 0n, info = withFees({})) {
     const wallet = {
         getAddress: async () => address,
         getSpendableVtxos: async () => [fundingCoin()],
-        getBoardingUtxos: async () => [
-            deposit(0, 60_000),
-            deposit(1, 40_000),
-            deposit(2, 5_000, false),
-        ],
+        getBoardingUtxos: async () => deposits,
+        boardingTapscript: {
+            exitScript: bytesToHex(
+                CSVMultisigTapscript.encode({
+                    pubkeys: [operatorKey],
+                    timelock: { type: "seconds", value: BigInt(EXIT_DELAY) },
+                }).script,
+            ),
+        },
         getContractManager: async () => ({
             getSyncState: () => ({ mode: "online", lastSyncedAt: 1 }),
         }),
@@ -75,6 +92,9 @@ function setup(boardingMaxFeeSats = 0n, info = withFees({})) {
         settle,
         register,
         boarding: createBoarding({ config: cfg, runtime }),
+        setDeposits(next: ExtendedCoin[]) {
+            deposits = next;
+        },
         hold() {
             let release!: () => void;
             held = new Promise<void>((resolve) => (release = resolve));
@@ -107,6 +127,31 @@ describe("on-chain boarding", () => {
             maxFeeSats: "250",
             commitmentTxid: "cc".repeat(32),
             error: null,
+        });
+    });
+
+    it("boards a fresh deposit but never an expired one, which it reports as expiredSats", async () => {
+        const s = setup();
+        const now = Math.floor(Date.now() / 1000);
+        const fresh = deposit(0, 60_000, true, now - 60);
+        const expired = deposit(1, 40_000, true, now - EXIT_DELAY - 60);
+        s.setDeposits([fresh, expired, deposit(2, 5_000, false)]);
+
+        await s.boarding.start("alice");
+        await vi.waitFor(() => expect(s.boarding.status().state).toBe("succeeded"));
+        expect(s.settle.mock.calls).toEqual([
+            [{ inputs: [fresh], outputs: [{ address, amount: 60_000n }] }],
+        ]);
+        expect(await s.boarding.deposits()).toEqual({
+            confirmedSats: 60_000n,
+            unconfirmedSats: 5_000n,
+            expiredSats: 40_000n,
+        });
+
+        s.setDeposits([expired]);
+        await expect(s.boarding.start("alice")).rejects.toMatchObject({
+            code: "boarding_nothing_confirmed",
+            status: 409,
         });
     });
 

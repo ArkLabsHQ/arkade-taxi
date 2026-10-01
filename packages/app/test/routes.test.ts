@@ -1646,7 +1646,7 @@ describe("CORS", () => {
             boarding: {
                 status: () => boardingView().job,
                 address: async () => "bcrt1pboarding",
-                utxos: async () => [],
+                deposits: async () => boardingView().deposits!,
                 start: async () => {},
             },
         };

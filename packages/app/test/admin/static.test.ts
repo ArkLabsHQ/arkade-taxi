@@ -599,7 +599,9 @@ describe("the dashboard is dependency-free", () => {
                         assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
                     }),
                 ],
-                boarding: boardingView(),
+                boarding: boardingView({
+                    deposits: { confirmedSats: 0n, unconfirmedSats: 0n, expiredSats: 7_000n },
+                }),
             }),
         });
         const opened = new Date(2026, 0, 1, 9, 0, 0);
@@ -615,9 +617,9 @@ describe("the dashboard is dependency-free", () => {
         expect(text("funding-reserved")).toBe("0 sats");
         expect(text("funding-threshold")).toBe("10 000 sats");
         expect(text("funding-state")).toBe("below reserve");
-        expect(dashboard.element("funding-board").disabled, "nothing confirmed to board").toBe(
-            true,
-        );
+        expect(dashboard.element("funding-board").disabled, "only expired deposits").toBe(true);
+        expect(text("funding-boarding-expired")).toBe("7 000 sats");
+        expect(dashboard.element("funding-boarding-sweep").hidden).toBe(false);
         expect(
             dashboard
                 .element("funding-assets")
@@ -644,19 +646,13 @@ describe("the dashboard is dependency-free", () => {
     it("boards confirmed on-chain deposits from the funding card, then reloads it", async () => {
         const boarded: string[] = [];
         let job = boardingView().job;
-        const deposit = (vout: number, value: number, confirmed: boolean) => ({
-            txid: "dd".repeat(32),
-            vout,
-            value,
-            status: { confirmed },
-        });
         const admin = harness({
             funding: async () => ({
                 config: config(),
                 inventory: undefined,
                 coins: [],
                 boarding: boardingView({
-                    utxos: [deposit(0, 60_000, true), deposit(1, 5_000, false)],
+                    deposits: { confirmedSats: 60_000n, unconfirmedSats: 5_000n, expiredSats: 0n },
                     job,
                 }),
             }),
@@ -673,6 +669,7 @@ describe("the dashboard is dependency-free", () => {
         expect(text("funding-boarding-unconfirmed")).toBe("5 000 sats");
         expect(text("funding-board-state")).toBe("idle");
         expect(dashboard.element("funding-board").disabled).toBe(false);
+        expect(dashboard.element("funding-boarding-sweep").hidden, "nothing expired").toBe(true);
         dashboard.element("funding-boarding-copy").fire("click");
         await vi.waitFor(() => expect(dashboard.copied).toEqual(["bcrt1pboarding"]));
 

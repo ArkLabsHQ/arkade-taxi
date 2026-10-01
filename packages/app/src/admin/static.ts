@@ -144,6 +144,10 @@ export const INDEX_HTML = `<!doctype html>
                         <dt>On-chain unconfirmed</dt>
                         <dd id="funding-boarding-unconfirmed">—</dd>
                     </div>
+                    <div>
+                        <dt>On-chain expired</dt>
+                        <dd id="funding-boarding-expired">—</dd>
+                    </div>
                 </dl>
                 <div class="panel__body">
                     <p class="label">Arkade address</p>
@@ -163,6 +167,9 @@ export const INDEX_HTML = `<!doctype html>
                     <p class="note">
                         Send bitcoin on-chain to this address. Board settles every confirmed deposit
                         into the Arkade address above in the next batch.
+                    </p>
+                    <p class="note is-error" id="funding-boarding-sweep" hidden>
+                        Expired deposits must be swept on-chain with the operator key.
                     </p>
                     <p class="note" id="funding-board-note" aria-live="polite"></p>
                 </div>
@@ -1186,6 +1193,9 @@ function renderFunding(funding) {
     $("funding-boarding-copy").disabled = false;
     $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
     $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
+    $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-boarding-sweep").hidden =
+        boarding.expiredSats === null || BigInt(boarding.expiredSats) === 0n;
     $("funding-board").disabled =
         boarding.confirmedSats === null ||
         BigInt(boarding.confirmedSats) === 0n ||

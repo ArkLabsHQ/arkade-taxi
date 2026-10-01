@@ -238,9 +238,13 @@ Job state lives in memory: a restart forgets it but loses no funds. Before
 registration nothing was sent. A registered intent the restarted process no
 longer answers is dropped at the next batch, leaving the deposit on-chain to
 board again. A batch that had already finalized delivered the coin to the
-operator's Arkade address, where the wallet finds it. Board promptly: once a
-deposit's boarding exit delay has passed, the Arkade Service no longer accepts
-it, and only the operator key's unilateral exit path can spend it.
+operator's Arkade address, where the wallet finds it.
+
+Board promptly. Once a deposit's boarding exit delay (arkd's
+`boardingExitDelay`) has passed, the Arkade Service no longer accepts it. The
+card then counts it under "On-chain expired" instead of confirmed, and Board
+leaves it out, the same filter the SDK's own `settle()` applies. Only the
+operator key's unilateral exit path can spend it: sweep it on-chain.
 
 ## Backup and restore
 

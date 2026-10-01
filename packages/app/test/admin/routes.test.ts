@@ -193,14 +193,8 @@ describe("GET /admin/api/funding", () => {
             assetId: taxiAssetIdToSwapId({ txid, groupIndex }),
             amount,
         });
-        const deposit = (vout: number, value: number, confirmed: boolean) => ({
-            txid: "dd".repeat(32),
-            vout,
-            value,
-            status: { confirmed },
-        });
         const boarding = boardingView({
-            utxos: [deposit(0, 60_000, true), deposit(1, 40_000, true), deposit(2, 5_000, false)],
+            deposits: { confirmedSats: 100_000n, unconfirmedSats: 5_000n, expiredSats: 40_000n },
         });
         const funding = async () => ({
             config: config({ addressHrp: "tark" }),
@@ -235,6 +229,7 @@ describe("GET /admin/api/funding", () => {
                     address: "bcrt1pboarding",
                     confirmedSats: "100000",
                     unconfirmedSats: "5000",
+                    expiredSats: "40000",
                     job: boarding.job,
                 },
             });

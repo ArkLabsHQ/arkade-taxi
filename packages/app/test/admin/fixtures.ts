@@ -12,7 +12,7 @@ type BoardingView = Awaited<ReturnType<AdminDeps["funding"]>>["boarding"];
 
 export const boardingView = (over: Partial<BoardingView> = {}): BoardingView => ({
     address: "bcrt1pboarding",
-    utxos: [],
+    deposits: { confirmedSats: 0n, unconfirmedSats: 0n, expiredSats: 0n },
     job: {
         state: "idle",
         actor: null,

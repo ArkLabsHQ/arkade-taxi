@@ -247,6 +247,9 @@ function renderFunding(funding) {
     $("funding-boarding-copy").disabled = false;
     $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
     $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
+    $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-boarding-sweep").hidden =
+        boarding.expiredSats === null || BigInt(boarding.expiredSats) === 0n;
     $("funding-board").disabled =
         boarding.confirmedSats === null ||
         BigInt(boarding.confirmedSats) === 0n ||

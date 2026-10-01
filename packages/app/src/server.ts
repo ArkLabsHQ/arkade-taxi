@@ -60,7 +60,7 @@ function fundingRead<T>(read: () => Promise<T>, nowMs: () => number): () => Prom
  */
 function adminDeps(deps: ServerDeps) {
     const coins = fundingRead(() => deps.inventory.getSpendableVtxos(), deps.nowMs);
-    const deposits = fundingRead(() => deps.boarding.utxos(), deps.nowMs);
+    const deposits = fundingRead(() => deps.boarding.deposits(), deps.nowMs);
     return {
         advances: deps.advances,
         policy: deps.policy,
@@ -90,7 +90,7 @@ function adminDeps(deps: ServerDeps) {
             coins: await coins(),
             boarding: {
                 address: await deps.boarding.address(),
-                utxos: await deposits().catch(() => null),
+                deposits: await deposits().catch(() => null),
                 job: deps.boarding.status(),
             },
         }),

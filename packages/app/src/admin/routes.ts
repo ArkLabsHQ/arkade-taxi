@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import type { Context, Hono } from "hono";
 import { z } from "zod";
-import { ArkAddress, type Coin, type VirtualCoin } from "@arkade-os/sdk";
+import { ArkAddress, type VirtualCoin } from "@arkade-os/sdk";
 import {
     isExposed,
     validateFareOption,
@@ -25,7 +25,7 @@ import {
     satsToWire,
 } from "@arkade-taxi/protocol";
 import { assetRuleToWire } from "../rulesWire.js";
-import type { BoardingStatus } from "../boarding.js";
+import type { BoardingDeposits, BoardingStatus } from "../boarding.js";
 import { sanitizeOperationalError, ServiceError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
@@ -68,7 +68,7 @@ export interface AdminDeps {
         boarding: {
             address: string;
             /** Null when the on-chain read failed. */
-            utxos: readonly Coin[] | null;
+            deposits: BoardingDeposits | null;
             job: BoardingStatus;
         };
     }>;
@@ -93,15 +93,6 @@ const MAX_ACTOR_LENGTH = 128;
 const message = (e: unknown): string => sanitizeOperationalError(e, "operation failed");
 
 const isSats = (s: string): boolean => /^[0-9]+$/.test(s) && BigInt(s) <= INT64_MAX;
-
-const boardingSats = (utxos: readonly Coin[] | null, confirmed: boolean) =>
-    utxos === null
-        ? null
-        : satsToWire(
-              utxos
-                  .filter((u) => u.status.confirmed === confirmed)
-                  .reduce((sum, u) => sum + BigInt(u.value), 0n),
-          );
 
 // zod runs a transform even when an earlier refinement failed, so this one has
 // to be total. The fallback is discarded along with the 400.
@@ -506,6 +497,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
     app.get(at("/api/funding"), async (c) => {
         try {
             const { config, inventory, coins, boarding } = await deps.funding();
+            const { deposits } = boarding;
             return ok(c, {
                 arkAddress: new ArkAddress(
                     config.serverPubkey,
@@ -521,8 +513,9 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                 })),
                 boarding: {
                     address: boarding.address,
-                    confirmedSats: boardingSats(boarding.utxos, true),
-                    unconfirmedSats: boardingSats(boarding.utxos, false),
+                    confirmedSats: deposits && satsToWire(deposits.confirmedSats),
+                    unconfirmedSats: deposits && satsToWire(deposits.unconfirmedSats),
+                    expiredSats: deposits && satsToWire(deposits.expiredSats),
                     job: boarding.job,
                 },
             });

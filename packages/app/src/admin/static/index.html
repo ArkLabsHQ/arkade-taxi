@@ -133,6 +133,10 @@
                         <dt>On-chain unconfirmed</dt>
                         <dd id="funding-boarding-unconfirmed">—</dd>
                     </div>
+                    <div>
+                        <dt>On-chain expired</dt>
+                        <dd id="funding-boarding-expired">—</dd>
+                    </div>
                 </dl>
                 <div class="panel__body">
                     <p class="label">Arkade address</p>
@@ -152,6 +156,9 @@
                     <p class="note">
                         Send bitcoin on-chain to this address. Board settles every confirmed deposit
                         into the Arkade address above in the next batch.
+                    </p>
+                    <p class="note is-error" id="funding-boarding-sweep" hidden>
+                        Expired deposits must be swept on-chain with the operator key.
                     </p>
                     <p class="note" id="funding-board-note" aria-live="polite"></p>
                 </div>

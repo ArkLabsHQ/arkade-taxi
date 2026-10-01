@@ -1,9 +1,12 @@
 import {
     ArkAddress,
+    CSVMultisigTapscript,
     Estimator,
+    hasBoardingTxExpired,
     type Coin,
     type ExtendedCoin,
     type IntentFeeConfig,
+    type Wallet,
 } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import type { RuntimeConfig } from "./config.js";
@@ -19,6 +22,12 @@ export interface BoardingStatus {
     maxFeeSats: string;
     commitmentTxid: string | null;
     error: string | null;
+}
+
+export interface BoardingDeposits {
+    confirmedSats: bigint;
+    unconfirmedSats: bigint;
+    expiredSats: bigint;
 }
 
 const fail = (code: string): never => {
@@ -39,6 +48,24 @@ export function boardingFee(inputs: readonly Coin[], fees: IntentFeeConfig, scri
     );
     const amount = total(inputs) - inputFees;
     return inputFees + checkedFee(estimator.evalOffchainOutput({ amount, script }).satoshis);
+}
+
+/** Expiry exactly as `Wallet.settle()` drops it from its default inputs (SDK 0.4.77,
+ * dist/chunk-S453MR7E.js:15408-15419): once the exit path matures, arkd refuses it. */
+async function boardingDeposits(wallet: Wallet) {
+    const utxos = await wallet.getBoardingUtxos();
+    const exit = CSVMultisigTapscript.decode(hex.decode(wallet.boardingTapscript.exitScript));
+    const { timelock } = exit.params;
+    const height =
+        timelock.type === "blocks"
+            ? (await wallet.onchainProvider.getChainTip()).height
+            : undefined;
+    const expired = (c: ExtendedCoin) => hasBoardingTxExpired(c, timelock, height);
+    return {
+        boardable: utxos.filter((c) => c.status.confirmed && !expired(c)),
+        unconfirmed: utxos.filter((c) => !c.status.confirmed),
+        expired: utxos.filter(expired),
+    };
 }
 
 export function createBoarding({
@@ -74,7 +101,14 @@ export function createBoarding({
     return {
         status: () => status,
         address: async () => wallet().getBoardingAddress(),
-        utxos: async (): Promise<Coin[]> => wallet().getBoardingUtxos(),
+        deposits: async (): Promise<BoardingDeposits> => {
+            const { boardable, unconfirmed, expired } = await boardingDeposits(wallet());
+            return {
+                confirmedSats: total(boardable),
+                unconfirmedSats: total(unconfirmed),
+                expiredSats: total(expired),
+            };
+        },
         stop() {
             stopped = true;
         },
@@ -86,14 +120,12 @@ export function createBoarding({
             const accepted = new Promise<void>((resolve) => (accept = resolve));
             const job = runtime.withSettlement(
                 async (wallet) => {
-                    const inputs = (await wallet.getBoardingUtxos()).filter(
-                        (c) => c.status.confirmed,
-                    );
+                    const inputs = (await boardingDeposits(wallet)).boardable;
                     if (!inputs.length)
                         throw new ServiceError(
                             "boarding_nothing_confirmed",
                             409,
-                            "no confirmed on-chain deposit to board",
+                            "no confirmed, unexpired on-chain deposit to board",
                         );
                     const info = await wallet.arkProvider.getInfo();
                     const fee = boardingFee(inputs, info.fees?.intentFee ?? {}, script);
