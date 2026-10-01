@@ -120,6 +120,7 @@ export const INDEX_HTML = `<!doctype html>
                     <div class="actions">
                         <button type="button" id="funding-copy" disabled>Copy address</button>
                         <span class="meta" id="funding-state">unknown</span>
+                        <span class="meta" id="funding-loaded"></span>
                     </div>
                 </div>
                 <dl class="states operational">
@@ -1158,6 +1159,7 @@ function renderFunding(funding) {
         body.append(tr);
     }
     $("funding-assets-empty").hidden = funding.assets.length > 0;
+    $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
 function renderAdvances(rows) {

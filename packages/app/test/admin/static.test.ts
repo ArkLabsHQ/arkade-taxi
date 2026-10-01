@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness } from "./fixtures.js";
+
+afterEach(() => vi.useRealTimers());
 
 const asset = (name: string): string =>
     readFileSync(fileURLToPath(new URL(`../../src/admin/static/${name}`, import.meta.url)), "utf8")
@@ -599,11 +601,15 @@ describe("the dashboard is dependency-free", () => {
                 ],
             }),
         });
+        const opened = new Date(2026, 0, 1, 9, 0, 0);
+        const later = new Date(2026, 0, 1, 9, 0, 7);
+        vi.setSystemTime(opened);
         const dashboard = runDashboard(() => dashboardPage([], "8".repeat(64), null), admin);
         const text = (id: string) => dashboard.element(id).textContent;
         const address = new ArkAddress(serverKey, operatorKey, "ark").encode();
 
         await vi.waitFor(() => expect(text("funding-address")).toBe(address));
+        expect(text("funding-loaded")).toBe("loaded " + opened.toLocaleTimeString());
         expect(text("funding-usable")).toBe("2 500 sats");
         expect(text("funding-reserved")).toBe("0 sats");
         expect(text("funding-threshold")).toBe("10 000 sats");
@@ -620,9 +626,14 @@ describe("the dashboard is dependency-free", () => {
         const fundingLoads = () =>
             dashboard.requests.filter((path) => path === "/admin/api/funding").length;
         expect(fundingLoads()).toBe(1);
+        vi.setSystemTime(later);
         await dashboard.poll();
         expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
+        expect(text("funding-loaded")).toBe("loaded " + opened.toLocaleTimeString());
         dashboard.element("refresh").fire("click");
         await vi.waitFor(() => expect(fundingLoads()).toBe(2));
+        await vi.waitFor(() =>
+            expect(text("funding-loaded")).toBe("loaded " + later.toLocaleTimeString()),
+        );
     });
 });

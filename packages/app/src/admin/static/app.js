@@ -242,6 +242,7 @@ function renderFunding(funding) {
         body.append(tr);
     }
     $("funding-assets-empty").hidden = funding.assets.length > 0;
+    $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
 function renderAdvances(rows) {
