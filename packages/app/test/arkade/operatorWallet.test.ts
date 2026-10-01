@@ -747,6 +747,29 @@ describe("the SDK's background settlement", () => {
         expect(s.events).toEqual(["settle:cc", "settle:end", "settle:aa", "settle:end"]);
     });
 
+    it("never lets a hung settle stop recovery when the provider changes, nor register after", async () => {
+        const s = setup();
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await s.runtime.refresh();
+        const retired = s.walletConfig;
+        s.holdSettle();
+        const hung = s.renew();
+        await vi.waitFor(() => expect(s.events).toEqual(["settle:aa"]));
+
+        s.setInfo(arkInfo({ digest: "changed" }));
+        await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
+        await expect(hung).rejects.toThrow("background_settlement_not_authorized");
+        await expect(
+            s.runtime.withSettlement(
+                async () => retired.arkProvider!.registerIntent(proofOf([])),
+                async () => () => {},
+            ),
+        ).rejects.toThrow("proceeds_submission_not_authorized");
+        expect(register).toHaveBeenCalledTimes(1);
+    });
+
     it("stops renewing coins that cannot outlive the threshold, and keeps boarding", async () => {
         const s = setup();
         vi.spyOn(s.runtime.providers.arkProvider, "registerIntent").mockResolvedValue("intent");

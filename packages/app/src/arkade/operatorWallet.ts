@@ -66,6 +66,9 @@ export function createOperatorRuntime(
     let settlement: Promise<void> | undefined;
     let settlementGuard: SettlementGuard | undefined;
     let backgroundSettling = false;
+    // The current wallet's token. A retired wallet may not register intents.
+    let live: object | undefined;
+    let retire = () => {};
     let turns: Promise<unknown> = Promise.resolve();
     // One settlement at a time, the proceeds worker's or the SDK's, in arrival order.
     const oneSettlement = <T>(work: () => Promise<T>): Promise<T> => {
@@ -107,6 +110,13 @@ export function createOperatorRuntime(
         return { ...state, blockers: [...state.blockers, ...(stale ? ["runtime_stale"] : [])] };
     };
 
+    const dropWallet = async () => {
+        retire();
+        const old = wallet;
+        wallet = undefined;
+        await old?.dispose();
+    };
+
     const check = async (): Promise<RuntimeSafety> => {
         snapshot = closed("runtime_checking");
         const verified = await verifyProviders(config, options.providers ?? providers);
@@ -135,16 +145,25 @@ export function createOperatorRuntime(
             typeof value === "bigint" ? value.toString() : value,
         );
         if (wallet && (result.blockers.length || fingerprint !== infoFingerprint)) {
-            if (settlement || backgroundSettling) {
+            // Only the proceeds worker, inside its turn, keeps the old wallet: never a background settle.
+            if (settlementGuard) {
                 result.blockers.push("operator_settlement_provider_changed");
                 return result;
             }
-            await wallet.dispose();
-            wallet = undefined;
+            await dropWallet();
         }
         if (result.blockers.length || stopped) return result;
         try {
             if (!wallet) {
+                const token = {};
+                live = token;
+                const retired = new Promise<never>((_, reject) => {
+                    retire = () => {
+                        live = undefined;
+                        reject(new Error("background_settlement_not_authorized"));
+                    };
+                });
+                retired.catch(() => {});
                 const created = await sdkBackground.run(true, () =>
                     (options.walletFactory ?? Wallet.create)({
                         identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
@@ -154,7 +173,7 @@ export function createOperatorRuntime(
                                 intent: Parameters<typeof providers.arkProvider.registerIntent>[0],
                             ) => {
                                 if (sdkBackground.getStore()) {
-                                    if (!backgroundSettling || stopped)
+                                    if (!backgroundSettling || stopped || live !== token)
                                         throw new Error("background_settlement_not_authorized");
                                     const proof = Transaction.fromPSBT(base64.decode(intent.proof));
                                     const taken = await held();
@@ -168,7 +187,7 @@ export function createOperatorRuntime(
                                     }
                                     return providers.arkProvider.registerIntent(intent);
                                 }
-                                if (!settlementGuard)
+                                if (!settlementGuard || live !== token)
                                     throw new Error("proceeds_submission_not_authorized");
                                 const enter = await settlementGuard(intent);
                                 enter();
@@ -189,9 +208,12 @@ export function createOperatorRuntime(
                 created.settle = (...args) =>
                     sdkBackground.getStore()
                         ? oneSettlement(async () => {
+                              if (live !== token)
+                                  throw new Error("background_settlement_not_authorized");
                               backgroundSettling = true;
                               try {
-                                  return await settle(...args);
+                                  // A retired wallet's settle may never return; its turn ends anyway.
+                                  return await Promise.race([settle(...args), retired]);
                               } finally {
                                   backgroundSettling = false;
                               }
@@ -216,8 +238,7 @@ export function createOperatorRuntime(
                 infoFingerprint = fingerprint;
             }
             if (stopped) {
-                await wallet.dispose();
-                wallet = undefined;
+                await dropWallet();
                 return closed("runtime_stopped");
             }
             const address = ArkAddress.decode(await wallet.getAddress());
@@ -226,8 +247,7 @@ export function createOperatorRuntime(
                 new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).encode()
             ) {
                 result.blockers.push("operator_payout_mismatch");
-                await wallet.dispose();
-                wallet = undefined;
+                await dropWallet();
                 return result;
             }
             const [tip, coins] = await Promise.allSettled([
@@ -472,9 +492,9 @@ export function createOperatorRuntime(
             await admission;
             await pending;
             await settlement;
+            retire();
             await turns;
-            await wallet?.dispose();
-            wallet = undefined;
+            await dropWallet();
         },
     };
 }
