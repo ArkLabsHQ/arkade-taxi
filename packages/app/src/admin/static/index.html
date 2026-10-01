@@ -318,7 +318,7 @@
                                     type="text"
                                     id="rule-asset"
                                     class="asset-input"
-                                    placeholder="txid:group"
+                                    placeholder="asset id from your wallet"
                                     spellcheck="false"
                                 />
                                 <button type="button" id="rule-add-asset">Add asset</button>
@@ -495,13 +495,12 @@
                             id="wiz-assets"
                             rows="4"
                             spellcheck="false"
-                            placeholder="txid:group"
+                            placeholder="asset id from your wallet, one per line"
                             aria-describedby="wiz-assets-hint"
                         ></textarea>
                         <span class="hint" id="wiz-assets-hint"
-                            >One per line: the asset's 64-character txid, a colon, then its group
-                            number, as the Funding card lists them. Each asset needs its own line;
-                            there is no "any asset".</span
+                            >One per line: the 68-character asset id your wallet shows. Each asset
+                            needs its own line; there is no "any asset".</span
                         >
                     </p>
                 </section>

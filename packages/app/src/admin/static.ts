@@ -329,7 +329,7 @@ export const INDEX_HTML = `<!doctype html>
                                     type="text"
                                     id="rule-asset"
                                     class="asset-input"
-                                    placeholder="txid:group"
+                                    placeholder="asset id from your wallet"
                                     spellcheck="false"
                                 />
                                 <button type="button" id="rule-add-asset">Add asset</button>
@@ -506,13 +506,12 @@ export const INDEX_HTML = `<!doctype html>
                             id="wiz-assets"
                             rows="4"
                             spellcheck="false"
-                            placeholder="txid:group"
+                            placeholder="asset id from your wallet, one per line"
                             aria-describedby="wiz-assets-hint"
                         ></textarea>
                         <span class="hint" id="wiz-assets-hint"
-                            >One per line: the asset's 64-character txid, a colon, then its group
-                            number, as the Funding card lists them. Each asset needs its own line;
-                            there is no "any asset".</span
+                            >One per line: the 68-character asset id your wallet shows. Each asset
+                            needs its own line; there is no "any asset".</span
                         >
                     </p>
                 </section>
@@ -1321,7 +1320,7 @@ body.is-alarm .headline__sweeper {
 }
 
 .asset-input {
-    max-width: 44ch;
+    max-width: 72ch;
 }
 
 .warn,
@@ -1795,7 +1794,7 @@ const STEP_NAMES = {
 };
 
 const ASSET_ID_HELP =
-    "Write an asset id as the Funding card lists it: its 64-character txid, a colon, then its group number, e.g. 1f2e…:0.";
+    "Paste the asset id your wallet shows: 68 characters of 0-9 and a-f. The txid:group form also works.";
 
 const $ = (id) => document.getElementById(id);
 
@@ -2565,11 +2564,25 @@ function fillPolicyForm(policy) {
 }
 
 const assetKey = (id) => id.txid + ":" + id.groupIndex;
+const reverseBytes = (hex) => hex.match(/../g).reverse().join("");
+const byteHex = (n) => n.toString(16).padStart(2, "0");
+
+// The wallet's id is the txid bytes then the group as uint16 little-endian; the
+// Taxi keeps those txid bytes reversed, as swapIdToTaxiAssetId does.
+const walletAssetId = (id) =>
+    reverseBytes(id.txid) + byteHex(id.groupIndex & 255) + byteHex(id.groupIndex >> 8);
+
 const assetLabel = (id) =>
-    id === null ? "Bitcoin" : id.txid.slice(0, 8) + "…" + id.txid.slice(-4) + ":" + id.groupIndex;
+    id === null ? "Bitcoin" : walletAssetId(id).slice(0, 8) + "…" + walletAssetId(id).slice(-8);
 
 function parseAssetId(text) {
-    const m = /^([0-9a-f]{64}):([0-9]{1,5})$/.exec(text.trim().toLowerCase());
+    const s = text.trim().toLowerCase();
+    if (/^[0-9a-f]{68}$/.test(s))
+        return {
+            txid: reverseBytes(s.slice(0, 64)),
+            groupIndex: parseInt(s.slice(66, 68) + s.slice(64, 66), 16),
+        };
+    const m = /^([0-9a-f]{64}):([0-9]{1,5})$/.exec(s);
     return m && Number(m[2]) <= 65535 ? { txid: m[1], groupIndex: Number(m[2]) } : null;
 }
 
@@ -2730,7 +2743,7 @@ function renderRules() {
         const label = assetLabel(rule.assetId);
         const asset = cell("th", label);
         asset.scope = "row";
-        if (rule.assetId) asset.title = assetKey(rule.assetId);
+        if (rule.assetId) asset.title = walletAssetId(rule.assetId);
 
         const on = control("input", "enabled", "Carry " + label);
         on.type = "checkbox";

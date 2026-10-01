@@ -4,7 +4,8 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
-import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { assetIdToWire } from "@arkade-taxi/protocol";
+import { swapIdToTaxiAssetId, taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
 import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness, type Harness } from "./fixtures.js";
@@ -723,6 +724,34 @@ describe("the dashboard is dependency-free", () => {
         expect(named(row(), "enabled")[0]!.checked).toBe(false);
     });
 
+    it("takes and shows asset ids exactly as the wallet writes them", async () => {
+        const admin = harness();
+        const dashboard = runDashboard(() => dashboardPage([], "1".repeat(64), null), admin);
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
+        );
+        // Distinct txid bytes and a group above 255, so byte order shows on both halves.
+        const wallet = taxiAssetIdToSwapId({
+            txid: Uint8Array.from({ length: 32 }, (_, i) => i + 1),
+            groupIndex: 300,
+        });
+        expect(wallet).toMatch(/^[0-9a-f]{68}$/);
+
+        dashboard.element("rule-asset").value = wallet;
+        dashboard.element("rule-add-asset").fire("click");
+        expect(JSON.parse(dashboard.element("assetRules").value)[0].assetId).toEqual(
+            assetIdToWire(swapIdToTaxiAssetId(wallet)),
+        );
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
+        );
+        expect(admin.policy.get().assetRules[0]!.assetId).toEqual(swapIdToTaxiAssetId(wallet));
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
+    });
+
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
         const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
         const admin = harness({
@@ -833,7 +862,10 @@ describe("setup guidance", () => {
         click("wizard-open");
         expect(dashboard.element("wizard").open).toBe(true);
         dashboard.element("wiz-btc").checked = true;
-        dashboard.element("wiz-assets").value = `${"ab".repeat(32)}:0`;
+        dashboard.element("wiz-assets").value = taxiAssetIdToSwapId({
+            txid: new Uint8Array(32).fill(0xab),
+            groupIndex: 0,
+        });
         click("wiz-next");
         dashboard.element("wiz-size-small").fire("change");
         expect(text("wiz-size-small-text")).toBe(
