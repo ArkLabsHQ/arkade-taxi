@@ -33,6 +33,7 @@ import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
 import { createProceedsCollector } from "./proceeds.js";
+import { createBoarding } from "./boarding.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 
 const seconds = () => Math.floor(Date.now() / 1000);
@@ -53,8 +54,13 @@ async function runServe(): Promise<void> {
             .filter((advance) => advanceKind(advance) === "covenant"),
         config,
     );
+    const jobs = new ProceedsRepository(db);
     const runtime = createOperatorRuntime(config, db, {
         reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+        heldOutpoints: () => [
+            ...unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+            ...(jobs.active()?.plan.inputs ?? []),
+        ],
     });
     const proceeds = createProceedsCollector({
         config,
@@ -63,8 +69,9 @@ async function runServe(): Promise<void> {
         reservations,
         swapFills,
         receiveQuotes,
-        jobs: new ProceedsRepository(db),
+        jobs,
     });
+    const boarding = createBoarding(runtime);
     const lockupSubmitter = productionLockupSubmitter(
         config,
         SingleKey.fromPrivateKey(config.operatorPrivkey),
@@ -233,6 +240,7 @@ async function runServe(): Promise<void> {
         rescan: () => lifecycle.refresh(),
         startup: () => lifecycle.status(),
         proceeds: () => proceeds.status(),
+        boarding,
         accepting: () => accepting,
         shutdownSignal: shutdown.signal,
         claimFeedLogger: log,

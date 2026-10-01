@@ -15,6 +15,7 @@ const select = (over: Partial<Parameters<typeof selectOperatorFunding>[0]> = {})
         maxSnapshotAgeMs: 30000,
         minExpiryHeadroomBlocks: 144n,
         minExpiryHeadroomSeconds: 86400n,
+        renewalThresholdSeconds: 259200n,
         minReserveSats: 10000n,
         dustSats: 330n,
         ...over,
@@ -145,6 +146,19 @@ describe("selectOperatorFunding", () => {
                 minReserveSats: 0n,
             }),
         ).toThrow(/inventory/);
+    });
+    it("never funds from a coin the SDK's VtxoManager is about to renew", () => {
+        const expiringIn = (days: number) =>
+            fundingCoin({
+                txid: "dd".repeat(32),
+                value: 338,
+                expiresAtHeight: undefined,
+                expiresAt: new Date((Math.floor(Date.now() / 1000) + days * 86_400) * 1000),
+            });
+        expect(() => select({ spendable: [expiringIn(2)], minReserveSats: 0n })).toThrow(
+            /inventory/,
+        );
+        expect(select({ spendable: [expiringIn(4)], minReserveSats: 0n }).inputs).toHaveLength(1);
     });
     it("rejects duplicate outpoints rather than counting value twice", () => {
         const coin = fundingCoin({ value: 200 });

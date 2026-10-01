@@ -226,6 +226,57 @@ Pause closes new admission, including new lockup acceptance. Existing durable
 work, claims, refunds and recovery continue. Let unsubmitted quotes expire and
 verify their reservations release before declaring the service drained.
 
+## Topping up the operator wallet
+
+The admin Funding card shows two addresses, and both fund the operator wallet
+with no further step:
+
+- Offchain: send sats or assets from any Arkade wallet to the Arkade address.
+- On-chain: send bitcoin to the boarding address. The SDK's background
+  settlement checks every minute and moves each deposit into the Arkade address
+  in the next batch after it confirms, with the Arkade Service's intent fee
+  deducted. The card shows a deposit as "On-chain unconfirmed", then "On-chain
+  confirmed" until it is boarded. It loads only on demand; its "loaded" stamp
+  says how old the figures are.
+
+A deposit left past its boarding exit delay (arkd's `boardingExitDelay`) can no
+longer be boarded. The card counts it as "On-chain expired", and the SDK sweeps
+it back to the boarding address on-chain, paying the on-chain fee, which
+restarts its timelock. The same process does not board a swept deposit again;
+it is boarded after the service next restarts.
+
+The same background settlement renews operator coins once they are within
+[`TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS`](environment.md) of expiry, so they are
+replaced before they reach the expiry headroom that closes admission. It never
+runs alongside the proceeds collector's settlement and never spends a coin the
+Taxi holds for a quote, a lockup, a swap fill or a proceeds job, nor a subdust
+receipt the collector consolidates. The Taxi in turn never commits a coin inside
+the renewal window.
+
+If readiness reports `renewal_threshold_exceeds_vtxo_lifetime`, the network's
+coins outlive the threshold by less than 12 hours, so renewing them would cost a
+fee soon after every renewal, or every minute past the lifetime. The Taxi has
+stopped the SDK's renewal for now; deposits still board and recovery continues,
+but admission stays closed. Lower `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to at
+least 12 hours below the VTXO lifetime and restart. The threshold must also stay
+above `TAXI_MIN_EXPIRY_HEADROOM_SECONDS` (one day by default), so on a network
+whose coins live 36 hours or less, lower that headroom too.
+
+`operator_intent_stale` means a settlement intent has waited over an hour for a
+batch, locking the coins it spends; admission closes, recovery continues. After
+a restart the Taxi deals with every intent an earlier process left waiting for,
+or in, a batch, once the intent has been quiet for a few batch sessions: it
+cancels it with arkd and locally, unless every coin it spends has already moved,
+in which case the batch went through and the record is left as it is. Either way
+the intent no longer counts toward `operator_intent_stale`. A proceeds job's
+intent is the exception: the proceeds collector reconciles its own. On shutdown
+an in-flight background batch gets one reconcile interval to finish before the
+Taxi lets it go.
+
+The SDK's deprecated-signer migration is turned off. It moves coins with an
+offchain send, which would bypass that guard and the held-coin filter, and the
+Taxi already closes its wallet when arkd's signer changes.
+
 ## Backup and restore
 
 1. Pause admission and inspect every active deadline. Schedule a backup only

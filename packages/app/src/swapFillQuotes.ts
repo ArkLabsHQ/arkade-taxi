@@ -536,6 +536,7 @@ async function createAdmittedSwapFillQuote(
                 maxSnapshotAgeMs: config.reconcileIntervalMs,
                 minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
                 minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
+                renewalThresholdSeconds: config.vtxoRenewalThresholdSeconds,
                 minReserveSats: config.operatorMinReserveSats,
                 dustSats: config.dust,
             });
@@ -1239,6 +1240,7 @@ async function reverifyFreshness(
               maxSnapshotAgeMs: deps.config.reconcileIntervalMs,
               minExpiryHeadroomBlocks: deps.config.minExpiryHeadroomBlocks,
               minExpiryHeadroomSeconds: deps.config.minExpiryHeadroomSeconds,
+              renewalThresholdSeconds: deps.config.vtxoRenewalThresholdSeconds,
               minReserveSats: deps.config.operatorMinReserveSats,
               dustSats: deps.config.dust,
           });

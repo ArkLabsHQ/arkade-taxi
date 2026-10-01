@@ -265,6 +265,7 @@ async function createReservedSponsoredQuote(
         maxSnapshotAgeMs: config.reconcileIntervalMs,
         minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
+        renewalThresholdSeconds: config.vtxoRenewalThresholdSeconds,
         minReserveSats: config.operatorMinReserveSats,
         dustSats: config.dust,
     };

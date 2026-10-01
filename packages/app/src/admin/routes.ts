@@ -26,6 +26,7 @@ import {
     satsToWire,
 } from "@arkade-taxi/protocol";
 import { assetRuleToWire } from "../rulesWire.js";
+import type { BoardingDeposits } from "../boarding.js";
 import { sanitizeOperationalError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
@@ -68,6 +69,8 @@ export interface AdminDeps {
         >;
         inventory: RuntimeSafety["inventory"];
         coins: readonly VirtualCoin[];
+        /** Each field is null when its read failed. */
+        boarding: { address: string | null; deposits: BoardingDeposits | null };
     }>;
 }
 
@@ -526,7 +529,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
 
     app.get(at("/api/funding"), async (c) => {
         try {
-            const { config, inventory, coins } = await deps.funding();
+            const { config, inventory, coins, boarding } = await deps.funding();
+            const { deposits } = boarding;
             return ok(c, {
                 arkAddress: new ArkAddress(
                     config.serverPubkey,
@@ -540,6 +544,12 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                     assetId: assetIdToWire(swapIdToTaxiAssetId(assetId)),
                     amount,
                 })),
+                boarding: {
+                    address: boarding.address,
+                    confirmedSats: deposits && satsToWire(deposits.confirmedSats),
+                    unconfirmedSats: deposits && satsToWire(deposits.unconfirmedSats),
+                    expiredSats: deposits && satsToWire(deposits.expiredSats),
+                },
             });
         } catch (e) {
             return c.json({ code: "funding_unavailable", error: message(e) }, 503, {

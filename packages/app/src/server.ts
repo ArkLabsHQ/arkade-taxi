@@ -3,6 +3,7 @@ import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import { createAdminRouter } from "./admin/index.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes.js";
 import { ReceiverClaimFeed } from "./claimFeed.js";
+import type { createBoarding } from "./boarding.js";
 import { shownConfig } from "./config.js";
 
 export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
@@ -12,6 +13,7 @@ export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "cla
     sweeperIntervalMs: number;
     sweeperRunning: () => boolean;
     rescan(): Promise<void>;
+    boarding: ReturnType<typeof createBoarding>;
     accepting?: () => boolean;
     shutdownSignal?: AbortSignal;
 }
@@ -33,6 +35,24 @@ function v1Cors() {
     };
 }
 
+const FUNDING_TTL_MS = 10_000;
+
+/** Concurrent and repeated funding requests share one wallet read for
+ * FUNDING_TTL_MS. A rejected read is dropped, so the next request retries. */
+function fundingRead<T>(read: () => Promise<T>, nowMs: () => number): () => Promise<T> {
+    let entry: { at: number; value: Promise<T> } | undefined;
+    return () => {
+        if (!entry || nowMs() - entry.at >= FUNDING_TTL_MS) {
+            const current = { at: nowMs(), value: read() };
+            current.value.catch(() => {
+                if (entry === current) entry = undefined;
+            });
+            entry = current;
+        }
+        return entry.value;
+    };
+}
+
 /**
  * The admin surface reads `lastTickAt` as epoch MILLISECONDS, while the ledger
  * — and so the sweeper — keeps unix seconds to match `QuoteResponse.expiresAt`.
@@ -40,6 +60,9 @@ function v1Cors() {
  * other's unit.
  */
 function adminDeps(deps: ServerDeps) {
+    const coins = fundingRead(() => deps.inventory.getSpendableVtxos(), deps.nowMs);
+    const boardingAddress = fundingRead(() => deps.boarding.address(), deps.nowMs);
+    const deposits = fundingRead(() => deps.boarding.deposits(), deps.nowMs);
     return {
         advances: deps.advances,
         policy: deps.policy,
@@ -69,12 +92,16 @@ function adminDeps(deps: ServerDeps) {
         funding: async () => ({
             config: deps.config,
             inventory: deps.runtime.safety().inventory,
-            coins: await deps.inventory.getSpendableVtxos(),
+            coins: await coins(),
+            boarding: {
+                address: await boardingAddress().catch(() => null),
+                deposits: await deposits().catch(() => null),
+            },
         }),
     };
 }
 
-function acceptingOnly(deps: ServerDeps) {
+function acceptingOnly(deps: Pick<ServerDeps, "shutdownSignal" | "accepting">) {
     return async (c: Context, next: Next) => {
         if (deps.shutdownSignal?.aborted || deps.accepting?.() === false)
             return c.json({ code: "shutting_down", error: "service is shutting down" }, 503);
@@ -83,7 +110,7 @@ function acceptingOnly(deps: ServerDeps) {
 }
 
 /** No /v1 handler reads a cookie, so `origin: "*"` is safe here. */
-export function createApp(deps: ServerDeps): Hono {
+export function createApp(deps: Omit<ServerDeps, "boarding">): Hono {
     const app = new Hono();
     app.use("/v1/*", v1Cors());
     app.use("*", acceptingOnly(deps));

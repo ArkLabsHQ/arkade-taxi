@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { expect } from "vitest";
-import { EsploraProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
+import { EsploraProvider, RestIndexerProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
 import { openDatabase } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
@@ -17,6 +17,8 @@ import {
     normalizeExpiry,
     verifyProviders,
 } from "../packages/app/src/arkade/providers.js";
+import { mineBlocks } from "../scripts/e2e-mine.mjs";
+import { admin, poll, required } from "./fixtures.js";
 import { liveScenario } from "./scenarios.js";
 
 liveScenario("provider-contract", async () => {
@@ -32,6 +34,7 @@ liveScenario("provider-contract", async () => {
     let db = openDatabase(path);
     let runtime = createOperatorRuntime(config, db, {
         onchainProvider: new EsploraProvider(esplora),
+        heldOutpoints: () => [],
     });
     try {
         const verified = await verifyProviders(config, runtime.providers);
@@ -119,6 +122,7 @@ liveScenario("provider-contract", async () => {
         db = openDatabase(path);
         runtime = createOperatorRuntime(config, db, {
             onchainProvider: new EsploraProvider(esplora),
+            heldOutpoints: () => [],
         });
         const durableAfterReopen = canonicalVtxoSnapshot(
             await runtime.storage.walletRepository.getVtxos(address),
@@ -146,4 +150,58 @@ liveScenario("provider-contract", async () => {
             throw new Error("refusing cleanup outside temp");
         rmSync(target, { recursive: true });
     }
+});
+
+liveScenario("onchain-boarding-topup", async () => {
+    const config = await resolveRuntimeConfig(loadConfig(process.env));
+    const operatorScript = `5120${Buffer.from(config.operatorKey).toString("hex")}`;
+    const indexer = new RestIndexerProvider(required("TAXI_E2E_ARKD_URL"));
+    const spendable = async () =>
+        (await indexer.getVtxos({ scripts: [operatorScript], spendableOnly: true })).vtxos;
+    const coins = await spendable();
+    const known = new Set(coins.map(({ txid, vout }) => `${txid}:${vout}`));
+    const baseline = coins
+        .filter((coin) => !coin.assets?.length)
+        .reduce((sum, coin) => sum + BigInt(coin.value), 0n);
+    // Taxi re-reads its wallet once per reconcile interval, so it can lag the last scenario's coins.
+    const before = await poll(
+        `usable inventory of every operator coin, ${baseline} sats`,
+        () => admin("funding"),
+        (funding) =>
+            funding.usableSats !== null &&
+            BigInt(funding.usableSats) === baseline &&
+            funding.boarding.address !== null,
+        30_000,
+    );
+    execFileSync(
+        process.execPath,
+        [
+            required("ARKADE_REGTEST_CLI"),
+            "faucet",
+            before.boarding.address,
+            "0.00123",
+            "--env",
+            required("ARKADE_REGTEST_ENV"),
+        ],
+        { timeout: 120000, stdio: "pipe" },
+    );
+    await mineBlocks(1);
+
+    // The SDK polls every 60 s and boards in the next batch; three polls, inside testTimeout.
+    await poll(
+        "the SDK boards the confirmed deposit on its own",
+        async () =>
+            (await spendable())
+                .filter(({ txid, vout }) => !known.has(`${txid}:${vout}`))
+                .map((coin) => coin.value),
+        (values) => values.length === 1 && values[0] === 123_000,
+        180_000,
+    );
+    await poll(
+        `boarded coin counted as usable inventory, ${baseline + 123_000n} sats`,
+        () => admin("funding"),
+        (funding) =>
+            funding.usableSats !== null && BigInt(funding.usableSats) === baseline + 123_000n,
+        60_000,
+    );
 });

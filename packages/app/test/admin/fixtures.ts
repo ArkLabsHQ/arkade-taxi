@@ -9,6 +9,14 @@ import { config } from "../fixtures.js";
 
 export const key = (b: number): Uint8Array => new Uint8Array(32).fill(b);
 
+type BoardingView = Awaited<ReturnType<AdminDeps["funding"]>>["boarding"];
+
+export const boardingView = (over: Partial<BoardingView> = {}): BoardingView => ({
+    address: "bcrt1pboarding",
+    deposits: { confirmedSats: 0n, unconfirmedSats: 0n, expiredSats: 0n },
+    ...over,
+});
+
 let seq = 0;
 
 export function advance(over: Partial<Advance> = {}): Advance {
@@ -94,7 +102,13 @@ export function harness(
         now: opts.now ?? (() => 100),
         serviceConfig: shownConfig(config()),
         funding:
-            opts.funding ?? (async () => ({ config: config(), inventory: undefined, coins: [] })),
+            opts.funding ??
+            (async () => ({
+                config: config(),
+                inventory: undefined,
+                coins: [],
+                boarding: boardingView(),
+            })),
     });
 
     const app = new Hono();

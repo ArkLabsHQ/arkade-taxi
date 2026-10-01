@@ -106,6 +106,14 @@ export const fundingCoin = (over: Partial<ExtendedVirtualCoin> = {}): ExtendedVi
     ...over,
 });
 
+/** An intent proof PSBT: input 0 stands in for the BIP-322 toSpend, then the coins. */
+export const intentProof = (inputs: readonly Outpoint[]) => {
+    const tx = new Transaction();
+    tx.addInput({ txid: "00".repeat(32), index: 0 });
+    for (const { txid, vout } of inputs) tx.addInput({ txid, index: vout });
+    return base64.encode(tx.toPSBT());
+};
+
 export function quoteInfrastructure(
     advances: MemoryAdvances,
     getPolicy: () => Policy,
@@ -213,6 +221,7 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     minExpiryHeadroomSeconds: 86400n,
     recoveryBroadcastSeconds: 43200n,
     recoveryCriticalSeconds: 7200n,
+    vtxoRenewalThresholdSeconds: 259200n,
     reconcileIntervalMs: 30000,
     operatorMinReserveSats: 10000n,
     proceedsMaxFeeSats: 0n,

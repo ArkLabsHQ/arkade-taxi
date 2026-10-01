@@ -49,8 +49,11 @@
                         <div>
                             <p class="step__title">Fund your Taxi</p>
                             <p class="step__detail" id="step-fund-detail"></p>
+                            <p class="step__detail">
+                                On-chain deposits move in automatically shortly after they confirm.
+                            </p>
                         </div>
-                        <a class="button" id="step-fund-fix" href="#funding">Show address</a>
+                        <a class="button" id="step-fund-fix" href="#funding">Show addresses</a>
                     </li>
                     <li class="step" id="step-limits">
                         <span class="step__state" id="step-limits-state">…</span>
@@ -169,6 +172,7 @@
                     <div class="actions">
                         <button type="button" id="funding-copy" disabled>Copy address</button>
                         <span class="meta" id="funding-state">unknown</span>
+                        <span class="meta" id="funding-loaded"></span>
                     </div>
                 </div>
                 <dl class="states operational">
@@ -184,12 +188,36 @@
                         <dt>Reserve threshold</dt>
                         <dd id="funding-threshold">—</dd>
                     </div>
+                    <div>
+                        <dt>On-chain confirmed</dt>
+                        <dd id="funding-boarding-confirmed">—</dd>
+                    </div>
+                    <div>
+                        <dt>On-chain unconfirmed</dt>
+                        <dd id="funding-boarding-unconfirmed">—</dd>
+                    </div>
+                    <div>
+                        <dt>On-chain expired</dt>
+                        <dd id="funding-boarding-expired">—</dd>
+                    </div>
                 </dl>
                 <div class="panel__body">
                     <p class="label">Arkade address</p>
                     <p class="address" id="funding-address">—</p>
                     <p class="note">
                         Send sats or assets offchain from any Arkade wallet to this address.
+                    </p>
+                    <p class="label">On-chain boarding address</p>
+                    <p class="address" id="funding-boarding-address">—</p>
+                    <div class="actions">
+                        <button type="button" id="funding-boarding-copy" disabled>
+                            Copy boarding address
+                        </button>
+                    </div>
+                    <p class="note">
+                        Send bitcoin on-chain to this address. Deposits move into the Arkade address
+                        above automatically shortly after they confirm; expired ones are swept back
+                        here automatically.
                     </p>
                 </div>
                 <div class="scroll">

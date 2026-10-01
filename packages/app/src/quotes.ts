@@ -438,6 +438,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         maxSnapshotAgeMs: config.reconcileIntervalMs,
         minExpiryHeadroomBlocks: config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: config.minExpiryHeadroomSeconds,
+        renewalThresholdSeconds: config.vtxoRenewalThresholdSeconds,
         minReserveSats: config.operatorMinReserveSats,
         dustSats: config.dust,
     };

@@ -19,6 +19,7 @@ export interface TaxiConfig {
     minExpiryHeadroomSeconds: bigint;
     recoveryBroadcastSeconds: bigint;
     recoveryCriticalSeconds: bigint;
+    vtxoRenewalThresholdSeconds: bigint;
     reconcileIntervalMs: number;
     operatorMinReserveSats: bigint;
     proceedsMaxFeeSats: bigint;
@@ -58,6 +59,7 @@ export const SHOWN_CONFIG = {
     minExpiryHeadroomSeconds: "TAXI_MIN_EXPIRY_HEADROOM_SECONDS",
     recoveryBroadcastSeconds: "TAXI_RECOVERY_BROADCAST_SECONDS",
     recoveryCriticalSeconds: "TAXI_RECOVERY_CRITICAL_SECONDS",
+    vtxoRenewalThresholdSeconds: "TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS",
     reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
     logLevel: "TAXI_LOG_LEVEL",
@@ -159,6 +161,8 @@ const SCHEMA = z
         TAXI_MIN_EXPIRY_HEADROOM_SECONDS: positiveSats.default("86400"),
         TAXI_RECOVERY_BROADCAST_SECONDS: positiveSats.default("43200"),
         TAXI_RECOVERY_CRITICAL_SECONDS: positiveSats.default("7200"),
+        // The SDK's own default (VtxoManager DEFAULT_THRESHOLD_SECONDS, 3 days).
+        TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: positiveSats.default("259200"),
         TAXI_RECONCILE_INTERVAL_MS: interval.default("30000"),
         TAXI_OPERATOR_MIN_RESERVE_SATS: positiveSats.default("10000"),
         TAXI_PROCEEDS_MAX_FEE_SATS: z
@@ -189,6 +193,13 @@ const SCHEMA = z
                 code: z.ZodIssueCode.custom,
                 path: ["TAXI_RECOVERY_BROADCAST_SECONDS"],
                 message: "must be less than TAXI_MIN_EXPIRY_HEADROOM_SECONDS",
+            });
+        }
+        if (v.TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS <= v.TAXI_MIN_EXPIRY_HEADROOM_SECONDS) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS"],
+                message: "must exceed TAXI_MIN_EXPIRY_HEADROOM_SECONDS",
             });
         }
         if (v.TAXI_RECOVERY_CRITICAL_BLOCKS >= v.TAXI_RECOVERY_BROADCAST_BLOCKS) {
@@ -233,6 +244,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         minExpiryHeadroomSeconds: v.TAXI_MIN_EXPIRY_HEADROOM_SECONDS,
         recoveryBroadcastSeconds: v.TAXI_RECOVERY_BROADCAST_SECONDS,
         recoveryCriticalSeconds: v.TAXI_RECOVERY_CRITICAL_SECONDS,
+        vtxoRenewalThresholdSeconds: v.TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS,
         reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,

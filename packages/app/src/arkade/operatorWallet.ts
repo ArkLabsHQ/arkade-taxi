@@ -1,18 +1,26 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
     SingleKey,
     ArkAddress,
     Wallet,
     EsploraProvider,
+    Transaction,
     canSpendOffchain,
+    isSubdust,
+    isVtxoSpent,
     type WalletConfig,
+    type ArkInfo,
+    type ArkIntentState,
     type ArkProvider,
+    type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
+import { base64, hex } from "@scure/base";
 import type { Database } from "@arkade-taxi/db";
 import type { Outpoint } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../config.js";
 import { ServiceError } from "../errors.js";
-import { createProviders, verifyProviders, normalizeExpiry } from "./providers.js";
+import { createProviders, verifyProviders, normalizeExpiry, renewing } from "./providers.js";
 import { createOperatorStorage } from "./sqlExecutor.js";
 import type { RuntimeSafety } from "./types.js";
 
@@ -20,11 +28,33 @@ const admissionOnlyBlockers = new Set([
     "vtxo_expiry_headroom",
     "vtxo_expiry_unknown",
     "operator_reserve_low",
+    "renewal_threshold_exceeds_vtxo_lifetime",
+    "operator_intent_stale",
 ]);
+const WAITING: ArkIntentState[] = ["waiting_to_submit", "waiting_for_batch", "batch_in_progress"];
+const STALE_INTENT_MS = 3_600_000;
 
 type SettlementGuard = (
     intent: Parameters<ArkProvider["registerIntent"]>[0],
 ) => Promise<() => void>;
+
+/** Set inside the SDK's own background settlement (VtxoManager): its poll timers
+ * inherit it from wallet creation, and its event-driven renewal is wrapped in it. */
+const sdkBackground = new AsyncLocalStorage<true>();
+const outpointKey = (o: Outpoint) => `${o.txid}:${o.vout}`;
+
+/** The coins an intent spends: its proof's inputs after input 0, the BIP-322 toSpend reference. */
+export function proofInputs(intent: { proof: string }): string[] {
+    const proof = Transaction.fromPSBT(base64.decode(intent.proof));
+    const coins: string[] = [];
+    for (let i = 1; i < proof.inputsLength; i++) {
+        const { txid, index } = proof.getInput(i);
+        coins.push(`${hex.encode(txid!)}:${index}`);
+    }
+    return coins;
+}
+/** How long past the renewal threshold a coin must live, or the SDK renews it soon after birth. */
+const RENEWAL_MARGIN_SECONDS = 43_200n;
 
 export interface OperatorRuntimeOptions {
     now?: () => number;
@@ -32,12 +62,14 @@ export interface OperatorRuntimeOptions {
     walletFactory?: (config: WalletConfig) => Promise<Wallet>;
     onchainProvider?: WalletConfig["onchainProvider"];
     reservedOutpoints?: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
+    /** Coins the SDK's background settlement must never spend. Without it, it spends none. */
+    heldOutpoints: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
 }
 
 export function createOperatorRuntime(
     config: RuntimeConfig,
     db: Database,
-    options: OperatorRuntimeOptions = {},
+    options: OperatorRuntimeOptions,
 ) {
     const now = options.now ?? Date.now;
     const providers = createProviders(config);
@@ -49,6 +81,79 @@ export function createOperatorRuntime(
     let queuedRefresh: Promise<RuntimeSafety> | undefined;
     let settlement: Promise<void> | undefined;
     let settlementGuard: SettlementGuard | undefined;
+    let backgroundSettling = false;
+    // The current wallet's token. A retired wallet may not register intents.
+    let live: object | undefined;
+    let retire = () => {};
+    let turns: Promise<unknown> = Promise.resolve();
+    // One settlement at a time, the proceeds worker's or the SDK's, in arrival order.
+    const oneSettlement = <T>(work: () => Promise<T>): Promise<T> => {
+        const turn = turns.then(work);
+        turns = turn.catch(() => {});
+        return turn;
+    };
+    const held = async () => new Set((await options.heldOutpoints()).map(outpointKey));
+    const tooShort = (lifetime: bigint) =>
+        lifetime - config.vtxoRenewalThresholdSeconds < RENEWAL_MARGIN_SECONDS;
+    // arkd advertises no VTXO lifetime; a batch output's own span is it. Below 512 it counts blocks.
+    const shortLived = (coin: ExtendedVirtualCoin) => {
+        if (coin.isPreconfirmed !== false || coin.expiresAt === undefined) return false;
+        const born = new Date(coin.createdAt).getTime();
+        const span = Math.floor((new Date(coin.expiresAt).getTime() - born) / 1000);
+        return Number.isSafeInteger(span) && tooShort(BigInt(span));
+    };
+    const advertisesShortLife = (info?: ArkInfo) =>
+        info?.vtxoTreeExpiry !== undefined &&
+        info.vtxoTreeExpiry >= 512n &&
+        tooShort(info.vtxoTreeExpiry);
+    const startedAt = now();
+    // Earlier-process intents the startup pass has cancelled, or left because their batch went through.
+    const handled = new Set<string>();
+    let earlierIntentsHandled = false;
+    // Settle intents never expire (expire_at 0): one an earlier process left waiting for, or in, a
+    // batch locks its coins for good, since nobody here signs that batch. Once quiet for a few
+    // sessions it is cancelled, unless every VTXO it spends was consumed. A boarding input is
+    // on-chain, unknown to the indexer, and can't be double-spent, so it never stops this.
+    const handleEarlierIntents = async (info: ArkInfo) => {
+        const taken = await held();
+        const quiet = Math.max(60_000, 3 * Number(info.sessionDuration) * 1000);
+        const earlier = (
+            await storage.intentRepository.getIntents({
+                states: ["waiting_for_batch", "batch_in_progress"],
+            })
+        ).filter(
+            (i) =>
+                i.createdAt < startedAt &&
+                !handled.has(i.intentTxId) &&
+                !i.intentVtxos.some((o) => taken.has(outpointKey(o))),
+        );
+        const due = earlier.filter((i) => now() - i.updatedAt >= quiet);
+        if (due.length) {
+            const { vtxos } = await providers.indexerProvider.getVtxos({
+                outpoints: due.flatMap((i) => i.intentVtxos),
+            });
+            const known = new Map(vtxos.map((v) => [outpointKey(v), v]));
+            for (const intent of due) {
+                const spends = intent.intentVtxos.flatMap((o) => known.get(outpointKey(o)) ?? []);
+                if (!spends.length || !spends.every(isVtxoSpent)) {
+                    await providers.arkProvider
+                        .deleteIntent({
+                            proof: intent.deleteProof,
+                            message: JSON.parse(intent.deleteProofMessage),
+                        })
+                        .catch(() => {});
+                    await storage.intentRepository.saveIntent({
+                        ...intent,
+                        state: "cancelled",
+                        cancellationReason: "registered by an earlier Taxi process",
+                        updatedAt: now(),
+                    });
+                }
+                handled.add(intent.intentTxId);
+            }
+        }
+        return due.length === earlier.length;
+    };
     let stopped = false;
     let infoFingerprint: string | undefined;
     let serverUnrollScript: Awaited<ReturnType<typeof verifyProviders>>["serverUnrollScript"];
@@ -67,6 +172,13 @@ export function createOperatorRuntime(
         const stale =
             now() - state.checkedAt >= config.reconcileIntervalMs || now() < state.checkedAt;
         return { ...state, blockers: [...state.blockers, ...(stale ? ["runtime_stale"] : [])] };
+    };
+
+    const dropWallet = async () => {
+        retire();
+        const old = wallet;
+        wallet = undefined;
+        await old?.dispose();
     };
 
     const check = async (): Promise<RuntimeSafety> => {
@@ -97,41 +209,104 @@ export function createOperatorRuntime(
             typeof value === "bigint" ? value.toString() : value,
         );
         if (wallet && (result.blockers.length || fingerprint !== infoFingerprint)) {
-            if (settlement) {
+            // Only the proceeds worker, inside its turn, keeps the old wallet: never a background settle.
+            if (settlementGuard) {
                 result.blockers.push("operator_settlement_provider_changed");
                 return result;
             }
-            await wallet.dispose();
-            wallet = undefined;
+            await dropWallet();
         }
         if (result.blockers.length || stopped) return result;
         try {
             if (!wallet) {
-                wallet = await (options.walletFactory ?? Wallet.create)({
-                    identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
-                    arkProvider: Object.assign(Object.create(providers.arkProvider), {
-                        getInfo: async () => verified.info!,
-                        registerIntent: async (
-                            intent: Parameters<typeof providers.arkProvider.registerIntent>[0],
-                        ) => {
-                            if (!settlementGuard)
-                                throw new Error("proceeds_submission_not_authorized");
-                            const enter = await settlementGuard(intent);
-                            enter();
-                            return providers.arkProvider.registerIntent(intent);
-                        },
-                    }),
-                    indexerProvider: providers.indexerProvider,
-                    onchainProvider:
-                        options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
-                    storage,
-                    settlementConfig: false,
+                const token = {};
+                live = token;
+                const retired = new Promise<never>((_, reject) => {
+                    retire = () => {
+                        live = undefined;
+                        reject(new Error("background_settlement_not_authorized"));
+                    };
                 });
+                retired.catch(() => {});
+                const created = await sdkBackground.run(true, async () => {
+                    const made = await (options.walletFactory ?? Wallet.create)({
+                        identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
+                        arkProvider: Object.assign(Object.create(providers.arkProvider), {
+                            getInfo: async () => verified.info!,
+                            registerIntent: async (
+                                intent: Parameters<typeof providers.arkProvider.registerIntent>[0],
+                            ) => {
+                                if (sdkBackground.getStore()) {
+                                    if (!backgroundSettling || stopped || live !== token)
+                                        throw new Error("background_settlement_not_authorized");
+                                    const taken = await held();
+                                    if (proofInputs(intent).some((coin) => taken.has(coin)))
+                                        throw new Error("background_settlement_spends_held_coin");
+                                    return providers.arkProvider.registerIntent(intent);
+                                }
+                                if (!settlementGuard || live !== token)
+                                    throw new Error("proceeds_submission_not_authorized");
+                                const enter = await settlementGuard(intent);
+                                enter();
+                                return providers.arkProvider.registerIntent(intent);
+                            },
+                        }),
+                        indexerProvider: providers.indexerProvider,
+                        onchainProvider:
+                            options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
+                        storage,
+                        settlementConfig: {
+                            vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
+                            deprecatedSignerMigration: false,
+                        },
+                    });
+                    // Wallet.create builds it today; a lazy one must still start its timers in here.
+                    await made.getVtxoManager();
+                    return made;
+                });
+                const settle = created.settle.bind(created);
+                created.settle = (...args) =>
+                    sdkBackground.getStore()
+                        ? oneSettlement(async () => {
+                              if (live !== token)
+                                  throw new Error("background_settlement_not_authorized");
+                              backgroundSettling = true;
+                              const run = settle(...args);
+                              try {
+                                  // A retired wallet's settle may never return; its turn ends anyway.
+                                  return await Promise.race([run, retired]);
+                              } finally {
+                                  backgroundSettling = false;
+                                  // Cut loose, it can rebuild a ContractManager on its way out.
+                                  if (live !== token)
+                                      void run.finally(() => created.dispose()).catch(() => {});
+                              }
+                          })
+                        : settle(...args);
+                const spendable = created.getSpendableVtxos.bind(created);
+                const shortLife = advertisesShortLife(verified.info);
+                created.getSpendableVtxos = async (filter) => {
+                    const coins = await spendable(filter);
+                    if (!sdkBackground.getStore()) return coins;
+                    // Renewing such a coin only buys another, a fee each minute; boarding goes on.
+                    if (shortLife || coins.some(shortLived)) return [];
+                    const taken = await held();
+                    return coins.filter(
+                        (c) => !taken.has(outpointKey(c)) && !isSubdust(c, config.dust),
+                    );
+                };
+                const manager = await created.getVtxoManager();
+                const renew = manager.renewVtxos.bind(manager);
+                manager.renewVtxos = (...args) => sdkBackground.run(true, () => renew(...args));
+                wallet = created;
                 infoFingerprint = fingerprint;
             }
+            if (!earlierIntentsHandled)
+                earlierIntentsHandled = await handleEarlierIntents(verified.info!).catch(
+                    () => false,
+                );
             if (stopped) {
-                await wallet.dispose();
-                wallet = undefined;
+                await dropWallet();
                 return closed("runtime_stopped");
             }
             const address = ArkAddress.decode(await wallet.getAddress());
@@ -140,8 +315,7 @@ export function createOperatorRuntime(
                 new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).encode()
             ) {
                 result.blockers.push("operator_payout_mismatch");
-                await wallet.dispose();
-                wallet = undefined;
+                await dropWallet();
                 return result;
             }
             const [tip, coins] = await Promise.allSettled([
@@ -174,6 +348,15 @@ export function createOperatorRuntime(
                     result.blockers.push("intent_locks_unavailable");
                     return result;
                 }
+                const waiting = await storage.intentRepository
+                    .getIntents({ states: WAITING })
+                    .catch(() => []);
+                if (
+                    waiting.some(
+                        (i) => now() - i.createdAt > STALE_INTENT_MS && !handled.has(i.intentTxId),
+                    )
+                )
+                    result.blockers.push("operator_intent_stale");
                 let taxiLocks: readonly Outpoint[] = [];
                 try {
                     taxiLocks = (await options.reservedOutpoints?.()) ?? [];
@@ -205,6 +388,8 @@ export function createOperatorRuntime(
                         result.blockers.push("vtxo_expiry_unknown");
                         continue;
                     }
+                    if (shortLived(coin))
+                        result.blockers.push("renewal_threshold_exceeds_vtxo_lifetime");
                     const clock = expiry.kind === "height" ? result.chainHeight : result.chainTime;
                     const headroom =
                         expiry.kind === "height"
@@ -217,6 +402,7 @@ export function createOperatorRuntime(
                     if (isReserved) continue;
                     if (
                         !coin.assets?.length &&
+                        !renewing(coin, config.vtxoRenewalThresholdSeconds) &&
                         result.chainTime !== null &&
                         result.chainHeight !== null &&
                         canSpendOffchain(coin, {
@@ -241,6 +427,8 @@ export function createOperatorRuntime(
             result.walletSynced = false;
             result.blockers.push("wallet_unavailable");
         }
+        if (advertisesShortLife(verified.info))
+            result.blockers.push("renewal_threshold_exceeds_vtxo_lifetime");
         result.blockers = [...new Set(result.blockers)];
         return result;
     };
@@ -276,9 +464,14 @@ export function createOperatorRuntime(
         return queuedRefresh;
     };
 
+    let retiring: ReturnType<typeof setTimeout> | undefined;
     const stop = () => {
         stopped = true;
         snapshot = closed("runtime_stopped");
+        // An in-flight background batch gets one interval, half the shutdown budget, to finish;
+        // a hung one can hold the drain no longer.
+        retiring ??= setTimeout(() => retire(), config.reconcileIntervalMs);
+        retiring.unref?.();
     };
 
     return {
@@ -310,11 +503,17 @@ export function createOperatorRuntime(
             settlement = new Promise<void>((resolve) => {
                 release = resolve;
             });
-            settlementGuard = guard;
             try {
-                return await work(wallet);
+                return await oneSettlement(async () => {
+                    if (!wallet || stopped) throw new Error("proceeds_wallet_unavailable");
+                    settlementGuard = guard;
+                    try {
+                        return await work(wallet);
+                    } finally {
+                        settlementGuard = undefined;
+                    }
+                });
             } finally {
-                settlementGuard = undefined;
                 settlement = undefined;
                 release();
             }
@@ -375,8 +574,9 @@ export function createOperatorRuntime(
             await admission;
             await pending;
             await settlement;
-            await wallet?.dispose();
-            wallet = undefined;
+            await turns;
+            clearTimeout(retiring);
+            await dropWallet();
         },
     };
 }

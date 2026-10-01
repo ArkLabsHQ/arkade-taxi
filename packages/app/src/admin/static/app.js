@@ -89,6 +89,14 @@ const BLOCKER_GROUPS = [
     ["The wallet holds a coin whose expiry the Taxi cannot read.", "vtxo_expiry_unknown"],
     ["Some of the Taxi's coins expire too soon to lend.", "vtxo_expiry_headroom"],
     [
+        "This network's coins outlive TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS by less than 12 hours, so renewing them would cost a fee again and again. Renewal is stopped and nothing is lent until you lower TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS to at least 12 hours below the network's VTXO lifetime.",
+        "renewal_threshold_exceeds_vtxo_lifetime",
+    ],
+    [
+        "A wallet settlement has waited over an hour for an Arkade batch, so the coins it spends stay locked. Restarting the Taxi cancels a stuck background settlement.",
+        "operator_intent_stale",
+    ],
+    [
         "The Taxi has not finished its first check of payments in progress.",
         "reconciler_not_started",
     ],
@@ -187,7 +195,7 @@ const BLOCKER_GROUPS = [
             "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
             "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
             "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
-            "proceeds_reservation_changed",
+            "proceeds_reservation_changed proceeds_intent_inputs_changed",
     ],
 ];
 
@@ -520,7 +528,7 @@ function step(id, done, detail) {
     if (detail !== undefined) $("step-" + id + "-detail").textContent = detail;
 }
 
-const SEND_TO = "offchain to its Arkade address.";
+const SEND_TO = "offchain to its Arkade address, or on-chain to its boarding address.";
 
 function fundText(usable, reserve, funded) {
     if (usable === undefined) return "Its balance is unknown until it can read its wallet.";
@@ -541,7 +549,7 @@ function fundText(usable, reserve, funded) {
               group(reserve) +
               " sats it must keep in reserve. Send it at least " +
               group((-spare).toString()) +
-              " sats more, " +
+              " sats more: " +
               SEND_TO;
 }
 
@@ -978,6 +986,14 @@ function renderFunding(funding) {
         body.append(tr);
     }
     $("funding-assets-empty").hidden = funding.assets.length > 0;
+    const boarding = funding.boarding;
+    $("funding-boarding-address").textContent =
+        boarding.address === null ? "unavailable" : boarding.address;
+    $("funding-boarding-copy").disabled = boarding.address === null;
+    $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
+    $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
+    $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
 function renderAdvances(rows) {
@@ -1582,6 +1598,8 @@ const CONFIG_MEANINGS = {
         "Seconds the Taxi allows to recover lent sats, for coins that expire at a time.",
     recoveryCriticalSeconds:
         "This close to expiry, in seconds, a recovery deadline is critical and new payments pause.",
+    vtxoRenewalThresholdSeconds:
+        "This close to expiry, in seconds, the wallet renews a coin, and the Taxi lends none; keep it 12 hours below the network's VTXO lifetime.",
     reconcileIntervalMs:
         "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
     proceedsMaxFeeSats:
@@ -1718,14 +1736,18 @@ function wire() {
         $("go-live-confirm").hidden = true;
         $("step-live-fix").focus();
     });
-    $("funding-copy").addEventListener("click", async () => {
-        try {
-            await navigator.clipboard.writeText($("funding-address").textContent);
-            $("funding-state").textContent = "address copied";
-        } catch (e) {
-            $("funding-state").textContent = "copy failed: select the address instead";
-        }
-    });
+    for (const [button, address] of [
+        ["funding-copy", "funding-address"],
+        ["funding-boarding-copy", "funding-boarding-address"],
+    ])
+        $(button).addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText($(address).textContent);
+                $("funding-state").textContent = "address copied";
+            } catch (e) {
+                $("funding-state").textContent = "copy failed: select the address instead";
+            }
+        });
 
     $("rule-add-bitcoin").addEventListener("click", () => {
         if (view.rules.some((r) => r.assetId === null))

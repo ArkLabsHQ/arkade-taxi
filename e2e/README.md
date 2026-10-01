@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-one live scenarios and two integrity assertions must all pass. Skips,
+Twenty-two live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
@@ -36,7 +36,7 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-17 named scenarios and both integrity assertions, stores each run in
+18 named scenarios and both integrity assertions, stores each run in
 `e2e-artifacts/direct-<run>/`, and is rejected in CI.
 
 Check registration integrity without starting network services:
@@ -89,7 +89,7 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-one
+- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-two
   scenarios and both integrity assertions must pass with zero failures, skips,
   or todos.
 
@@ -98,6 +98,12 @@ having asserted nothing is worse than no suite.
 The suite exercises production HTTP and provider boundaries, real covenant
 purchase/recycle/refund/recovery flows, exposure and admission controls, packed
 client verification, persistent operator state, and restart reconciliation.
+An on-chain deposit to the operator's boarding address is mined and boarded by
+the SDK's own background settlement, with no operator action, into usable
+inventory. The stack's VTXOs live two days, inside the SDK's three-day renewal
+default, so the harness sets `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to 30 hours:
+above the one-day expiry headroom, and at least 12 hours short of the lifetime,
+or the Taxi stops renewal and closes admission.
 It also covers lost submit responses, duplicate requests, stale provider
 identity, warning/critical recovery deadlines before VTXO expiry, and one
 two-owner offer fill in which a solver and a sponsor each sign only their own
@@ -152,7 +158,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The harness always clones master afresh; read the tested SHA from the current
-`stack.json` and retain it with all 23 passing assertions. Capture the existing
+`stack.json` and retain it with all 24 passing assertions. Capture the existing
 default project's container, volume and network inventory before and after, and
 verify that no resources with the run's exact ownership labels remain after
 successful cleanup.

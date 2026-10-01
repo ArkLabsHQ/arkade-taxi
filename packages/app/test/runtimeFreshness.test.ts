@@ -63,6 +63,8 @@ function setup() {
     let walletEntered = gate();
     let coins = [fundingCoin(), fundingCoin({ vout: 1, expiresAtHeight: 900001 })];
     const wallet = {
+        settle: async () => "",
+        getVtxoManager: async () => ({ renewVtxos: async () => "" }),
         getAddress: async () =>
             new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode(),
         getSpendableVtxos: async () => {
@@ -95,6 +97,7 @@ function setup() {
         },
         walletFactory: async () => wallet,
         reservedOutpoints: () => reservations.listReservedOutpoints(),
+        heldOutpoints: () => reservations.listReservedOutpoints(),
     });
     const builder = new FakeLockupBuilder(cfg, serverUnroll);
     const observed: unknown[] = [];

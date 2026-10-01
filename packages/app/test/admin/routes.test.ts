@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { advance, harness, healthySweeper, key } from "./fixtures.js";
+import { advance, boardingView, harness, healthySweeper, key } from "./fixtures.js";
 import {
     DUST,
     VTXO_MIN,
@@ -207,6 +207,9 @@ describe("GET /admin/api/funding", () => {
             assetId: taxiAssetIdToSwapId({ txid, groupIndex }),
             amount,
         });
+        const boarding = boardingView({
+            deposits: { confirmedSats: 100_000n, unconfirmedSats: 5_000n, expiredSats: 40_000n },
+        });
         const funding = async () => ({
             config: config({ addressHrp: "tark" }),
             inventory: {
@@ -220,6 +223,7 @@ describe("GET /admin/api/funding", () => {
                 fundingCoin({ vout: 1, assets: [held(0, 7n), held(1, 200n)] }),
                 fundingCoin({ vout: 2 }),
             ],
+            boarding,
         });
 
         for (const mount of ["prefix", "root"] as const) {
@@ -235,8 +239,27 @@ describe("GET /admin/api/funding", () => {
                     { assetId: { txid: bytesToHex(txid), groupIndex: 0 }, amount: "7" },
                     { assetId: { txid: bytesToHex(txid), groupIndex: 1 }, amount: "500" },
                 ],
+                boarding: {
+                    address: "bcrt1pboarding",
+                    confirmedSats: "100000",
+                    unconfirmedSats: "5000",
+                    expiredSats: "40000",
+                },
             });
         }
+        const unread = harness({
+            funding: async () => ({
+                ...(await funding()),
+                boarding: { address: null, deposits: null },
+            }),
+        });
+        expect((await unread.json("/admin/api/funding")).body.boarding).toEqual({
+            address: null,
+            confirmedSats: null,
+            unconfirmedSats: null,
+            expiredSats: null,
+        });
+        expect((await unread.send("/admin/api/funding/board", "POST", {})).status).toBe(404);
     });
 });
 

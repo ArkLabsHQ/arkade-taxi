@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { assetIdToWire } from "@arkade-taxi/protocol";
@@ -11,7 +11,9 @@ import { SHOWN_CONFIG } from "../../src/config.js";
 import { openApiDocument } from "../../src/openapi.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
 import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { harness, type Harness } from "./fixtures.js";
+import { boardingView, harness, type Harness } from "./fixtures.js";
+
+afterEach(() => vi.useRealTimers());
 
 const asset = (name: string): string =>
     readFileSync(fileURLToPath(new URL(`../../src/admin/static/${name}`, import.meta.url)), "utf8")
@@ -91,6 +93,10 @@ const NOT_BLOCKERS = new Set([
     ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
     ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
     ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
+    // Refusals inside the SDK's own background settlement, which only the SDK sees and logs,
+    // and the SDK's intent states.
+    ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],
+    ...["waiting_to_submit", "waiting_for_batch", "batch_in_progress"],
 ]);
 
 function backendBlockerCodes(): string[] {
@@ -761,6 +767,9 @@ describe("the dashboard is dependency-free", () => {
 
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
         const token = { txid: Uint8Array.from({ length: 32 }, (_, i) => 32 - i), groupIndex: 258 };
+        let boarding = boardingView({
+            deposits: { confirmedSats: 60_000n, unconfirmedSats: 5_000n, expiredSats: 7_000n },
+        });
         const admin = harness({
             funding: async () => ({
                 config: config(),
@@ -775,17 +784,27 @@ describe("the dashboard is dependency-free", () => {
                         assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
                     }),
                 ],
+                boarding,
             }),
         });
+        const opened = new Date(2026, 0, 1, 9, 0, 0);
+        const later = new Date(2026, 0, 1, 9, 0, 7);
+        vi.setSystemTime(opened);
         const dashboard = runDashboard(() => dashboardPage([], "8".repeat(64), null), admin);
         const text = (id: string) => dashboard.element(id).textContent;
         const address = new ArkAddress(serverKey, operatorKey, "ark").encode();
 
         await vi.waitFor(() => expect(text("funding-address")).toBe(address));
+        expect(text("funding-loaded")).toBe("loaded " + opened.toLocaleTimeString());
         expect(text("funding-usable")).toBe("2 500 sats");
         expect(text("funding-reserved")).toBe("0 sats");
         expect(text("funding-threshold")).toBe("10 000 sats");
         expect(text("funding-state")).toBe("below reserve");
+        expect(text("funding-boarding-address")).toBe("bcrt1pboarding");
+        expect(text("funding-boarding-confirmed")).toBe("60 000 sats");
+        expect(text("funding-boarding-unconfirmed")).toBe("5 000 sats");
+        expect(text("funding-boarding-expired")).toBe("7 000 sats");
+        expect(INDEX_HTML).not.toContain("Board<");
         expect(
             dashboard
                 .element("funding-assets")
@@ -793,15 +812,25 @@ describe("the dashboard is dependency-free", () => {
         ).toEqual([[taxiAssetIdToSwapId(token), "258", "1 234 567"]]);
 
         dashboard.element("funding-copy").fire("click");
-        await vi.waitFor(() => expect(dashboard.copied).toEqual([address]));
+        dashboard.element("funding-boarding-copy").fire("click");
+        await vi.waitFor(() => expect(dashboard.copied).toEqual([address, "bcrt1pboarding"]));
 
         const fundingLoads = () =>
             dashboard.requests.filter((path) => path === "/admin/api/funding").length;
         expect(fundingLoads()).toBe(1);
+        vi.setSystemTime(later);
         await dashboard.poll();
         expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
+        expect(text("funding-loaded")).toBe("loaded " + opened.toLocaleTimeString());
+        boarding = { address: null, deposits: null };
         dashboard.element("refresh").fire("click");
         await vi.waitFor(() => expect(fundingLoads()).toBe(2));
+        await vi.waitFor(() =>
+            expect(text("funding-loaded")).toBe("loaded " + later.toLocaleTimeString()),
+        );
+        expect(text("funding-boarding-address")).toBe("unavailable");
+        expect(dashboard.element("funding-boarding-copy").disabled).toBe(true);
+        expect(text("funding-boarding-confirmed")).toBe("unknown");
     });
 });
 
@@ -1227,11 +1256,15 @@ describe("setup guidance", () => {
         ]);
         expect(text("step-connected-title")).toBe("Taxi is running and connected (regtest)");
         expect(steps.slice(1).map((step) => text(`step-${step}-detail`))).toEqual([
-            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more, offchain to its Arkade address.",
+            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more: offchain to its Arkade address, or on-chain to its boarding address.",
             "It lends nothing while any of the three limits is 0.",
             "It carries nothing until at least one rule is switched on.",
             "The Taxi is paused, so it refuses every new payment.",
         ]);
+        expect(INDEX_HTML).toContain(
+            "On-chain deposits move in automatically shortly after they confirm.",
+        );
+        expect(INDEX_HTML).toContain('href="#funding">Show addresses</a>');
 
         click("wiz-cancel");
         expect(dashboard.element("wizard").open).toBe(false);

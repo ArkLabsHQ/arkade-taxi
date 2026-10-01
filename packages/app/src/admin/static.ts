@@ -60,8 +60,11 @@ export const INDEX_HTML = `<!doctype html>
                         <div>
                             <p class="step__title">Fund your Taxi</p>
                             <p class="step__detail" id="step-fund-detail"></p>
+                            <p class="step__detail">
+                                On-chain deposits move in automatically shortly after they confirm.
+                            </p>
                         </div>
-                        <a class="button" id="step-fund-fix" href="#funding">Show address</a>
+                        <a class="button" id="step-fund-fix" href="#funding">Show addresses</a>
                     </li>
                     <li class="step" id="step-limits">
                         <span class="step__state" id="step-limits-state">…</span>
@@ -180,6 +183,7 @@ export const INDEX_HTML = `<!doctype html>
                     <div class="actions">
                         <button type="button" id="funding-copy" disabled>Copy address</button>
                         <span class="meta" id="funding-state">unknown</span>
+                        <span class="meta" id="funding-loaded"></span>
                     </div>
                 </div>
                 <dl class="states operational">
@@ -195,12 +199,36 @@ export const INDEX_HTML = `<!doctype html>
                         <dt>Reserve threshold</dt>
                         <dd id="funding-threshold">—</dd>
                     </div>
+                    <div>
+                        <dt>On-chain confirmed</dt>
+                        <dd id="funding-boarding-confirmed">—</dd>
+                    </div>
+                    <div>
+                        <dt>On-chain unconfirmed</dt>
+                        <dd id="funding-boarding-unconfirmed">—</dd>
+                    </div>
+                    <div>
+                        <dt>On-chain expired</dt>
+                        <dd id="funding-boarding-expired">—</dd>
+                    </div>
                 </dl>
                 <div class="panel__body">
                     <p class="label">Arkade address</p>
                     <p class="address" id="funding-address">—</p>
                     <p class="note">
                         Send sats or assets offchain from any Arkade wallet to this address.
+                    </p>
+                    <p class="label">On-chain boarding address</p>
+                    <p class="address" id="funding-boarding-address">—</p>
+                    <div class="actions">
+                        <button type="button" id="funding-boarding-copy" disabled>
+                            Copy boarding address
+                        </button>
+                    </div>
+                    <p class="note">
+                        Send bitcoin on-chain to this address. Deposits move into the Arkade address
+                        above automatically shortly after they confirm; expired ones are swept back
+                        here automatically.
                     </p>
                 </div>
                 <div class="scroll">
@@ -1876,6 +1904,14 @@ const BLOCKER_GROUPS = [
     ["The wallet holds a coin whose expiry the Taxi cannot read.", "vtxo_expiry_unknown"],
     ["Some of the Taxi's coins expire too soon to lend.", "vtxo_expiry_headroom"],
     [
+        "This network's coins outlive TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS by less than 12 hours, so renewing them would cost a fee again and again. Renewal is stopped and nothing is lent until you lower TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS to at least 12 hours below the network's VTXO lifetime.",
+        "renewal_threshold_exceeds_vtxo_lifetime",
+    ],
+    [
+        "A wallet settlement has waited over an hour for an Arkade batch, so the coins it spends stay locked. Restarting the Taxi cancels a stuck background settlement.",
+        "operator_intent_stale",
+    ],
+    [
         "The Taxi has not finished its first check of payments in progress.",
         "reconciler_not_started",
     ],
@@ -1974,7 +2010,7 @@ const BLOCKER_GROUPS = [
             "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
             "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
             "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
-            "proceeds_reservation_changed",
+            "proceeds_reservation_changed proceeds_intent_inputs_changed",
     ],
 ];
 
@@ -2307,7 +2343,7 @@ function step(id, done, detail) {
     if (detail !== undefined) $("step-" + id + "-detail").textContent = detail;
 }
 
-const SEND_TO = "offchain to its Arkade address.";
+const SEND_TO = "offchain to its Arkade address, or on-chain to its boarding address.";
 
 function fundText(usable, reserve, funded) {
     if (usable === undefined) return "Its balance is unknown until it can read its wallet.";
@@ -2328,7 +2364,7 @@ function fundText(usable, reserve, funded) {
               group(reserve) +
               " sats it must keep in reserve. Send it at least " +
               group((-spare).toString()) +
-              " sats more, " +
+              " sats more: " +
               SEND_TO;
 }
 
@@ -2765,6 +2801,14 @@ function renderFunding(funding) {
         body.append(tr);
     }
     $("funding-assets-empty").hidden = funding.assets.length > 0;
+    const boarding = funding.boarding;
+    $("funding-boarding-address").textContent =
+        boarding.address === null ? "unavailable" : boarding.address;
+    $("funding-boarding-copy").disabled = boarding.address === null;
+    $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
+    $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
+    $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
 function renderAdvances(rows) {
@@ -3369,6 +3413,8 @@ const CONFIG_MEANINGS = {
         "Seconds the Taxi allows to recover lent sats, for coins that expire at a time.",
     recoveryCriticalSeconds:
         "This close to expiry, in seconds, a recovery deadline is critical and new payments pause.",
+    vtxoRenewalThresholdSeconds:
+        "This close to expiry, in seconds, the wallet renews a coin, and the Taxi lends none; keep it 12 hours below the network's VTXO lifetime.",
     reconcileIntervalMs:
         "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
     proceedsMaxFeeSats:
@@ -3505,14 +3551,18 @@ function wire() {
         $("go-live-confirm").hidden = true;
         $("step-live-fix").focus();
     });
-    $("funding-copy").addEventListener("click", async () => {
-        try {
-            await navigator.clipboard.writeText($("funding-address").textContent);
-            $("funding-state").textContent = "address copied";
-        } catch (e) {
-            $("funding-state").textContent = "copy failed: select the address instead";
-        }
-    });
+    for (const [button, address] of [
+        ["funding-copy", "funding-address"],
+        ["funding-boarding-copy", "funding-boarding-address"],
+    ])
+        $(button).addEventListener("click", async () => {
+            try {
+                await navigator.clipboard.writeText($(address).textContent);
+                $("funding-state").textContent = "address copied";
+            } catch (e) {
+                $("funding-state").textContent = "copy failed: select the address instead";
+            }
+        });
 
     $("rule-add-bitcoin").addEventListener("click", () => {
         if (view.rules.some((r) => r.assetId === null))

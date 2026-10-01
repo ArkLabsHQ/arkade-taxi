@@ -44,6 +44,7 @@ import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createAdminApp, createApp } from "../src/server.js";
 import { INDEX_HTML } from "../src/admin/static.js";
+import { boardingView } from "./admin/fixtures.js";
 import type { SweeperStatus } from "../src/sweeper.js";
 import type { ReconcilerStatus } from "../src/reconciler.js";
 import {
@@ -1642,6 +1643,10 @@ describe("CORS", () => {
             sweeperIntervalMs: 1_000,
             sweeperRunning: () => true,
             rescan: async () => {},
+            boarding: {
+                address: async () => "bcrt1pboarding",
+                deposits: async () => boardingView().deposits!,
+            },
         };
     };
     const corsApp = () => createApp(serverDeps());
@@ -1698,6 +1703,64 @@ describe("CORS", () => {
         expect(await (await admin.request("/")).text()).toBe(INDEX_HTML);
         const closing = createAdminApp({ ...serverDeps(), accepting: () => false });
         expect((await closing.request("/api/status")).status).toBe(503);
+    });
+
+    it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
+        let nowMs = 1_000_000;
+        let reads = 0;
+        let addressReads = 0;
+        let failing = false;
+        let addressFailing = false;
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        const base = serverDeps();
+        const admin = createAdminApp({
+            ...base,
+            nowMs: () => nowMs,
+            inventory: {
+                getLockedVtxoOutpoints: async () => [],
+                getSpendableVtxos: async () => {
+                    reads++;
+                    await gate;
+                    if (failing) throw new Error("wallet unavailable");
+                    return [fundingCoin()];
+                },
+            },
+            boarding: {
+                ...base.boarding,
+                address: async () => {
+                    addressReads++;
+                    if (addressFailing) throw new Error("wallet unavailable");
+                    return "bcrt1pboarding";
+                },
+            },
+        });
+        const funding = async () => (await admin.request("/api/funding")).status;
+
+        const concurrent = [funding(), funding()];
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(reads).toBe(1);
+        release();
+        expect(await Promise.all(concurrent)).toEqual([200, 200]);
+        nowMs += 9_999;
+        expect(await funding()).toBe(200);
+        expect([reads, addressReads]).toEqual([1, 1]);
+        nowMs += 1;
+        expect(await funding()).toBe(200);
+        expect([reads, addressReads]).toEqual([2, 2]);
+
+        nowMs += 10_000;
+        failing = true;
+        expect(await funding()).toBe(503);
+        failing = false;
+        expect(await funding()).toBe(200);
+        expect(reads).toBe(4);
+
+        nowMs += 10_000;
+        addressFailing = true;
+        const degraded = await admin.request("/api/funding");
+        expect(degraded.status).toBe(200);
+        expect((await degraded.json()).boarding.address).toBeNull();
     });
 
     it("gives /admin no CORS headers and does not answer its preflight", async () => {

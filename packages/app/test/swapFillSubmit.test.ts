@@ -964,6 +964,7 @@ describe("submitSwapFill bound freshness gate", () => {
             });
             runtime = createOperatorRuntime(cfg, world.db, {
                 now: () => clockMs,
+                heldOutpoints: () => [],
                 providers: {
                     arkProvider: {
                         getInfo: async () => {
@@ -983,6 +984,8 @@ describe("submitSwapFill bound freshness gate", () => {
                 },
                 walletFactory: async () =>
                     ({
+                        settle: async () => "",
+                        getVtxoManager: async () => ({ renewVtxos: async () => "" }),
                         getAddress: async () =>
                             new ArkAddress(
                                 cfg.serverPubkey,

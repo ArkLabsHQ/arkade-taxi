@@ -352,6 +352,7 @@ async function createReserved(
         maxSnapshotAgeMs: deps.config.reconcileIntervalMs,
         minExpiryHeadroomBlocks: deps.config.minExpiryHeadroomBlocks,
         minExpiryHeadroomSeconds: deps.config.minExpiryHeadroomSeconds,
+        renewalThresholdSeconds: deps.config.vtxoRenewalThresholdSeconds,
         minReserveSats: deps.config.operatorMinReserveSats,
     };
     const selection = structuredClone(selectOperatorFunding(options));
