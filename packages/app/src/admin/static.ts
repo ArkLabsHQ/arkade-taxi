@@ -114,6 +114,53 @@ export const INDEX_HTML = `<!doctype html>
                 <p class="note" id="readiness-blockers"></p>
             </section>
 
+            <section class="panel" aria-labelledby="funding-heading">
+                <div class="panel__head">
+                    <h2 id="funding-heading">Funding</h2>
+                    <div class="actions">
+                        <button type="button" id="funding-copy" disabled>Copy address</button>
+                        <span class="meta" id="funding-state">unknown</span>
+                    </div>
+                </div>
+                <dl class="states operational">
+                    <div>
+                        <dt>Usable</dt>
+                        <dd id="funding-usable">—</dd>
+                    </div>
+                    <div>
+                        <dt>Reserved</dt>
+                        <dd id="funding-reserved">—</dd>
+                    </div>
+                    <div>
+                        <dt>Reserve threshold</dt>
+                        <dd id="funding-threshold">—</dd>
+                    </div>
+                </dl>
+                <div class="panel__body">
+                    <p class="label">Arkade address</p>
+                    <p class="address" id="funding-address">—</p>
+                    <p class="note">
+                        Send sats or assets offchain from any Arkade wallet to this address.
+                    </p>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Asset balances across the operator's spendable coins
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Asset</th>
+                                <th scope="col" class="n">Group</th>
+                                <th scope="col" class="n">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody id="funding-assets"></tbody>
+                    </table>
+                    <p class="empty" id="funding-assets-empty" hidden>No assets held.</p>
+                </div>
+            </section>
+
             <div class="cols">
                 <section class="panel" aria-labelledby="policy-heading">
                     <div class="panel__head">
@@ -128,14 +175,6 @@ export const INDEX_HTML = `<!doctype html>
                         <p class="note" id="switch-note" aria-live="polite"></p>
 
                         <form id="policy-form" class="form-grid" novalidate>
-                            <p class="field">
-                                <label for="feeFlatSats">Flat fee (sats)</label>
-                                <input type="text" id="feeFlatSats" inputmode="numeric" />
-                            </p>
-                            <p class="field">
-                                <label for="feeBps">Fee (bps)</label>
-                                <input type="number" id="feeBps" min="0" max="10000" step="1" />
-                            </p>
                             <p class="field">
                                 <label for="maxOutstandingSats">Max outstanding (sats)</label>
                                 <input type="text" id="maxOutstandingSats" inputmode="numeric" />
@@ -167,17 +206,8 @@ export const INDEX_HTML = `<!doctype html>
                                 <input type="number" id="quoteTtlSeconds" min="1" step="1" />
                             </p>
                             <p class="field field--wide">
-                                <label for="assetAllowlist">Asset allowlist</label>
-                                <input
-                                    type="text"
-                                    id="assetAllowlist"
-                                    spellcheck="false"
-                                    placeholder="comma separated"
-                                />
-                                <label class="check">
-                                    <input type="checkbox" id="allowAnyAsset" />
-                                    Accept every asset
-                                </label>
+                                <label for="assetRules">Asset rules (JSON)</label>
+                                <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
                             <div class="actions">
                                 <button type="submit" class="primary" id="apply">Apply</button>
@@ -499,6 +529,13 @@ body.is-alarm .headline__sweeper {
     color: var(--text-dim);
 }
 
+.address {
+    margin: 0;
+    font: 400 14px/1.5 var(--mono);
+    word-break: break-all;
+    user-select: all;
+}
+
 /* Digits are grouped with a plain space, which at this size reads as two
  * separate numbers unless it is pulled back in. */
 .figure {
@@ -688,7 +725,8 @@ body.is-alarm .headline__sweeper {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
     width: 100%;
     padding: 6px 8px;
     background: #0c0e11;
@@ -699,7 +737,8 @@ select {
 }
 
 input[type="text"]:hover,
-select:hover {
+select:hover,
+textarea:hover {
     border-color: #48515b;
 }
 
@@ -889,9 +928,8 @@ const STATES = [
     "expired",
 ];
 
-const SATS_FIELDS = ["feeFlatSats", "maxOutstandingSats", "maxPerPaymentTopupSats"];
+const SATS_FIELDS = ["maxOutstandingSats", "maxPerPaymentTopupSats"];
 const INT_FIELDS = [
-    "feeBps",
     "maxConcurrentAdvances",
     "locktimeMarginBlocks",
     "locktimeMarginSeconds",
@@ -1092,6 +1130,36 @@ function renderOperational(readiness) {
         : "No operational blockers.";
 }
 
+function renderFunding(funding) {
+    const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
+    $("funding-address").textContent = funding.arkAddress;
+    $("funding-copy").disabled = false;
+    $("funding-usable").textContent = sats(funding.usableSats);
+    $("funding-reserved").textContent = sats(funding.reservedSats);
+    $("funding-threshold").textContent = sats(funding.minReserveSats);
+    $("funding-state").textContent =
+        funding.usableSats === null
+            ? "inventory unknown"
+            : BigInt(funding.usableSats) < BigInt(funding.minReserveSats)
+              ? "below reserve"
+              : "reserve met";
+    const body = $("funding-assets");
+    body.textContent = "";
+    for (const a of funding.assets) {
+        const tr = document.createElement("tr");
+        const id = document.createElement("td");
+        id.append(cell("span", a.assetId.txid, "trunc"));
+        id.title = a.assetId.txid;
+        tr.append(
+            id,
+            cell("td", String(a.assetId.groupIndex), "n"),
+            cell("td", group(a.amount), "n"),
+        );
+        body.append(tr);
+    }
+    $("funding-assets-empty").hidden = funding.assets.length > 0;
+}
+
 function renderAdvances(rows) {
     const body = $("advances-body");
     body.textContent = "";
@@ -1182,12 +1250,22 @@ function renderHistory(rows) {
     $("history-empty").hidden = rows.length > 0;
 }
 
+// The wire spells a fare's currency as its bare kind, a token's assetId beside
+// it; PATCH wants { kind, assetId }. unclaimedMode is output-only.
+function editableRules(rules) {
+    return rules.map(({ unclaimedMode, ...rule }) => ({
+        ...rule,
+        fares: rule.fares.map(({ id, currency, assetId, ...fare }) => ({
+            id,
+            currency: currency === "token" ? { kind: currency, assetId } : { kind: currency },
+            ...fare,
+        })),
+    }));
+}
+
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("allowAnyAsset").checked = policy.assetAllowlist === null;
-    $("assetAllowlist").value =
-        policy.assetAllowlist === null ? "" : policy.assetAllowlist.join(", ");
-    $("assetAllowlist").disabled = policy.assetAllowlist === null;
+    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
@@ -1197,7 +1275,7 @@ function renderServiceState(paused) {
     pill.classList.toggle("pill--attention", paused);
 }
 
-function policyPatch() {
+function policyPatch(rules) {
     const patch = {};
     for (const f of SATS_FIELDS) {
         const v = $(f).value.trim();
@@ -1207,14 +1285,8 @@ function policyPatch() {
         const v = Number($(f).value);
         if (v !== view.policy[f]) patch[f] = v;
     }
-    const allow = $("allowAnyAsset").checked
-        ? null
-        : $("assetAllowlist")
-              .value.split(",")
-              .map((s) => s.trim())
-              .filter((s) => s !== "");
-    if (JSON.stringify(allow) !== JSON.stringify(view.policy.assetAllowlist)) {
-        patch.assetAllowlist = allow;
+    if (JSON.stringify(rules) !== JSON.stringify(editableRules(view.policy.assetRules))) {
+        patch.assetRules = rules;
     }
     return patch;
 }
@@ -1338,6 +1410,14 @@ async function loadHistory() {
     renderHistory((await api("/admin/api/policy/history?limit=50")).history);
 }
 
+async function loadFunding() {
+    try {
+        renderFunding(await api("/admin/api/funding"));
+    } catch (e) {
+        $("funding-state").textContent = "unavailable: " + e.message;
+    }
+}
+
 async function refresh() {
     try {
         await Promise.all([loadStatus(), loadAdvances()]);
@@ -1376,10 +1456,6 @@ function wire() {
         filter.append(opt);
     }
 
-    $("allowAnyAsset").addEventListener("change", (e) => {
-        $("assetAllowlist").disabled = e.target.checked;
-    });
-
     filter.addEventListener("change", () => {
         loadAdvances(false).catch((e) => setNote("advances-note", e.message, true));
     });
@@ -1398,6 +1474,7 @@ function wire() {
     });
 
     $("refresh").addEventListener("click", refresh);
+    $("refresh").addEventListener("click", loadFunding);
     $("revert").addEventListener("click", () => {
         if (view.policy) fillPolicyForm(view.policy);
         setNote("policy-note", "", false);
@@ -1412,10 +1489,25 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
+    $("funding-copy").addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText($("funding-address").textContent);
+            $("funding-state").textContent = "address copied";
+        } catch (e) {
+            $("funding-state").textContent = "copy failed: select the address instead";
+        }
+    });
 
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        const patch = policyPatch();
+        let rules;
+        try {
+            rules = JSON.parse($("assetRules").value);
+        } catch (err) {
+            setNote("policy-note", "Asset rules: " + err.message, true);
+            return;
+        }
+        const patch = policyPatch(rules);
         if (Object.keys(patch).length === 0) {
             setNote("policy-note", "nothing changed", false);
             return;
@@ -1441,6 +1533,7 @@ function wire() {
 wire();
 loadPolicy().catch((e) => setNote("policy-note", e.message, true));
 loadHistory().catch(() => {});
+loadFunding();
 refresh();
 window.setInterval(refresh, POLL_MS);
 `;

@@ -1,11 +1,22 @@
+const loopbackPort = (bindings) => {
+    const port = Number(bindings?.[0]?.HostPort);
+    return bindings?.length === 1 &&
+        bindings[0].HostIp === "127.0.0.1" &&
+        Number.isInteger(port) &&
+        port >= 1 &&
+        port <= 65535
+        ? port
+        : undefined;
+};
+
 export function assertTaxiRestartOwnership(container, volume, image, project) {
     const label = "dev.arkade-taxi.e2e-project";
-    const bindings = container.NetworkSettings?.Ports?.["8080/tcp"];
     const networks = Object.keys(container.NetworkSettings?.Networks ?? {});
     const mounts = container.Mounts ?? [];
     const dataMount = mounts.find((mount) => mount.Destination === "/data");
     const bridgeMount = mounts.find((mount) => mount.Destination === "/app/e2e-esplora-bridge.mjs");
-    const port = Number(bindings?.[0]?.HostPort);
+    const port = loopbackPort(container.NetworkSettings?.Ports?.["8080/tcp"]);
+    const adminPort = loopbackPort(container.NetworkSettings?.Ports?.["8081/tcp"]);
     if (
         !/^taxi12-[a-f0-9]{12}$/.test(project) ||
         container.Name !== `/${project}-taxi` ||
@@ -21,12 +32,9 @@ export function assertTaxiRestartOwnership(container, volume, image, project) {
         dataMount.Name !== volume.Name ||
         bridgeMount?.Type !== "bind" ||
         bridgeMount.RW !== false ||
-        bindings?.length !== 1 ||
-        bindings[0].HostIp !== "127.0.0.1" ||
-        !Number.isInteger(port) ||
-        port < 1 ||
-        port > 65535
+        port === undefined ||
+        adminPort === undefined
     )
         throw new Error("Taxi restart ownership verification failed");
-    return { port };
+    return { port, adminPort };
 }

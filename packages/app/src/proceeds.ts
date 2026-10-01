@@ -48,7 +48,7 @@ const withinOutputLimit = (amount: bigint, maxAmount: bigint) => {
     if (typeof maxAmount !== "bigint") fail("proceeds_output_limit_invalid");
     return withinVtxoMaxAmount(amount, maxAmount);
 };
-const holdings = (coins: readonly VirtualCoin[]) => {
+export const holdings = (coins: readonly VirtualCoin[]) => {
     const values = new Map<string, bigint>();
     for (const coin of coins)
         for (const a of coin.assets ?? []) {

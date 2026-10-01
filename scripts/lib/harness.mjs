@@ -732,6 +732,8 @@ export function buildTaxiRunArgs({
         `${esploraBridge}:/app/e2e-esplora-bridge.mjs:ro`,
         "-p",
         "127.0.0.1::8080",
+        "-p",
+        "127.0.0.1::8081",
         image,
         "node",
         "--experimental-eventsource",

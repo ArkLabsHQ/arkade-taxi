@@ -104,7 +104,7 @@ export async function poll<T>(
 }
 
 export const admin = async (path: string, patch?: unknown) => {
-    const response = await fetch(`${required("TAXI_E2E_BASE_URL")}/admin/api/${path}`, {
+    const response = await fetch(`${required("TAXI_E2E_ADMIN_URL")}/admin/api/${path}`, {
         ...(patch === undefined ? {} : { method: "PATCH", body: JSON.stringify(patch) }),
         headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },
     });

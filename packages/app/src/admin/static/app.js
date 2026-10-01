@@ -12,9 +12,8 @@ const STATES = [
     "expired",
 ];
 
-const SATS_FIELDS = ["feeFlatSats", "maxOutstandingSats", "maxPerPaymentTopupSats"];
+const SATS_FIELDS = ["maxOutstandingSats", "maxPerPaymentTopupSats"];
 const INT_FIELDS = [
-    "feeBps",
     "maxConcurrentAdvances",
     "locktimeMarginBlocks",
     "locktimeMarginSeconds",
@@ -215,6 +214,36 @@ function renderOperational(readiness) {
         : "No operational blockers.";
 }
 
+function renderFunding(funding) {
+    const sats = (value) => (value === null ? "unknown" : group(value) + " sats");
+    $("funding-address").textContent = funding.arkAddress;
+    $("funding-copy").disabled = false;
+    $("funding-usable").textContent = sats(funding.usableSats);
+    $("funding-reserved").textContent = sats(funding.reservedSats);
+    $("funding-threshold").textContent = sats(funding.minReserveSats);
+    $("funding-state").textContent =
+        funding.usableSats === null
+            ? "inventory unknown"
+            : BigInt(funding.usableSats) < BigInt(funding.minReserveSats)
+              ? "below reserve"
+              : "reserve met";
+    const body = $("funding-assets");
+    body.textContent = "";
+    for (const a of funding.assets) {
+        const tr = document.createElement("tr");
+        const id = document.createElement("td");
+        id.append(cell("span", a.assetId.txid, "trunc"));
+        id.title = a.assetId.txid;
+        tr.append(
+            id,
+            cell("td", String(a.assetId.groupIndex), "n"),
+            cell("td", group(a.amount), "n"),
+        );
+        body.append(tr);
+    }
+    $("funding-assets-empty").hidden = funding.assets.length > 0;
+}
+
 function renderAdvances(rows) {
     const body = $("advances-body");
     body.textContent = "";
@@ -305,12 +334,22 @@ function renderHistory(rows) {
     $("history-empty").hidden = rows.length > 0;
 }
 
+// The wire spells a fare's currency as its bare kind, a token's assetId beside
+// it; PATCH wants { kind, assetId }. unclaimedMode is output-only.
+function editableRules(rules) {
+    return rules.map(({ unclaimedMode, ...rule }) => ({
+        ...rule,
+        fares: rule.fares.map(({ id, currency, assetId, ...fare }) => ({
+            id,
+            currency: currency === "token" ? { kind: currency, assetId } : { kind: currency },
+            ...fare,
+        })),
+    }));
+}
+
 function fillPolicyForm(policy) {
     for (const f of SATS_FIELDS.concat(INT_FIELDS)) $(f).value = policy[f];
-    $("allowAnyAsset").checked = policy.assetAllowlist === null;
-    $("assetAllowlist").value =
-        policy.assetAllowlist === null ? "" : policy.assetAllowlist.join(", ");
-    $("assetAllowlist").disabled = policy.assetAllowlist === null;
+    $("assetRules").value = JSON.stringify(editableRules(policy.assetRules), null, 2);
     $("policy-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
@@ -320,7 +359,7 @@ function renderServiceState(paused) {
     pill.classList.toggle("pill--attention", paused);
 }
 
-function policyPatch() {
+function policyPatch(rules) {
     const patch = {};
     for (const f of SATS_FIELDS) {
         const v = $(f).value.trim();
@@ -330,14 +369,8 @@ function policyPatch() {
         const v = Number($(f).value);
         if (v !== view.policy[f]) patch[f] = v;
     }
-    const allow = $("allowAnyAsset").checked
-        ? null
-        : $("assetAllowlist")
-              .value.split(",")
-              .map((s) => s.trim())
-              .filter((s) => s !== "");
-    if (JSON.stringify(allow) !== JSON.stringify(view.policy.assetAllowlist)) {
-        patch.assetAllowlist = allow;
+    if (JSON.stringify(rules) !== JSON.stringify(editableRules(view.policy.assetRules))) {
+        patch.assetRules = rules;
     }
     return patch;
 }
@@ -461,6 +494,14 @@ async function loadHistory() {
     renderHistory((await api("/admin/api/policy/history?limit=50")).history);
 }
 
+async function loadFunding() {
+    try {
+        renderFunding(await api("/admin/api/funding"));
+    } catch (e) {
+        $("funding-state").textContent = "unavailable: " + e.message;
+    }
+}
+
 async function refresh() {
     try {
         await Promise.all([loadStatus(), loadAdvances()]);
@@ -499,10 +540,6 @@ function wire() {
         filter.append(opt);
     }
 
-    $("allowAnyAsset").addEventListener("change", (e) => {
-        $("assetAllowlist").disabled = e.target.checked;
-    });
-
     filter.addEventListener("change", () => {
         loadAdvances(false).catch((e) => setNote("advances-note", e.message, true));
     });
@@ -521,6 +558,7 @@ function wire() {
     });
 
     $("refresh").addEventListener("click", refresh);
+    $("refresh").addEventListener("click", loadFunding);
     $("revert").addEventListener("click", () => {
         if (view.policy) fillPolicyForm(view.policy);
         setNote("policy-note", "", false);
@@ -535,10 +573,25 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
+    $("funding-copy").addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText($("funding-address").textContent);
+            $("funding-state").textContent = "address copied";
+        } catch (e) {
+            $("funding-state").textContent = "copy failed: select the address instead";
+        }
+    });
 
     $("policy-form").addEventListener("submit", (e) => {
         e.preventDefault();
-        const patch = policyPatch();
+        let rules;
+        try {
+            rules = JSON.parse($("assetRules").value);
+        } catch (err) {
+            setNote("policy-note", "Asset rules: " + err.message, true);
+            return;
+        }
+        const patch = policyPatch(rules);
         if (Object.keys(patch).length === 0) {
             setNote("policy-note", "nothing changed", false);
             return;
@@ -564,5 +617,6 @@ function wire() {
 wire();
 loadPolicy().catch((e) => setNote("policy-note", e.message, true));
 loadHistory().catch(() => {});
+loadFunding();
 refresh();
 window.setInterval(refresh, POLL_MS);

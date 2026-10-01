@@ -56,7 +56,7 @@ const resumeAfterFault = async () => {
         120_000,
     );
     if (snapshot.paused) {
-        const response = await fetch(`${required("TAXI_E2E_BASE_URL")}/admin/api/resume`, {
+        const response = await fetch(`${required("TAXI_E2E_ADMIN_URL")}/admin/api/resume`, {
             method: "POST",
             body: "{}",
             headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },

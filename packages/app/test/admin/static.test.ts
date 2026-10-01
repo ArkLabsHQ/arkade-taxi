@@ -2,7 +2,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
+import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness } from "./fixtures.js";
 
 const asset = (name: string): string =>
@@ -82,20 +85,26 @@ function deferred<T>() {
     return { promise, resolve, reject };
 }
 
-function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown>) {
+function runDashboard(
+    fetchAdvances: (path: string) => unknown | Promise<unknown>,
+    admin = harness(),
+) {
     const elements = new Map<string, DashboardElement>();
     const element = (id: string) => {
+        if (!INDEX_HTML.includes(`id="${id}"`)) throw new Error(`index.html has no #${id}`);
         if (!elements.has(id)) elements.set(id, new DashboardElement());
         return elements.get(id)!;
     };
     const requests: string[] = [];
+    const copied: string[] = [];
+    let poll = async () => {};
     const response = (body: unknown) => ({
         ok: true,
         status: 200,
         statusText: "OK",
         text: async () => JSON.stringify(body),
     });
-    const fetch = async (path: string) => {
+    const fetch = async (path: string, init?: { headers?: Record<string, string> }) => {
         requests.push(path);
         if (path.startsWith("/admin/api/advances")) {
             const result: any = await fetchAdvances(path);
@@ -144,17 +153,10 @@ function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown
                     sweeper: { nearestDeadline: { height: null, time: null } },
                 },
             });
-        if (path === "/admin/api/policy/history?limit=50") return response({ history: [] });
-        return response({
-            feeFlatSats: "0",
-            feeBps: 0,
-            maxOutstandingSats: "0",
-            maxPerPaymentTopupSats: "0",
-            maxConcurrentAdvances: 0,
-            locktimeMarginBlocks: 73,
-            locktimeMarginSeconds: 43_201,
-            quoteTtlSeconds: 60,
-            assetAllowlist: null,
+        // The authenticating proxy, not the page, supplies the operator header.
+        return admin.app.request(path, {
+            ...init,
+            headers: { ...init?.headers, "x-taxi-operator": "console-operator" },
         });
     };
     const document = {
@@ -168,7 +170,8 @@ function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown
     runInNewContext(APP_JS, {
         document,
         fetch,
-        window: { setInterval() {} },
+        navigator: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
+        window: { setInterval: (tick: () => Promise<void>) => void (poll = tick) },
         URL,
         URLSearchParams,
         Date,
@@ -182,7 +185,7 @@ function runDashboard(fetchAdvances: (path: string) => unknown | Promise<unknown
     });
     const renderedIds = () =>
         element("advances-body").children.map((row) => row.children[0]?.title);
-    return { element, renderedIds, requests };
+    return { element, renderedIds, requests, copied, poll: () => poll() };
 }
 
 describe("static routes", () => {
@@ -520,5 +523,106 @@ describe("the dashboard is dependency-free", () => {
         expect(advanceRequests[1]).toContain("snapshot=" + firstToken);
         expect(dashboard.element("advances-count").textContent).toContain("1 loaded · 1");
         expect(dashboard.element("advances-more").hidden).toBe(true);
+    });
+
+    it("edits the real policy wire's asset rules into a PATCH the router accepts", async () => {
+        const admin = harness();
+        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const seeded = admin.policy.update(
+            policy({
+                assetRules: [
+                    ...policy().assetRules,
+                    {
+                        assetId: token,
+                        enabled: true,
+                        fares: [
+                            {
+                                id: "token",
+                                currency: { kind: "token", assetId: token },
+                                pricing: { kind: "flat", units: 1n },
+                            },
+                        ],
+                        claim: "recycle",
+                        maxTopupSats: 500n,
+                    },
+                ],
+            }),
+            "seed",
+        );
+        const dashboard = runDashboard(() => dashboardPage([], "7".repeat(64), null), admin);
+        const note = () => dashboard.element("policy-note").textContent;
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent, note()).toMatch(/^loaded/),
+        );
+        expect(note()).toBe("");
+        expect(dashboard.element("maxConcurrentAdvances").value).toBe(seeded.maxConcurrentAdvances);
+
+        const rules = JSON.parse(dashboard.element("assetRules").value);
+        rules[1].enabled = false;
+        const edited = JSON.stringify(rules);
+        dashboard.element("assetRules").value = edited;
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("assetRules").value, note()).not.toBe(edited),
+        );
+        expect(note()).toBe("request accepted");
+        expect(JSON.parse(dashboard.element("assetRules").value)).toEqual(rules);
+        expect(admin.policy.get().assetRules).toEqual([
+            seeded.assetRules[0],
+            { ...seeded.assetRules[1], enabled: false },
+        ]);
+
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toBe("nothing changed");
+        const sent = dashboard.requests.length;
+        dashboard.element("assetRules").value = "[";
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toMatch(/^Asset rules: /);
+        expect(dashboard.requests).toHaveLength(sent);
+    });
+
+    it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
+        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const admin = harness({
+            funding: async () => ({
+                config: config(),
+                inventory: {
+                    usableSats: 2_500n,
+                    reservedSats: 0n,
+                    usableVtxos: 1,
+                    reservedVtxos: 0,
+                },
+                coins: [
+                    fundingCoin({
+                        assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
+                    }),
+                ],
+            }),
+        });
+        const dashboard = runDashboard(() => dashboardPage([], "8".repeat(64), null), admin);
+        const text = (id: string) => dashboard.element(id).textContent;
+        const address = new ArkAddress(serverKey, operatorKey, "ark").encode();
+
+        await vi.waitFor(() => expect(text("funding-address")).toBe(address));
+        expect(text("funding-usable")).toBe("2 500 sats");
+        expect(text("funding-reserved")).toBe("0 sats");
+        expect(text("funding-threshold")).toBe("10 000 sats");
+        expect(text("funding-state")).toBe("below reserve");
+        expect(
+            dashboard
+                .element("funding-assets")
+                .children.map((row) => row.children.map((c) => c.title || c.textContent)),
+        ).toEqual([["cd".repeat(32), "1", "1 234 567"]]);
+
+        dashboard.element("funding-copy").fire("click");
+        await vi.waitFor(() => expect(dashboard.copied).toEqual([address]));
+
+        const fundingLoads = () =>
+            dashboard.requests.filter((path) => path === "/admin/api/funding").length;
+        expect(fundingLoads()).toBe(1);
+        await dashboard.poll();
+        expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
+        dashboard.element("refresh").fire("click");
+        await vi.waitFor(() => expect(fundingLoads()).toBe(2));
     });
 });

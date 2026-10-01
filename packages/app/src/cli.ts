@@ -22,7 +22,7 @@ import {
     ProductionSwapFillGraphBuilder,
 } from "./swapFillQuotes.js";
 import { createSweeper } from "./sweeper.js";
-import { createApp } from "./server.js";
+import { createAdminApp, createApp, type ServerDeps } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
 import { SingleKey } from "@arkade-os/sdk";
 import { advanceKind } from "@arkade-taxi/core";
@@ -144,7 +144,7 @@ async function runServe(): Promise<void> {
     let timer: ReturnType<typeof setInterval> | undefined;
     let watcherStop: Promise<void> | undefined;
     let closeServer: Promise<void> | undefined;
-    let server: ReturnType<typeof serve> | undefined;
+    const servers: ReturnType<typeof serve>[] = [];
     let accepting = true;
     const shutdown = new AbortController();
 
@@ -166,7 +166,7 @@ async function runServe(): Promise<void> {
         const info = await runtime.providers.arkProvider.getInfo();
         return { vtxoMaxAmount: info.vtxoMaxAmount };
     };
-    const app = createApp({
+    const deps: ServerDeps = {
         advances,
         policy,
         config,
@@ -236,19 +236,33 @@ async function runServe(): Promise<void> {
         accepting: () => accepting,
         shutdownSignal: shutdown.signal,
         claimFeedLogger: log,
-    });
+    };
+    const app = createApp(deps);
 
     lifecycle = createServiceLifecycle({
         listen: async () => {
-            server = serve({ fetch: app.fetch, port: config.httpPort }, (info) =>
-                log.info({ port: info.port }, "taxi listening"),
+            servers.push(
+                serve({ fetch: app.fetch, port: config.httpPort }, (info) =>
+                    log.info({ port: info.port }, "taxi listening"),
+                ),
             );
+            if (config.adminPort !== undefined)
+                servers.push(
+                    serve({ fetch: createAdminApp(deps).fetch, port: config.adminPort }, (info) =>
+                        log.info({ port: info.port }, "taxi admin listening"),
+                    ),
+                );
             return {
                 stopAccepting() {
                     accepting = false;
-                    closeServer ??= new Promise<void>((resolve, reject) =>
-                        server!.close((error) => (error ? reject(error) : resolve())),
-                    );
+                    closeServer ??= Promise.all(
+                        servers.map(
+                            (server) =>
+                                new Promise<void>((resolve, reject) =>
+                                    server.close((error) => (error ? reject(error) : resolve())),
+                                ),
+                        ),
+                    ).then(() => {});
                 },
                 finished: () => closeServer ?? Promise.resolve(),
             };

@@ -30,7 +30,7 @@ output fits, `proceeds_output_limit_exceeded` blocks submission. A previously
 authorized job that exceeds a changed limit stays reserved; do not edit its plan
 or clear reservations to bypass the blocker.
 
-Inspect `proceeds` in `/health`, or `readiness.proceeds` in `/admin/api/status`:
+Inspect `proceeds` in `/health`, or `readiness.proceeds` in the admin port's `/admin/api/status`:
 it reports the active job,
 state, blocker, exact authorized fee and commitment. New quotes wait while a
 collection job is active, until its exact spendable self-output is verified;
@@ -90,7 +90,9 @@ docker run --name taxi --restart unless-stopped \
   --mount type=volume,source=taxi-data,target=/data \
   --env-file /secure/taxi/public.env \
   --env TAXI_OPERATOR_PRIVKEY \
+  --env TAXI_ADMIN_PORT=8081 \
   -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:8081:8081 \
   arkade-taxi:release-candidate
 ```
 
@@ -99,10 +101,11 @@ Use an immutable image digest for deployed releases. The image runs as
 Graceful termination drains owned work and preserves durable intents. Do not
 start another writer against the same database during shutdown or restore.
 
-A trusted reverse proxy owns TLS and authentication. Protect both `/admin` and
-the bare `/api/*` admin aliases; they share Taxi's HTTP listener. Remove any
-inbound `X-Taxi-Operator`, replace it with the authenticated operator identity,
-and prevent direct access to the backend port. Taxi validates and audits this
+A trusted reverse proxy owns TLS and authentication. The admin console listens
+only on [`TAXI_ADMIN_PORT`](environment.md#taxi_admin_port), never on the public
+port, and authenticates nothing: route operators to it through the proxy alone.
+Remove any inbound `X-Taxi-Operator`, replace it with the authenticated operator
+identity, and prevent direct access to the backend ports. Taxi validates and audits this
 header but does not authenticate it. Request JSON cannot choose the actor.
 
 Pin the Arkade Service public key independently of Taxi. Taxi obtains the
@@ -173,7 +176,7 @@ or clear reservations to make readiness green.
 ## Pause, rescan and retry
 
 The admin UI exposes these audited operations. Their equivalent authenticated
-routes accept `POST` with `Content-Type: application/json` and body `{}`:
+routes on the admin port accept `POST` with `Content-Type: application/json` and body `{}`:
 
 | Route                                      | Effect                                                  |
 | ------------------------------------------ | ------------------------------------------------------- |

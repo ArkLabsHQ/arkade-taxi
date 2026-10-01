@@ -238,6 +238,13 @@ body.is-alarm .headline__sweeper {
     color: var(--text-dim);
 }
 
+.address {
+    margin: 0;
+    font: 400 14px/1.5 var(--mono);
+    word-break: break-all;
+    user-select: all;
+}
+
 /* Digits are grouped with a plain space, which at this size reads as two
  * separate numbers unless it is pulled back in. */
 .figure {
@@ -427,7 +434,8 @@ body.is-alarm .headline__sweeper {
 
 input[type="text"],
 input[type="number"],
-select {
+select,
+textarea {
     width: 100%;
     padding: 6px 8px;
     background: #0c0e11;
@@ -438,7 +446,8 @@ select {
 }
 
 input[type="text"]:hover,
-select:hover {
+select:hover,
+textarea:hover {
     border-color: #48515b;
 }
 

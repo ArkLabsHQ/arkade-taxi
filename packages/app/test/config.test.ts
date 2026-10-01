@@ -84,6 +84,16 @@ describe("loadConfig", () => {
         expect(cfg.logLevel).toBe("info");
     });
 
+    it("takes an optional admin port that must differ from the HTTP port", () => {
+        expect(loadConfig(env()).adminPort).toBeUndefined();
+        expect(loadConfig(env({ TAXI_ADMIN_PORT: "9090" })).adminPort).toBe(9090);
+        expect(() => loadConfig(env({ TAXI_ADMIN_PORT: "8080" }))).toThrow(
+            /TAXI_ADMIN_PORT: must differ from TAXI_HTTP_PORT/,
+        );
+        for (const value of ["0", "65536", "80a"])
+            expect(() => loadConfig(env({ TAXI_ADMIN_PORT: value }))).toThrow(/TAXI_ADMIN_PORT/);
+    });
+
     it("decodes the operator private key to 32 bytes", () => {
         const cfg = loadConfig(env());
         expect(cfg.operatorPrivkey).toHaveLength(32);
