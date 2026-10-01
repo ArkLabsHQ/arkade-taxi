@@ -27,7 +27,7 @@ import { hexToBytes, type FundingInputValue } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
 import { createActorWallets, disposeActorWallets, expiryOf } from "../scripts/e2e-wallets.mjs";
 import { routeProviderFetch } from "../scripts/lib/harness.mjs";
-import { preEffectRequest, submitWithReadiness, type AdmissionWindow } from "./admission.js";
+import { preEffectRequest, submitWithReadiness, type AdmissionWindow } from "./admission";
 import {
     assertScenarioBoundary,
     ownCleanup,

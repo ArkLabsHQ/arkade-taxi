@@ -14,10 +14,10 @@ import {
     Leaf,
     covenantSpendInput,
     lockupSats,
-} from "../packages/covenant/src/index.js";
+} from "../packages/covenant/src/index";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { setOwnedServices } from "../scripts/lib/cltv-evidence.mjs";
-import { liveScenario } from "./scenarios.js";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     artifactPath,
@@ -28,7 +28,7 @@ import {
     quoteFor,
     required,
     sizedSender,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const COVENANT = "taxi-dust-covenant";
 const SERVICES = ["arkd", "emulator"];

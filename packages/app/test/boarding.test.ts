@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CSVMultisigTapscript, type ExtendedCoin, type Wallet } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { createBoarding } from "../src/boarding.js";
-import { operatorKey } from "./fixtures.js";
+import { createBoarding } from "../src/boarding";
+import { operatorKey } from "./fixtures";
 
 const EXIT_DELAY = 604_672;
 const deposit = (vout: number, value: number, confirmed: boolean, block_time?: number) =>

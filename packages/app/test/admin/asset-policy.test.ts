@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { admit } from "@arkade-taxi/core";
-import { harness, key } from "./fixtures.js";
+import { harness, key } from "./fixtures";
 
 const rule = () => ({
     assetId: { txid: "ab".repeat(32), groupIndex: 7 },

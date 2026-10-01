@@ -12,14 +12,14 @@ import {
 import { buildOfferFillPlan } from "@arkade-os/swap";
 import { encodeOffer, offerVtxoScript } from "@arkade-os/swap/protocol";
 import { ArkAddress } from "@arkade-os/sdk";
-import { deriveJointInputs, deriveJointOutputs } from "../src/arkade/jointGraphDerivation.js";
-import { fundingCoin, serverKey, serverUnroll } from "./fixtures.js";
+import { deriveJointInputs, deriveJointOutputs } from "../src/arkade/jointGraphDerivation";
+import { fundingCoin, serverKey, serverUnroll } from "./fixtures";
 import {
     insertReceiveQuote,
     WANTED_SWAP_ID,
     type InsertedReceiveQuote,
-} from "./jointFillFixtures.js";
-import { asIndexed } from "./graphFixtures.js";
+} from "./jointFillFixtures";
+import { asIndexed } from "./graphFixtures";
 
 /** The REST reads the production builder makes, served from a test's own state. */
 export interface RealBuilderState {

@@ -13,15 +13,15 @@ import {
 import { buildOfferFillPlan } from "@arkade-os/swap";
 import { createOffer, decodeOffer } from "@arkade-os/swap/protocol";
 import { type CovenantTransfer, type JointGraph } from "@arkade-taxi/client";
-import { signJointGraphForOwner } from "./offerSigning.js";
-import { deriveJointOutputs } from "../packages/app/src/arkade/jointGraphDerivation.js";
+import { signJointGraphForOwner } from "./offerSigning";
+import { deriveJointOutputs } from "../packages/app/src/arkade/jointGraphDerivation";
 import { hex } from "@scure/base";
-import { loadConfig } from "../packages/app/src/config.js";
+import { loadConfig } from "../packages/app/src/config";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { preEffectRequest } from "./admission.js";
-import { liveScenario } from "./scenarios.js";
+import { preEffectRequest } from "./admission";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     artifactPath,
@@ -41,7 +41,7 @@ import {
     walletBalance,
     type Live,
     type Locked,
-} from "./fixtures.js";
+} from "./fixtures";
 
 type Fare = { id: string; currency: "sats" | "asset"; units: bigint };
 

@@ -10,10 +10,10 @@ import {
     type ReceiverWalletInput,
     type TaxiClient,
     type TaxiError,
-} from "../index.js";
+} from "../index";
 import { hex } from "@scure/base";
-import { taxiClient, boundedFetch, type ArkadeContext } from "./context.js";
-import type { RememberedTaxi, TaxiActivity } from "./activity.js";
+import { taxiClient, boundedFetch, type ArkadeContext } from "./context";
+import type { RememberedTaxi, TaxiActivity } from "./activity";
 
 export type ReceiverClaim = Parameters<TaxiClient["verifyIncomingClaim"]>[0];
 export type ClaimClient = Pick<

@@ -2,8 +2,8 @@ import { expect } from "vitest";
 import { ArkAddress, Transaction, VtxoScript, asset, selectCoinsWithAsset } from "@arkade-os/sdk";
 import { signSponsoredPayment } from "@arkade-taxi/client";
 import { base64, hex } from "@scure/base";
-import { preEffectRequest } from "./admission.js";
-import { liveScenario } from "./scenarios.js";
+import { preEffectRequest } from "./admission";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     assetOutputs,
@@ -13,7 +13,7 @@ import {
     required,
     walletBalance,
     walletAssetBalances,
-} from "./fixtures.js";
+} from "./fixtures";
 
 liveScenario("sponsored-direct-send", async () => {
     const live = await openLive();

@@ -1,4 +1,4 @@
-import type { DustCovenantParams } from "../src/params.js";
+import type { DustCovenantParams } from "../src/params";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 

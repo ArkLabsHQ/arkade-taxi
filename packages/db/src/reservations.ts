@@ -8,9 +8,9 @@ import {
     type ExpiryDeadline,
     type Outpoint,
 } from "@arkade-taxi/core";
-import { AdvanceRepository } from "./advances.js";
-import { PolicyRepository } from "./policy.js";
-import { assertNativeAccess } from "./coordination.js";
+import { AdvanceRepository } from "./advances";
+import { PolicyRepository } from "./policy";
+import { assertNativeAccess } from "./coordination";
 
 export interface ReserveQuoteRequest {
     advance: Advance;

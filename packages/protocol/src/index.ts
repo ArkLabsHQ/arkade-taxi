@@ -31,7 +31,7 @@ export {
     covenantSpendInputFromWire,
     covenantSpendInputToWire,
     type CovenantSpendInputValue,
-} from "./codec.js";
+} from "./codec";
 
 export {
     fillRequestToWire,
@@ -39,7 +39,7 @@ export {
     type FillRequestBody,
     type FillState,
     type FillStatusResponse,
-} from "./fill.js";
+} from "./fill";
 
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */

@@ -9,7 +9,7 @@ import {
     type ArkProvider,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { createArkFillSubmitter } from "../src/arkade/arkFillSubmitter.js";
+import { createArkFillSubmitter } from "../src/arkade/arkFillSubmitter";
 
 const seeds = [1, 2, 3].map((n) => new Uint8Array(32).fill(n));
 const identities = seeds.map((seed) => SingleKey.fromPrivateKey(seed));

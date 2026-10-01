@@ -6,8 +6,8 @@ export {
     tapLeavesOfInput,
     tapScriptSigEntries,
     unsignedPsbtBytes,
-} from "./arkTransaction.js";
-export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph.js";
+} from "./arkTransaction";
+export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph";
 export {
     JointSigningError,
     JointSubmissionAmbiguousError,
@@ -21,7 +21,7 @@ export {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
-} from "./jointSigning.js";
+} from "./jointSigning";
 export {
     FILL_TEMPLATE,
     fillCosignerKeys,
@@ -31,4 +31,4 @@ export {
     submitFillGraph,
     type FillOwner,
     type FillOwnerKeys,
-} from "./fillSigning.js";
+} from "./fillSigning";

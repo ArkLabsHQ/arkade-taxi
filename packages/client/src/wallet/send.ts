@@ -17,7 +17,7 @@ import {
     type TaxiClient,
     type VerifyQuoteArgs,
     type VerifySponsoredQuoteArgs,
-} from "../index.js";
+} from "../index";
 import {
     fundingInputFromWire,
     fundingInputToWire,
@@ -25,8 +25,8 @@ import {
     type FundingInputWire,
 } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
-import { retryDelay } from "../client.js";
-import type { Bip21Taxi } from "./requests.js";
+import { retryDelay } from "../client";
+import type { Bip21Taxi } from "./requests";
 import {
     boundedFetch,
     callerMinimum,
@@ -38,9 +38,9 @@ import {
     type ArkadeContext,
     type ProbeRefusal,
     type TaxiInfo,
-} from "./context.js";
-import type { TaxiActivity } from "./activity.js";
-import { isCanonicalTxid, isHttpUrl, priceFare } from "./wire.js";
+} from "./context";
+import type { TaxiActivity } from "./activity";
+import { isCanonicalTxid, isHttpUrl, priceFare } from "./wire";
 
 export type DirectTaxiMode = "recycle" | "purchase" | "sponsored";
 

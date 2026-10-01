@@ -10,7 +10,7 @@ import {
     type Wallet,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { buildDirectFillGraph, finalizeAcceptedDirectFill } from "../../e2e/directFillGraph.js";
+import { buildDirectFillGraph, finalizeAcceptedDirectFill } from "../../e2e/directFillGraph";
 
 const identities = [1, 2, 3].map((fill) => SingleKey.fromPrivateKey(new Uint8Array(32).fill(fill)));
 const assetId = "aa".repeat(32) + "0000";

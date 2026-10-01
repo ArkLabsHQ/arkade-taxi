@@ -3,8 +3,8 @@ import { expect } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { preEffectRequest } from "./admission.js";
-import { liveScenario } from "./scenarios.js";
+import { preEffectRequest } from "./admission";
+import { liveScenario } from "./scenarios";
 import {
     assetOutputs,
     claimFromFeed,
@@ -19,7 +19,7 @@ import {
     transaction,
     walletBalance,
     type Locked,
-} from "./fixtures.js";
+} from "./fixtures";
 import {
     BOB_COIN_SATS,
     DELIVERED,
@@ -29,7 +29,7 @@ import {
     sigCount,
     signAsCaller,
     txOf,
-} from "./fillSupport.js";
+} from "./fillSupport";
 
 const readyUrl = () => `${required("TAXI_E2E_BASE_URL")}/ready`;
 

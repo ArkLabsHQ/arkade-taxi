@@ -49,11 +49,11 @@ import {
     type Database,
 } from "@arkade-taxi/db";
 import { covenantParamsOf, type Advance, type AdvanceState } from "@arkade-taxi/core";
-import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { classifyObservedSpend, createSpendWatcher, type SpendWatcher } from "../src/watcher.js";
-import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery.js";
-import { createProceedsCollector } from "../src/proceeds.js";
+import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
+import { classifyObservedSpend, createSpendWatcher, type SpendWatcher } from "../src/watcher";
+import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery";
+import { createProceedsCollector } from "../src/proceeds";
 import {
     config,
     fundingCoin,
@@ -64,9 +64,9 @@ import {
     senderKey,
     serverKey,
     V2_DEADLINE,
-} from "./fixtures.js";
-import { arkInfo } from "./arkade/fixtures.js";
-import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
+} from "./fixtures";
+import { arkInfo } from "./arkade/fixtures";
+import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures";
 
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const sdk = await importOriginal<typeof import("@arkade-os/sdk")>();

@@ -4,8 +4,8 @@ import type {
     Exposure,
     Policy,
     QuoteRequest,
-} from "./types.js";
-import type { CustodySolvency } from "./solvency.js";
+} from "./types";
+import type { CustodySolvency } from "./solvency";
 import {
     FareError,
     resolveFare,
@@ -13,7 +13,7 @@ import {
     ruleFor,
     selectFare,
     type FareSpec,
-} from "./fares.js";
+} from "./fares";
 
 export interface LendingGate {
     solvency: CustodySolvency;

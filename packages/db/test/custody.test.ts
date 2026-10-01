@@ -2,15 +2,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { applyMigrations } from "../src/schema.js";
-import { AdvanceRepository } from "../src/advances.js";
-import { PolicyRepository } from "../src/policy.js";
+import { applyMigrations } from "../src/schema";
+import { AdvanceRepository } from "../src/advances";
+import { PolicyRepository } from "../src/policy";
 import {
     CustodyError,
     CustodyReleaseInputConflictError,
     CustodyRepository,
     CustodySweptError,
-} from "../src/custody.js";
+} from "../src/custody";
 
 const WINDOW = 8_640_000;
 const INT64_MAX = 9_223_372_036_854_775_807n;

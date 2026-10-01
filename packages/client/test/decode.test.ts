@@ -16,7 +16,7 @@ import {
     decodeQuote,
     decodeReceiveQuote,
     decodeReceiverClaimDescriptor,
-} from "../src/decode.js";
+} from "../src/decode";
 
 const hex32 = (byte: string) => byte.repeat(32);
 const fill32 = (byte: number) => new Uint8Array(32).fill(byte);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { idleFillDeps, MemoryFills } from "./fillFixtures.js";
+import { idleFillDeps, MemoryFills } from "./fillFixtures";
 import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
@@ -34,18 +34,18 @@ import {
     decodeSponsoredQuote,
     decodeStatus,
 } from "@arkade-taxi/client";
-import { openApiDocument, type Schema } from "../src/openapi.js";
-import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
-import { FakeLockupBuilder } from "../src/quotes.js";
-import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
-import { ServiceError } from "../src/errors.js";
-import { createServiceLifecycle } from "../src/lifecycle.js";
-import { createAdminApp, createApp, type ServerDeps } from "../src/server.js";
-import { INDEX_HTML } from "../src/admin/static.js";
-import { boardingView } from "./admin/fixtures.js";
-import type { SweeperStatus } from "../src/sweeper.js";
-import { createLockupReconciler, type ReconcilerStatus } from "../src/reconciler.js";
-import { createSpendWatcher } from "../src/watcher.js";
+import { openApiDocument, type Schema } from "../src/openapi";
+import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes";
+import { FakeLockupBuilder } from "../src/quotes";
+import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes";
+import { ServiceError } from "../src/errors";
+import { createServiceLifecycle } from "../src/lifecycle";
+import { createAdminApp, createApp, type ServerDeps } from "../src/server";
+import { INDEX_HTML } from "../src/admin/static";
+import { boardingView } from "./admin/fixtures";
+import type { SweeperStatus } from "../src/sweeper";
+import { createLockupReconciler, type ReconcilerStatus } from "../src/reconciler";
+import { createSpendWatcher } from "../src/watcher";
 import {
     advance,
     config,
@@ -66,9 +66,9 @@ import {
     quoteInfrastructure,
     serverUnroll,
     signedEnvelope,
-} from "./fixtures.js";
+} from "./fixtures";
 import type { Policy } from "@arkade-taxi/core";
-import { asIndexed } from "./graphFixtures.js";
+import { asIndexed } from "./graphFixtures";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;

@@ -17,7 +17,7 @@ import {
 } from "@arkade-os/sdk";
 import { exitDelayEncodable } from "@arkade-taxi/covenant";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
-import type { RuntimeConfig, TaxiConfig } from "../config.js";
+import type { RuntimeConfig, TaxiConfig } from "../config";
 import type { ExpiryDeadline } from "@arkade-taxi/core";
 
 export function normalizeExpiry(coin: {

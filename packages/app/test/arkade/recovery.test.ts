@@ -28,9 +28,9 @@ import {
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import { fundingInputToWire } from "@arkade-taxi/protocol";
 import { covenantParamsOf, type Advance } from "@arkade-taxi/core";
-import type { RuntimeConfig } from "../../src/config.js";
-import { readFundingSource } from "../../src/arkade/fundingSource.js";
-import { sealGraph } from "../graphFixtures.js";
+import type { RuntimeConfig } from "../../src/config";
+import { readFundingSource } from "../../src/arkade/fundingSource";
+import { sealGraph } from "../graphFixtures";
 import {
     advance,
     config,
@@ -41,26 +41,22 @@ import {
     senderTree,
     serverKey,
     serverUnroll,
-} from "../fixtures.js";
+} from "../fixtures";
 import {
     createBoundJointFill,
     foreignRecoveryPreflight,
     patchJointSource,
     type BoundJointFill,
-} from "../jointFillFixtures.js";
-import { buildLockupEnvelope, operatorFundingInput } from "../../src/arkade/lockupBuilder.js";
-import { validatePersistedLockupGraph } from "../../src/arkade/submit.js";
-import {
-    decodeLockupEnvelope,
-    encodeLockupEnvelope,
-    unsignedGraphId,
-} from "../../src/arkade/psbt.js";
+} from "../jointFillFixtures";
+import { buildLockupEnvelope, operatorFundingInput } from "../../src/arkade/lockupBuilder";
+import { validatePersistedLockupGraph } from "../../src/arkade/submit";
+import { decodeLockupEnvelope, encodeLockupEnvelope, unsignedGraphId } from "../../src/arkade/psbt";
 import {
     assertRecoveryStartupInvariants,
     buildRecoveryIntent,
     createRecoveryRunner,
     type RecoveryIntent,
-} from "../../src/arkade/recovery.js";
+} from "../../src/arkade/recovery";
 
 const directories: string[] = [];
 const databases: Database[] = [];

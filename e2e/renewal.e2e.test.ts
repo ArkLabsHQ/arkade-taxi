@@ -45,20 +45,20 @@ import {
     loadConfig,
     resolveRuntimeConfig,
     type RuntimeConfig,
-} from "../packages/app/src/config.js";
-import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
-import { ProductionLockupBuilder } from "../packages/app/src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../packages/app/src/arkade/psbt.js";
-import type { LockupBuildRequest } from "../packages/app/src/quotes.js";
-import { productionLockupSubmitter } from "../packages/app/src/arkade/submit.js";
-import { normalizeExpiry } from "../packages/app/src/arkade/providers.js";
-import { unionReservedOutpoints } from "../packages/app/src/arkade/reservedOutpoints.js";
-import { createSpendWatcher } from "../packages/app/src/watcher.js";
+} from "../packages/app/src/config";
+import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet";
+import { ProductionLockupBuilder } from "../packages/app/src/arkade/lockupBuilder";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../packages/app/src/arkade/psbt";
+import type { LockupBuildRequest } from "../packages/app/src/quotes";
+import { productionLockupSubmitter } from "../packages/app/src/arkade/submit";
+import { normalizeExpiry } from "../packages/app/src/arkade/providers";
+import { unionReservedOutpoints } from "../packages/app/src/arkade/reservedOutpoints";
+import { createSpendWatcher } from "../packages/app/src/watcher";
 import { buildArkFundingArgs } from "../scripts/lib/harness.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { artifactPath, fundingOf, poll, required } from "./fixtures.js";
-import { liveScenario } from "./scenarios.js";
+import { artifactPath, fundingOf, poll, required } from "./fixtures";
+import { liveScenario } from "./scenarios";
 
 type Actor = { identity: SingleKey; wallet: Wallet };
 

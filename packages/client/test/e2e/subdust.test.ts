@@ -23,7 +23,7 @@ import {
     watchReceiverClaims,
     type TaxiActivity,
     type VerifiedClaim,
-} from "../../src/wallet/index.js";
+} from "../../src/wallet/index";
 
 const ARK_URL = process.env.ARK_URL ?? "http://localhost:7070";
 const TAXI_URL = process.env.TAXI_URL ?? "http://127.0.0.1:7400";

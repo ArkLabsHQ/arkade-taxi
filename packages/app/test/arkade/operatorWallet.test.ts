@@ -21,14 +21,14 @@ import {
     providerEmulatorKey,
     serverKey,
     policy,
-} from "../fixtures.js";
-import { arkInfo } from "./fixtures.js";
+} from "../fixtures";
+import { arkInfo } from "./fixtures";
 import {
     createOperatorRuntime,
     type OperatorRuntimeOptions,
-} from "../../src/arkade/operatorWallet.js";
-import { resolveRuntimeConfig } from "../../src/config.js";
-import { createSpendWatcher } from "../../src/watcher.js";
+} from "../../src/arkade/operatorWallet";
+import { resolveRuntimeConfig } from "../../src/config";
+import { createSpendWatcher } from "../../src/watcher";
 
 const proofOf = (inputs: { txid: string; vout: number }[]) =>
     ({ proof: intentProof(inputs) }) as never;

@@ -1,8 +1,8 @@
 import { expect } from "vitest";
 import { verifyQuote, VerificationErrorCode as Code } from "@arkade-taxi/client";
 import type { QuoteResponse } from "@arkade-taxi/protocol";
-import { liveScenario } from "./scenarios.js";
-import { lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
+import { liveScenario } from "./scenarios";
+import { lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures";
 
 liveScenario("verify-quote-rejects-tampered-params", async () => {
     const live = await openLive();

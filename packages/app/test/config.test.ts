@@ -6,9 +6,9 @@ import {
     SECRET_CONFIG,
     SHOWN_CONFIG,
     shownConfig,
-} from "../src/config.js";
-import { verifyProviders } from "../src/arkade/providers.js";
-import { sanitizeOperationalError } from "../src/errors.js";
+} from "../src/config";
+import { verifyProviders } from "../src/arkade/providers";
+import { sanitizeOperationalError } from "../src/errors";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
     ArkAddress,
@@ -18,8 +18,8 @@ import {
     ESPLORA_URL,
     networks,
 } from "@arkade-os/sdk";
-import { operatorPrivkey, serverKey } from "./fixtures.js";
-import { arkInfo } from "./arkade/fixtures.js";
+import { operatorPrivkey, serverKey } from "./fixtures";
+import { arkInfo } from "./arkade/fixtures";
 
 const HEX32 = "11".repeat(32);
 

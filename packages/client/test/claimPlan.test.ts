@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { hex } from "@scure/base";
-import { planReceiverClaim, type ReceiverClaim } from "../src/wallet/claims.js";
+import { planReceiverClaim, type ReceiverClaim } from "../src/wallet/claims";
 
 const receiverKey = "11".repeat(32);
 const script = `5120${receiverKey}`;

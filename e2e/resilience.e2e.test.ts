@@ -3,10 +3,10 @@ import { expect } from "vitest";
 import { signLockup } from "@arkade-taxi/client";
 import { Extension, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
-import { normalizeExpiry } from "../packages/app/src/arkade/providers.js";
+import { normalizeExpiry } from "../packages/app/src/arkade/providers";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
-import { preEffectRequest } from "./admission.js";
-import { liveScenario } from "./scenarios.js";
+import { preEffectRequest } from "./admission";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     boundary,
@@ -24,7 +24,7 @@ import {
     terminal,
     type Live,
     type Locked,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const rowFor = async (id: string) =>
     (await admin("advances")).advances.find((row: any) => row.id === id);

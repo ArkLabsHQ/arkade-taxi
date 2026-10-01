@@ -6,8 +6,8 @@ import {
     delegationVariables,
     registerRenewal,
     renewalTemplate,
-} from "../src/delegatee.js";
-import { config, emulatorKey, operatorKey, receiverKey, senderKey, serverKey } from "./fixtures.js";
+} from "../src/delegatee";
+import { config, emulatorKey, operatorKey, receiverKey, senderKey, serverKey } from "./fixtures";
 
 const DEADLINE = 1_800_000_000n;
 

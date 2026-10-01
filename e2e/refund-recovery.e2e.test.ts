@@ -5,11 +5,11 @@ import { RestEmulatorProvider, Transaction } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Advance } from "@arkade-taxi/core";
 import { loanSats, lockupSats } from "@arkade-taxi/covenant";
-import { buildRecoveryIntent } from "../packages/app/src/arkade/recovery.js";
-import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
+import { buildRecoveryIntent } from "../packages/app/src/arkade/recovery";
+import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { matchRecoveryEvidence, readOwnedRecoveryLogs } from "../scripts/lib/cltv-evidence.mjs";
-import { liveScenario } from "./scenarios.js";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     artifactPath,
@@ -24,7 +24,7 @@ import {
     terminal,
     walletBalance,
     walletInputOf,
-} from "./fixtures.js";
+} from "./fixtures";
 
 liveScenario("sender-refund-before-locktime", async () => {
     const live = await openLive();

@@ -3,16 +3,16 @@ import {
     buildDirectFillGraph,
     finalizeAcceptedDirectFill,
     mergeComplete,
-} from "./directFillGraph.js";
-export { finalizeAcceptedDirectFill } from "./directFillGraph.js";
+} from "./directFillGraph";
+export { finalizeAcceptedDirectFill } from "./directFillGraph";
 import { lockupSats } from "@arkade-taxi/covenant";
 import { base64, hex } from "@scure/base";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { loadConfig } from "../packages/app/src/config.js";
+import { loadConfig } from "../packages/app/src/config";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { preEffectRequest } from "./admission.js";
+import { preEffectRequest } from "./admission";
 import {
     admin,
     artifactPath,
@@ -31,7 +31,7 @@ import {
     transaction,
     walletBalance,
     type Locked,
-} from "./fixtures.js";
+} from "./fixtures";
 
 export const DIRECT_DELIVERY = 1_000n;
 export const DIRECT_FARE = 7n;

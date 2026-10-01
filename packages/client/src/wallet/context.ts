@@ -5,12 +5,12 @@ import {
     type ArkadeInfo,
     type NetworkName,
 } from "@arkade-os/sdk";
-import { TaxiClient, taxiAssetId } from "../index.js";
+import { TaxiClient, taxiAssetId } from "../index";
 import { hex } from "@scure/base";
-import type { Bip21Taxi } from "./requests.js";
-import type { DirectTaxiMode } from "./send.js";
-import { priceFare, wireUnits } from "./wire.js";
-export { taxiAssetId } from "../index.js";
+import type { Bip21Taxi } from "./requests";
+import type { DirectTaxiMode } from "./send";
+import { priceFare, wireUnits } from "./wire";
+export { taxiAssetId } from "../index";
 
 export type TaxiInfo = Awaited<ReturnType<TaxiClient["info"]>>;
 export type TaxiFare = TaxiInfo["assetRules"][number]["fares"][number];

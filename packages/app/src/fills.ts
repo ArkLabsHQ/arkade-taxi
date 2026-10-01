@@ -41,23 +41,23 @@ import {
     type PreparedJointSubmission,
 } from "@arkade-taxi/client";
 import type { FillRequestBody, FillStatusResponse } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "./config.js";
-import { ErrorCode, ServiceError, sanitizeOperationalError } from "./errors.js";
-import { withQuoteAdmission } from "./quotes.js";
-import type { RuntimeGate } from "./arkade/types.js";
-import { assertFreshSafety } from "./arkade/inventory.js";
-import { buildRecoveryIntent } from "./arkade/recovery.js";
-import { encodeFillSource, type FillFundingSource } from "./arkade/fundingSource.js";
+import type { RuntimeConfig } from "./config";
+import { ErrorCode, ServiceError, sanitizeOperationalError } from "./errors";
+import { withQuoteAdmission } from "./quotes";
+import type { RuntimeGate } from "./arkade/types";
+import { assertFreshSafety } from "./arkade/inventory";
+import { buildRecoveryIntent } from "./arkade/recovery";
+import { encodeFillSource, type FillFundingSource } from "./arkade/fundingSource";
 import {
     deriveJointInputs,
     deriveJointOutputs,
     JointGraphDerivationError,
     type DerivedJointOutput,
-} from "./arkade/jointGraphDerivation.js";
-import { assertCheckpointForInput } from "./arkade/psbt.js";
-import { assertForeignInput, assertTaxiUnsigned } from "./arkade/fillForeignInputs.js";
-import { createArkFillSubmitter } from "./arkade/arkFillSubmitter.js";
-import { normalizeExpiry, withinVtxoMaxAmount } from "./arkade/providers.js";
+} from "./arkade/jointGraphDerivation";
+import { assertCheckpointForInput } from "./arkade/psbt";
+import { assertForeignInput, assertTaxiUnsigned } from "./arkade/fillForeignInputs";
+import { createArkFillSubmitter } from "./arkade/arkFillSubmitter";
+import { normalizeExpiry, withinVtxoMaxAmount } from "./arkade/providers";
 
 export interface FillGraphArgs {
     graph: { arkTx: string; checkpoints: readonly string[] };

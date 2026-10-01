@@ -13,7 +13,7 @@ import {
     type Database,
     type ReceiveQuote,
     type Fill,
-} from "../src/index.js";
+} from "../src/index";
 import type { Advance } from "@arkade-taxi/core";
 
 const fillReservations = (db: Database) =>

@@ -25,8 +25,8 @@ import {
     type FundingInputValue,
     fundingInputFromWire,
 } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "./config.js";
-import type { RuntimeGate } from "./arkade/types.js";
+import type { RuntimeConfig } from "./config";
+import type { RuntimeGate } from "./arkade/types";
 import {
     type ExtendedVirtualCoin,
     Transaction,
@@ -34,10 +34,10 @@ import {
     type IndexerProvider,
 } from "@arkade-os/sdk";
 import { createHash } from "node:crypto";
-import { buildLockupEnvelope, operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { decodeLockupEnvelope, parseLockupEnvelope } from "./arkade/psbt.js";
-import { LockupShapeError } from "./lockup.js";
-import { verifySenderFunding } from "./arkade/senderFunding.js";
+import { buildLockupEnvelope, operatorFundingInput } from "./arkade/lockupBuilder";
+import { decodeLockupEnvelope, parseLockupEnvelope } from "./arkade/psbt";
+import { LockupShapeError } from "./lockup";
+import { verifySenderFunding } from "./arkade/senderFunding";
 import {
     ReservationConflictError,
     LockupClaimError,
@@ -49,11 +49,11 @@ import {
     assertFreshSafety,
     selectOperatorFunding,
     type FundingSelection,
-} from "./arkade/inventory.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import { totalExposure } from "./exposure.js";
-import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors.js";
-import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit.js";
+} from "./arkade/inventory";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import { totalExposure } from "./exposure";
+import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors";
+import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit";
 
 export interface LockupBuildRequest {
     senderInputs: FundingInputValue[];

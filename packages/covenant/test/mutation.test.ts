@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
-import { compileV2 } from "../src/v2-artifact.js";
-import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
+import { compileV2 } from "../src/v2-artifact";
+import type { AssetIdRef, DustCovenantParams } from "../src/params";
 
 const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

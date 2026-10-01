@@ -15,11 +15,11 @@ import {
 import type { AssetIdRef } from "@arkade-taxi/covenant";
 import type { CustodySolvency } from "@arkade-taxi/core";
 import { base64, hex } from "@scure/base";
-import { decodeLockupEnvelope } from "./arkade/psbt.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import type { SubmissionResumer } from "./arkade/submit.js";
-import type { SpendWatcher, WatcherBlocker } from "./watcher.js";
-import { sanitizeOperationalError } from "./errors.js";
+import { decodeLockupEnvelope } from "./arkade/psbt";
+import { readFundingSource } from "./arkade/fundingSource";
+import type { SubmissionResumer } from "./arkade/submit";
+import type { SpendWatcher, WatcherBlocker } from "./watcher";
+import { sanitizeOperationalError } from "./errors";
 
 /** The pass's whole solvency view, not a summary of it: the lending gate reads
  * the same object the operator surface shows. Never a blocker — negative

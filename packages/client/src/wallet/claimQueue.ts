@@ -8,7 +8,7 @@ import {
     planReceiverClaim,
     type ClaimPlan,
     type VerifiedClaim,
-} from "./claims.js";
+} from "./claims";
 
 export interface ClaimQueueOptions {
     identity: Identity;

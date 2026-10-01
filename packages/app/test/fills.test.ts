@@ -18,13 +18,13 @@ import {
 } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade-taxi/db";
-import { assertFillGraph, type FillGraphArgs } from "../src/fills.js";
-import { assertForeignInput } from "../src/arkade/fillForeignInputs.js";
-import type { ServiceError } from "../src/errors.js";
-import { runtimeSafety, serverUnroll } from "./fixtures.js";
-import { WANTED_ASSET } from "./jointFillFixtures.js";
-import { asIndexed } from "./graphFixtures.js";
-import { receiverPaidFill } from "./realFillFixtures.js";
+import { assertFillGraph, type FillGraphArgs } from "../src/fills";
+import { assertForeignInput } from "../src/arkade/fillForeignInputs";
+import type { ServiceError } from "../src/errors";
+import { runtimeSafety, serverUnroll } from "./fixtures";
+import { WANTED_ASSET } from "./jointFillFixtures";
+import { asIndexed } from "./graphFixtures";
+import { receiverPaidFill } from "./realFillFixtures";
 
 const state = vi.hoisted(() => ({
     contractVtxos: [] as unknown[],

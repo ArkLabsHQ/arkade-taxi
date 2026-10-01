@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { applyMigrations } from "../src/schema.js";
-import { AdvanceRepository } from "../src/advances.js";
-import { PolicyRepository } from "../src/policy.js";
+import { applyMigrations } from "../src/schema";
+import { AdvanceRepository } from "../src/advances";
+import { PolicyRepository } from "../src/policy";
 
 const ABOVE_MAX_SAFE = 9_007_199_254_740_993n; // 2^53 + 1
 const INT64_MAX = 9_223_372_036_854_775_807n;

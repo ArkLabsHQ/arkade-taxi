@@ -14,15 +14,15 @@ import {
     type Database,
 } from "@arkade-taxi/db";
 import type { Advance } from "@arkade-taxi/core";
-import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
+import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
 import {
     buildSponsoredEnvelope,
     type SponsoredBuildRequest,
-} from "../src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { createLockupReconciler } from "../src/reconciler.js";
-import { custodySolvencyView } from "../src/custody.js";
-import { swapAssetId } from "../src/proceeds.js";
+} from "../src/arkade/sponsoredBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
+import { createLockupReconciler } from "../src/reconciler";
+import { custodySolvencyView } from "../src/custody";
+import { swapAssetId } from "../src/proceeds";
 import {
     config,
     fundingCoin,
@@ -30,8 +30,8 @@ import {
     policy as basePolicy,
     receiverKey,
     senderKey,
-} from "./fixtures.js";
-import { buildRequest, senderTree, unroll } from "./arkade/lockupFixtures.js";
+} from "./fixtures";
+import { buildRequest, senderTree, unroll } from "./arkade/lockupFixtures";
 
 const directories: string[] = [];
 afterEach(() => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { selectOperatorFunding } from "../../src/arkade/inventory.js";
-import { fundingCoin, runtimeSafety } from "../fixtures.js";
+import { selectOperatorFunding } from "../../src/arkade/inventory";
+import { fundingCoin, runtimeSafety } from "../fixtures";
 
 const select = (over: Partial<Parameters<typeof selectOperatorFunding>[0]> = {}) =>
     selectOperatorFunding({

@@ -1,6 +1,6 @@
 import { arkade, timelockToSequence } from "@arkade-os/sdk";
-import { V2_ARTIFACT } from "./dust-covenant-artifact.js";
-import { loanSats, recycleFare, type DustCovenantParams } from "./params.js";
+import { V2_ARTIFACT } from "./dust-covenant-artifact";
+import { loanSats, recycleFare, type DustCovenantParams } from "./params";
 
 export { V2_ARTIFACT };
 

@@ -3,8 +3,8 @@ import { ArkAddress, RestArkProvider } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import { TaxiClient, verifyQuote } from "@arkade-taxi/client";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { liveScenario } from "./scenarios.js";
-import { admin, control, fundingOf, health, poll, required } from "./fixtures.js";
+import { liveScenario } from "./scenarios";
+import { admin, control, fundingOf, health, poll, required } from "./fixtures";
 import {
     cleanupDirectFill,
     directCounters,
@@ -15,7 +15,7 @@ import {
     prepareDirectFill,
     recycleDirectFill,
     settledDirectFill,
-} from "./directFillSupport.js";
+} from "./directFillSupport";
 
 const point = (input: { txid: string; vout: number }) => `${input.txid}:${input.vout}`;
 

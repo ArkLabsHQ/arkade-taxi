@@ -6,12 +6,12 @@ import type {
     FillRepository,
     ReceiveQuoteRepository,
 } from "@arkade-taxi/db";
-import { readFundingSource } from "./arkade/fundingSource.js";
+import { readFundingSource } from "./arkade/fundingSource";
 import {
     deriveJointInputs,
     deriveJointOutputs,
     type DerivedJointOutput,
-} from "./arkade/jointGraphDerivation.js";
+} from "./arkade/jointGraphDerivation";
 
 export interface FillReconcilerStatus {
     lastTickAt: number | null;

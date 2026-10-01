@@ -1,7 +1,7 @@
 import { base64, hex } from "@scure/base";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { Transaction } from "@arkade-os/sdk";
-import { unsignedPsbtBytes } from "./arkTransaction.js";
+import { unsignedPsbtBytes } from "./arkTransaction";
 
 export interface JointGraph {
     readonly arkTx: string;
