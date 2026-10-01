@@ -1,6 +1,6 @@
 import { arkade, CLTVMultisigTapscript, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
-import { buildScripts, type CovenantScripts } from "./scripts.js";
-import type { DustCovenantParams } from "./params.js";
+import { buildScripts, type CovenantScripts } from "./scripts";
+import type { DustCovenantParams } from "./params";
 
 /** Order fixes the merkle root, so it is part of the address. Do not reorder. */
 export enum Leaf {

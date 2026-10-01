@@ -23,23 +23,23 @@ import {
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import type { RuntimeConfig } from "../config.js";
-import { sanitizeOperationalError } from "../errors.js";
-import { LockupShapeError } from "../lockup.js";
+import type { RuntimeConfig } from "../config";
+import { sanitizeOperationalError } from "../errors";
+import { LockupShapeError } from "../lockup";
 import {
     decodeBase64,
     decodeLockupEnvelope,
     encodeLockupEnvelope,
     unsignedGraphId,
     type LockupEnvelope,
-} from "./psbt.js";
-import { buildLockupEnvelope } from "./lockupBuilder.js";
+} from "./psbt";
+import { buildLockupEnvelope } from "./lockupBuilder";
 import {
     buildSponsoredEnvelope,
     sponsoredGraphId,
     type SponsoredBuildRequest,
-} from "./sponsoredBuilder.js";
-import type { LockupBuildRequest } from "../quotes.js";
+} from "./sponsoredBuilder";
+import type { LockupBuildRequest } from "../quotes";
 
 export interface ValidatedLockupSubmission {
     encoded: string;

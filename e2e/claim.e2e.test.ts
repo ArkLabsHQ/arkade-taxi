@@ -6,8 +6,8 @@ import type { ClaimsSnapshotResponse, ReceiverClaimWire } from "@arkade-taxi/pro
 import { base64, hex } from "@scure/base";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { preEffectRequest, submitWithReadiness } from "./admission.js";
-import { liveScenario } from "./scenarios.js";
+import { preEffectRequest, submitWithReadiness } from "./admission";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     artifactPath,
@@ -25,7 +25,7 @@ import {
     transaction,
     walletBalance,
     walletAssetBalances,
-} from "./fixtures.js";
+} from "./fixtures";
 
 async function smallBitcoinPayment() {
     const live = await openLive();

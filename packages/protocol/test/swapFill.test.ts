@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytesToHex } from "../src/codec.js";
+import { bytesToHex } from "../src/codec";
 import {
     swapFillGraphFromWire,
     swapFillGraphToWire,
@@ -10,7 +10,7 @@ import {
     type SwapFillGraphWire,
     type SwapFillQuoteRequestBody,
     type SwapFillStatusResponse,
-} from "../src/swapFill.js";
+} from "../src/swapFill";
 
 const GRAPH: SwapFillGraphWire = {
     arkTx: "aGVsbG8=",

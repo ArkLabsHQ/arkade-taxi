@@ -1,11 +1,11 @@
 import { VtxoScript, canSpendOffchain, type IndexerProvider } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import type { FundingInputValue } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import type { RuntimeSafety } from "./types.js";
-import { normalizeExpiry } from "./providers.js";
-import { inputAssets, toArkInput } from "./lockupBuilder.js";
-import { ServiceError } from "../errors.js";
+import type { RuntimeConfig } from "../config";
+import type { RuntimeSafety } from "./types";
+import { normalizeExpiry } from "./providers";
+import { inputAssets, toArkInput } from "./lockupBuilder";
+import { ServiceError } from "../errors";
 
 export async function verifySenderFunding(
     inputs: FundingInputValue[],

@@ -1,5 +1,5 @@
-import { isExposed } from "./ledger.js";
-import type { Advance, Exposure } from "./types.js";
+import { isExposed } from "./ledger";
+import type { Advance, Exposure } from "./types";
 
 const isLocked = (a: Advance) => a.state === "locked";
 

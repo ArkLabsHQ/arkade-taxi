@@ -1,5 +1,5 @@
 import type { arkade } from "@arkade-os/sdk";
-import type { AssetIdRef } from "./params.js";
+import type { AssetIdRef } from "./params";
 
 /**
  * `required` decides how the found flag is consumed, and the distinction is

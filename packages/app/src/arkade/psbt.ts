@@ -20,10 +20,10 @@ import {
     type FundingInputWire,
     type LockupCommitment,
 } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import type { LockupBuildRequest } from "../quotes.js";
-import { lockupPlan } from "./lockupBuilder.js";
-import { LockupShapeError } from "../lockup.js";
+import type { RuntimeConfig } from "../config";
+import type { LockupBuildRequest } from "../quotes";
+import { lockupPlan } from "./lockupBuilder";
+import { LockupShapeError } from "../lockup";
 
 export interface LockupEnvelope extends LockupCommitment {
     arkTx: string;

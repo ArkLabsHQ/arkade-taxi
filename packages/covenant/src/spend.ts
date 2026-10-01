@@ -1,6 +1,7 @@
 import { asset, type Outpoint, type TapLeafScript } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { claimLeafDisabled, DustCovenantScript, Leaf } from "./vtxo.js";
+import type { DustCovenantScript } from "./vtxo";
+import { claimLeafDisabled, Leaf } from "./vtxo";
 
 const { AssetGroup, AssetId, AssetOutput, Packet } = asset;
 

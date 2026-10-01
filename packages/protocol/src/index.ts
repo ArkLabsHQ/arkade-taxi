@@ -31,7 +31,7 @@ export {
     covenantSpendInputFromWire,
     covenantSpendInputToWire,
     type CovenantSpendInputValue,
-} from "./codec.js";
+} from "./codec";
 
 export {
     SWAP_FILL_TEMPLATE,
@@ -60,7 +60,7 @@ export {
     type SwapFillState,
     type SwapFillStatusResponse,
     type SwapFillSubmitRequestBody,
-} from "./swapFill.js";
+} from "./swapFill";
 
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */

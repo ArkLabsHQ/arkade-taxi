@@ -4,8 +4,8 @@ import {
     unrecoveredTopup,
     validateParams,
     type DustCovenantParams,
-} from "../src/params.js";
-import { receiverPaid } from "./fixtures.js";
+} from "../src/params";
+import { receiverPaid } from "./fixtures";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

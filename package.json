@@ -18,15 +18,23 @@
         "format:check": "prettier --check .",
         "vectors": "node scripts/gen-vectors.mjs",
         "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs",
-        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs"
+        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs",
+        "lint": "eslint ."
     },
     "devDependencies": {
         "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.77-23c6d353.tgz",
+        "@eslint/js": "^10.0.1",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
+        "eslint": "^10.11.0",
+        "eslint-config-prettier": "^10.1.8",
+        "eslint-plugin-unused-imports": "^4.4.1",
+        "globals": "^17.13.0",
         "prettier": "^3.9.6",
+        "tsup": "^8.5.1",
         "typescript": "^5.9.3",
+        "typescript-eslint": "^8.71.0",
         "vitest": "^3.2.7"
     },
     "pnpm": {

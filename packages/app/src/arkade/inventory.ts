@@ -1,8 +1,8 @@
 import { canSpendOffchain, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import type { ExpiryDeadline, Outpoint } from "@arkade-taxi/core";
-import { ServiceError } from "../errors.js";
-import { normalizeExpiry } from "./providers.js";
-import type { RuntimeSafety } from "./types.js";
+import { ServiceError } from "../errors";
+import { normalizeExpiry } from "./providers";
+import type { RuntimeSafety } from "./types";
 
 export interface FundingSelection {
     inputs: ExtendedVirtualCoin[];

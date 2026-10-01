@@ -14,11 +14,11 @@ import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReceiverWalletInput } from "../src/index.js";
+import type { ReceiverWalletInput } from "../src/index";
 import * as sdk from "@arkade-os/sdk";
-import * as client from "../src/index.js";
+import * as client from "../src/index";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { fundingInputs, senderIdentity, senderTree, serverKey } from "./fixtures.js";
+import { fundingInputs, senderIdentity, senderTree, serverKey } from "./fixtures";
 const { packageManagerInvocation } = (await import(
     new URL("../../../scripts/lib/harness.mjs", import.meta.url).href
 )) as { packageManagerInvocation(args: string[]): { command: string; args: string[] } };

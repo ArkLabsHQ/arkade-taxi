@@ -22,15 +22,15 @@ import {
     type Identity,
     type IWallet,
 } from "@arkade-os/sdk";
-import { tapLeavesOfInput } from "../../src/joint/arkTransaction.js";
-import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
+import { tapLeavesOfInput } from "../../src/joint/arkTransaction";
+import { digestJointGraph } from "../../src/joint/jointGraph";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
 import {
     OFFER_FILL_TEMPLATE,
     buildOfferFillPlan,
     verifyOfferFillPlan,
     type JointGraph,
-} from "../../src/joint/offerFillPlan.js";
+} from "../../src/joint/offerFillPlan";
 import {
     JointSigningError,
     JointSubmissionAmbiguousError,
@@ -39,7 +39,7 @@ import {
     signJointGraphForOwner,
     submitJointFill,
     type JointSignerBinding,
-} from "../../src/joint/offerFillSigning.js";
+} from "../../src/joint/offerFillSigning";
 
 const state = vi.hoisted(() => ({
     vtxos: [] as unknown[],

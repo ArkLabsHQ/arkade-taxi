@@ -1,7 +1,7 @@
 import { arkade } from "@arkade-os/sdk";
-import { appendAssetLookup } from "./asset.js";
-import { pinOutput } from "./pin.js";
-import { recycleFare, refundTopup, validateParams, type DustCovenantParams } from "./params.js";
+import { appendAssetLookup } from "./asset";
+import { pinOutput } from "./pin";
+import { recycleFare, refundTopup, validateParams, type DustCovenantParams } from "./params";
 
 const finish = (out: arkade.ArkadeScriptType, hasAsset: boolean): Uint8Array => {
     if (!hasAsset) out.push(1);

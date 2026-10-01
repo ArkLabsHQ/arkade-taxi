@@ -11,13 +11,13 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
-import type { RuntimeSafety } from "../src/arkade/types.js";
-import type { QuoteDeps } from "../src/quotes.js";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt";
+import type { RuntimeSafety } from "../src/arkade/types";
+import type { QuoteDeps } from "../src/quotes";
 import { LockupClaimError } from "@arkade-taxi/db";
-import { isExposed, type Advance, type Outpoint, type Policy } from "@arkade-taxi/core";
+import { isExposed, type Advance, type Policy } from "@arkade-taxi/core";
 import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../src/config.js";
+import type { RuntimeConfig } from "../src/config";
 
 // Real curve points: computeArkadeScriptPublicKey lifts the emulator key to do
 // point addition, so 32 arbitrary bytes fail with "cannot find square root".

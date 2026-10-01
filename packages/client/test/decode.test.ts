@@ -10,7 +10,7 @@ import {
     type ReceiveQuoteResponse,
     type ReceiverClaimDescriptorWire,
 } from "@arkade-taxi/protocol";
-import { decodeInfo, decodeReceiveQuote, decodeReceiverClaimDescriptor } from "../src/decode.js";
+import { decodeInfo, decodeReceiveQuote, decodeReceiverClaimDescriptor } from "../src/decode";
 
 const hex32 = (byte: string) => byte.repeat(32);
 const fill32 = (byte: number) => new Uint8Array(32).fill(byte);

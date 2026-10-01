@@ -16,7 +16,7 @@ import {
     deriveJointInputs,
     deriveJointOutputs,
     JointGraphDerivationError,
-} from "./jointGraphDerivation.js";
+} from "./jointGraphDerivation";
 import {
     buildOfferFillPlan,
     type BuildOfferFillPlanOpts,

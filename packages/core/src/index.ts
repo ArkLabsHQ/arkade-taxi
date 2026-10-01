@@ -1,4 +1,4 @@
-export * from "./types.js";
+export * from "./types";
 export {
     advanceKind,
     canTransition,
@@ -8,9 +8,9 @@ export {
     isTerminal,
     transition,
     validateFundingSnapshot,
-} from "./ledger.js";
-export { computeExposure, sweepable } from "./exposure.js";
-export { admit } from "./admission.js";
+} from "./ledger";
+export { computeExposure, sweepable } from "./exposure";
+export { admit } from "./admission";
 export {
     assetIdKey,
     fareBase,
@@ -30,4 +30,4 @@ export {
     type FarePricing,
     type FareSpec,
     type ResolvedClaimMode,
-} from "./fares.js";
+} from "./fares";

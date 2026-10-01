@@ -8,8 +8,8 @@ import {
     hexToBytes,
     satsFromWire,
     satsToWire,
-} from "./codec.js";
-import type { AssetIdWire, FareWire } from "./index.js";
+} from "./codec";
+import type { AssetIdWire, FareWire } from "./index";
 
 export const SWAP_FILL_TEMPLATE = "taxi-fill/1" as const;
 

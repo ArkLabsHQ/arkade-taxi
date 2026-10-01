@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import type { QuoteRequestBody } from "@arkade-taxi/protocol";
-import { TaxiClient } from "../src/client.js";
-import type { EventSourceLike } from "../src/client.js";
-import { decodeClaimsChanged, decodeClaimsSnapshot } from "../src/index.js";
-import { ClientErrorCode, TaxiError } from "../src/errors.js";
-import { signLockup } from "../src/lockup.js";
-import { verifyQuote } from "../src/verify.js";
+import { TaxiClient } from "../src/client";
+import type { EventSourceLike } from "../src/client";
+import { decodeClaimsChanged, decodeClaimsSnapshot } from "../src/index";
+import { ClientErrorCode, TaxiError } from "../src/errors";
+import { signLockup } from "../src/lockup";
+import { verifyQuote } from "../src/verify";
 import {
     args,
     info,
@@ -18,7 +18,7 @@ import {
     senderIdentity,
     senderKey,
     serverKey,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const BASE = "https://taxi.example";
 

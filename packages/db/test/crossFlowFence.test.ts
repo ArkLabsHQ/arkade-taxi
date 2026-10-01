@@ -16,7 +16,7 @@ import {
     type Database,
     type SwapFill,
     type ReceiveQuote,
-} from "../src/index.js";
+} from "../src/index";
 
 const COIN = { txid: "aa".repeat(32), vout: 0 };
 const NOW = 1_757_000_000;

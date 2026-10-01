@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { subDustScript } from "../src/pin.js";
+import { subDustScript } from "../src/pin";
 import {
     buildPurchase,
     buildReclaim,
     buildRecycle,
     buildRefund,
     buildScripts,
-} from "../src/scripts.js";
-import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
-import { receiverPaid } from "./fixtures.js";
+} from "../src/scripts";
+import type { AssetIdRef, DustCovenantParams } from "../src/params";
+import { receiverPaid } from "./fixtures";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

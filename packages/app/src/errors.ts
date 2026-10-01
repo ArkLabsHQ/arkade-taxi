@@ -5,7 +5,7 @@ import {
     PolicyRevisionConflictError,
     RecoveryBudgetConflictError,
 } from "@arkade-taxi/db";
-import { LockupShapeError } from "./lockup.js";
+import { LockupShapeError } from "./lockup";
 
 const SENSITIVE_LABEL =
     /\b(?:(?:[a-z][a-z0-9]{0,31}[-_]){0,2}(?:secret|credential|token|password|cookie)|private[-_ ]?key|privkey|seed(?: phrase)?|mnemonic|signed[-_ ]?(?:psbt|transaction|tx)|psbt|api[-_ ]?key|authorization|bearer)\b/i;

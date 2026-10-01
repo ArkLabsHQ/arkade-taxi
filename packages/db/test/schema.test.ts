@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
-import { ADVANCE_STATES, applyMigrations, MIGRATIONS } from "../src/schema.js";
-import { AdvanceRepository } from "../src/advances.js";
-import { ReceiveQuoteRepository } from "../src/receiveQuotes.js";
+import { ADVANCE_STATES, applyMigrations, MIGRATIONS } from "../src/schema";
+import { AdvanceRepository } from "../src/advances";
+import { ReceiveQuoteRepository } from "../src/receiveQuotes";
 
 function fresh(): Database {
     const db = new DatabaseCtor(":memory:");

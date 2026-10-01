@@ -14,7 +14,7 @@ import {
     ReservationRepository,
     ProceedsRepository,
     applyMigrations,
-} from "../src/index.js";
+} from "../src/index";
 
 const input = (vout = 0) => ({ txid: "aa".repeat(32), vout });
 const quote = (overrides: Partial<Advance> = {}): Advance => {

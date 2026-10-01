@@ -1,8 +1,8 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { Advance, AdvanceState, Outpoint } from "@arkade-taxi/core";
 import { validateFundingSnapshot } from "@arkade-taxi/core";
-import { assertNativeAccess } from "./coordination.js";
-import { PolicyRepository } from "./policy.js";
+import { assertNativeAccess } from "./coordination";
+import { PolicyRepository } from "./policy";
 
 const COLUMNS = [
     "id",

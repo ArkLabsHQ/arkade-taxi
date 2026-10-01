@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { ArkAddress, SingleKey } from "@arkade-os/sdk";
-import { fundingCoin, serverKey } from "../../packages/app/test/fixtures.js";
-import { lock, quoteFor, type Live } from "../../e2e/fixtures.js";
+import { fundingCoin, serverKey } from "../../packages/app/test/fixtures";
+import { lock, quoteFor, type Live } from "../../e2e/fixtures";
 
 const failures = vi.hoisted(() => ({ original: new Error("original refusal"), artifact: false }));
-vi.mock("@arkade-taxi/protocol", () => import("../../packages/protocol/src/index.js"));
-vi.mock("../../e2e/admission.js", () => ({
+vi.mock("@arkade-taxi/protocol", () => import("../../packages/protocol/src/index"));
+vi.mock("../../e2e/admission", () => ({
     preEffectRequest: async () => {
         throw failures.original;
     },

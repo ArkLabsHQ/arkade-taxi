@@ -24,14 +24,14 @@ import {
     fareToWire,
     satsToWire,
 } from "@arkade-taxi/protocol";
-import { assetRuleToWire } from "../rulesWire.js";
-import { sanitizeOperationalError } from "../errors.js";
-import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
-import type { RuntimeSafety } from "../arkade/types.js";
-import type { RuntimeConfig } from "../config.js";
-import { holdings } from "../proceeds.js";
-import type { OperationalSnapshot } from "../routes.js";
-import type { RecoveryDeadline } from "../sweeper.js";
+import { assetRuleToWire } from "../rulesWire";
+import { sanitizeOperationalError } from "../errors";
+import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder";
+import type { RuntimeSafety } from "../arkade/types";
+import type { RuntimeConfig } from "../config";
+import { holdings } from "../proceeds";
+import type { OperationalSnapshot } from "../routes";
+import type { RecoveryDeadline } from "../sweeper";
 
 /** What the admin surface needs to know about the sweeper. Only the first three
  * fields are required, so a sweeper that tracks less can still report. */

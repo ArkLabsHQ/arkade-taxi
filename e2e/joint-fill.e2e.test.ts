@@ -20,8 +20,8 @@ import {
     submitJointFill,
     tapScriptSigEntries,
 } from "@arkade-taxi/client";
-import { liveScenario } from "./scenarios.js";
-import { openLive, poll, required, walletBalance } from "./fixtures.js";
+import { liveScenario } from "./scenarios";
+import { openLive, poll, required, walletBalance } from "./fixtures";
 
 const WANT_UNITS = 1_000n;
 const FARE_UNITS = 100n;

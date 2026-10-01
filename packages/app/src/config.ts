@@ -1,5 +1,5 @@
 import { DefaultVtxo, ESPLORA_URL, SingleKey } from "@arkade-os/sdk";
-import { createProviders, verifyProviders } from "./arkade/providers.js";
+import { createProviders, verifyProviders } from "./arkade/providers";
 import { hexToBytes } from "@arkade-taxi/protocol";
 import { z } from "zod";
 

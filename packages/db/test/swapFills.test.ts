@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
-import { AdvanceRepository } from "../src/advances.js";
-import { applyMigrations, MIGRATIONS } from "../src/schema.js";
-import { SwapFillRepository } from "../src/swapFills.js";
-import type { SwapFill } from "../src/swapFills.js";
+import { AdvanceRepository } from "../src/advances";
+import { applyMigrations, MIGRATIONS } from "../src/schema";
+import { SwapFillRepository } from "../src/swapFills";
+import type { SwapFill } from "../src/swapFills";
 
 const NOW = 1_757_000_000;
 

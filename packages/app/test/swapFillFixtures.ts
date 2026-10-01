@@ -16,10 +16,10 @@ import {
     type SwapFillGraph,
     type SwapFillState,
 } from "@arkade-taxi/db";
-import type { SwapFillBuildRequest } from "../src/arkade/swapFillBuilder.js";
-import { taxiAssetIdToSwapId } from "../src/arkade/swapFillBuilder.js";
-import type { DecodedOfferTerms, SwapFillStore } from "../src/swapFillQuotes.js";
-import { config, fundingCoin, receiverKey, serverKey } from "./fixtures.js";
+import type { SwapFillBuildRequest } from "../src/arkade/swapFillBuilder";
+import { taxiAssetIdToSwapId } from "../src/arkade/swapFillBuilder";
+import type { DecodedOfferTerms, SwapFillStore } from "../src/swapFillQuotes";
+import { config, fundingCoin, receiverKey, serverKey } from "./fixtures";
 import { digestJointGraph, OFFER_FILL_TEMPLATE, type JointGraph } from "@arkade-taxi/client";
 
 // Any valid curve point; the fake builds transactions but never signs them.

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { AssetIdRef } from "@arkade-taxi/covenant";
-import type { Exposure, Policy, QuoteRequest } from "../src/types.js";
-import { admit } from "../src/admission.js";
-import type { AssetRule, FareOption } from "../src/fares.js";
+import type { Exposure, Policy, QuoteRequest } from "../src/types";
+import { admit } from "../src/admission";
+import type { AssetRule, FareOption } from "../src/fares";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 

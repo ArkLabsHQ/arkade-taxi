@@ -1,6 +1,6 @@
+import type { CSVMultisigTapscript } from "@arkade-os/sdk";
 import {
     ArkAddress,
-    CSVMultisigTapscript,
     Transaction,
     VtxoScript,
     scriptFromTapLeafScript,
@@ -46,30 +46,30 @@ import {
     taxiAssetIdToSwapId,
     type SwapFillBuildRequest,
     type SwapFillWireScripts,
-} from "./arkade/swapFillBuilder.js";
+} from "./arkade/swapFillBuilder";
 import {
     deriveJointInputs,
     deriveJointOutputs,
     JointGraphDerivationError,
-} from "./arkade/jointGraphDerivation.js";
-import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
-import { assertOwnerServerLeaf, operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { normalizeExpiry, normalizeSigner, withinVtxoMaxAmount } from "./arkade/providers.js";
+} from "./arkade/jointGraphDerivation";
+import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory";
+import { assertOwnerServerLeaf, operatorFundingInput } from "./arkade/lockupBuilder";
+import { normalizeExpiry, normalizeSigner, withinVtxoMaxAmount } from "./arkade/providers";
 import {
     encodeJointFillSource,
     readFundingSource,
     type JointFillFundingSource,
-} from "./arkade/fundingSource.js";
-import { buildRecoveryIntent } from "./arkade/recovery.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import { admissionError, ErrorCode, ServiceError } from "./errors.js";
+} from "./arkade/fundingSource";
+import { buildRecoveryIntent } from "./arkade/recovery";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import { admissionError, ErrorCode, ServiceError } from "./errors";
 import {
     rereadInventory,
     sameFundingSnapshot,
     withQuoteAdmission,
     type AdvanceStore,
     type QuoteDeps,
-} from "./quotes.js";
+} from "./quotes";
 import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
 import { createHash } from "node:crypto";
 
@@ -1110,7 +1110,7 @@ function assertTrustedGraph(args: {
     const change = args.taxiTotal - req.contributionSats;
     let changeSum = 0n;
     let fareSeen: { assetId: string; units: bigint } | undefined;
-    let receiverSats = receiver!.sats;
+    const receiverSats = receiver!.sats;
     const receiverAssets = new Map<string, bigint>();
     const outputAssets = new Map<string, bigint>();
     for (const a of receiver!.assets) {

@@ -11,7 +11,6 @@ import type {
     ClaimsSnapshotResponse,
     FareWire,
     QuoteParams,
-    ReceiveQuoteResponse,
     ReceiverClaimDescriptorWire,
     ReceiverClaimState,
     ReceiverClaimWire,
@@ -41,7 +40,7 @@ import {
     type SwapFillStatusResponse,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
-import { ClientErrorCode, TaxiError } from "./errors.js";
+import { ClientErrorCode, TaxiError } from "./errors";
 
 export interface DecodedInfo {
     protocolVersion: number;

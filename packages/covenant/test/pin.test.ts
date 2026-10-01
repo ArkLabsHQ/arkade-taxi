@@ -1,9 +1,9 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
-import { payoutPkScript, pinOutput, subDustScript } from "../src/pin.js";
-import { appendAssetLookup } from "../src/asset.js";
-import type { AssetIdRef } from "../src/params.js";
+import { payoutPkScript, pinOutput, subDustScript } from "../src/pin";
+import { appendAssetLookup } from "../src/asset";
+import type { AssetIdRef } from "../src/params";
 
 const key = new Uint8Array(32).fill(0xab);
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

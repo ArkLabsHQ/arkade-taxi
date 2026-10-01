@@ -10,12 +10,12 @@ import {
     scriptFromTapLeafScript,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { buildLockupEnvelope, inputAssets, lockupPlan } from "../../src/arkade/lockupBuilder.js";
-import { config, operatorKey } from "../fixtures.js";
-import { buildRequest, unroll, senderTree, operatorTree } from "./lockupFixtures.js";
-import { parseLockupEnvelope } from "../../src/arkade/psbt.js";
+import { buildLockupEnvelope, inputAssets, lockupPlan } from "../../src/arkade/lockupBuilder";
+import { config, operatorKey } from "../fixtures";
+import { buildRequest, unroll, senderTree, operatorTree } from "./lockupFixtures";
+import { parseLockupEnvelope } from "../../src/arkade/psbt";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
-import type { LockupBuildRequest } from "../../src/quotes.js";
+import type { LockupBuildRequest } from "../../src/quotes";
 
 describe("joint funded graph", () => {
     it.each([10n, 330n])(

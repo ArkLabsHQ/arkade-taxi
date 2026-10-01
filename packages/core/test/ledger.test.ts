@@ -1,13 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DustCovenantParams } from "@arkade-taxi/covenant";
-import type { Advance, AdvanceState } from "../src/types.js";
-import {
-    canTransition,
-    covenantParamsOf,
-    isExpired,
-    isTerminal,
-    transition,
-} from "../src/ledger.js";
+import type { Advance, AdvanceState } from "../src/types";
+import { canTransition, covenantParamsOf, isExpired, isTerminal, transition } from "../src/ledger";
 
 const ALL_STATES: readonly AdvanceState[] = [
     "quoted",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
-import { buildRecycle } from "../src/scripts.js";
-import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
+import { buildRecycle } from "../src/scripts";
+import type { AssetIdRef, DustCovenantParams } from "../src/params";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

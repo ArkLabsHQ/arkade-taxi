@@ -1,8 +1,8 @@
 import { Hono, type Context, type Next } from "hono";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
-import { createAdminRouter } from "./admin/index.js";
-import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes.js";
-import { ReceiverClaimFeed } from "./claimFeed.js";
+import { createAdminRouter } from "./admin/index";
+import { createRoutes, operationalSnapshot, type RouteDeps } from "./routes";
+import { ReceiverClaimFeed } from "./claimFeed";
 
 export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
     advances: AdvanceRepository;

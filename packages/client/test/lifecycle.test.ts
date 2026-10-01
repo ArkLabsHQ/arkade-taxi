@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WeakValueRegistry } from "../src/lifecycle.js";
+import { WeakValueRegistry } from "../src/lifecycle";
 
 interface Value {
     name: string;

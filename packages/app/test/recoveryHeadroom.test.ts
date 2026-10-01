@@ -13,15 +13,18 @@ import {
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
 import type { Database } from "@arkade-taxi/db";
-import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
-import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { buildRecoveryIntent } from "../src/arkade/recovery.js";
-import { createServiceLifecycle } from "../src/lifecycle.js";
-import type { ServerDeps } from "../src/server.js";
-import { createRoutes } from "../src/routes.js";
-import { arkInfo } from "./arkade/fixtures.js";
-import { buildRequest, unroll } from "./arkade/lockupFixtures.js";
+// Loading these modules eagerly is what lets the mocks below apply; do not make them type-only.
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports
+import { createOperatorRuntime } from "../src/arkade/operatorWallet";
+import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
+import { buildRecoveryIntent } from "../src/arkade/recovery";
+// eslint-disable-next-line @typescript-eslint/consistent-type-imports
+import { createServiceLifecycle } from "../src/lifecycle";
+import type { ServerDeps } from "../src/server";
+import { createRoutes } from "../src/routes";
+import { arkInfo } from "./arkade/fixtures";
+import { buildRequest, unroll } from "./arkade/lockupFixtures";
 import {
     config,
     emulatorKey,
@@ -30,16 +33,16 @@ import {
     policy,
     providerEmulatorKey,
     quoteBody,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const current = vi.hoisted(() => ({ value: undefined as Harness | undefined }));
-vi.mock("../src/config.js", async (original) => ({
-    ...(await original<typeof import("../src/config.js")>()),
+vi.mock("../src/config", async (original) => ({
+    ...(await original<typeof import("../src/config")>()),
     loadConfig: () => current.value!.config,
     resolveRuntimeConfig: async () => current.value!.config,
 }));
-vi.mock("../src/arkade/operatorWallet.js", async (original) => {
-    const actual = await original<typeof import("../src/arkade/operatorWallet.js")>();
+vi.mock("../src/arkade/operatorWallet", async (original) => {
+    const actual = await original<typeof import("../src/arkade/operatorWallet")>();
     return {
         ...actual,
         createOperatorRuntime: (
@@ -65,8 +68,8 @@ vi.mock("../src/arkade/operatorWallet.js", async (original) => {
         },
     };
 });
-vi.mock("../src/server.js", async (original) => {
-    const actual = await original<typeof import("../src/server.js")>();
+vi.mock("../src/server", async (original) => {
+    const actual = await original<typeof import("../src/server")>();
     return {
         ...actual,
         createApp: (deps: ServerDeps) => {
@@ -97,16 +100,16 @@ vi.mock("../src/server.js", async (original) => {
         },
     };
 });
-vi.mock("../src/watcher.js", async (original) => {
-    const actual = await original<typeof import("../src/watcher.js")>();
+vi.mock("../src/watcher", async (original) => {
+    const actual = await original<typeof import("../src/watcher")>();
     return {
         ...actual,
         createSpendWatcher: (deps: Parameters<typeof actual.createSpendWatcher>[0]) =>
             actual.createSpendWatcher({ ...deps, arkProvider: undefined }),
     };
 });
-vi.mock("../src/lifecycle.js", async (original) => {
-    const actual = await original<typeof import("../src/lifecycle.js")>();
+vi.mock("../src/lifecycle", async (original) => {
+    const actual = await original<typeof import("../src/lifecycle")>();
     return {
         ...actual,
         createServiceLifecycle: (deps: Parameters<typeof createServiceLifecycle>[0]) => {
@@ -351,7 +354,7 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
     const argv = process.argv;
     process.argv = [argv[0]!, "cli", "serve"];
     try {
-        await import("../src/cli.js");
+        await import("../src/cli");
         await startup;
     } finally {
         process.argv = argv;

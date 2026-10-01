@@ -38,11 +38,11 @@ import {
     type Database,
 } from "@arkade-taxi/db";
 import type { Advance, AdvanceState } from "@arkade-taxi/core";
-import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { classifyObservedSpend, createSpendWatcher } from "../src/watcher.js";
-import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery.js";
-import { createProceedsCollector } from "../src/proceeds.js";
+import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
+import { classifyObservedSpend, createSpendWatcher } from "../src/watcher";
+import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery";
+import { createProceedsCollector } from "../src/proceeds";
 import {
     config,
     fundingCoin,
@@ -51,9 +51,9 @@ import {
     policy as basePolicy,
     providerEmulatorKey,
     serverKey,
-} from "./fixtures.js";
-import { arkInfo } from "./arkade/fixtures.js";
-import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
+} from "./fixtures";
+import { arkInfo } from "./arkade/fixtures";
+import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures";
 
 const directories: string[] = [];
 afterEach(() => {

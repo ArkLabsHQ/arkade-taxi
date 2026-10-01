@@ -1,5 +1,5 @@
 import type { DustCovenantParams } from "@arkade-taxi/covenant";
-import { TERMINAL_STATES, type Advance, type AdvanceState } from "./types.js";
+import { TERMINAL_STATES, type Advance, type AdvanceState } from "./types";
 
 /** Absent `kind` is a covenant advance: the only shape persisted before
  * sponsored direct sends existed. */

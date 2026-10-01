@@ -29,13 +29,13 @@ import {
     type ReceiveQuoteRequestBody,
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "./config.js";
-import { sameFundingSnapshot, withQuoteAdmission, type AdvanceStore } from "./quotes.js";
-import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
-import { operatorFundingInput } from "./arkade/lockupBuilder.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import type { RuntimeGate, RuntimeSafety } from "./arkade/types.js";
-import { admissionError, ErrorCode, ServiceError } from "./errors.js";
+import type { RuntimeConfig } from "./config";
+import { sameFundingSnapshot, withQuoteAdmission, type AdvanceStore } from "./quotes";
+import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory";
+import { operatorFundingInput } from "./arkade/lockupBuilder";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import type { RuntimeGate, RuntimeSafety } from "./arkade/types";
+import { admissionError, ErrorCode, ServiceError } from "./errors";
 
 export interface ReceiveQuoteDeps {
     runtime: RuntimeGate;

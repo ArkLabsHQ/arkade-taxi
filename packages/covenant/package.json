@@ -11,7 +11,7 @@
         }
     },
     "scripts": {
-        "build": "tsc -p tsconfig.json"
+        "build": "tsup src/index.ts --format esm --target es2022 --dts --sourcemap"
     },
     "dependencies": {
         "@arkade-os/sdk": "0.4.77",

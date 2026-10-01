@@ -2,7 +2,7 @@ import { Extension, Transaction, VtxoScript, asset } from "@arkade-os/sdk";
 import { createHash } from "node:crypto";
 import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
 import { base64, hex } from "@scure/base";
-import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation.js";
+import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation";
 
 export interface JointFillFundingSource {
     tag: "joint-fill";

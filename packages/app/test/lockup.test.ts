@@ -7,8 +7,8 @@ import {
     lockupFundingTotal,
     LockupShapeError,
     type LockupOutput,
-} from "../src/lockup.js";
-import { DUST, operatorKey, receiverKey, senderKey, VTXO_MIN } from "./fixtures.js";
+} from "../src/lockup";
+import { DUST, operatorKey, receiverKey, senderKey, VTXO_MIN } from "./fixtures";
 
 const ASSET = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 const TOKEN = { txid: new Uint8Array(32).fill(0x99), groupIndex: 0 };

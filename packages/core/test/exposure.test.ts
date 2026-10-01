@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Advance, AdvanceState } from "../src/types.js";
-import { computeExposure, sweepable } from "../src/exposure.js";
+import type { Advance, AdvanceState } from "../src/types";
+import { computeExposure, sweepable } from "../src/exposure";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 

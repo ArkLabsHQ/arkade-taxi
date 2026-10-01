@@ -30,8 +30,8 @@ import {
     senderKey,
     senderTree,
     serverUnroll,
-} from "./fixtures.js";
-import { selectOperatorFunding } from "../src/arkade/inventory.js";
+} from "./fixtures";
+import { selectOperatorFunding } from "../src/arkade/inventory";
 import {
     createProceedsCollector,
     assertProceedsPlan,
@@ -40,11 +40,11 @@ import {
     proceedsFee,
     reconcileProceeds,
     type CollectionPlan,
-} from "../src/proceeds.js";
-import { arkInfo } from "./arkade/fixtures.js";
+} from "../src/proceeds";
+import { arkInfo } from "./arkade/fixtures";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { buildSponsoredEnvelope } from "../src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
+import { buildSponsoredEnvelope } from "../src/arkade/sponsoredBuilder";
+import { decodeLockupEnvelope } from "../src/arkade/psbt";
 
 const cfg = config({
     operatorKey: operatorTree.tweakedPublicKey,

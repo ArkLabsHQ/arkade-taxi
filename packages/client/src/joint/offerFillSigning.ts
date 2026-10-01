@@ -10,15 +10,15 @@ import {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
-} from "./jointSigning.js";
-import type { JointGraph } from "./jointGraph.js";
-import { OFFER_FILL_TEMPLATE } from "./offerFillPlan.js";
+} from "./jointSigning";
+import type { JointGraph } from "./jointGraph";
+import { OFFER_FILL_TEMPLATE } from "./offerFillPlan";
 
 export {
     JointSigningError,
     JointSubmissionAmbiguousError,
     type JointSignerBinding,
-} from "./jointSigning.js";
+} from "./jointSigning";
 
 export type JointFundingOwner = FillInputOwner;
 

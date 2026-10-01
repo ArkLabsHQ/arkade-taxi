@@ -44,10 +44,10 @@ import {
 import { base64, hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
 import { tapLeafHash } from "@scure/btc-signer/payment.js";
-import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./decode.js";
-import { WeakValueRegistry } from "./lifecycle.js";
-import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
-import type { VerifiedQuote } from "./verify.js";
+import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./decode";
+import { WeakValueRegistry } from "./lifecycle";
+import { activeQuoteStateFor, immutablePlainCopy } from "./lockup";
+import type { VerifiedQuote } from "./verify";
 import { claimLeafDisabled } from "@arkade-taxi/covenant";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;

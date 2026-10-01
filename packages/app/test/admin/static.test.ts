@@ -3,10 +3,10 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
-import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
-import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
-import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { harness } from "./fixtures.js";
+import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static";
+import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder";
+import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures";
+import { harness } from "./fixtures";
 
 const asset = (name: string): string =>
     readFileSync(fileURLToPath(new URL(`../../src/admin/static/${name}`, import.meta.url)), "utf8")

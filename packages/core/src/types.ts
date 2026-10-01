@@ -1,5 +1,5 @@
 import type { AssetIdRef, ReceiverFare } from "@arkade-taxi/covenant";
-import type { AssetRule, ClaimMode, FareSpec, ResolvedClaimMode } from "./fares.js";
+import type { AssetRule, ClaimMode, FareSpec, ResolvedClaimMode } from "./fares";
 
 /**
  * Transitions are driven by observed chain state, never by optimism: `locked`

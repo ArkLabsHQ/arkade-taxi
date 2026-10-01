@@ -1,6 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
-import { copyByteView } from "../src/signer.js";
+import { copyByteView } from "../src/signer";
 
 describe("copyByteView", () => {
     it("copies local, cross-realm, and Buffer Uint8Array values", () => {

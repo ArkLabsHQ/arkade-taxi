@@ -25,13 +25,13 @@ import type {
     ReservationRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
-import type { RuntimeConfig } from "./config.js";
-import type { createOperatorRuntime } from "./arkade/operatorWallet.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import { validatePersistedLockupGraph } from "./arkade/submit.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import { classifyObservedSpend } from "./watcher.js";
-import { normalizeExpiry, verifyProviders, withinVtxoMaxAmount } from "./arkade/providers.js";
+import type { RuntimeConfig } from "./config";
+import type { createOperatorRuntime } from "./arkade/operatorWallet";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import { validatePersistedLockupGraph } from "./arkade/submit";
+import { readFundingSource } from "./arkade/fundingSource";
+import { classifyObservedSpend } from "./watcher";
+import { normalizeExpiry, verifyProviders, withinVtxoMaxAmount } from "./arkade/providers";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
 const intentDigest = (proof: string, message: string) =>
