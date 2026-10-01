@@ -28,6 +28,66 @@
         </header>
 
         <main>
+            <section class="panel" id="setup" aria-labelledby="setup-heading">
+                <div class="panel__head">
+                    <h2 id="setup-heading">Get started</h2>
+                </div>
+                <ol class="steps">
+                    <li class="step" id="step-connected">
+                        <span class="step__state" id="step-connected-state">…</span>
+                        <div>
+                            <p class="step__title" id="step-connected-title">
+                                Taxi is running and connected
+                            </p>
+                            <ul class="step__detail" id="step-connected-detail"></ul>
+                        </div>
+                        <button type="button" id="step-connected-fix">Check again</button>
+                    </li>
+                    <li class="step" id="step-fund">
+                        <span class="step__state" id="step-fund-state">…</span>
+                        <div>
+                            <p class="step__title">Fund your Taxi</p>
+                            <p class="step__detail" id="step-fund-detail"></p>
+                        </div>
+                        <a class="button" id="step-fund-fix" href="#funding">Show funding</a>
+                    </li>
+                    <li class="step" id="step-limits">
+                        <span class="step__state" id="step-limits-state">…</span>
+                        <div>
+                            <p class="step__title">Set your limits</p>
+                            <p class="step__detail" id="step-limits-detail"></p>
+                        </div>
+                        <a class="button" id="step-limits-fix" href="#limits">Edit limits</a>
+                    </li>
+                    <li class="step" id="step-carry">
+                        <span class="step__state" id="step-carry-state">…</span>
+                        <div>
+                            <p class="step__title">Choose what to carry</p>
+                            <p class="step__detail" id="step-carry-detail"></p>
+                        </div>
+                        <a class="button" id="step-carry-fix" href="#carry">Edit rules</a>
+                    </li>
+                    <li class="step" id="step-live">
+                        <span class="step__state" id="step-live-state">…</span>
+                        <div>
+                            <p class="step__title">Go live</p>
+                            <p class="step__detail" id="step-live-detail"></p>
+                            <div class="step__confirm" id="go-live-confirm" role="alert" hidden>
+                                <p id="go-live-warning"></p>
+                                <div class="actions">
+                                    <button type="button" class="attention" id="go-live-anyway">
+                                        Go live anyway
+                                    </button>
+                                    <button type="button" id="go-live-cancel">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="primary" id="step-live-fix">Go live</button>
+                    </li>
+                </ol>
+                <p class="note setup__note" id="setup-note" aria-live="polite"></p>
+            </section>
+
             <section class="headline" aria-labelledby="exposure-heading">
                 <div>
                     <h2 class="label" id="exposure-heading">Outstanding exposure</h2>
@@ -100,10 +160,9 @@
                         <dd id="time-expiry">—</dd>
                     </div>
                 </dl>
-                <p class="note" id="readiness-blockers"></p>
             </section>
 
-            <section class="panel" aria-labelledby="funding-heading">
+            <section class="panel" id="funding" aria-labelledby="funding-heading">
                 <div class="panel__head">
                     <h2 id="funding-heading">Funding</h2>
                     <div class="actions">

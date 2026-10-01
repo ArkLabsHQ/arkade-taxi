@@ -5,8 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import type { OperationalSnapshot } from "../../src/routes.js";
 import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { harness } from "./fixtures.js";
+import { harness, type Harness } from "./fixtures.js";
 
 const asset = (name: string): string =>
     readFileSync(fileURLToPath(new URL(`../../src/admin/static/${name}`, import.meta.url)), "utf8")
@@ -58,6 +59,71 @@ class DashboardElement {
             listener({ target: this, preventDefault() {} });
     }
 }
+
+const source = (path: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../${path}`, import.meta.url)), "utf8");
+const union = (path: string, pattern: RegExp) =>
+    [...pattern.exec(source(path))![1]!.matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+
+// Every module whose codes reach readiness.blockers, and the snake_case literals
+// in them that never do.
+const BLOCKER_SOURCES = [
+    "app/src/routes.ts",
+    "app/src/lifecycle.ts",
+    "app/src/arkade/operatorWallet.ts",
+    "app/src/arkade/providers.ts",
+    "app/src/sweeper.ts",
+    "app/src/arkade/recovery.ts",
+    "app/src/arkade/submit.ts",
+    "app/src/reconciler.ts",
+    "app/src/watcher.ts",
+    "app/src/swapFillReconciler.ts",
+    "app/src/proceeds.ts",
+    "db/src/proceeds.ts",
+    "db/src/reservations.ts",
+];
+const NOT_BLOCKERS = new Set([
+    ...["not_ready", "recovery_failed", "runtime_unsafe", "shutdown_failed", "shutdown_timeout"],
+    ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
+    ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
+    ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
+]);
+
+function backendBlockerCodes(): string[] {
+    const expansions: Record<string, string[]> = {
+        startup_: union("app/src/lifecycle.ts", /type LifecyclePhase =([^;]+);/),
+        chain_: union("core/src/types.ts", /type ExpiryDeadline =(.+)/),
+        lockup_submission_: union("core/src/types.ts", /submissionPhase\?:([^;]+);/),
+    };
+    const codes = new Set<string>();
+    for (const path of BLOCKER_SOURCES) {
+        const text = source(path);
+        for (const [, code] of text.matchAll(/["'`]([a-z][a-z0-9]*(?:_[a-z0-9]+)+)["'`]/g))
+            if (!NOT_BLOCKERS.has(code!)) codes.add(code!);
+        for (const [template, prefix, suffix] of text.matchAll(
+            /`([a-z]+_[a-z_]*)\$\{[^}]+\}([a-z_]*)`/g,
+        )) {
+            if (!expansions[prefix!]) throw new Error(`${path}: cannot expand ${template}`);
+            for (const value of expansions[prefix!]!) codes.add(prefix + value + suffix);
+        }
+    }
+    return [...codes];
+}
+
+const readiness = (blockers: string[], usableSats = "2500") =>
+    ({
+        ready: blockers.length === 0,
+        body: {
+            status: blockers.length ? "degraded" : "ok",
+            blockers,
+            startup: { phase: "ready", complete: true, blocker: null },
+            runtime: {
+                provider: { network: "regtest", identityOk: true },
+                inventory: { usableSats, reservedSats: "0", usableVtxos: 1, reservedVtxos: 0 },
+            },
+            sweeper: { nearestDeadline: { height: null, time: null } },
+        },
+    }) as unknown as OperationalSnapshot;
 
 const named = (root: DashboardElement, name: string): DashboardElement[] => [
     ...(root.name === name ? [root] : []),
@@ -700,5 +766,60 @@ describe("the dashboard is dependency-free", () => {
         expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
         dashboard.element("refresh").fire("click");
         await vi.waitFor(() => expect(fundingLoads()).toBe(2));
+    });
+});
+
+describe("setup guidance", () => {
+    it("says every readiness blocker the backend can raise in a sentence", () => {
+        const codes = backendBlockerCodes();
+        const { context } = runDashboard(() => dashboardPage([], "c".repeat(64), null));
+
+        expect(codes.length).toBeGreaterThan(100);
+        expect(codes.filter((code) => context.blockerText(code) === code)).toEqual([]);
+        expect(context.blockerText("no_such_blocker")).toBe("no_such_blocker");
+    });
+
+    it("walks a fresh Taxi through the checklist in plain words", async () => {
+        const admin: Harness = harness({
+            operationalSnapshot: (options) =>
+                readiness([
+                    ...(admin.policy.get().paused && !options?.ignoreManualPause
+                        ? ["manual_pause"]
+                        : []),
+                    "operator_reserve_low",
+                ]),
+        });
+        const dashboard = runDashboard(() => dashboardPage([], "d".repeat(64), null), admin, {
+            realStatus: true,
+        });
+        const text = (id: string) => dashboard.element(id).textContent;
+        const steps = ["connected", "fund", "limits", "carry", "live"];
+
+        await vi.waitFor(() => expect(text("step-fund-detail")).toContain("10 000"));
+        expect(steps.map((step) => text(`step-${step}-state`))).toEqual([
+            "Done",
+            "To do",
+            "To do",
+            "To do",
+            "To do",
+        ]);
+        expect(text("step-connected-title")).toBe("Taxi is running and connected (regtest)");
+        expect(steps.slice(1).map((step) => text(`step-${step}-detail`))).toEqual([
+            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more.",
+            "It lends nothing while any of the three limits is 0.",
+            "It carries nothing until at least one rule is switched on.",
+            "The Taxi is paused, so it refuses every new payment.",
+        ]);
+
+        dashboard.element("step-live-fix").fire("click");
+        expect(dashboard.element("go-live-confirm").hidden).toBe(false);
+        expect(text("go-live-warning")).toBe(
+            "Not done yet: fund your Taxi, set your limits, choose what to carry. It will refuse payments until they are.",
+        );
+        expect(dashboard.sent).toEqual([]);
+        dashboard.element("go-live-anyway").fire("click");
+        await vi.waitFor(() =>
+            expect(dashboard.sent.map((r) => r.path)).toEqual(["/admin/api/policy/resume"]),
+        );
     });
 });

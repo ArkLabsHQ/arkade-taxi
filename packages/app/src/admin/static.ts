@@ -39,6 +39,66 @@ export const INDEX_HTML = `<!doctype html>
         </header>
 
         <main>
+            <section class="panel" id="setup" aria-labelledby="setup-heading">
+                <div class="panel__head">
+                    <h2 id="setup-heading">Get started</h2>
+                </div>
+                <ol class="steps">
+                    <li class="step" id="step-connected">
+                        <span class="step__state" id="step-connected-state">…</span>
+                        <div>
+                            <p class="step__title" id="step-connected-title">
+                                Taxi is running and connected
+                            </p>
+                            <ul class="step__detail" id="step-connected-detail"></ul>
+                        </div>
+                        <button type="button" id="step-connected-fix">Check again</button>
+                    </li>
+                    <li class="step" id="step-fund">
+                        <span class="step__state" id="step-fund-state">…</span>
+                        <div>
+                            <p class="step__title">Fund your Taxi</p>
+                            <p class="step__detail" id="step-fund-detail"></p>
+                        </div>
+                        <a class="button" id="step-fund-fix" href="#funding">Show funding</a>
+                    </li>
+                    <li class="step" id="step-limits">
+                        <span class="step__state" id="step-limits-state">…</span>
+                        <div>
+                            <p class="step__title">Set your limits</p>
+                            <p class="step__detail" id="step-limits-detail"></p>
+                        </div>
+                        <a class="button" id="step-limits-fix" href="#limits">Edit limits</a>
+                    </li>
+                    <li class="step" id="step-carry">
+                        <span class="step__state" id="step-carry-state">…</span>
+                        <div>
+                            <p class="step__title">Choose what to carry</p>
+                            <p class="step__detail" id="step-carry-detail"></p>
+                        </div>
+                        <a class="button" id="step-carry-fix" href="#carry">Edit rules</a>
+                    </li>
+                    <li class="step" id="step-live">
+                        <span class="step__state" id="step-live-state">…</span>
+                        <div>
+                            <p class="step__title">Go live</p>
+                            <p class="step__detail" id="step-live-detail"></p>
+                            <div class="step__confirm" id="go-live-confirm" role="alert" hidden>
+                                <p id="go-live-warning"></p>
+                                <div class="actions">
+                                    <button type="button" class="attention" id="go-live-anyway">
+                                        Go live anyway
+                                    </button>
+                                    <button type="button" id="go-live-cancel">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="primary" id="step-live-fix">Go live</button>
+                    </li>
+                </ol>
+                <p class="note setup__note" id="setup-note" aria-live="polite"></p>
+            </section>
+
             <section class="headline" aria-labelledby="exposure-heading">
                 <div>
                     <h2 class="label" id="exposure-heading">Outstanding exposure</h2>
@@ -111,10 +171,9 @@ export const INDEX_HTML = `<!doctype html>
                         <dd id="time-expiry">—</dd>
                     </div>
                 </dl>
-                <p class="note" id="readiness-blockers"></p>
             </section>
 
-            <section class="panel" aria-labelledby="funding-heading">
+            <section class="panel" id="funding" aria-labelledby="funding-heading">
                 <div class="panel__head">
                     <h2 id="funding-heading">Funding</h2>
                     <div class="actions">
@@ -602,6 +661,94 @@ main {
     padding: 14px;
 }
 
+.panel:target,
+.group:target {
+    outline: 1px solid var(--accent);
+    outline-offset: 4px;
+}
+
+/* Setup checklist */
+
+.steps {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.step {
+    display: grid;
+    grid-template-columns: 9ch minmax(0, 1fr) auto;
+    gap: 4px 16px;
+    align-items: start;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+}
+
+.step__state {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 2px;
+    font: 600 11px/1.6 var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+.step__state::before {
+    content: "";
+    flex: none;
+    width: 8px;
+    height: 8px;
+    background: var(--accent);
+}
+
+.step.is-done .step__state {
+    color: var(--text-faint);
+}
+
+.step.is-done .step__state::before {
+    background: var(--line-strong);
+}
+
+.step__title {
+    margin: 0;
+    font: 600 13.5px/1.6 var(--sans);
+}
+
+.step__detail {
+    margin: 2px 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--text-dim);
+    font: 400 12.5px/1.55 var(--sans);
+}
+
+.step__detail code {
+    margin-left: 8px;
+    color: var(--text-faint);
+    font: 400 11px/1.5 var(--mono);
+}
+
+.step__confirm {
+    margin-top: 8px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    background: #1a1710;
+    color: var(--accent);
+    font: 400 12.5px/1.5 var(--sans);
+}
+
+.step__confirm p {
+    margin: 0 0 8px;
+}
+
+.setup__note {
+    margin: 0;
+    padding: 0 14px 10px;
+}
+
 /* Headline: exposure and sweeper */
 
 .headline {
@@ -954,7 +1101,8 @@ input[type="radio"] {
     align-items: center;
 }
 
-button {
+button,
+.button {
     padding: 6px 12px;
     background: transparent;
     color: var(--text);
@@ -966,6 +1114,13 @@ button {
     cursor: pointer;
 }
 
+.button {
+    display: inline-block;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.button:hover,
 button:hover:not(:disabled) {
     background: var(--panel-2);
     border-color: #4b545f;
@@ -1131,6 +1286,206 @@ const CLAIMS = [
     ["either", "Payer chooses"],
 ];
 
+const ATTENTION = " Check it under Advances.";
+const PROCEEDS_STUCK =
+    "Collecting the fares and repayments the Taxi received stopped on a problem; the service logs say why.";
+
+// Readiness blockers by meaning, one sentence each. A code missing here is shown raw.
+const BLOCKER_GROUPS = [
+    ["The Taxi is paused, so it refuses every new payment.", "manual_pause"],
+    ["The Taxi's spendable balance is below the reserve it must keep.", "operator_reserve_low"],
+    ["The Taxi is shutting down.", "shutdown_in_progress"],
+    ["The Taxi has stopped.", "runtime_stopped"],
+    ["The Taxi has not checked its wallet and the Arkade server yet.", "runtime_unchecked"],
+    ["The Taxi is checking its wallet and the Arkade server.", "runtime_checking"],
+    [
+        "The Taxi's last check of its wallet and the Arkade server failed; it tries again shortly.",
+        "runtime_check_failed",
+    ],
+    [
+        "The Taxi's last check of its wallet and the Arkade server is out of date; it checks again shortly.",
+        "runtime_stale",
+    ],
+    ["The Taxi cannot reach the Arkade server.", "server_unavailable"],
+    ["The Arkade server's key changed since the Taxi started.", "server_identity_mismatch"],
+    ["The Arkade server reports a network the Taxi does not know.", "network_unknown"],
+    ["The Arkade server's network changed since the Taxi started.", "network_mismatch"],
+    ["The Taxi knows no emulator key for this network.", "emulator_key_unavailable"],
+    ["The Taxi cannot reach the emulator.", "emulator_unavailable"],
+    [
+        "The emulator's key does not match the one this network expects.",
+        "emulator_identity_mismatch",
+    ],
+    ["The Arkade server's dust amount changed since the Taxi started.", "dust_mismatch"],
+    [
+        "The Arkade server's minimum coin amount changed since the Taxi started.",
+        "vtxo_min_amount_mismatch",
+    ],
+    [
+        "The Arkade server reports amount limits the Taxi cannot work with.",
+        "provider_limits_invalid",
+    ],
+    ["The Arkade server's exit script failed the Taxi's safety check.", "server_unroll_invalid"],
+    [
+        "The Arkade server changed while the Taxi was settling; it waits for the settlement to finish.",
+        "operator_settlement_provider_changed",
+    ],
+    [
+        "The wallet's address does not match the Taxi's configured operator key.",
+        "operator_payout_mismatch",
+    ],
+    ["The Taxi cannot read the latest block from its chain explorer.", "chain_tip_unavailable"],
+    ["The Taxi does not know the current block height.", "chain_height_unavailable"],
+    ["The Taxi does not know the current chain time.", "chain_time_unavailable"],
+    ["The Taxi's wallet is still syncing with the Arkade server.", "wallet_unsynced"],
+    ["The Taxi could not open or read its wallet.", "wallet_unavailable"],
+    [
+        "The Taxi cannot tell which of its coins are already in use.",
+        "intent_locks_unavailable reservation_locks_unavailable",
+    ],
+    ["The wallet reported a coin with an impossible amount.", "wallet_value_invalid"],
+    ["The wallet holds a coin whose expiry the Taxi cannot read.", "vtxo_expiry_unknown"],
+    ["Some of the Taxi's coins expire too soon to lend.", "vtxo_expiry_headroom"],
+    [
+        "The Taxi has not finished its first check of payments in progress.",
+        "reconciler_not_started",
+    ],
+    [
+        "The Taxi has not finished its first check of swap fills in progress.",
+        "swap_fill_reconciler_not_started",
+    ],
+    ["The recovery sweeper has not run yet.", "sweeper_not_started"],
+    [
+        "The recovery sweeper has stopped running on time. Lent sats are recovered only while it runs.",
+        "sweeper_stale",
+    ],
+    [
+        "A safety check reported a problem without a name.",
+        "startup_blocked runtime_blocked recovery_blocked reconciler_blocked proceeds_blocked",
+    ],
+    [
+        "Startup failed while starting background checks. Check again to retry.",
+        "startup_background_failed",
+    ],
+    [
+        "A payment tried to use coins that were already reserved." + ATTENTION,
+        "reserved_input_conflict",
+    ],
+    [
+        "A payment's lockup failed a safety check, so the Taxi stopped sending it." + ATTENTION,
+        "lockup_submission_invalid_prepared_artifact lockup_submission_invalid_pending_proof " +
+            "lockup_submission_invalid_provider_response lockup_submission_invalid_persisted_artifact " +
+            "lockup_submission_invalid_persisted_envelope",
+    ],
+    [
+        "The Taxi could not release the coins it held for a finished payment.",
+        "sponsored_release_failed",
+    ],
+    [
+        "The Taxi cannot read the chain tip to watch payments, so it paused itself.",
+        "canonical_tip_unavailable",
+    ],
+    [
+        "The live feed of Arkade transactions dropped; the Taxi keeps checking by polling.",
+        "transaction_stream_disconnected",
+    ],
+    [
+        "A payment's coin was spent in a way the Taxi does not recognise." + ATTENTION,
+        "covenant_spend_unknown",
+    ],
+    [
+        "The Taxi saw conflicting chain data about a payment." + ATTENTION,
+        "covenant_observation_disagreement",
+    ],
+    ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
+    ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
+    [
+        "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",
+        "covenant_unspent_at_expiry",
+    ],
+    [
+        "A payment's recovery deadline is very close, so the Taxi paused new payments.",
+        "recovery_deadline_critical",
+    ],
+    ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
+    ["A payment's lent sats can now be recovered.", "recovery_eligible"],
+    [
+        "A payment's recovery time is invalid, so the Taxi cannot recover its sats on its own.",
+        "recovery_locktime_invalid",
+    ],
+    [
+        "Recovering a payment's lent sats failed a safety check." + ATTENTION,
+        "recovery_quarantined recovery_artifact_invalid",
+    ],
+    [
+        "The emulator did not confirm a recovery; the Taxi retries it.",
+        "recovery_submission_ambiguous",
+    ],
+    [
+        "The Taxi is collecting the fares and repayments it received; new payments wait until it finishes.",
+        "proceeds_collecting proceeds_output_pending proceeds_intent_pending proceeds_worker_active",
+    ],
+    [
+        "Collecting the Taxi's earnings needs more balance above the reserve. Send it more sats.",
+        "proceeds_reserve_unavailable",
+    ],
+    [
+        "Collecting the Taxi's earnings costs a fee above TAXI_PROCEEDS_MAX_FEE_SATS.",
+        "proceeds_fee_cap_exceeded",
+    ],
+    [
+        PROCEEDS_STUCK,
+        "proceeds_submission_not_authorized proceeds_wallet_unavailable proceeds_output_limit_invalid " +
+            "proceeds_asset_invalid proceeds_plan_invalid proceeds_fee_invalid proceeds_ownership_invalid " +
+            "proceeds_duplicate_inventory proceeds_input_reserved proceeds_output_limit_exceeded " +
+            "proceeds_fee_authorization_changed proceeds_input_conflict proceeds_submission_ambiguous " +
+            "proceeds_ambiguous_intent proceeds_receipt_missing proceeds_receipt_mismatch " +
+            "proceeds_payout_key_changed proceeds_lockup_mismatch proceeds_covenant_missing " +
+            "proceeds_spend_mismatch proceeds_inputs_missing proceeds_input_facts_changed " +
+            "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
+            "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
+            "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
+            "proceeds_reservation_changed",
+    ],
+];
+
+const BLOCKERS = new Map(
+    BLOCKER_GROUPS.flatMap(([text, codes]) => codes.split(" ").map((code) => [code, text])),
+);
+
+// Startup blockers are built as startup_<phase>[_pending|_failed].
+const PHASES = new Map([
+    ["local", "starting"],
+    ["listening", "starting its checks"],
+    ["provider", "checking its wallet and the Arkade server"],
+    ["reconciliation", "catching up on payments in progress"],
+    ["recovery", "checking for lent sats that are due back"],
+    ["streams", "subscribing to live Arkade updates"],
+    ["background", "starting background checks"],
+    ["ready", "finishing startup"],
+    ["stopping", "shutting down"],
+    ["stopped", "stopping"],
+]);
+
+function blockerText(code) {
+    if (BLOCKERS.has(code)) return BLOCKERS.get(code);
+    const startup = /^startup_([a-z]+?)(_pending|_failed)?$/.exec(code);
+    if (startup && PHASES.has(startup[1]))
+        return startup[2] === "_failed"
+            ? "Startup failed while " + PHASES.get(startup[1]) + "; the Taxi keeps retrying."
+            : "Starting up: " + PHASES.get(startup[1]) + ".";
+    if (/^lockup_submission_[a-z]+_ambiguous$/.test(code))
+        return "The Arkade server did not confirm a payment's lockup." + ATTENTION;
+    return code;
+}
+
+const STEP_NAMES = {
+    connected: "get the Taxi running and connected",
+    fund: "fund your Taxi",
+    limits: "set your limits",
+    carry: "choose what to carry",
+};
+
 const ASSET_ID_HELP =
     "Write an asset id as the Funding card lists it: its 64-character txid, a colon, then its group number, e.g. 1f2e…:0.";
 
@@ -1139,7 +1494,9 @@ const $ = (id) => document.getElementById(id);
 const view = {
     status: null,
     policy: null,
+    funding: null,
     rules: [],
+    done: {},
     offline: false,
     advances: [],
     nextAdvanceOffset: null,
@@ -1322,9 +1679,114 @@ function renderOperational(readiness) {
     $("time-expiry").textContent = deadlines.time
         ? deadlines.time.remaining + " seconds / " + deadlines.time.severity
         : "none";
-    $("readiness-blockers").textContent = readiness.blockers.length
-        ? "Blockers: " + readiness.blockers.join(", ")
-        : "No operational blockers.";
+}
+
+function step(id, done, detail) {
+    view.done[id] = done;
+    $("step-" + id).classList.toggle("is-done", done);
+    $("step-" + id + "-state").textContent = done ? "Done" : "To do";
+    $("step-" + id + "-fix").hidden = done;
+    if (detail !== undefined) $("step-" + id + "-detail").textContent = detail;
+}
+
+function fundText(usable, reserve, funded) {
+    if (usable === undefined) return "Its balance is unknown until it can read its wallet.";
+    if (!reserve)
+        return funded ? group(usable) + " sats usable." : blockerText("operator_reserve_low");
+    const spare = BigInt(usable) - BigInt(reserve);
+    return funded
+        ? group(usable) +
+              " sats usable: the " +
+              group(spare.toString()) +
+              " above its " +
+              group(reserve) +
+              " sats reserve can be lent."
+        : group(usable) +
+              " sats usable, below the " +
+              group(reserve) +
+              " sats it must keep in reserve. Send it at least " +
+              group((-spare).toString()) +
+              " sats more.";
+}
+
+function renderSetup() {
+    const status = view.status;
+    const policy = view.policy;
+    if (!status || !policy) return;
+    const blockers = status.readiness.blockers;
+    const runtime = status.readiness.runtime || {};
+    const others = view.offline
+        ? []
+        : blockers.filter((code) => code !== "manual_pause" && code !== "operator_reserve_low");
+
+    step("connected", !view.offline && others.length === 0);
+    const network = (runtime.provider || {}).network;
+    $("step-connected-title").textContent =
+        "Taxi is running and connected" + (network ? " (" + network + ")" : "");
+    const list = $("step-connected-detail");
+    list.textContent = "";
+    if (view.offline) list.append(cell("li", "The console cannot reach the Taxi."));
+    for (const code of others) {
+        const item = cell("li", blockerText(code));
+        item.append(cell("code", code));
+        list.append(item);
+    }
+
+    const usable = (runtime.inventory || {}).usableSats;
+    const reserve = view.funding && view.funding.minReserveSats;
+    const funded =
+        usable !== undefined &&
+        (reserve ? BigInt(usable) >= BigInt(reserve) : !blockers.includes("operator_reserve_low"));
+    step("fund", funded, fundText(usable, reserve, funded));
+
+    const limited =
+        policy.maxPerPaymentTopupSats !== "0" &&
+        policy.maxOutstandingSats !== "0" &&
+        policy.maxConcurrentAdvances !== 0;
+    step(
+        "limits",
+        limited,
+        limited
+            ? "Up to " +
+                  group(policy.maxPerPaymentTopupSats) +
+                  " sats per payment, " +
+                  group(policy.maxOutstandingSats) +
+                  " sats in total, " +
+                  policy.maxConcurrentAdvances +
+                  " payments at once."
+            : "It lends nothing while any of the three limits is 0.",
+    );
+
+    const on = policy.assetRules.filter((rule) => rule.enabled);
+    const assets = on.filter((rule) => rule.assetId !== null).length;
+    const carried = [
+        ...(on.length > assets ? ["small bitcoin payments"] : []),
+        ...(assets ? [assets + (assets === 1 ? " asset" : " assets")] : []),
+    ];
+    step(
+        "carry",
+        on.length > 0,
+        on.length
+            ? "It carries " + carried.join(" and ") + "."
+            : "It carries nothing until at least one rule is switched on.",
+    );
+
+    const ready = Object.keys(STEP_NAMES).every((id) => view.done[id]);
+    step(
+        "live",
+        !status.paused,
+        status.paused
+            ? blockerText("manual_pause")
+            : ready
+              ? "It is taking payments."
+              : "It is live, but refuses payments until the steps above are done.",
+    );
+    if (!status.paused) $("go-live-confirm").hidden = true;
+}
+
+function goLive() {
+    $("go-live-confirm").hidden = true;
+    mutate(() => postAction("/admin/api/policy/resume"), "setup-note");
 }
 
 function renderFunding(funding) {
@@ -1723,6 +2185,7 @@ async function loadStatus() {
     renderOperational(status.readiness);
     renderServiceState(status.paused);
     $("hint-dust").textContent = group(status.dust);
+    renderSetup();
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
 }
 
@@ -1825,9 +2288,11 @@ async function loadAdvances(append) {
 }
 
 async function loadPolicy() {
-    view.policy = await api("/admin/api/policy");
-    fillPolicyForm(view.policy);
+    const policy = await api("/admin/api/policy");
+    fillPolicyForm(policy);
+    view.policy = policy;
     if (view.status) renderExposure(view.status);
+    renderSetup();
 }
 
 async function loadHistory() {
@@ -1836,10 +2301,12 @@ async function loadHistory() {
 
 async function loadFunding() {
     try {
-        renderFunding(await api("/admin/api/funding"));
+        view.funding = await api("/admin/api/funding");
+        renderFunding(view.funding);
     } catch (e) {
         $("funding-state").textContent = "unavailable: " + e.message;
     }
+    renderSetup();
 }
 
 async function refresh() {
@@ -1851,6 +2318,7 @@ async function refresh() {
         $("updated").textContent = "unreachable: " + e.message;
     }
     renderAlarm();
+    renderSetup();
 }
 
 async function mutate(run, noteId) {
@@ -1913,6 +2381,24 @@ function wire() {
     $("rescan").addEventListener("click", () =>
         mutate(() => postAction("/admin/api/rescan"), "switch-note"),
     );
+    $("step-connected-fix").addEventListener("click", () =>
+        mutate(() => postAction("/admin/api/rescan"), "setup-note"),
+    );
+    $("step-live-fix").addEventListener("click", () => {
+        const undone = Object.keys(STEP_NAMES).filter((id) => !view.done[id]);
+        if (undone.length === 0) return goLive();
+        $("go-live-warning").textContent =
+            "Not done yet: " +
+            undone.map((id) => STEP_NAMES[id]).join(", ") +
+            ". It will refuse payments until they are.";
+        $("go-live-confirm").hidden = false;
+        $("go-live-anyway").focus();
+    });
+    $("go-live-anyway").addEventListener("click", goLive);
+    $("go-live-cancel").addEventListener("click", () => {
+        $("go-live-confirm").hidden = true;
+        $("step-live-fix").focus();
+    });
     $("funding-copy").addEventListener("click", async () => {
         try {
             await navigator.clipboard.writeText($("funding-address").textContent);
