@@ -808,7 +808,7 @@ describe("setup guidance", () => {
         ]);
         expect(text("step-connected-title")).toBe("Taxi is running and connected (regtest)");
         expect(steps.slice(1).map((step) => text(`step-${step}-detail`))).toEqual([
-            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more.",
+            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more: offchain to its Arkade address, or on-chain to its boarding address.",
             "It lends nothing while any of the three limits is 0.",
             "It carries nothing until at least one rule is switched on.",
             "The Taxi is paused, so it refuses every new payment.",
