@@ -52,6 +52,8 @@ export interface AdminDeps {
     advances: AdvanceRepository;
     policy: PolicyRepository;
     recoveryExecutionBudget: { height: bigint; time: bigint };
+    dust: bigint;
+    vtxoMinAmount: bigint;
     sweeperStatus: () => SweeperStatus;
     rescan(): Promise<void>;
     operationalSnapshot(options?: { ignoreManualPause?: boolean }): OperationalSnapshot;
@@ -470,6 +472,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         return ok(c, {
             now: Date.now(),
             paused: deps.policy.get().paused,
+            dust: satsToWire(deps.dust),
+            vtxoMinAmount: satsToWire(deps.vtxoMinAmount),
             exposure: {
                 outstandingSats: satsToWire(outstandingSats),
                 activeCount: active.length,
