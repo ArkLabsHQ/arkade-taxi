@@ -107,9 +107,10 @@ export interface FareOfferWire {
         | { kind: "proportional"; bps: number; minUnits: string; maxUnits: string | null };
 }
 
-/** What the operator serves for one asset. `assetId` null is sub-dust bitcoin. */
+/** What the operator serves for one asset. `assetId` null is sub-dust bitcoin;
+ * `"*"` is any asset without a rule of its own, never bitcoin. */
 export interface AssetRuleWire {
-    assetId: AssetIdWire | null;
+    assetId: AssetIdWire | null | "*";
     enabled: boolean;
     fares: FareOfferWire[];
     claim: "recycle" | "purchase" | "either";

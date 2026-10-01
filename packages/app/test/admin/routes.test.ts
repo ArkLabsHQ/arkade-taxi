@@ -3,8 +3,17 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { advance, harness, healthySweeper, key } from "./fixtures.js";
-import { DUST, VTXO_MIN, config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
+import {
+    DUST,
+    VTXO_MIN,
+    config,
+    fundingCoin,
+    operatorKey,
+    operatorPrivkey,
+    serverKey,
+} from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
+import { SHOWN_CONFIG } from "../../src/config.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 
 const INT64_MAX = "9223372036854775807";
@@ -1073,5 +1082,22 @@ describe("policy surface completeness", () => {
         const res = await h.send("/admin/api/policy", "PATCH", { assetRules: [] }, "ops");
         expect(res.status).toBe(200);
         expect(res.body.assetRules).toEqual([]);
+    });
+});
+
+describe("GET /admin/api/config", () => {
+    it("serves the allowlisted running config and never the operator private key", async () => {
+        const { status, body } = await harness().json("/admin/api/config");
+        expect(status).toBe(200);
+        expect(body.config.map((entry: { key: string }) => entry.key)).toEqual(
+            Object.keys(SHOWN_CONFIG),
+        );
+        expect(body.config).toContainEqual({
+            key: "operatorMinReserveSats",
+            env: "TAXI_OPERATOR_MIN_RESERVE_SATS",
+            value: "10000",
+        });
+        expect(body.config).toContainEqual({ key: "dust", env: null, value: String(DUST) });
+        expect(JSON.stringify(body)).not.toContain(bytesToHex(operatorPrivkey));
     });
 });

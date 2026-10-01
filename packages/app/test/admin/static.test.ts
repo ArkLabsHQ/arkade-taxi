@@ -6,6 +6,9 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { assetIdToWire } from "@arkade-taxi/protocol";
 import { swapIdToTaxiAssetId, taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { PATCHABLE_POLICY_KEYS, POLICY_VOCABULARY } from "../../src/admin/routes.js";
+import { SHOWN_CONFIG } from "../../src/config.js";
+import { openApiDocument } from "../../src/openapi.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
 import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
 import { harness, type Harness } from "./fixtures.js";
@@ -324,9 +327,10 @@ describe("static routes", () => {
 
 describe("served constants match the authored assets", () => {
     it("has no drift between src/admin/static/* and the embedded strings", () => {
-        expect(INDEX_HTML).toBe(asset("index.html"));
-        expect(APP_JS).toBe(asset("app.js"));
-        expect(STYLES_CSS).toBe(asset("styles.css"));
+        const fix = "run node scripts/mirror-admin-static.mjs";
+        expect(INDEX_HTML, fix).toBe(asset("index.html"));
+        expect(APP_JS, fix).toBe(asset("app.js"));
+        expect(STYLES_CSS, fix).toBe(asset("styles.css"));
     });
 });
 
@@ -652,6 +656,8 @@ describe("the dashboard is dependency-free", () => {
         rules[1].enabled = false;
         const edited = JSON.stringify(rules);
         dashboard.element("assetRules").value = edited;
+        // The fixture's bitcoin rule is "either" with a free fare.
+        dashboard.element("rules-giveaway-ok").checked = true;
         dashboard.element("policy-form").fire("submit");
         await vi.waitFor(() =>
             expect(dashboard.element("assetRules").value, note()).not.toBe(edited),
@@ -705,6 +711,7 @@ describe("the dashboard is dependency-free", () => {
             },
         ]);
 
+        dashboard.element("rules-giveaway-ok").checked = true;
         dashboard.element("policy-form").fire("submit");
         await vi.waitFor(() =>
             expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
@@ -795,6 +802,389 @@ describe("the dashboard is dependency-free", () => {
         expect(fundingLoads(), "a poll tick must not re-read the operator wallet").toBe(1);
         dashboard.element("refresh").fire("click");
         await vi.waitFor(() => expect(fundingLoads()).toBe(2));
+    });
+});
+
+const loaded = async (admin: Harness, realStatus = false) => {
+    const dashboard = runDashboard(() => dashboardPage([], "9".repeat(64), null), admin, {
+        realStatus,
+    });
+    await vi.waitFor(() => {
+        expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/);
+        expect(dashboard.element("updated").textContent).toMatch(/^updated/);
+    });
+    return dashboard;
+};
+
+describe("the any-asset rule", () => {
+    it("is added from the settings table once, and saved as *", async () => {
+        const admin = harness();
+        const dashboard = await loaded(admin);
+        const note = () => dashboard.element("policy-note").textContent;
+
+        dashboard.element("rule-add-any").fire("click");
+        expect(JSON.parse(dashboard.element("assetRules").value)).toMatchObject([{ assetId: "*" }]);
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.textContent).toBe(
+            "Any asset",
+        );
+        dashboard.element("rule-add-any").fire("click");
+        expect(note()).toBe("Any asset already has a rule.");
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() => expect(note()).toBe("request accepted"));
+        expect(admin.policy.get().assetRules.map((rule) => rule.assetId)).toEqual(["*"]);
+    });
+
+    it("is offered by the setup wizard", async () => {
+        const admin = harness({ operationalSnapshot: () => readiness([]) });
+        const dashboard = await loaded(admin, true);
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        dashboard.element("wiz-btc").checked = false;
+        dashboard.element("wiz-any").checked = true;
+        for (let n = 0; n < 3; n++) dashboard.element("wiz-next").fire("click");
+        expect(dashboard.element("wiz-summary").textContent).toMatch(
+            /^Your Taxi will carry any asset\./,
+        );
+
+        dashboard.element("wiz-save").fire("click");
+        await vi.waitFor(() =>
+            expect(admin.policy.get().assetRules.map((rule) => rule.assetId)).toEqual(["*"]),
+        );
+    });
+});
+
+describe("giving carriers away", () => {
+    const GIVEAWAY =
+        "Payers could take the carrier sats for free; you would pay every carrier yourself.";
+
+    it("is refused in the wizard until the operator ticks the override", async () => {
+        const admin = harness({ operationalSnapshot: () => readiness([]) });
+        const dashboard = await loaded(admin, true);
+        const click = (id: string) => dashboard.element(id).fire("click");
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        click("wiz-next");
+        click("wiz-next");
+        dashboard.element("wiz-claim-either").fire("change");
+        expect(dashboard.element("wiz-giveaway").hidden).toBe(false);
+        click("wiz-next");
+        expect(dashboard.element("wiz-note").textContent).toMatch(
+            /^To go on, tick "Give carriers away for free"/,
+        );
+        expect(dashboard.element("wizard-progress").textContent).toBe("Step 3 of 4");
+
+        dashboard.element("wiz-claim-recycle").fire("change");
+        expect(dashboard.element("wiz-giveaway").hidden).toBe(true);
+        dashboard.element("wiz-claim-purchase").fire("change");
+        dashboard.element("wiz-giveaway-ok").checked = true;
+        click("wiz-next");
+        click("wiz-save");
+        await vi.waitFor(() =>
+            expect(admin.policy.get().assetRules).toMatchObject([
+                { assetId: null, claim: "purchase" },
+            ]),
+        );
+    });
+
+    it("is refused in the settings table until the operator ticks the override", async () => {
+        const admin = harness();
+        const dashboard = await loaded(admin);
+        const note = () => dashboard.element("policy-note").textContent;
+        dashboard.element("rule-add-bitcoin").fire("click");
+        const claim = named(dashboard.element("rules-body").children[0]!, "claim")[0]!;
+        claim.value = "purchase";
+        claim.fire("change");
+        expect(dashboard.element("rules-giveaway").hidden).toBe(false);
+
+        dashboard.element("policy-form").fire("submit");
+        expect(note()).toBe(GIVEAWAY);
+        expect(dashboard.sent).toEqual([]);
+
+        dashboard.element("rules-giveaway-ok").checked = true;
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() => expect(note()).toBe("request accepted"));
+        expect(admin.policy.get().assetRules[0]!.claim).toBe("purchase");
+    });
+
+    const paid = { id: "paid", currency: { kind: "sats" }, pricing: { kind: "flat", units: "1" } };
+    const free = { ...paid, id: "free", pricing: { kind: "flat", units: "0" } };
+    const percent = (kind: string, bps: number, minUnits: string) => ({
+        id: "percent",
+        currency: { kind },
+        pricing: { kind: "proportional", bps, minUnits, maxUnits: null },
+    });
+    const rule = (over: object) => ({
+        assetId: null,
+        enabled: true,
+        claim: "purchase",
+        maxTopupSats: null,
+        fares: [free],
+        ...over,
+    });
+
+    // The fake status says dust 330 and vtxoMinAmount 10: an asset payment
+    // borrows the whole dust, a bitcoin one as little as 10 sats.
+    it.each([
+        ["purchase with a flat 0 fare", rule({}), true],
+        [
+            "either with a flat 0 fare among others",
+            rule({ claim: "either", fares: [paid, free] }),
+            true,
+        ],
+        ["recycle with a flat 0 fare", rule({ claim: "recycle" }), false],
+        ["a switched-off rule", rule({ enabled: false }), false],
+        ["a flat 1 fare", rule({ fares: [paid] }), false],
+        [
+            "a share of the asset sent, no minimum",
+            rule({ fares: [percent("sameAsset", 500, "0")] }),
+            true,
+        ],
+        [
+            "a share of the asset sent, minimum 1",
+            rule({ fares: [percent("sameAsset", 500, "1")] }),
+            false,
+        ],
+        [
+            "0.3% of the dust an asset borrows",
+            rule({ assetId: "*", fares: [percent("sats", 30, "0")] }),
+            true,
+        ],
+        [
+            "1% of the dust an asset borrows",
+            rule({ assetId: "*", fares: [percent("sats", 100, "0")] }),
+            false,
+        ],
+        ["1% of the least bitcoin borrows", rule({ fares: [percent("sats", 100, "0")] }), true],
+    ])("decides whether %s is free to take", async (_label, value, flagged) => {
+        const dashboard = await loaded(harness());
+        expect(dashboard.context.giveaways([value]).length > 0).toBe(flagged);
+    });
+});
+
+// Every list below comes from the server's own schemas, so an option added
+// there without a control or an explanation here fails.
+describe("console coverage", () => {
+    const TOKEN = { txid: Uint8Array.from({ length: 32 }, (_, i) => i + 7), groupIndex: 2 };
+    const helpText = (id: string) =>
+        new RegExp(`id="${id}"[^>]*>([\\s\\S]*?)</d[dt]>`).exec(INDEX_HTML)?.[1]?.trim() ?? "";
+
+    it("has a control for every policy field the PATCH schema accepts", async () => {
+        const dashboard = await loaded(harness());
+        const paths = () => dashboard.sent.map((request) => request.path);
+        const fields = PATCHABLE_POLICY_KEYS.filter(
+            (key) => key !== "paused" && key !== "assetRules",
+        );
+        for (const key of fields) dashboard.element(key).value = "7";
+        dashboard.element("rule-add-bitcoin").fire("click");
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() => expect(paths()).toContain("/admin/api/policy"));
+        expect(Object.keys(dashboard.sent[0]!.body).sort()).toEqual(
+            [...fields, "assetRules"].sort(),
+        );
+
+        dashboard.element("pause").fire("click");
+        dashboard.element("resume").fire("click");
+        await vi.waitFor(() =>
+            expect(paths()).toEqual(
+                expect.arrayContaining(["/admin/api/policy/pause", "/admin/api/policy/resume"]),
+            ),
+        );
+    });
+
+    it("edits every rule field the PATCH schema accepts from the table", async () => {
+        const dashboard = await loaded(harness());
+        const rules = () => JSON.parse(dashboard.element("assetRules").value);
+        const control = (row: number, name: string, n = 0) =>
+            named(dashboard.element("rules-body").children[row]!, name)[n]!;
+        const ids = () => rules()[2].fares.map((fare: { id: string }) => fare.id);
+        const checks: Record<string, () => void> = {
+            assetId: () => {
+                dashboard.element("rule-add-bitcoin").fire("click");
+                dashboard.element("rule-add-any").fire("click");
+                dashboard.element("rule-asset").value = taxiAssetIdToSwapId(TOKEN);
+                dashboard.element("rule-add-asset").fire("click");
+                expect(rules().map((rule: { assetId: unknown }) => rule.assetId)).toEqual([
+                    null,
+                    "*",
+                    assetIdToWire(TOKEN),
+                ]);
+            },
+            enabled: () => {
+                control(1, "enabled").checked = false;
+                control(1, "enabled").fire("change");
+                expect(rules()[1].enabled).toBe(false);
+            },
+            claim: () => {
+                expect(control(2, "claim").children.map((option) => option.value)).toEqual(
+                    POLICY_VOCABULARY.claims,
+                );
+                for (const mode of POLICY_VOCABULARY.claims) {
+                    control(2, "claim").value = mode;
+                    control(2, "claim").fire("change");
+                    expect(rules()[2].claim).toBe(mode);
+                }
+            },
+            maxTopupSats: () => {
+                control(2, "maxTopupSats").value = "250";
+                control(2, "maxTopupSats").fire("change");
+                expect(rules()[2].maxTopupSats).toBe("250");
+            },
+            fares: () => {
+                control(2, "add-fare").fire("click");
+                control(2, "id", 1).value = "vip";
+                control(2, "id", 1).fire("change");
+                expect(ids()).toEqual(["sats", "vip"]);
+                control(2, "fare-up", 1).fire("click");
+                expect(ids()).toEqual(["vip", "sats"]);
+                control(2, "fare-down", 0).fire("click");
+                expect(ids()).toEqual(["sats", "vip"]);
+                control(2, "remove-fare", 1).fire("click");
+                expect(ids()).toEqual(["sats"]);
+            },
+        };
+        expect(Object.keys(checks).sort()).toEqual([...POLICY_VOCABULARY.ruleFields].sort());
+        for (const field of POLICY_VOCABULARY.ruleFields) checks[field]!();
+    });
+
+    it("offers, explains and saves every fare currency and pricing kind", async () => {
+        const admin = harness();
+        const dashboard = await loaded(admin);
+        const control = (name: string) =>
+            named(dashboard.element("rules-body").children[0]!, name)[0]!;
+        const set = (name: string, value: string) => {
+            control(name).value = value;
+            control(name).fire("change");
+        };
+        const options = (name: string) => control(name).children.map((option) => option.value);
+        const fare = () => JSON.parse(dashboard.element("assetRules").value)[0].fares[0];
+        dashboard.element("rule-add-any").fire("click");
+        expect(options("currency")).toEqual(POLICY_VOCABULARY.currencies);
+        expect(options("pricing")).toEqual(POLICY_VOCABULARY.pricings);
+        for (const kind of POLICY_VOCABULARY.currencies)
+            expect(helpText(`help-currency-${kind}`), kind).not.toBe("");
+        for (const kind of POLICY_VOCABULARY.pricings)
+            expect(helpText(`help-pricing-${kind}`), kind).not.toBe("");
+
+        set("currency", "sameAsset");
+        set("pricing", "proportional");
+        set("percent", "0.5");
+        set("min", "1");
+        set("max", "1000");
+        expect(fare()).toEqual({
+            id: "asset",
+            currency: { kind: "sameAsset" },
+            pricing: { kind: "proportional", bps: 50, minUnits: "1", maxUnits: "1000" },
+        });
+
+        set("currency", "token");
+        expect(options("pricing")).toEqual(["flat"]);
+        set("token", taxiAssetIdToSwapId(TOKEN));
+        set("units", "2");
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
+        );
+        expect(admin.policy.get().assetRules[0]!.fares).toEqual([
+            {
+                id: "token",
+                currency: { kind: "token", assetId: TOKEN },
+                pricing: { kind: "flat", units: 2n },
+            },
+        ]);
+        expect(control("token").value).toBe(taxiAssetIdToSwapId(TOKEN));
+    });
+
+    it("explains every claim mode where it is chosen, and every kind of payment", () => {
+        for (const mode of POLICY_VOCABULARY.claims) {
+            expect(helpText(`help-claim-${mode}`), mode).not.toBe("");
+            expect(INDEX_HTML).toContain(`id="wiz-claim-${mode}"`);
+        }
+        const kinds = Object.entries(openApiDocument.paths)
+            .filter(([path, item]) => "post" in item && !path.includes("{"))
+            .map(([path]) => path.replace("/v1/", ""));
+        expect(kinds.length).toBeGreaterThan(3);
+        for (const kind of kinds) expect(helpText(`help-route-${kind}`), kind).not.toBe("");
+    });
+
+    it("shows every allowlisted config value with its variable and meaning", async () => {
+        const dashboard = await loaded(harness());
+        const body = dashboard.element("service-config");
+        await vi.waitFor(() =>
+            expect(body.children).toHaveLength(Object.keys(SHOWN_CONFIG).length),
+        );
+        const rows = body.children.map((row) => row.children.map((c) => c.textContent));
+        Object.entries(SHOWN_CONFIG).forEach(([key, env], i) => {
+            expect(rows[i]![0]).toBe(env ?? key + " (derived)");
+            expect(rows[i]![2], key).not.toBe("");
+        });
+        expect(rows).toContainEqual([
+            "TAXI_OPERATOR_MIN_RESERVE_SATS",
+            "10 000",
+            expect.stringMatching(/reserve|keeps/i),
+        ]);
+    });
+});
+
+describe("the wizard's asset fare", () => {
+    const toStep3 = async () => {
+        const admin = harness({ operationalSnapshot: () => readiness([]) });
+        const dashboard = await loaded(admin, true);
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        dashboard.element("wiz-btc").checked = false;
+        dashboard.element("wiz-any").checked = true;
+        dashboard.element("wiz-next").fire("click");
+        dashboard.element("wiz-next").fire("click");
+        return {
+            admin,
+            dashboard,
+            set: (id: string, value: string) => void (dashboard.element(id).value = value),
+        };
+    };
+    const askAssetFare = (dashboard: Awaited<ReturnType<typeof toStep3>>["dashboard"]) => {
+        dashboard.element("wiz-fare-asset").checked = true;
+        dashboard.element("wiz-fare-asset").fire("change");
+    };
+    const save = async ({ admin, dashboard }: Awaited<ReturnType<typeof toStep3>>) => {
+        dashboard.element("wiz-next").fire("click");
+        const summary = dashboard.element("wiz-summary").textContent;
+        dashboard.element("wiz-save").fire("click");
+        await vi.waitFor(() => expect(admin.policy.get().assetRules).toHaveLength(1));
+        return { summary, fares: admin.policy.get().assetRules[0]!.fares.map((f) => f.pricing) };
+    };
+
+    it("takes a percentage of its own and words it from the amount sent", async () => {
+        const step = await toStep3();
+        step.dashboard.element("wiz-fare-percent").fire("change");
+        step.set("wiz-fare-pct", "1");
+        step.set("wiz-fare-min", "2");
+        askAssetFare(step.dashboard);
+        expect(step.dashboard.element("wiz-asset-percent-fields").hidden).toBe(false);
+        step.set("wiz-asset-pct", "0.5");
+        step.set("wiz-asset-min", "100");
+        step.set("wiz-asset-max", "5000");
+        const { summary, fares } = await save(step);
+        expect(summary).toContain(
+            "Each payment pays 1% of the sats lent, at least 2 sats. Asset payments may instead pay 0.5% of the amount they send, at least 100 units and at most 5 000 units.",
+        );
+        expect(fares).toEqual([
+            { kind: "proportional", bps: 100, minUnits: 2n, maxUnits: null },
+            { kind: "proportional", bps: 50, minUnits: 100n, maxUnits: 5000n },
+        ]);
+    });
+
+    it("takes a flat amount of its own, in units", async () => {
+        const step = await toStep3();
+        step.dashboard.element("wiz-fare-flat").fire("change");
+        step.set("wiz-fare-flat-sats", "10");
+        askAssetFare(step.dashboard);
+        step.set("wiz-asset-flat-units", "3");
+        const { summary, fares } = await save(step);
+        expect(summary).toContain(
+            "Each payment pays a fare of 10 sats. Asset payments may instead pay 3 units of the asset they send.",
+        );
+        expect(fares).toEqual([
+            { kind: "flat", units: 10n },
+            { kind: "flat", units: 3n },
+        ]);
     });
 });
 

@@ -1763,6 +1763,13 @@ describe("API documentation", () => {
         ];
     };
 
+    it("documents the any-asset rule exactly as /v1/info serves it", async () => {
+        const any = { ...basePolicy().assetRules[0]!, assetId: "*" as const };
+        const body = await (await app({ assetRules: [any] }).request("/v1/info")).json();
+        expect(body.assetRules[0].assetId).toBe("*");
+        expect(mismatches(body, { $ref: "#/components/schemas/InfoResponse" })).toEqual([]);
+    });
+
     it("documents exactly the public routes the app registers", () => {
         const registered = app()
             .routes.map(({ method, path }) => `${method} ${path.replace(/:(\w+)/g, "{$1}")}`)

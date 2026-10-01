@@ -114,6 +114,45 @@ describe("admit", () => {
     });
 });
 
+describe("the any-asset rule", () => {
+    const any = rule({ assetId: "*", fares: [cutFare] });
+    const ask = (assetId: AssetIdRef | undefined, assetRules: AssetRule[]) =>
+        admit(
+            request({ assetId, assetUnits: 100n }),
+            policy({ assetRules }),
+            exposure(),
+            DUST,
+            MIN,
+        );
+
+    it("admits an asset that has no rule of its own", () => {
+        expect(okOf(ask(asset(3), [any])).fare).toEqual({
+            currency: "asset",
+            assetId: asset(3),
+            units: 1n,
+        });
+    });
+
+    it("lets an exact rule switch one asset off while it serves the rest", () => {
+        const rules = [any, rule({ assetId: USDT, enabled: false })];
+        expect(reasonOf(ask(USDT, rules))).toBe("asset_disabled");
+        expect(ask(asset(3), rules).ok).toBe(true);
+    });
+
+    it("lets an exact rule price one asset differently", () => {
+        const rules = [any, rule({ assetId: USDT, fares: [ticketFare] })];
+        expect(okOf(ask(USDT, rules)).fare).toEqual({
+            currency: "asset",
+            assetId: TOKEN,
+            units: 1n,
+        });
+    });
+
+    it("does not serve bitcoin", () => {
+        expect(reasonOf(ask(undefined, [any]))).toBe("asset_not_served");
+    });
+});
+
 describe("fares", () => {
     it("takes the rule's first offer when the client names none", () => {
         const d = okOf(admit(request({ assetId: USDT }), policy(), exposure(), DUST, MIN));

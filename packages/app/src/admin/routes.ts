@@ -28,7 +28,7 @@ import { assetRuleToWire } from "../rulesWire.js";
 import { sanitizeOperationalError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
-import type { RuntimeConfig } from "../config.js";
+import type { RuntimeConfig, ShownConfigEntry } from "../config.js";
 import { holdings } from "../proceeds.js";
 import type { OperationalSnapshot } from "../routes.js";
 import type { RecoveryDeadline } from "../sweeper.js";
@@ -58,6 +58,7 @@ export interface AdminDeps {
     rescan(): Promise<void>;
     operationalSnapshot(options?: { ignoreManualPause?: boolean }): OperationalSnapshot;
     now(): number;
+    serviceConfig: readonly ShownConfigEntry[];
     /** Rejects while the operator wallet is unavailable. */
     funding(): Promise<{
         config: Pick<
@@ -135,7 +136,7 @@ const fareOption = z
     });
 const assetRule = z
     .object({
-        assetId: assetId.nullable(),
+        assetId: z.union([z.literal("*"), assetId]).nullable(),
         enabled: z.boolean(),
         fares: z.array(fareOption),
         claim: z.enum(["recycle", "purchase", "either"]),
@@ -165,6 +166,15 @@ const policyPatch = z
 export const PATCHABLE_POLICY_KEYS = Object.keys(policyPatch.shape).filter(
     () => true,
 ) as (keyof Policy)[];
+
+// Read from the schemas above, so the console's coverage test sees a new
+// rule field, claim mode or fare kind the moment the server accepts it.
+export const POLICY_VOCABULARY = {
+    ruleFields: Object.keys(assetRule.shape),
+    claims: assetRule.shape.claim.options,
+    currencies: fareOption.innerType().shape.currency.options.map((o) => o.shape.kind.value),
+    pricings: fareOption.innerType().shape.pricing.options.map((o) => o.shape.kind.value),
+};
 
 const emptyMutation = z.object({}).strict();
 
@@ -522,6 +532,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             });
         }
     });
+
+    app.get(at("/api/config"), (c) => ok(c, { config: deps.serviceConfig }));
 
     app.get(at("/api/policy"), (c) => ok(c, toPolicyWire(deps.policy.get())));
 

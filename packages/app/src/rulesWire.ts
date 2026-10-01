@@ -21,7 +21,7 @@ const fareOfferToWire = (f: AssetRule["fares"][number]): FareOfferWire => ({
 
 // Only mode this build implements; the domain AssetRule carries none yet.
 export const assetRuleToWire = (r: AssetRule): AssetRuleWire => ({
-    assetId: r.assetId === null ? null : assetIdToWire(r.assetId),
+    assetId: r.assetId === null || r.assetId === "*" ? r.assetId : assetIdToWire(r.assetId),
     enabled: r.enabled,
     fares: r.fares.map(fareOfferToWire),
     claim: r.claim,
