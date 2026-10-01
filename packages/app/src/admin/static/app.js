@@ -30,7 +30,7 @@ const CLAIMS = [
 
 const ATTENTION = " Check it under Advances.";
 const PROCEEDS_STUCK =
-    "Collecting the fares and repayments the Taxi received stopped on a problem; the service logs say why.";
+    "Collecting the fares and repayments the Taxi received is stuck; the code beside this names the cause.";
 
 // Readiness blockers by meaning, one sentence each. A code missing here is shown raw.
 const BLOCKER_GROUPS = [
