@@ -518,7 +518,7 @@ function step(id, done, detail) {
     if (detail !== undefined) $("step-" + id + "-detail").textContent = detail;
 }
 
-const SEND_TO = "offchain to its Arkade address, or on-chain to its boarding address.";
+const SEND_TO = "offchain to its Arkade address.";
 
 function fundText(usable, reserve, funded) {
     if (usable === undefined) return "Its balance is unknown until it can read its wallet.";
@@ -539,7 +539,7 @@ function fundText(usable, reserve, funded) {
               group(reserve) +
               " sats it must keep in reserve. Send it at least " +
               group((-spare).toString()) +
-              " sats more: " +
+              " sats more, " +
               SEND_TO;
 }
 
