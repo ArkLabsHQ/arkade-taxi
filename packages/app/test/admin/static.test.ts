@@ -4,9 +4,11 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
-import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
-import { config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { boardingView, harness } from "./fixtures.js";
+import { assetIdToWire } from "@arkade-taxi/protocol";
+import { swapIdToTaxiAssetId, taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import type { OperationalSnapshot } from "../../src/routes.js";
+import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
+import { boardingView, harness, type Harness } from "./fixtures.js";
 
 afterEach(() => vi.useRealTimers());
 
@@ -25,11 +27,21 @@ class DashboardElement {
     disabled = false;
     value: any = "";
     checked = false;
+    open = false;
+    name = "";
     title = "";
     scope = "";
     type = "";
     className = "";
     private text = "";
+
+    showModal() {
+        this.open = true;
+    }
+    close() {
+        this.open = false;
+    }
+    focus() {}
 
     set textContent(value: string) {
         this.text = String(value);
@@ -50,6 +62,78 @@ class DashboardElement {
             listener({ target: this, preventDefault() {} });
     }
 }
+
+const source = (path: string) =>
+    readFileSync(fileURLToPath(new URL(`../../../${path}`, import.meta.url)), "utf8");
+const union = (path: string, pattern: RegExp) =>
+    [...pattern.exec(source(path))![1]!.matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+
+// Every module whose codes reach readiness.blockers, and the snake_case literals
+// in them that never do.
+const BLOCKER_SOURCES = [
+    "app/src/routes.ts",
+    "app/src/lifecycle.ts",
+    "app/src/arkade/operatorWallet.ts",
+    "app/src/arkade/providers.ts",
+    "app/src/sweeper.ts",
+    "app/src/arkade/recovery.ts",
+    "app/src/arkade/submit.ts",
+    "app/src/reconciler.ts",
+    "app/src/watcher.ts",
+    "app/src/swapFillReconciler.ts",
+    "app/src/proceeds.ts",
+    "db/src/proceeds.ts",
+    "db/src/reservations.ts",
+];
+const NOT_BLOCKERS = new Set([
+    ...["not_ready", "recovery_failed", "runtime_unsafe", "shutdown_failed", "shutdown_timeout"],
+    ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
+    ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
+    ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
+    // Refusals inside the SDK's own background settlement, which only the SDK sees and logs.
+    ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],
+]);
+
+function backendBlockerCodes(): string[] {
+    const expansions: Record<string, string[]> = {
+        startup_: union("app/src/lifecycle.ts", /type LifecyclePhase =([^;]+);/),
+        chain_: union("core/src/types.ts", /type ExpiryDeadline =(.+)/),
+        lockup_submission_: union("core/src/types.ts", /submissionPhase\?:([^;]+);/),
+    };
+    const codes = new Set<string>();
+    for (const path of BLOCKER_SOURCES) {
+        const text = source(path);
+        for (const [, code] of text.matchAll(/["'`]([a-z][a-z0-9]*(?:_[a-z0-9]+)+)["'`]/g))
+            if (!NOT_BLOCKERS.has(code!)) codes.add(code!);
+        for (const [template, prefix, suffix] of text.matchAll(
+            /`([a-z]+_[a-z_]*)\$\{[^}]+\}([a-z_]*)`/g,
+        )) {
+            if (!expansions[prefix!]) throw new Error(`${path}: cannot expand ${template}`);
+            for (const value of expansions[prefix!]!) codes.add(prefix + value + suffix);
+        }
+    }
+    return [...codes];
+}
+
+const readiness = (blockers: string[], usableSats = "2500") =>
+    ({
+        ready: blockers.length === 0,
+        body: {
+            status: blockers.length ? "degraded" : "ok",
+            blockers,
+            startup: { phase: "ready", complete: true, blocker: null },
+            runtime: {
+                provider: { network: "regtest", identityOk: true },
+                inventory: { usableSats, reservedSats: "0", usableVtxos: 1, reservedVtxos: 0 },
+            },
+            sweeper: { nearestDeadline: { height: null, time: null } },
+        },
+    }) as unknown as OperationalSnapshot;
+
+const named = (root: DashboardElement, name: string): DashboardElement[] => [
+    ...(root.name === name ? [root] : []),
+    ...root.children.flatMap((child) => named(child, name)),
+];
 
 const dashboardRow = (id: string, state = "locked") => ({
     id,
@@ -90,6 +174,7 @@ function deferred<T>() {
 function runDashboard(
     fetchAdvances: (path: string) => unknown | Promise<unknown>,
     admin = harness(),
+    { realStatus = false } = {},
 ) {
     const elements = new Map<string, DashboardElement>();
     const element = (id: string) => {
@@ -98,6 +183,7 @@ function runDashboard(
         return elements.get(id)!;
     };
     const requests: string[] = [];
+    const sent: { method: string; path: string; body: any }[] = [];
     const copied: string[] = [];
     let poll = async () => {};
     const response = (body: unknown) => ({
@@ -106,8 +192,12 @@ function runDashboard(
         statusText: "OK",
         text: async () => JSON.stringify(body),
     });
-    const fetch = async (path: string, init?: { headers?: Record<string, string> }) => {
+    const fetch = async (
+        path: string,
+        init?: { method?: string; headers?: Record<string, string>; body?: string },
+    ) => {
         requests.push(path);
+        if (init?.method) sent.push({ method: init.method, path, body: JSON.parse(init.body!) });
         if (path.startsWith("/admin/api/advances")) {
             const result: any = await fetchAdvances(path);
             if (result?.httpStatus)
@@ -119,7 +209,7 @@ function runDashboard(
                 };
             return response(result);
         }
-        if (path === "/admin/api/status")
+        if (path === "/admin/api/status" && !realStatus)
             return response({
                 exposure: {
                     outstandingSats: "1",
@@ -128,6 +218,8 @@ function runDashboard(
                 },
                 counts: {},
                 paused: true,
+                dust: "330",
+                vtxoMinAmount: "10",
                 sweeper: {
                     healthy: true,
                     running: true,
@@ -169,7 +261,7 @@ function runDashboard(
         createElement: () => new DashboardElement(),
         addEventListener() {},
     };
-    runInNewContext(APP_JS, {
+    const context: Record<string, any> = {
         document,
         fetch,
         navigator: { clipboard: { writeText: async (text: string) => void copied.push(text) } },
@@ -184,10 +276,11 @@ function runDashboard(
         Map,
         Array,
         String,
-    });
+    };
+    runInNewContext(APP_JS, context);
     const renderedIds = () =>
         element("advances-body").children.map((row) => row.children[0]?.title);
-    return { element, renderedIds, requests, copied, poll: () => poll() };
+    return { element, renderedIds, requests, sent, copied, context, poll: () => poll() };
 }
 
 describe("static routes", () => {
@@ -583,8 +676,88 @@ describe("the dashboard is dependency-free", () => {
         expect(dashboard.requests).toHaveLength(sent);
     });
 
+    it("edits rules from the settings table and keeps the JSON view on the same rules", async () => {
+        const admin = harness();
+        const [seeded] = admin.policy.update(policy(), "seed").assetRules;
+        const dashboard = runDashboard(() => dashboardPage([], "b".repeat(64), null), admin);
+        const row = () => dashboard.element("rules-body").children[0]!;
+        const json = () => JSON.parse(dashboard.element("assetRules").value);
+        await vi.waitFor(() => expect(named(row(), "claim")).toHaveLength(1));
+
+        const claim = named(row(), "claim")[0]!;
+        claim.value = "purchase";
+        claim.fire("change");
+        named(row(), "add-fare")[0]!.fire("click");
+        const units = named(row(), "units")[1]!;
+        units.value = "5";
+        units.fire("change");
+        const added = { id: "sats-2", currency: { kind: "sats" }, pricing: { kind: "flat" } };
+        expect(json()).toEqual([
+            {
+                assetId: null,
+                enabled: true,
+                fares: [
+                    {
+                        id: "sats",
+                        currency: { kind: "sats" },
+                        pricing: { kind: "flat", units: "0" },
+                    },
+                    { ...added, pricing: { kind: "flat", units: "5" } },
+                ],
+                claim: "purchase",
+                maxTopupSats: null,
+            },
+        ]);
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
+        );
+        expect(admin.policy.get().assetRules).toEqual([
+            {
+                ...seeded,
+                claim: "purchase",
+                fares: [...seeded!.fares, { ...added, pricing: { kind: "flat", units: 5n } }],
+            },
+        ]);
+
+        const edited = json();
+        edited[0].enabled = false;
+        dashboard.element("assetRules").value = JSON.stringify(edited);
+        dashboard.element("assetRules").fire("input");
+        expect(named(row(), "enabled")[0]!.checked).toBe(false);
+    });
+
+    it("takes and shows asset ids exactly as the wallet writes them", async () => {
+        const admin = harness();
+        const dashboard = runDashboard(() => dashboardPage([], "1".repeat(64), null), admin);
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
+        );
+        // Distinct txid bytes and a group above 255, so byte order shows on both halves.
+        const wallet = taxiAssetIdToSwapId({
+            txid: Uint8Array.from({ length: 32 }, (_, i) => i + 1),
+            groupIndex: 300,
+        });
+        expect(wallet).toMatch(/^[0-9a-f]{68}$/);
+
+        dashboard.element("rule-asset").value = wallet;
+        dashboard.element("rule-add-asset").fire("click");
+        expect(JSON.parse(dashboard.element("assetRules").value)[0].assetId).toEqual(
+            assetIdToWire(swapIdToTaxiAssetId(wallet)),
+        );
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
+
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
+        );
+        expect(admin.policy.get().assetRules[0]!.assetId).toEqual(swapIdToTaxiAssetId(wallet));
+        expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
+    });
+
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
-        const token = { txid: new Uint8Array(32).fill(0xcd), groupIndex: 1 };
+        const token = { txid: Uint8Array.from({ length: 32 }, (_, i) => 32 - i), groupIndex: 258 };
         let boarding = boardingView({
             deposits: { confirmedSats: 60_000n, unconfirmedSats: 5_000n, expiredSats: 7_000n },
         });
@@ -627,7 +800,7 @@ describe("the dashboard is dependency-free", () => {
             dashboard
                 .element("funding-assets")
                 .children.map((row) => row.children.map((c) => c.title || c.textContent)),
-        ).toEqual([["cd".repeat(32), "1", "1 234 567"]]);
+        ).toEqual([[taxiAssetIdToSwapId(token), "258", "1 234 567"]]);
 
         dashboard.element("funding-copy").fire("click");
         dashboard.element("funding-boarding-copy").fire("click");
@@ -649,5 +822,169 @@ describe("the dashboard is dependency-free", () => {
         expect(text("funding-boarding-address")).toBe("unavailable");
         expect(dashboard.element("funding-boarding-copy").disabled).toBe(true);
         expect(text("funding-boarding-confirmed")).toBe("unknown");
+    });
+});
+
+describe("setup guidance", () => {
+    it("says every readiness blocker the backend can raise in a sentence", () => {
+        const codes = backendBlockerCodes();
+        const { context } = runDashboard(() => dashboardPage([], "c".repeat(64), null));
+
+        expect(codes.length).toBeGreaterThan(100);
+        expect(codes.filter((code) => context.blockerText(code) === code)).toEqual([]);
+        expect(context.blockerText("no_such_blocker")).toBe("no_such_blocker");
+    });
+
+    it("walks a fresh Taxi through the checklist and the setup wizard in one PATCH", async () => {
+        const admin: Harness = harness({
+            operationalSnapshot: (options) =>
+                readiness([
+                    ...(admin.policy.get().paused && !options?.ignoreManualPause
+                        ? ["manual_pause"]
+                        : []),
+                    "operator_reserve_low",
+                ]),
+        });
+        const before = admin.policy.get();
+        const dashboard = runDashboard(() => dashboardPage([], "d".repeat(64), null), admin, {
+            realStatus: true,
+        });
+        const text = (id: string) => dashboard.element(id).textContent;
+        const click = (id: string) => dashboard.element(id).fire("click");
+        const steps = ["connected", "fund", "limits", "carry", "live"];
+
+        await vi.waitFor(() => expect(dashboard.element("wizard").open).toBe(true));
+        await vi.waitFor(() => expect(text("step-fund-detail")).toContain("10 000"));
+        expect(steps.map((step) => text(`step-${step}-state`))).toEqual([
+            "Done",
+            "To do",
+            "To do",
+            "To do",
+            "To do",
+        ]);
+        expect(text("step-connected-title")).toBe("Taxi is running and connected (regtest)");
+        expect(steps.slice(1).map((step) => text(`step-${step}-detail`))).toEqual([
+            "2 500 sats usable, below the 10 000 sats it must keep in reserve. Send it at least 7 500 sats more: offchain to its Arkade address, or on-chain to its boarding address.",
+            "It lends nothing while any of the three limits is 0.",
+            "It carries nothing until at least one rule is switched on.",
+            "The Taxi is paused, so it refuses every new payment.",
+        ]);
+        expect(INDEX_HTML).toContain(
+            "On-chain deposits move in automatically shortly after they confirm.",
+        );
+        expect(INDEX_HTML).toContain('href="#funding">Show addresses</a>');
+
+        click("wiz-cancel");
+        expect(dashboard.element("wizard").open).toBe(false);
+        click("step-live-fix");
+        expect(dashboard.element("go-live-confirm").hidden).toBe(false);
+        expect(text("go-live-warning")).toBe(
+            "Not done yet: fund your Taxi, set your limits, choose what to carry. It will refuse payments until they are.",
+        );
+        expect(dashboard.sent).toEqual([]);
+        click("go-live-anyway");
+        await vi.waitFor(() =>
+            expect(text("setup-note")).toBe(
+                "The Taxi cannot go live yet. The Taxi's spendable balance is below the reserve it must keep.",
+            ),
+        );
+        expect(dashboard.sent.map((r) => r.path)).toEqual(["/admin/api/policy/resume"]);
+
+        click("wizard-open");
+        expect(dashboard.element("wizard").open).toBe(true);
+        dashboard.element("wiz-btc").checked = true;
+        dashboard.element("wiz-assets").value = taxiAssetIdToSwapId({
+            txid: new Uint8Array(32).fill(0xab),
+            groupIndex: 0,
+        });
+        click("wiz-next");
+        dashboard.element("wiz-size-small").fire("change");
+        expect(text("wiz-size-small-text")).toBe(
+            "330 sats per payment · 33 000 sats in total · 100 payments at once",
+        );
+        click("wiz-next");
+        dashboard.element("wiz-fare-free").fire("change");
+        dashboard.element("wiz-claim-recycle").fire("change");
+        click("wiz-next");
+        expect(text("wiz-summary")).toBe(
+            "Your Taxi will carry small bitcoin payments and 1 asset. It lends up to 330 sats per payment and 33 000 sats in total, to at most 100 payments at once. Payers pay no fare. When a receiver claims, they repay the lent sats, so your Taxi gets them back.",
+        );
+        click("wiz-save-live");
+        await vi.waitFor(() => expect(text("step-live-state")).toBe("Done"));
+
+        expect(dashboard.element("wizard").open).toBe(false);
+        expect(dashboard.sent.filter((r) => r.method === "PATCH")).toHaveLength(1);
+        const rule = {
+            enabled: true,
+            fares: [
+                { id: "sats", currency: { kind: "sats" }, pricing: { kind: "flat", units: 0n } },
+            ],
+            claim: "recycle",
+            maxTopupSats: null,
+        };
+        expect(admin.policy.get()).toEqual({
+            ...before,
+            paused: false,
+            maxPerPaymentTopupSats: DUST,
+            maxOutstandingSats: 100n * DUST,
+            maxConcurrentAdvances: 100,
+            assetRules: [
+                { assetId: null, ...rule },
+                { assetId: { txid: new Uint8Array(32).fill(0xab), groupIndex: 0 }, ...rule },
+            ],
+        });
+        expect(["limits", "carry"].map((step) => text(`step-${step}-state`))).toEqual([
+            "Done",
+            "Done",
+        ]);
+
+        click("wizard-open");
+        for (let n = 0; n < 3; n++) click("wiz-next");
+        expect(dashboard.element("wiz-save-live").hidden).toBe(true);
+        expect(text("wiz-save-hint")).toBe("Save keeps your Taxi live.");
+        click("wiz-save");
+        await vi.waitFor(() => expect(text("setup-note")).toBe("Saved. Your Taxi is still live."));
+        expect(admin.policy.get().paused).toBe(false);
+    });
+
+    it("explains refused changes in plain words and keeps the raw error for support", async () => {
+        const dashboard = runDashboard(() => dashboardPage([], "e".repeat(64), null));
+        const note = dashboard.element("policy-note");
+        const raw = () => note.children[0]?.children[1]?.textContent;
+        await vi.waitFor(() =>
+            expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
+        );
+
+        dashboard.element("locktimeMarginBlocks").value = "10";
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(note.textContent).toBe(
+                "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.",
+            ),
+        );
+        expect(raw()).toBe("policy margin must exceed the configured recovery execution budget");
+
+        dashboard.element("locktimeMarginBlocks").value = "144";
+        dashboard.element("maxOutstandingSats").value = "lots";
+        dashboard.element("policy-form").fire("submit");
+        await vi.waitFor(() =>
+            expect(note.textContent).toBe("Max outstanding must be a whole number of sats."),
+        );
+        expect(raw()).toMatch(/^maxOutstandingSats: expected a decimal sats amount/);
+
+        const broken = runDashboard(
+            () => dashboardPage([], "f".repeat(64), null),
+            harness({
+                funding: async () => {
+                    throw new Error("indexer timeout");
+                },
+            }),
+        );
+        await vi.waitFor(() =>
+            expect(broken.element("funding-state").textContent).toBe(
+                "The Taxi cannot read its wallet right now.",
+            ),
+        );
+        expect(broken.element("funding-state").title).toBe("funding_unavailable: indexer timeout");
     });
 });

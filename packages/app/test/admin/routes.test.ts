@@ -3,7 +3,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { advance, boardingView, harness, healthySweeper, key } from "./fixtures.js";
-import { config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
+import { DUST, VTXO_MIN, config, fundingCoin, operatorKey, serverKey } from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
 import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
 
@@ -56,6 +56,12 @@ describe("GET /admin/api/status", () => {
             activeCount: 3,
             oldestUnsweptLocktime: { height: "799000", time: "1700000000" },
         });
+    });
+
+    it("tells the console the network dust and minimum coin amount", async () => {
+        const { body } = await harness().json("/admin/api/status");
+
+        expect([body.dust, body.vtxoMinAmount]).toEqual([String(DUST), String(VTXO_MIN)]);
     });
 
     it("reports a null oldest locktime and zero exposure when nothing is locked", async () => {

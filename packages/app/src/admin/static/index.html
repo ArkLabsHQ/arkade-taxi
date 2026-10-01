@@ -28,6 +28,70 @@
         </header>
 
         <main>
+            <section class="panel" id="setup" aria-labelledby="setup-heading">
+                <div class="panel__head">
+                    <h2 id="setup-heading">Get started</h2>
+                    <button type="button" id="wizard-open">Run setup again</button>
+                </div>
+                <ol class="steps">
+                    <li class="step" id="step-connected">
+                        <span class="step__state" id="step-connected-state">…</span>
+                        <div>
+                            <p class="step__title" id="step-connected-title">
+                                Taxi is running and connected
+                            </p>
+                            <ul class="step__detail" id="step-connected-detail"></ul>
+                        </div>
+                        <button type="button" id="step-connected-fix">Check again</button>
+                    </li>
+                    <li class="step" id="step-fund">
+                        <span class="step__state" id="step-fund-state">…</span>
+                        <div>
+                            <p class="step__title">Fund your Taxi</p>
+                            <p class="step__detail" id="step-fund-detail"></p>
+                            <p class="step__detail">
+                                On-chain deposits move in automatically shortly after they confirm.
+                            </p>
+                        </div>
+                        <a class="button" id="step-fund-fix" href="#funding">Show addresses</a>
+                    </li>
+                    <li class="step" id="step-limits">
+                        <span class="step__state" id="step-limits-state">…</span>
+                        <div>
+                            <p class="step__title">Set your limits</p>
+                            <p class="step__detail" id="step-limits-detail"></p>
+                        </div>
+                        <a class="button" id="step-limits-fix" href="#limits">Edit limits</a>
+                    </li>
+                    <li class="step" id="step-carry">
+                        <span class="step__state" id="step-carry-state">…</span>
+                        <div>
+                            <p class="step__title">Choose what to carry</p>
+                            <p class="step__detail" id="step-carry-detail"></p>
+                        </div>
+                        <a class="button" id="step-carry-fix" href="#carry">Edit rules</a>
+                    </li>
+                    <li class="step" id="step-live">
+                        <span class="step__state" id="step-live-state">…</span>
+                        <div>
+                            <p class="step__title">Go live</p>
+                            <p class="step__detail" id="step-live-detail"></p>
+                            <div class="step__confirm" id="go-live-confirm" role="alert" hidden>
+                                <p id="go-live-warning"></p>
+                                <div class="actions">
+                                    <button type="button" class="attention" id="go-live-anyway">
+                                        Go live anyway
+                                    </button>
+                                    <button type="button" id="go-live-cancel">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="primary" id="step-live-fix">Go live</button>
+                    </li>
+                </ol>
+                <div class="note setup__note" id="setup-note" aria-live="polite"></div>
+            </section>
+
             <section class="headline" aria-labelledby="exposure-heading">
                 <div>
                     <h2 class="label" id="exposure-heading">Outstanding exposure</h2>
@@ -100,10 +164,9 @@
                         <dd id="time-expiry">—</dd>
                     </div>
                 </dl>
-                <p class="note" id="readiness-blockers"></p>
             </section>
 
-            <section class="panel" aria-labelledby="funding-heading">
+            <section class="panel" id="funding" aria-labelledby="funding-heading">
                 <div class="panel__head">
                     <h2 id="funding-heading">Funding</h2>
                     <div class="actions">
@@ -175,104 +238,234 @@
                 </div>
             </section>
 
-            <div class="cols">
-                <section class="panel" aria-labelledby="policy-heading">
-                    <div class="panel__head">
-                        <h2 id="policy-heading">Policy</h2>
+            <section class="panel" id="settings" aria-labelledby="policy-heading">
+                <div class="panel__head">
+                    <h2 id="policy-heading">Settings</h2>
+                    <div class="actions">
+                        <button type="button" id="pause" class="attention">Pause</button>
+                        <button type="button" id="resume">Resume</button>
                         <span class="meta" id="policy-loaded"></span>
                     </div>
-                    <div class="panel__body">
-                        <div class="actions">
-                            <button type="button" id="pause" class="attention">Pause</button>
-                            <button type="button" id="resume">Resume</button>
-                        </div>
-                        <p class="note" id="switch-note" aria-live="polite"></p>
+                </div>
+                <div class="panel__body">
+                    <div class="note" id="switch-note" aria-live="polite"></div>
 
-                        <form id="policy-form" class="form-grid" novalidate>
-                            <p class="field">
-                                <label for="maxOutstandingSats">Max outstanding (sats)</label>
-                                <input type="text" id="maxOutstandingSats" inputmode="numeric" />
+                    <form id="policy-form" novalidate>
+                        <fieldset class="group" id="limits">
+                            <legend>Limits</legend>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="maxPerPaymentTopupSats"
+                                        >Max per payment (sats)</label
+                                    >
+                                    <input
+                                        type="text"
+                                        id="maxPerPaymentTopupSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-per-payment"
+                                    />
+                                    <span class="hint" id="hint-per-payment"
+                                        >The most it lends to one payment, unless a rule below sets
+                                        its own. The network dust,
+                                        <span id="hint-dust">—</span> sats, covers any small
+                                        payment.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxOutstandingSats">Max outstanding (sats)</label>
+                                    <input
+                                        type="text"
+                                        id="maxOutstandingSats"
+                                        inputmode="numeric"
+                                        aria-describedby="hint-outstanding"
+                                    />
+                                    <span class="hint" id="hint-outstanding"
+                                        >The most it has lent at once, across all payments. It is
+                                        lent from the balance above the reserve. Example: 33
+                                        000.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="maxConcurrentAdvances">Max payments at once</label>
+                                    <input
+                                        type="number"
+                                        id="maxConcurrentAdvances"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-concurrent"
+                                    />
+                                    <span class="hint" id="hint-concurrent"
+                                        >How many payments can wait to be claimed at the same time.
+                                        Example: 100.</span
+                                    >
+                                </p>
+                            </div>
+                            <p class="hint">
+                                At 0, any one of these makes the Taxi refuse every payment.
                             </p>
-                            <p class="field">
-                                <label for="maxPerPaymentTopupSats"
-                                    >Max topup per payment (sats)</label
-                                >
+                        </fieldset>
+
+                        <fieldset class="group" id="carry">
+                            <legend>What you carry</legend>
+                            <p class="hint">
+                                One rule per kind of payment. Each asset needs its own rule with its
+                                exact id: there is no rule for "any asset". A payer is offered the
+                                fares in order, and the first is the default. A flat 0 fare is free;
+                                a percent fare in sats is a share of the sats lent, and in an asset
+                                a share of the amount sent.
+                            </p>
+                            <div class="scroll">
+                                <table class="rules">
+                                    <caption class="sr-only">
+                                        Payments the Taxi carries, and on what terms
+                                    </caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Payment</th>
+                                            <th scope="col">On</th>
+                                            <th scope="col">Fares</th>
+                                            <th scope="col">When the receiver claims</th>
+                                            <th scope="col">Max per payment</th>
+                                            <th scope="col"><span class="sr-only">Remove</span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="rules-body"></tbody>
+                                </table>
+                                <p class="empty" id="rules-empty" hidden>
+                                    No rules yet: the Taxi refuses every payment.
+                                </p>
+                            </div>
+                            <div class="actions">
+                                <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
+                                <label class="sr-only" for="rule-asset">Asset id to add</label>
                                 <input
                                     type="text"
-                                    id="maxPerPaymentTopupSats"
-                                    inputmode="numeric"
+                                    id="rule-asset"
+                                    class="asset-input"
+                                    placeholder="asset id from your wallet"
+                                    spellcheck="false"
                                 />
-                            </p>
-                            <p class="field">
-                                <label for="maxConcurrentAdvances">Max concurrent advances</label>
-                                <input type="number" id="maxConcurrentAdvances" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginBlocks">Locktime margin (blocks)</label>
-                                <input type="number" id="locktimeMarginBlocks" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="locktimeMarginSeconds">Locktime margin (seconds)</label>
-                                <input type="number" id="locktimeMarginSeconds" min="0" step="1" />
-                            </p>
-                            <p class="field">
-                                <label for="quoteTtlSeconds">Quote TTL (seconds)</label>
-                                <input type="number" id="quoteTtlSeconds" min="1" step="1" />
-                            </p>
-                            <p class="field field--wide">
+                                <button type="button" id="rule-add-asset">Add asset</button>
+                                <button
+                                    type="button"
+                                    id="rules-json-toggle"
+                                    aria-expanded="false"
+                                    aria-controls="rules-json"
+                                >
+                                    Edit as JSON
+                                </button>
+                            </div>
+                            <p class="field" id="rules-json" hidden>
                                 <label for="assetRules">Asset rules (JSON)</label>
                                 <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
-                            <div class="actions">
-                                <button type="submit" class="primary" id="apply">Apply</button>
-                                <button type="button" id="revert">Revert</button>
-                            </div>
-                        </form>
-                        <p class="note" id="policy-note" aria-live="polite"></p>
-                    </div>
-                </section>
+                        </fieldset>
 
-                <section class="panel" aria-labelledby="advances-heading">
-                    <div class="panel__head">
-                        <h2 id="advances-heading">Advances</h2>
-                        <span class="actions">
-                            <label class="field-label" for="state-filter">State</label>
-                            <select id="state-filter">
-                                <option value="">all</option>
-                            </select>
-                            <span class="meta" id="advances-count"></span>
-                        </span>
-                    </div>
-                    <div class="scroll">
-                        <table>
-                            <caption class="sr-only">
-                                Advances ordered by safety urgency in the current snapshot
-                            </caption>
-                            <thead>
-                                <tr>
-                                    <th scope="col">Id</th>
-                                    <th scope="col">State</th>
-                                    <th scope="col" class="n">Topup</th>
-                                    <th scope="col" class="n">Fee</th>
-                                    <th scope="col" class="n">Locktime</th>
-                                    <th scope="col" class="n">Age</th>
-                                    <th scope="col">Phase</th>
-                                    <th scope="col">Action</th>
-                                    <th scope="col">Covenant</th>
-                                </tr>
-                            </thead>
-                            <tbody id="advances-body"></tbody>
-                        </table>
-                        <p class="empty" id="advances-empty" hidden>No advances.</p>
-                    </div>
-                    <div class="pagination">
-                        <p class="note" id="advances-note" aria-live="polite">
-                            Current snapshot pagination starts on refresh.
-                        </p>
-                        <button type="button" id="advances-more" hidden>Load more</button>
-                    </div>
-                </section>
-            </div>
+                        <details class="group" id="advanced">
+                            <summary>Advanced</summary>
+                            <p class="hint">Leave these at their defaults unless you know why.</p>
+                            <div class="form-grid">
+                                <p class="field">
+                                    <label for="locktimeMarginBlocks"
+                                        >Locktime margin (blocks)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginBlocks"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-blocks"
+                                    />
+                                    <span class="hint" id="hint-margin-blocks"
+                                        >Headroom between a payment's recovery time and its coin's
+                                        expiry, so the Taxi recovers lent sats before the coin
+                                        expires. Must exceed the recovery budget
+                                        (TAXI_RECOVERY_BROADCAST_BLOCKS). Default 144.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="locktimeMarginSeconds"
+                                        >Locktime margin (seconds)</label
+                                    >
+                                    <input
+                                        type="number"
+                                        id="locktimeMarginSeconds"
+                                        min="0"
+                                        step="1"
+                                        aria-describedby="hint-margin-seconds"
+                                    />
+                                    <span class="hint" id="hint-margin-seconds"
+                                        >The same headroom for coins that expire at a time rather
+                                        than a block. Must exceed TAXI_RECOVERY_BROADCAST_SECONDS.
+                                        Default 86 400, one day.</span
+                                    >
+                                </p>
+                                <p class="field">
+                                    <label for="quoteTtlSeconds">Quote lifetime (seconds)</label>
+                                    <input
+                                        type="number"
+                                        id="quoteTtlSeconds"
+                                        min="1"
+                                        step="1"
+                                        aria-describedby="hint-quote-ttl"
+                                    />
+                                    <span class="hint" id="hint-quote-ttl"
+                                        >How long a price quote stays valid. The coins set aside for
+                                        a quote are freed when it expires. Default 60.</span
+                                    >
+                                </p>
+                            </div>
+                        </details>
+
+                        <div class="actions">
+                            <button type="submit" class="primary" id="apply">Apply</button>
+                            <button type="button" id="revert">Revert</button>
+                        </div>
+                    </form>
+                    <div class="note" id="policy-note" aria-live="polite"></div>
+                </div>
+            </section>
+
+            <section class="panel" aria-labelledby="advances-heading">
+                <div class="panel__head">
+                    <h2 id="advances-heading">Advances</h2>
+                    <span class="actions">
+                        <label class="field-label" for="state-filter">State</label>
+                        <select id="state-filter">
+                            <option value="">all</option>
+                        </select>
+                        <span class="meta" id="advances-count"></span>
+                    </span>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            Advances ordered by safety urgency in the current snapshot
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Id</th>
+                                <th scope="col">State</th>
+                                <th scope="col" class="n">Topup</th>
+                                <th scope="col" class="n">Fee</th>
+                                <th scope="col" class="n">Locktime</th>
+                                <th scope="col" class="n">Age</th>
+                                <th scope="col">Phase</th>
+                                <th scope="col">Action</th>
+                                <th scope="col">Covenant</th>
+                            </tr>
+                        </thead>
+                        <tbody id="advances-body"></tbody>
+                    </table>
+                    <p class="empty" id="advances-empty" hidden>No advances.</p>
+                </div>
+                <div class="pagination">
+                    <p class="note" id="advances-note" aria-live="polite">
+                        Current snapshot pagination starts on refresh.
+                    </p>
+                    <button type="button" id="advances-more" hidden>Load more</button>
+                </div>
+            </section>
 
             <section class="panel" aria-labelledby="history-heading">
                 <div class="panel__head">
@@ -299,5 +492,196 @@
                 </div>
             </section>
         </main>
+
+        <dialog class="wizard" id="wizard" aria-labelledby="wizard-title">
+            <div class="panel__head">
+                <h2 id="wizard-title">Set up your Taxi</h2>
+                <span class="meta" id="wizard-progress">Step 1 of 4</span>
+            </div>
+            <div class="panel__body">
+                <section id="wiz-step-1" aria-labelledby="wiz-h1">
+                    <h3 id="wiz-h1" tabindex="-1">What should your Taxi carry?</h3>
+                    <p class="lede">
+                        Your Taxi lends the sats a payment is missing, so that it can be sent.
+                        Choose which payments it helps.
+                    </p>
+                    <label class="check" for="wiz-btc">
+                        <input type="checkbox" id="wiz-btc" aria-describedby="wiz-btc-hint" />
+                        Small bitcoin payments
+                    </label>
+                    <p class="hint" id="wiz-btc-hint">
+                        Payments below the network dust, <span id="wiz-dust">—</span> sats, which
+                        cannot be sent on their own.
+                    </p>
+                    <p class="field">
+                        <label for="wiz-assets">Specific assets (optional)</label>
+                        <textarea
+                            id="wiz-assets"
+                            rows="4"
+                            spellcheck="false"
+                            placeholder="asset id from your wallet, one per line"
+                            aria-describedby="wiz-assets-hint"
+                        ></textarea>
+                        <span class="hint" id="wiz-assets-hint"
+                            >One per line: the 68-character asset id your wallet shows. Each asset
+                            needs its own line; there is no "any asset".</span
+                        >
+                    </p>
+                </section>
+
+                <section id="wiz-step-2" aria-labelledby="wiz-h2" hidden>
+                    <h3 id="wiz-h2" tabindex="-1">How much should it lend?</h3>
+                    <p class="lede">
+                        Each payment borrows at most the network dust. Choose how much your Taxi may
+                        have lent out at once.
+                    </p>
+                    <fieldset class="choices">
+                        <legend class="sr-only">Lending limits</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-small" />
+                            <span class="choice__title">Small</span>
+                            <span class="choice__body" id="wiz-size-small-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-medium" />
+                            <span class="choice__title">Medium</span>
+                            <span class="choice__body" id="wiz-size-medium-text"></span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-size" id="wiz-size-custom" />
+                            <span class="choice__title">Custom</span>
+                            <span class="choice__body">Set the three limits yourself.</span>
+                        </label>
+                    </fieldset>
+                    <div class="form-grid" id="wiz-custom" hidden>
+                        <p class="field">
+                            <label for="wiz-per-payment">Per payment (sats)</label>
+                            <input type="text" id="wiz-per-payment" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-outstanding">In total (sats)</label>
+                            <input type="text" id="wiz-outstanding" inputmode="numeric" />
+                        </p>
+                        <p class="field">
+                            <label for="wiz-concurrent">Payments at once</label>
+                            <input type="text" id="wiz-concurrent" inputmode="numeric" />
+                        </p>
+                    </div>
+                    <p class="hint">
+                        Lent sats stay locked until the receiver claims them or the Taxi recovers
+                        them. To lend the whole total, your Taxi needs it on top of the reserve it
+                        must keep.
+                    </p>
+                </section>
+
+                <section id="wiz-step-3" aria-labelledby="wiz-h3" hidden>
+                    <h3 id="wiz-h3" tabindex="-1">What should payers pay?</h3>
+                    <fieldset class="choices">
+                        <legend>Fare</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-free" />
+                            <span class="choice__title">Free</span>
+                            <span class="choice__body">Payers pay nothing extra.</span>
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-flat" />
+                            <span class="choice__title">A flat fare</span>
+                            <span class="choice__body"
+                                >The same number of sats on every payment.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-fare" id="wiz-fare-percent" />
+                            <span class="choice__title">A percentage</span>
+                            <span class="choice__body"
+                                >A share of the sats lent, with a minimum and an optional
+                                maximum.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="inline-fields" id="wiz-fare-flat-fields" hidden>
+                        <label for="wiz-fare-flat-sats">Fare</label>
+                        <input type="text" id="wiz-fare-flat-sats" inputmode="numeric" /> sats per
+                        payment
+                    </p>
+                    <p class="inline-fields" id="wiz-fare-percent-fields" hidden>
+                        <label for="wiz-fare-pct">Percentage</label>
+                        <input type="text" id="wiz-fare-pct" inputmode="decimal" /> %, at least
+                        <label class="sr-only" for="wiz-fare-min">Minimum fare in sats</label>
+                        <input type="text" id="wiz-fare-min" inputmode="numeric" placeholder="0" />
+                        and at most
+                        <label class="sr-only" for="wiz-fare-max">Maximum fare in sats</label>
+                        <input
+                            type="text"
+                            id="wiz-fare-max"
+                            inputmode="numeric"
+                            placeholder="none"
+                        />
+                        sats
+                    </p>
+                    <div id="wiz-fare-asset-row" hidden>
+                        <label class="check" for="wiz-fare-asset">
+                            <input type="checkbox" id="wiz-fare-asset" />
+                            Asset payments may pay the fare in the asset they send instead
+                        </label>
+                        <p class="hint">
+                            Same numbers, counted in the asset's own units; a percentage is then a
+                            share of the amount sent.
+                        </p>
+                    </div>
+                    <p class="hint warn" id="wiz-fare-btc-warn" hidden>
+                        A small bitcoin payment leaves its sender no sats to spare, so a fare the
+                        sender pays is refused on it. Free is the safe choice for bitcoin.
+                    </p>
+
+                    <fieldset class="choices">
+                        <legend>When the receiver claims</legend>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-recycle" />
+                            <span class="choice__title"
+                                >Get my sats back when the receiver claims</span
+                            >
+                            <span class="choice__body"
+                                >The receiver repays the lent sats with their own, so they return to
+                                your Taxi.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-purchase" />
+                            <span class="choice__title">Sell the carrier outright</span>
+                            <span class="choice__body"
+                                >The receiver keeps the lent sats; the fare is all your Taxi earns.
+                                Receives quoted for a swap are refused, as they need the sats
+                                back.</span
+                            >
+                        </label>
+                        <label class="choice">
+                            <input type="radio" name="wiz-claim" id="wiz-claim-either" />
+                            <span class="choice__title">Let the payer choose</span>
+                            <span class="choice__body"
+                                >The payer picks one of the two; if they do not, the sats come back
+                                to you.</span
+                            >
+                        </label>
+                    </fieldset>
+                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                </section>
+
+                <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>
+                    <h3 id="wiz-h4" tabindex="-1">Check and save</h3>
+                    <p class="summary" id="wiz-summary"></p>
+                    <p class="hint" id="wiz-save-hint"></p>
+                </section>
+
+                <div class="note" id="wiz-note" aria-live="polite"></div>
+            </div>
+            <div class="actions wizard__foot">
+                <button type="button" id="wiz-cancel">Not now</button>
+                <button type="button" id="wiz-back">Back</button>
+                <button type="button" class="primary" id="wiz-next">Next</button>
+                <button type="button" id="wiz-save">Save</button>
+                <button type="button" class="primary" id="wiz-save-live">Save &amp; go live</button>
+            </div>
+        </dialog>
     </body>
 </html>

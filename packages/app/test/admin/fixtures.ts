@@ -87,6 +87,8 @@ export function harness(
         advances,
         policy,
         recoveryExecutionBudget: { height: 72n, time: 43_200n },
+        dust: config().dust,
+        vtxoMinAmount: config().vtxoMinAmount,
         sweeperStatus: opts.sweeper ?? (() => sweeper),
         rescan: opts.rescan ?? (async () => {}),
         operationalSnapshot:
