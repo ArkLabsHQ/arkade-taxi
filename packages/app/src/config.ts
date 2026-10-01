@@ -1,6 +1,6 @@
 import { DefaultVtxo, ESPLORA_URL, SingleKey } from "@arkade-os/sdk";
 import { createProviders, verifyProviders } from "./arkade/providers.js";
-import { hexToBytes } from "@arkade-taxi/protocol";
+import { bytesToHex, hexToBytes } from "@arkade-taxi/protocol";
 import { z } from "zod";
 
 export const LOG_LEVELS = ["trace", "debug", "info", "warn", "error", "fatal"] as const;
@@ -41,6 +41,65 @@ export interface RuntimeConfig extends TaxiConfig {
     vtxoMinAmount: bigint;
     addressHrp: string;
 }
+
+/** What the admin console may show of the running config, by the variable that
+ * sets it; null is derived at startup. An allowlist: a key in neither this nor
+ * SECRET_CONFIG fails config.test.ts. */
+export const SHOWN_CONFIG = {
+    httpPort: "TAXI_HTTP_PORT",
+    adminPort: "TAXI_ADMIN_PORT",
+    dbPath: "TAXI_DB_PATH",
+    arkdUrl: "TAXI_ARKD_URL",
+    indexerUrl: "TAXI_ARKD_URL",
+    emulatorUrl: "TAXI_EMULATOR_URL",
+    operatorMinReserveSats: "TAXI_OPERATOR_MIN_RESERVE_SATS",
+    minExpiryHeadroomBlocks: "TAXI_MIN_EXPIRY_HEADROOM_BLOCKS",
+    recoveryBroadcastBlocks: "TAXI_RECOVERY_BROADCAST_BLOCKS",
+    recoveryCriticalBlocks: "TAXI_RECOVERY_CRITICAL_BLOCKS",
+    minExpiryHeadroomSeconds: "TAXI_MIN_EXPIRY_HEADROOM_SECONDS",
+    recoveryBroadcastSeconds: "TAXI_RECOVERY_BROADCAST_SECONDS",
+    recoveryCriticalSeconds: "TAXI_RECOVERY_CRITICAL_SECONDS",
+    vtxoRenewalThresholdSeconds: "TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS",
+    reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
+    proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
+    logLevel: "TAXI_LOG_LEVEL",
+    operatorKey: null,
+    operatorSignerKey: null,
+    networkName: null,
+    esploraUrl: null,
+    serverPubkey: null,
+    emulatorPubkey: null,
+    dust: null,
+    vtxoMinAmount: null,
+    addressHrp: null,
+} as const satisfies Partial<Record<keyof RuntimeConfig, string | null>>;
+
+export const SECRET_CONFIG: readonly string[] = [
+    "operatorPrivkey",
+] satisfies (keyof RuntimeConfig)[];
+
+export interface ShownConfigEntry {
+    key: keyof typeof SHOWN_CONFIG;
+    env: string | null;
+    value: string | null;
+}
+
+const shownValue = (value: unknown): string | null => {
+    if (value === undefined || value === null) return null;
+    if (value instanceof Uint8Array) return bytesToHex(value);
+    const text = String(value);
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
+    // A URL can carry credentials in its userinfo or query; neither is shown.
+    const url = new URL(text);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+};
+
+export const shownConfig = (cfg: RuntimeConfig): ShownConfigEntry[] =>
+    (Object.keys(SHOWN_CONFIG) as (keyof typeof SHOWN_CONFIG)[]).map((key) => ({
+        key,
+        env: SHOWN_CONFIG[key],
+        value: shownValue(cfg[key]),
+    }));
 
 export interface ConfigIssue {
     variable: string;

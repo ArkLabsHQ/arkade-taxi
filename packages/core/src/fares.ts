@@ -59,10 +59,11 @@ export function resolveClaimMode(
 
 /**
  * One asset's terms. `assetId: null` is the plain sub-dust bitcoin transfer,
- * which is a first-class case and not an asset with a missing id.
+ * which is a first-class case and not an asset with a missing id. `"*"` is any
+ * asset without a rule of its own; it never covers bitcoin.
  */
 export interface AssetRule {
-    assetId: AssetIdRef | null;
+    assetId: AssetIdRef | null | "*";
     enabled: boolean;
     /** Offered in operator preference order; a client may accept any of them. */
     fares: FareOption[];
@@ -83,13 +84,18 @@ export const assetIdKey = (id: AssetIdRef): string =>
 
 export const sameAsset = (a: AssetIdRef, b: AssetIdRef): boolean => assetIdKey(a) === assetIdKey(b);
 
-/** The rule governing a transfer, or undefined when the operator listed none. */
-export const ruleFor = (rules: readonly AssetRule[], assetId?: AssetIdRef): AssetRule | undefined =>
-    rules.find((r) =>
-        assetId === undefined
-            ? r.assetId === null
-            : r.assetId !== null && sameAsset(r.assetId, assetId),
-    );
+/** The rule governing a transfer, or undefined when the operator listed none.
+ * An exact rule beats `"*"` wherever it sits, so one asset can be priced or
+ * switched off apart from the rest. */
+export const ruleFor = (
+    rules: readonly AssetRule[],
+    assetId?: AssetIdRef,
+): AssetRule | undefined =>
+    assetId === undefined
+        ? rules.find((r) => r.assetId === null)
+        : (rules.find(
+              (r) => r.assetId !== null && r.assetId !== "*" && sameAsset(r.assetId, assetId),
+          ) ?? rules.find((r) => r.assetId === "*"));
 
 export function validateFareOption(option: FareOption): void {
     const { currency, pricing } = option;

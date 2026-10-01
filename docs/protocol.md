@@ -8,7 +8,12 @@ payment.
 ## `GET /v1/info`
 
 Returns the operator, Arkade Service and emulator public keys and endpoints,
-plus `dust`, `vtxoMinAmount`, the asset allowlist, the fee schedule and limits.
+plus `dust`, `vtxoMinAmount`, `maxPerPaymentTopupSats`, `paused` and
+`assetRules`: per asset, whether it is served, its fares in preference order,
+its claim mode and its own per-payment cap. A rule's `assetId` is `null` for
+sub-dust bitcoin, an asset id, or `"*"` for any asset without a rule of its
+own. An asset's own rule always wins over `"*"`, and `"*"` never covers
+bitcoin.
 
 The server and emulator keys are here because a client cannot re-derive the
 covenant address without them. **A client must check both against ones it

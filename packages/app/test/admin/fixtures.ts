@@ -4,6 +4,7 @@ import { AdvanceRepository, PolicyRepository, openDatabase, type Database } from
 import { createAdminRouter, type SweeperStatus } from "../../src/admin/index.js";
 import type { AdminDeps } from "../../src/admin/routes.js";
 import type { OperationalSnapshot } from "../../src/routes.js";
+import { shownConfig } from "../../src/config.js";
 import { config } from "../fixtures.js";
 
 export const key = (b: number): Uint8Array => new Uint8Array(32).fill(b);
@@ -99,6 +100,7 @@ export function harness(
                     body: { blockers: [], status: "ok" },
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
+        serviceConfig: shownConfig(config()),
         funding:
             opts.funding ??
             (async () => ({

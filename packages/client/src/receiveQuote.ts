@@ -256,20 +256,24 @@ function verifyPolicy(
     receiverPaid: boolean,
     fareCurrency: "sats" | "asset" | undefined,
 ): void {
-    const foundRule = (rules as unknown[]).find((candidate) => {
-        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
-        const id = (candidate as { assetId?: unknown }).assetId;
-        if (!id || typeof id !== "object" || Array.isArray(id)) return false;
-        if (Object.keys(id).sort().join() !== "groupIndex,txid") return false;
-        try {
-            return sameAsset(
-                assetIdFromWire(id as Parameters<typeof assetIdFromWire>[0]),
-                expect.assetId,
-            );
-        } catch {
-            return false;
-        }
-    });
+    const idOf = (candidate: unknown): unknown =>
+        candidate && typeof candidate === "object" && !Array.isArray(candidate)
+            ? (candidate as { assetId?: unknown }).assetId
+            : undefined;
+    const foundRule =
+        (rules as unknown[]).find((candidate) => {
+            const id = idOf(candidate);
+            if (!id || typeof id !== "object" || Array.isArray(id)) return false;
+            if (Object.keys(id).sort().join() !== "groupIndex,txid") return false;
+            try {
+                return sameAsset(
+                    assetIdFromWire(id as Parameters<typeof assetIdFromWire>[0]),
+                    expect.assetId,
+                );
+            } catch {
+                return false;
+            }
+        }) ?? (rules as unknown[]).find((candidate) => idOf(candidate) === "*");
     const rule = (foundRule ??
         reject(
             VerificationErrorCode.AssetId,

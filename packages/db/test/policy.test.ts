@@ -99,6 +99,12 @@ describe("round-trip fidelity", () => {
         expect(repo.get().assetRules).toEqual([RULE, TOKEN_RULE]);
     });
 
+    it("round-trips the any-asset rule beside exact ones", () => {
+        const any = { ...TOKEN_RULE, assetId: "*" as const };
+        repo.update({ assetRules: [RULE, any, TOKEN_RULE] }, "alice");
+        expect(new PolicyRepository(db).get().assetRules).toEqual([RULE, any, TOKEN_RULE]);
+    });
+
     it("stores an empty rule list as serving nothing, not as absent", () => {
         repo.update({ assetRules: [RULE] }, "alice");
         repo.update({ assetRules: [] }, "alice");

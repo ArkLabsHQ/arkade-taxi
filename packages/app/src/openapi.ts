@@ -165,7 +165,11 @@ const schemas: Record<string, Schema> = {
     AssetRule: {
         description: "What the operator serves for one asset, and on what terms.",
         ...object({
-            assetId: { ...nullable(ref("AssetId")), description: "null is sub-dust bitcoin." },
+            assetId: {
+                oneOf: [ref("AssetId"), { type: "null" }, constant("*")],
+                description:
+                    'null is sub-dust bitcoin. "*" is any asset without a rule of its own, never bitcoin; an asset\'s own rule always wins over it.',
+            },
             enabled: bool,
             fares: { type: "array", items: ref("FareOffer") },
             claim: oneOfStrings("recycle", "purchase", "either"),
@@ -673,6 +677,20 @@ const examples = {
                     },
                 ],
                 claim: "either",
+                maxTopupSats: null,
+                unclaimedMode: "reclaim",
+            },
+            {
+                assetId: "*",
+                enabled: true,
+                fares: [
+                    {
+                        id: "asset",
+                        currency: "sameAsset",
+                        pricing: { kind: "proportional", bps: 50, minUnits: "1", maxUnits: null },
+                    },
+                ],
+                claim: "recycle",
                 maxTopupSats: null,
                 unclaimedMode: "reclaim",
             },

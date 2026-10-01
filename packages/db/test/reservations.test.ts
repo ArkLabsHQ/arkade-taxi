@@ -697,6 +697,20 @@ describe("durable reservations", () => {
         expect(() => reserve()).toThrow();
         expect(reservations.listReservedOutpoints()).toEqual([]);
     });
+    it("serves an asset through the any-asset rule unless the asset's own rule is off", () => {
+        const asset = { txid: new Uint8Array(32).fill(7), groupIndex: 0 };
+        const any = {
+            assetId: "*" as const,
+            enabled: true,
+            claim: "either" as const,
+            maxTopupSats: null,
+            fares: [],
+        };
+        policy.update({ assetRules: [any, { ...any, assetId: asset, enabled: false }] }, "test");
+        expect(() => reserve(quote({ assetId: asset, assetUnits: 5n }))).toThrow(/not served/);
+        reserve(quote({ assetId: { ...asset, groupIndex: 1 }, assetUnits: 5n }));
+        expect(reservations.listForAdvance("quote-1")).toEqual([input()]);
+    });
     it.each(["quoted", "locking", "locked", "recovering"] as const)(
         "does not release %s reservations",
         (state) => {

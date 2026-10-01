@@ -32,6 +32,11 @@ deliberate — it refuses to guess a price.
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
 
+The admin console's Service configuration panel (`GET /admin/api/config`) shows
+every value read here and every one derived from arkd at startup, read-only,
+except `TAXI_OPERATOR_PRIVKEY`. A URL is shown without credentials or query.
+Changing a value means restarting with the new environment.
+
 Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. It selects the SDK's
 Esplora endpoint from the network advertised by arkd. The same verified network
 selects the address HRP and emulator trust anchor; arkd supplies its signer,

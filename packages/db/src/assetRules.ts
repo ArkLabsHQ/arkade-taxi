@@ -13,7 +13,8 @@ import type { AssetRule, FareOption } from "@arkade-taxi/core";
  * so every amount crosses as a decimal string and every txid as hex.
  */
 
-type JsonAssetId = { txid: string; groupIndex: number } | null;
+type JsonAssetId = { txid: string; groupIndex: number };
+type AssetId = Extract<AssetRule["assetId"], object>;
 
 const toHex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
@@ -24,11 +25,13 @@ const fromHex = (s: string): Uint8Array => {
     return Uint8Array.from(s.match(/../g) ?? [], (byte) => parseInt(byte, 16));
 };
 
-const idOut = (id: AssetRule["assetId"]): JsonAssetId =>
-    id === null ? null : { txid: toHex(id.txid), groupIndex: id.groupIndex };
+const idOut = (id: AssetId): JsonAssetId => ({ txid: toHex(id.txid), groupIndex: id.groupIndex });
+const idIn = (id: JsonAssetId): AssetId => ({ txid: fromHex(id.txid), groupIndex: id.groupIndex });
 
-const idIn = (id: JsonAssetId): AssetRule["assetId"] =>
-    id === null ? null : { txid: fromHex(id.txid), groupIndex: id.groupIndex };
+const ruleIdOut = (id: AssetRule["assetId"]): JsonAssetId | null | "*" =>
+    id === null || id === "*" ? id : idOut(id);
+const ruleIdIn = (id: JsonAssetId | null | "*"): AssetRule["assetId"] =>
+    id === null || id === "*" ? id : idIn(id);
 
 const fareOut = (f: FareOption): unknown => ({
     id: f.id,
@@ -51,7 +54,7 @@ const fareIn = (raw: any): FareOption => ({
     id: raw.id,
     currency:
         raw.currency.kind === "token"
-            ? { kind: "token", assetId: idIn(raw.currency.assetId)! }
+            ? { kind: "token", assetId: idIn(raw.currency.assetId) }
             : { kind: raw.currency.kind },
     pricing:
         raw.pricing.kind === "flat"
@@ -67,7 +70,7 @@ const fareIn = (raw: any): FareOption => ({
 export const assetRulesToJson = (rules: readonly AssetRule[]): string =>
     JSON.stringify(
         rules.map((r) => ({
-            assetId: idOut(r.assetId),
+            assetId: ruleIdOut(r.assetId),
             enabled: r.enabled,
             fares: r.fares.map(fareOut),
             claim: r.claim,
@@ -79,7 +82,7 @@ export const assetRulesFromJson = (raw: string): AssetRule[] => {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) throw new Error("asset rules: expected a JSON array");
     return parsed.map((r: any) => ({
-        assetId: idIn(r.assetId),
+        assetId: ruleIdIn(r.assetId),
         enabled: r.enabled === true,
         fares: (r.fares ?? []).map(fareIn),
         claim: r.claim,

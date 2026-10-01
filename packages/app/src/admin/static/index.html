@@ -308,12 +308,57 @@
                         <fieldset class="group" id="carry">
                             <legend>What you carry</legend>
                             <p class="hint">
-                                One rule per kind of payment. Each asset needs its own rule with its
-                                exact id: there is no rule for "any asset". A payer is offered the
-                                fares in order, and the first is the default. A flat 0 fare is free;
-                                a percent fare in sats is a share of the sats lent, and in an asset
-                                a share of the amount sent.
+                                One rule per kind of payment: bitcoin, any asset, or one asset by
+                                its exact id. An asset's own rule always wins over "Any asset", so
+                                you can price one asset differently or switch it off. A payer may
+                                take any fare a rule offers; the first is the one they get if they
+                                name none, and the arrows reorder them.
                             </p>
+                            <details class="help" id="carry-help">
+                                <summary>What each choice means</summary>
+                                <dl>
+                                    <dt>When the receiver claims</dt>
+                                    <dd id="help-claim-recycle">
+                                        <b>Get my sats back</b> (recycle). The receiver repays the
+                                        lent sats with their own when they claim, so they come back
+                                        to your Taxi then. If nobody claims, the Taxi recovers them
+                                        itself after the locktime.
+                                    </dd>
+                                    <dd id="help-claim-purchase">
+                                        <b>Sell outright</b> (purchase). The receiver keeps the lent
+                                        sats when they claim: the fare, paid when the payment is
+                                        sent, is all your Taxi earns. Receive quotes refuse this
+                                        mode, as they need the sats repaid.
+                                    </dd>
+                                    <dd id="help-claim-either">
+                                        <b>Payer chooses</b> (either). Each payer picks recycle or
+                                        purchase; one who does not pick gets recycle.
+                                    </dd>
+                                    <dt>Fare currency</dt>
+                                    <dd id="help-currency-sats">
+                                        <b>In sats</b>. Paid out of the payer's own spare sats, so a
+                                        payer who has none cannot take it.
+                                    </dd>
+                                    <dd id="help-currency-sameAsset">
+                                        <b>In the asset</b>. Paid in the asset being moved, so a
+                                        payer holding only that asset can still pay. Never on
+                                        bitcoin.
+                                    </dd>
+                                    <dd id="help-currency-token">
+                                        <b>In a token</b>. A set amount of one token you name,
+                                        whatever is sent, like a prepaid ticket. Always flat.
+                                    </dd>
+                                    <dt>Fare pricing</dt>
+                                    <dd id="help-pricing-flat">
+                                        <b>Flat</b>. The same amount on every payment; 0 is free.
+                                    </dd>
+                                    <dd id="help-pricing-proportional">
+                                        <b>Percent</b>. A share of the sats lent for a sats fare, or
+                                        of the amount sent for an asset fare, rounded down and kept
+                                        between the minimum and the optional maximum.
+                                    </dd>
+                                </dl>
+                            </details>
                             <div class="scroll">
                                 <table class="rules">
                                     <caption class="sr-only">
@@ -335,8 +380,19 @@
                                     No rules yet: the Taxi refuses every payment.
                                 </p>
                             </div>
+                            <div class="confirm" id="rules-giveaway" role="alert" hidden>
+                                <p>
+                                    Payers could take the carrier sats for free; you would pay every
+                                    carrier yourself. <span id="rules-giveaway-which"></span>
+                                </p>
+                                <label class="check" for="rules-giveaway-ok">
+                                    <input type="checkbox" id="rules-giveaway-ok" />
+                                    Give carriers away for free
+                                </label>
+                            </div>
                             <div class="actions">
                                 <button type="button" id="rule-add-bitcoin">Add bitcoin</button>
+                                <button type="button" id="rule-add-any">Add any asset</button>
                                 <label class="sr-only" for="rule-asset">Asset id to add</label>
                                 <input
                                     type="text"
@@ -360,6 +416,47 @@
                                 <textarea id="assetRules" rows="14" spellcheck="false"></textarea>
                             </p>
                         </fieldset>
+
+                        <details class="group help" id="payment-kinds">
+                            <summary>Which settings each kind of payment uses</summary>
+                            <dl>
+                                <dt>Covenant transfers</dt>
+                                <dd id="help-route-transfers">
+                                    The Taxi lends the carrier sats a payment lacks, locked in a
+                                    covenant until the receiver claims it or the Taxi recovers it.
+                                    Uses Pause, the payment's rule (on, fares, claim mode, max per
+                                    payment), Max per payment, Max outstanding, Max payments at
+                                    once, both locktime margins and Quote lifetime.
+                                </dd>
+                                <dt>Sponsored direct transfers</dt>
+                                <dd id="help-route-sponsored-transfers">
+                                    The Taxi pays its share of the carrier straight into the
+                                    receiver's own wallet. Nothing is claimed or repaid, so the fare
+                                    is all your Taxi earns, and a free fare gives the carrier away.
+                                    Uses Pause, the payment's rule (on, fares, max per payment; not
+                                    its claim mode), Max per payment, Max outstanding and Max
+                                    payments at once (counting it only until it lands) and Quote
+                                    lifetime.
+                                </dd>
+                                <dt>Receive quotes</dt>
+                                <dd id="help-route-receive-quotes">
+                                    A receiver asks ahead for a covenant address a swap will pay
+                                    into; the Taxi lends the carrier and gets it back when the
+                                    receiver recycles. Uses Pause, the asset's rule (on, a sats fare
+                                    or the receiver's own fare, a claim mode that allows recycle,
+                                    max per payment), Max per payment, Max outstanding, Max payments
+                                    at once, both locktime margins and Quote lifetime.
+                                </dd>
+                                <dt>Swap fills</dt>
+                                <dd id="help-route-swap-fills">
+                                    A solver fills a swap offer into a receive quote's covenant, and
+                                    the Taxi puts in the sats that quote lends, on its terms. Uses
+                                    Pause and the Bitcoin rule (on, max per payment) whatever is
+                                    swapped, Max per payment, Max outstanding and Max payments at
+                                    once.
+                                </dd>
+                            </dl>
+                        </details>
 
                         <details class="group" id="advanced">
                             <summary>Advanced</summary>
@@ -491,6 +588,37 @@
                     <p class="empty" id="history-empty" hidden>No policy changes recorded.</p>
                 </div>
             </section>
+
+            <section class="panel" id="service" aria-labelledby="service-heading">
+                <div class="panel__head">
+                    <h2 id="service-heading">Service configuration</h2>
+                    <span class="meta">read-only</span>
+                </div>
+                <div class="panel__body">
+                    <p class="hint">
+                        Set from environment variables when the Taxi starts, so changing one needs a
+                        redeploy: set the variable and restart the Taxi. Derived values are read
+                        from the Arkade server and the Arkade SDK at startup. Secrets, such as the
+                        operator private key, are never shown.
+                    </p>
+                </div>
+                <div class="scroll">
+                    <table>
+                        <caption class="sr-only">
+                            The Taxi's running configuration
+                        </caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Variable</th>
+                                <th scope="col">Value</th>
+                                <th scope="col">What it does</th>
+                            </tr>
+                        </thead>
+                        <tbody id="service-config"></tbody>
+                    </table>
+                    <p class="empty" id="service-config-empty">Loading…</p>
+                </div>
+            </section>
         </main>
 
         <dialog class="wizard" id="wizard" aria-labelledby="wizard-title">
@@ -513,6 +641,14 @@
                         Payments below the network dust, <span id="wiz-dust">—</span> sats, which
                         cannot be sent on their own.
                     </p>
+                    <label class="check" for="wiz-any">
+                        <input type="checkbox" id="wiz-any" aria-describedby="wiz-any-hint" />
+                        Any asset
+                    </label>
+                    <p class="hint" id="wiz-any-hint">
+                        Every asset payment, whatever the asset. To treat one asset differently,
+                        give it a rule of its own under Settings afterwards.
+                    </p>
                     <p class="field">
                         <label for="wiz-assets">Specific assets (optional)</label>
                         <textarea
@@ -523,8 +659,7 @@
                             aria-describedby="wiz-assets-hint"
                         ></textarea>
                         <span class="hint" id="wiz-assets-hint"
-                            >One per line: the 68-character asset id your wallet shows. Each asset
-                            needs its own line; there is no "any asset".</span
+                            >One per line: the 68-character asset id your wallet shows.</span
                         >
                     </p>
                 </section>
@@ -624,9 +759,35 @@
                             <input type="checkbox" id="wiz-fare-asset" />
                             Asset payments may pay the fare in the asset they send instead
                         </label>
+                        <p class="inline-fields" id="wiz-asset-flat-fields" hidden>
+                            <label for="wiz-asset-flat-units">Fare in the asset</label>
+                            <input type="text" id="wiz-asset-flat-units" inputmode="numeric" />
+                            units of the asset per payment
+                        </p>
+                        <p class="inline-fields" id="wiz-asset-percent-fields" hidden>
+                            <label for="wiz-asset-pct">Percentage</label>
+                            <input type="text" id="wiz-asset-pct" inputmode="decimal" /> % of the
+                            amount sent, at least
+                            <label class="sr-only" for="wiz-asset-min">Minimum fare in units</label>
+                            <input
+                                type="text"
+                                id="wiz-asset-min"
+                                inputmode="numeric"
+                                placeholder="0"
+                            />
+                            and at most
+                            <label class="sr-only" for="wiz-asset-max">Maximum fare in units</label>
+                            <input
+                                type="text"
+                                id="wiz-asset-max"
+                                inputmode="numeric"
+                                placeholder="none"
+                            />
+                            units
+                        </p>
                         <p class="hint">
-                            Same numbers, counted in the asset's own units; a percentage is then a
-                            share of the amount sent.
+                            Counted in the asset's own units, not in sats. A payer picks either
+                            fare.
                         </p>
                     </div>
                     <p class="hint warn" id="wiz-fare-btc-warn" hidden>
@@ -664,7 +825,16 @@
                             >
                         </label>
                     </fieldset>
-                    <p class="hint warn" id="wiz-claim-warn" hidden></p>
+                    <div class="confirm" id="wiz-giveaway" role="alert" hidden>
+                        <p>
+                            Payers could take the carrier sats for free; you would pay every carrier
+                            yourself.
+                        </p>
+                        <label class="check" for="wiz-giveaway-ok">
+                            <input type="checkbox" id="wiz-giveaway-ok" />
+                            Give carriers away for free
+                        </label>
+                    </div>
                 </section>
 
                 <section id="wiz-step-4" aria-labelledby="wiz-h4" hidden>

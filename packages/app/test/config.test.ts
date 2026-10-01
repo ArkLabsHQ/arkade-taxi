@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { ConfigError, loadConfig, resolveRuntimeConfig } from "../src/config.js";
+import {
+    ConfigError,
+    loadConfig,
+    resolveRuntimeConfig,
+    SECRET_CONFIG,
+    SHOWN_CONFIG,
+    shownConfig,
+} from "../src/config.js";
 import { verifyProviders } from "../src/arkade/providers.js";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
@@ -245,5 +252,29 @@ describe("resolveRuntimeConfig", () => {
         expect(cfg.vtxoMinAmount).toBe(10n);
         expect(cfg.addressHrp).toBe(networks.regtest.hrp);
         expect(bytesToHex(cfg.emulatorPubkey)).toBe(pinned.slice(2));
+    });
+
+    it("classifies every config key as shown in the console or secret", async () => {
+        const classified = new Set<string>([...Object.keys(SHOWN_CONFIG), ...SECRET_CONFIG]);
+        const runtime = await resolveRuntimeConfig(configured(), providers());
+        for (const cfg of [configured(), runtime])
+            expect(Object.keys(cfg).filter((key) => !classified.has(key))).toEqual([]);
+        expect(SECRET_CONFIG.filter((key) => key in SHOWN_CONFIG)).toEqual([]);
+    });
+
+    it("shows neither a secret nor the credentials and query a URL carries", async () => {
+        const runtime = await resolveRuntimeConfig(
+            loadConfig(env({ TAXI_ARKD_URL: "https://user:pass@arkd.example/v1?token=abc#x" })),
+            providers(),
+        );
+        const shown = shownConfig(runtime);
+        expect(JSON.stringify(shown)).not.toContain(bytesToHex(runtime.operatorPrivkey));
+        expect(JSON.stringify(shown)).not.toMatch(/user|pass|token|#x/);
+        expect(shown.find((entry) => entry.key === "arkdUrl")).toEqual({
+            key: "arkdUrl",
+            env: "TAXI_ARKD_URL",
+            value: "https://arkd.example/v1",
+        });
+        expect(shown.find((entry) => entry.key === "adminPort")?.value).toBeNull();
     });
 });

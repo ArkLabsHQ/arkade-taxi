@@ -267,6 +267,25 @@ describe("createReceiveQuote", () => {
         expect((await createReceiveQuote(deps(), body())).fare.units).toBe(units);
     });
 
+    it("quotes an asset that only the any-asset rule serves", async () => {
+        configure({ assetRules: [{ ...rule(), assetId: "*" }] });
+        const response = await createReceiveQuote(deps(), body());
+        expect(response.fare).toEqual({ currency: "sats", units: "3" });
+        expect(quotes.get(response.quoteId)?.params.assetId).toEqual(ASSET);
+    });
+
+    it("refuses an asset whose own rule is off, even beside an any-asset rule", async () => {
+        configure({
+            assetRules: [
+                { ...rule(), assetId: "*" },
+                { ...rule(), enabled: false },
+            ],
+        });
+        expect((await caught(() => createReceiveQuote(deps(), body()))).code).toBe(
+            "asset_disabled",
+        );
+    });
+
     it("rejects a quote whose reserved input would leave subdust combined change", async () => {
         configure({ assetRules: [rule({ kind: "flat", units: 4n })] });
         await expect(
