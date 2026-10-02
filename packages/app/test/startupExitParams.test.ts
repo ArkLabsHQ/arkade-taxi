@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { AdvanceRepository, type Database } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "../src/config.js";
 import { advance, config } from "./fixtures.js";
+import { insertReceiveQuote } from "./jointFillFixtures.js";
 
 const current = vi.hoisted(() => ({
     config: undefined as RuntimeConfig | undefined,
@@ -52,5 +53,31 @@ it("refuses to start on a terminal advance written before the exit leaf", async 
     }
     expect(stderr).toHaveBeenCalledWith(
         expect.stringMatching(/written before the covenant exit leaf.*recreate the database/),
+    );
+}, 30_000);
+
+it("refuses to start on a receive quote written before the exit leaf", async () => {
+    vi.resetModules();
+    current.config = config();
+    current.seed = (db) => {
+        insertReceiveQuote({ wantAmount: 5n, db });
+        db.prepare(
+            "UPDATE receive_quotes SET params_json = json_remove(params_json, '$.exitDelay')",
+        ).run();
+    };
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const argv = process.argv;
+    process.argv = [argv[0]!, "cli", "serve"];
+    try {
+        await import("../src/cli.js");
+        await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+    } finally {
+        process.argv = argv;
+    }
+    expect(stderr).toHaveBeenCalledWith(
+        expect.stringMatching(
+            /receive quotes were written before the covenant exit leaf.*recreate the database/,
+        ),
     );
 }, 30_000);

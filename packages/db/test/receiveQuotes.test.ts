@@ -235,6 +235,34 @@ describe("receive quote repository", () => {
         db.close();
     });
 
+    it.each(
+        (["quoted", "expired", "bound"] as const).flatMap((state) =>
+            (["operatorSignerKey", "exitDelay"] as const).map((field) => [state, field] as const),
+        ),
+    )("refuses a database holding a quote in state %s whose params lack %s", (state, field) => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        if (state === "expired") repo.expireQuotes(NOW + 60);
+        if (state === "bound")
+            repo.bind({
+                quoteId: "receive-1",
+                fill: boundFill(),
+                advance: boundAdvance(),
+                expectedPolicyRevision: policy.getSnapshot().revision,
+                now: NOW,
+            });
+        expect(() => repo.assertExitParamsPresent()).not.toThrow();
+        db.prepare("UPDATE receive_quotes SET params_json = json_remove(params_json, ?)").run(
+            `$.${field}`,
+        );
+        expect(() => repo.assertExitParamsPresent()).toThrow(
+            /receive quotes were written before the covenant exit leaf.*recreate the database/,
+        );
+        db.close();
+    });
+
     it("expires and releases only unbound quotes", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);

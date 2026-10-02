@@ -736,4 +736,21 @@ export class ReceiveQuoteRepository {
         if (!Number.isSafeInteger(at) || at < 0) fail("expiry clock");
         return this.db.transaction(() => expireReceiveQuotes(this.db, at)).immediate();
     }
+
+    /** Startup decodes no receive quote, so a legacy row would fail at its first read. */
+    assertExitParamsPresent(): void {
+        assertNativeAccess(this.db);
+        const { total } = this.db
+            .prepare<[], { total: bigint }>(
+                `SELECT count(*) AS total FROM receive_quotes
+                 WHERE json_extract(params_json, '$.operatorSignerKey') IS NULL
+                    OR json_extract(params_json, '$.exitDelay') IS NULL`,
+            )
+            .safeIntegers(true)
+            .get()!;
+        if (total > 0n)
+            throw new Error(
+                `Incompatible development data: ${total} receive quotes were written before the covenant exit leaf; recreate the database before starting this service`,
+            );
+    }
 }
