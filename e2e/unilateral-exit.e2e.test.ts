@@ -113,8 +113,11 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
             totals: pkg.totals,
             steps: pkg.steps.map((s) => `${s.kind} ${"parentTxid" in s ? s.parentTxid : s.txid}`),
         };
-        expect(pkg.vtxos.map((vtxo) => vtxo.outpoint)).toContain(
-            `${outpoint.txid}:${outpoint.vout}`,
+        expect(pkg.vtxos).toContainEqual(
+            expect.objectContaining({
+                outpoint: `${outpoint.txid}:${outpoint.vout}`,
+                skipped: expect.stringMatching(/uneconomic/),
+            }),
         );
         expect(pkg.steps).toContainEqual(
             expect.objectContaining({ kind: "package", parentTxid: outpoint.txid }),

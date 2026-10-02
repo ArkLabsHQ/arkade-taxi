@@ -119,7 +119,10 @@ two-owner offer fill in which a solver and a sponsor each sign only their own
 inputs while the offer covenant is co-signed by nobody but the emulator and the
 Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
-once the exit delay matures on median time past.
+once the exit delay matures on median time past. The package skips the 330-sat
+covenant as uneconomic, so it reaches the chain only because the Taxi's change
+output in the same lockup shares its branch: a sender cannot drive this exit
+alone.
 
 The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
 select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,
