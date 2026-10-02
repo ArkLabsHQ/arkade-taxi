@@ -109,7 +109,9 @@ identity, and prevent direct access to the backend ports. Taxi validates and aud
 header but does not authenticate it. Request JSON cannot choose the actor. A plain
 basic-auth proxy needs no header: without one, Taxi records the user name from the Basic
 `Authorization` header the proxy forwards (Traefik's `basicAuth` does unless
-`removeHeader` is set). If the proxy forwards neither, set
+`removeHeader` is set). With Traefik, `headerField: X-Taxi-Operator` on the `basicAuth`
+middleware forwards the authenticated user as that header even with `removeHeader` set,
+which keeps per-operator attribution. If the proxy forwards neither, set
 [`TAXI_ADMIN_OPERATOR`](environment.md#taxi_admin_operator) and Taxi attributes every
 console change to that one name.
 
