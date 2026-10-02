@@ -104,10 +104,12 @@ actor from the `X-Taxi-Operator` header, else from the user name of a Basic
 of the three names anyone.
 
 Use it when the proxy authenticates operators but does not pass the result on, as
-a basic-auth middleware with `removeHeader` does. It is a single fixed name:
-every console change is attributed to it, whoever made it, so the audit trail can
-no longer tell operators apart. It is not a credential and authenticates no one.
-The admin port must still be reachable only through the authenticating proxy.
+a basic-auth middleware with `removeHeader` does, and cannot be set to forward the
+authenticated user instead (see the `headerField` note in the
+[runbook](runbook.md#deployment)). It is a single fixed name: every console change
+is attributed to it, whoever made it, so the audit trail can no longer tell
+operators apart. It is not a credential and authenticates no one. The admin port
+must still be reachable only through the authenticating proxy.
 
 The value is trimmed. An empty one, one longer than 128 characters, or one with a
 control character stops startup.
