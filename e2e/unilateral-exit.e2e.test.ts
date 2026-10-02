@@ -216,7 +216,15 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         );
         Object.assign(evidence, { resumedAt, scannedAt: flagged.scannedAt });
         expect(flagged.advance.failureCode).toBe("covenant_unrolled");
-        expect((await admin("status")).paused).toBe(true);
+        const status = await admin("status");
+        evidence.policyHistory = (await admin("policy/history")).history;
+        expect(status.paused).toBe(false);
+        expect(status.warnings).toContainEqual(
+            expect.objectContaining({
+                advanceId: locked.quote.transferId,
+                code: "covenant_unrolled",
+            }),
+        );
     } finally {
         // Best effort: a failure here must not mask the scenario's own error.
         for (const service of paused)
