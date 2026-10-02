@@ -73,6 +73,10 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     if (equalKeys(p.senderKey, p.operatorSignerKey)) {
         throw new Error("covenant: sender and operator signer keys must be distinct");
     }
+    // operatorKey is not compared to the signer: it is a tweaked payout key nothing signs with.
+    if (equalKeys(p.receiverKey, p.operatorSignerKey)) {
+        throw new Error("covenant: receiver and operator signer keys must be distinct");
+    }
     if (
         !exitDelayEncodable(p.exitDelay.value) ||
         p.exitDelay.type !== exitTimelock(p.exitDelay.value).type

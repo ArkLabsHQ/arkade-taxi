@@ -69,6 +69,12 @@ describe("validateParams", () => {
         ).toThrow(/sender and operator signer keys must be distinct/);
     });
 
+    it("refuses a receiver key equal to the operator signer key", () => {
+        expect(() =>
+            validateParams({ ...base(), receiverKey: base().operatorSignerKey }, 10n),
+        ).toThrow(/receiver and operator signer keys must be distinct/);
+    });
+
     it("refuses exit params the covenant cannot encode", () => {
         expect(() =>
             validateParams({ ...base(), operatorSignerKey: key(1).slice(1) }, 10n),
