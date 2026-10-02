@@ -89,4 +89,12 @@ jobs:
                       e2e-artifacts/proxy-events.json
                       e2e-artifacts/boundary-diagnostics.jsonl
                       e2e-artifacts/cltv-evidence.json
+                      e2e-artifacts/isolated/stack.json
+                      e2e-artifacts/isolated/results.json
+                      e2e-artifacts/isolated/taxi.log
+                      e2e-artifacts/isolated/stack.log
+                      e2e-artifacts/isolated/failure.log
+                      e2e-artifacts/isolated/proxy-events.json
+                      e2e-artifacts/isolated/boundary-diagnostics.jsonl
+                      e2e-artifacts/isolated/unilateral-exit.json
                   if-no-files-found: warn

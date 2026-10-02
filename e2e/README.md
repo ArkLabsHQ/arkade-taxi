@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-two live scenarios and two integrity assertions must all pass. Skips,
+Twenty-three live scenarios and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
@@ -36,8 +36,17 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-18 named scenarios and both integrity assertions, stores each run in
-`e2e-artifacts/direct-<run>/`, and is rejected in CI.
+18 named scenarios and both integrity assertions plus the isolated run below,
+stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
+
+### Isolated scenarios
+
+`covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
+leaves its advance `locked` and admission closed for good and moves chain time a
+day ahead. Both modes therefore run it first, on a fresh stack of its own,
+before the shared suite. `node e2e/assert-ran.mjs --isolated <results.json>`
+checks that run, whose artifacts land in `e2e-artifacts/isolated/` (or its own
+`direct-<run>/`).
 
 Check registration integrity without starting network services:
 
@@ -75,8 +84,8 @@ CI checks out `ArkLabsHQ/arkade-regtest` at unpinned `master` with depth one and
 prints the resolved commit. The isolated harness records its actual resolved
 master SHA, image identities, source identity, public fixtures, ports, profile,
 and UTC start in `e2e-artifacts/stack.json`. The workflow uploads that manifest,
-the Vitest JSON results, Taxi logs, and redacted stack diagnostics on success or
-failure.
+the Vitest JSON results, Taxi logs, and redacted stack diagnostics of both stacks
+on success or failure.
 
 ## The rule this suite exists to enforce
 
@@ -89,9 +98,9 @@ having asserted nothing is worse than no suite.
 - `suite-integrity.e2e.test.ts` reads the sibling test files and asserts that
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
-- `assert-ran.mjs` validates Vitest's JSON report independently: all twenty-two
-  scenarios and both integrity assertions must pass with zero failures, skips,
-  or todos.
+- `assert-ran.mjs` validates Vitest's JSON report independently: the shared
+  run's twenty-two scenarios and both integrity assertions, and the isolated
+  run's scenario, must pass with zero failures, skips, or todos.
 
 ## What the scenarios prove
 
@@ -108,7 +117,9 @@ It also covers lost submit responses, duplicate requests, stale provider
 identity, warning/critical recovery deadlines before VTXO expiry, and one
 two-owner offer fill in which a solver and a sponsor each sign only their own
 inputs while the offer covenant is co-signed by nobody but the emulator and the
-Arkade Service.
+Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
+package puts a covenant on-chain and the sender and Taxi spend its exit leaf
+once the exit delay matures on median time past.
 
 The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
 select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,

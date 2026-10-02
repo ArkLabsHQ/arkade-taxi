@@ -406,6 +406,8 @@ describe("package manager process boundary", () => {
         expect(direct.tests).toEqual(
             task12Tests.filter((path) => !/\/(joint-fill|receiver-paid)\./.test(path)),
         );
+        for (const options of [resolveE2eOptions([], { ci: "true" }), direct])
+            expect(options.isolatedTests).toEqual(["e2e/unilateral-exit.e2e.test.ts"]);
         for (const args of [
             ["--direct", task12Tests[0]],
             ["--direct", "--direct"],
@@ -582,8 +584,9 @@ describe("package manager process boundary", () => {
     it("isolates package manager config for builds and live test processes", () => {
         const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
         expect(stack).toMatch(
-            /async function main\(\) \{\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
+            /async function main\(isolated = false\) \{\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
         );
+        expect(stack).toMatch(/main\(true\)\s*\.then\(\(\) => main\(\)\)/);
         expect(stack).not.toContain('run("pnpm"');
         expect(stack.match(/await runPnpm\(/g)).toHaveLength(4);
         expect(stack).toContain("NPM_CONFIG_USERCONFIG: packs.npmUserConfig");

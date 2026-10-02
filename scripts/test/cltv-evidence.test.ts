@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { matchRecoveryEvidence, readOwnedRecoveryLogs } from "../lib/cltv-evidence.mjs";
+import {
+    matchRecoveryEvidence,
+    ownedServiceIds,
+    readOwnedRecoveryLogs,
+    setOwnedServices,
+} from "../lib/cltv-evidence.mjs";
 
 const project = "taxi12-0123456789ab";
+const labels = (owner: string, service: string) => ({
+    "com.docker.compose.project": owner,
+    "com.docker.compose.service": service,
+});
 const txid = "81f12e37e367d35f8e98c5c07f62336e436fca546ba90f4548d5b91af34de553";
 const at = Date.parse("2026-09-12T06:28:29Z");
 const internal = new Error(
@@ -186,4 +195,37 @@ describe("owned bounded Docker log reads", () => {
         ).toThrow();
         expect(io.calls.some((args) => args[0] === "logs")).toBe(false);
     });
+});
+
+it("resolves only containers this run owns", () => {
+    const run = (args: string[]) =>
+        args[0] === "ps"
+            ? "a".repeat(64)
+            : JSON.stringify([
+                  {
+                      Id: "a".repeat(64),
+                      State: { Running: true },
+                      Config: { Labels: labels(project, "arkd") },
+                  },
+              ]);
+    expect(ownedServiceIds(project, ["arkd"], run)).toEqual({
+        arkd: { id: "a".repeat(64), running: true },
+    });
+    const foreign = (args: string[]) =>
+        args[0] === "ps"
+            ? "a".repeat(64)
+            : JSON.stringify([
+                  {
+                      Id: "a".repeat(64),
+                      State: { Running: true },
+                      Config: { Labels: labels("taxi12-ffffffffffff", "arkd") },
+                  },
+              ]);
+    expect(() => ownedServiceIds(project, ["arkd"], foreign)).toThrow();
+    expect(() => ownedServiceIds("not-a-project", ["arkd"], run)).toThrow();
+    const calls: string[][] = [];
+    const recorded = (args: string[]) => (calls.push(args), run(args));
+    setOwnedServices(project, ["arkd"], "pause", recorded);
+    expect(calls.at(-1)).toEqual(["pause", "a".repeat(64)]);
+    expect(() => setOwnedServices(project, ["arkd"], "rm", recorded)).toThrow();
 });
