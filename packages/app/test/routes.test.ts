@@ -1707,6 +1707,23 @@ describe("CORS", () => {
         expect((await closing.request("/api/status")).status).toBe(503);
     });
 
+    it("hands the configured admin operator to the console it serves", async () => {
+        const base = serverDeps();
+        const admin = createAdminApp({
+            ...base,
+            config: { ...base.config, adminOperator: "taxi-ops" },
+        });
+
+        const res = await admin.request("/api/rescan", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+        });
+
+        expect(res.status).toBe(202);
+        expect(base.policy.history(10).map((row) => row.actor)).toEqual(["taxi-ops"]);
+    });
+
     it("lists watcher warnings on the admin status only, never in public readiness", async () => {
         const warning = { advanceId: "adv-unrolled", code: "covenant_unrolled", detail: "d" };
         reconcilerStatus = { ...reconcilerStatus, warnings: [warning] };

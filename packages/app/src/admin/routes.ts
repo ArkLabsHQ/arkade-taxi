@@ -30,7 +30,12 @@ import type { BoardingDeposits } from "../boarding.js";
 import { sanitizeOperationalError } from "../errors.js";
 import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
 import type { RuntimeSafety } from "../arkade/types.js";
-import type { RuntimeConfig, ShownConfigEntry } from "../config.js";
+import {
+    ACTOR_CONTROL_CHARS,
+    MAX_ACTOR_LENGTH,
+    type RuntimeConfig,
+    type ShownConfigEntry,
+} from "../config.js";
 import { holdings } from "../proceeds.js";
 import type { OperationalSnapshot } from "../routes.js";
 import type { RecoveryDeadline } from "../sweeper.js";
@@ -61,6 +66,8 @@ export interface AdminDeps {
     operationalSnapshot(options?: { ignoreManualPause?: boolean }): OperationalSnapshot;
     now(): number;
     serviceConfig: readonly ShownConfigEntry[];
+    /** Named as the actor when neither the operator header nor basic auth identifies one. */
+    adminOperator?: string;
     /** Rejects while the operator wallet is unavailable. */
     funding(): Promise<{
         config: Pick<
@@ -87,7 +94,6 @@ const ACTIVE_EXPOSURE_STATES = new Set<AdvanceState>(["locking", "locked", "reco
 const STALE_FLOOR_MS = 30_000;
 
 const PROXY_ACTOR_HEADER = "x-taxi-operator";
-const MAX_ACTOR_LENGTH = 128;
 const message = (e: unknown): string => sanitizeOperationalError(e, "operation failed");
 
 const isSats = (s: string): boolean => /^[0-9]+$/.test(s) && BigInt(s) <= INT64_MAX;
@@ -453,14 +459,15 @@ function basicAuthUser(header: string | undefined): string {
     return decoded.includes(":") ? decoded.slice(0, decoded.indexOf(":")) : "";
 }
 
-function proxyActor(c: Context): string {
+function proxyActor(c: Context, fallback?: string): string {
     const actor =
         c.req.header(PROXY_ACTOR_HEADER)?.trim() ||
-        basicAuthUser(c.req.header("authorization")).trim();
+        basicAuthUser(c.req.header("authorization")).trim() ||
+        fallback;
     if (!actor) throw new Error(`header ${PROXY_ACTOR_HEADER}: operator identity is required`);
     if (actor.length > MAX_ACTOR_LENGTH)
         throw new Error(`header ${PROXY_ACTOR_HEADER}: operator identity is too long`);
-    if (/[\u0000-\u001f\u007f]/.test(actor))
+    if (ACTOR_CONTROL_CHARS.test(actor))
         throw new Error(`header ${PROXY_ACTOR_HEADER}: operator identity is invalid`);
     return actor;
 }
@@ -479,7 +486,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         return rescanPending;
     };
     const mutation = async (c: Context): Promise<string> => {
-        const who = proxyActor(c);
+        const who = proxyActor(c, deps.adminOperator);
         const parsed = emptyMutation.safeParse(await readJson(c));
         if (!parsed.success) throw new Error(issuesToMessage(parsed.error));
         return who;
@@ -568,7 +575,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         let body: unknown;
         let who: string;
         try {
-            who = proxyActor(c);
+            who = proxyActor(c, deps.adminOperator);
             body = await readJson(c);
         } catch (e) {
             return bad(c, message(e));

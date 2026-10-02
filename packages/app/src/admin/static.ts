@@ -2194,7 +2194,10 @@ function explain(error) {
         text = "The Taxi cannot read its wallet right now.";
     else if (/^header x-taxi-operator/.test(error.message))
         text =
-            "The console could not tell who you are: the proxy in front of it must send the operator header.";
+            "The console could not tell who you are: the proxy in front of it must send the operator header" +
+            (/ is required$/.test(error.message)
+                ? "; or set TAXI_ADMIN_OPERATOR on the Taxi itself."
+                : ".");
     else if (/recovery execution budget/.test(error.message))
         text =
             "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.";
@@ -3418,6 +3421,8 @@ async function loadFunding() {
 const CONFIG_MEANINGS = {
     httpPort: "The public port wallets call.",
     adminPort: "The port serving this console; keep it behind the authenticating proxy.",
+    adminOperator:
+        "The name recorded for a console change when the proxy forwards no operator identity.",
     dbPath: "The SQLite file holding the ledger; it must survive restarts.",
     arkdUrl: "The Arkade server the Taxi works with.",
     indexerUrl: "Where the Taxi reads coins: the same Arkade server's indexer.",
