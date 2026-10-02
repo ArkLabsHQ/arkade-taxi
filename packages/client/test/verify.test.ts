@@ -300,6 +300,25 @@ describe("verifyQuote — caller authorisation bounds", () => {
     });
 });
 
+describe("verifyQuote — exit delay floor", () => {
+    it.each([
+        ["below the floor", { value: 86_017n, type: "seconds" }],
+        ["in the other domain", { value: 144n, type: "blocks" }],
+    ] as const)("rejects an exit delay %s", (_name, minExitDelay) => {
+        rejects({ expect: { ...args().expect, minExitDelay } }, "EXIT_DELAY_BELOW_MIN");
+    });
+
+    it.each([
+        ["no floor", undefined],
+        ["a lower floor", { value: 512n, type: "seconds" }],
+        ["an equal floor", { value: 86_016n, type: "seconds" }],
+    ] as const)("accepts the quoted exit delay against %s", (_name, minExitDelay) => {
+        const a = args();
+        if (minExitDelay) a.expect.minExitDelay = minExitDelay;
+        expect(verifyQuote(a).params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+    });
+});
+
 describe("verifyQuote — independent address rebuild", () => {
     // The tamper the whole file exists for: params changed, covenantAddress left
     // alone, and the caller's expectations updated so no equality check fires

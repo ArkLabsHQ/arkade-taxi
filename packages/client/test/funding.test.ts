@@ -265,6 +265,7 @@ describe("requestVerifiedQuote", () => {
         "fare",
         "currency",
         "locktime",
+        "exitDelay",
         "amount",
         "expiry",
     ])("applies explicit %s verification", async (kind) => {
@@ -279,6 +280,7 @@ describe("requestVerifiedQuote", () => {
         if (kind === "fare") r.expect.maxFare.units = 9n;
         if (kind === "currency") r.expect.maxFare = { currency: "asset", units: 10n };
         if (kind === "locktime") r.expect.minLocktime = 800_001n;
+        if (kind === "exitDelay") r.expect.minExitDelay = { value: 86_017n, type: "seconds" };
         if (kind === "amount") r.selectedVtxos[0].value = 9;
         if (kind === "expiry") r.now = 1_000_000_060;
         await expect(transport().taxi.requestVerifiedQuote(r)).rejects.toThrow();

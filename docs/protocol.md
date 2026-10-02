@@ -176,6 +176,12 @@ also checks the quoted receiver, sender and asset against what the caller asked
 to pay, and that `topup`, fare currency/asset/units and `locktime` are within the caller's
 authorisation.
 
+A verifier should pass its own arkd's `unilateralExitDelay` as `expect.minExitDelay`
+to `verifyQuote`, `verifyReceiveQuote` and `verifyIncomingClaim`, which then refuse
+an `exitDelay` of another type or a smaller value. Without it, a Taxi could quote an
+exit delay below arkd's floor, and arkd would then refuse every off-chain spend of
+that covenant: griefing, not theft.
+
 The address check alone is not sufficient. It is only meaningful once the client
 has pinned `serverKey` and `emulatorKey` against values it already trusts —
 otherwise an operator could name an emulator it controls and the derivation

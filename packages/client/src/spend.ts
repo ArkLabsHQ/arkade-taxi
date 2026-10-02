@@ -9,6 +9,7 @@ import {
     signerTransaction,
     type CovenantSpendInput,
     type DustCovenantParams,
+    type RelativeTimelock,
 } from "@arkade-taxi/covenant";
 import {
     quoteParamsFromWire,
@@ -47,7 +48,7 @@ import { tapLeafHash } from "@scure/btc-signer/payment.js";
 import { decodeClaimsSnapshot, decodeInfo, decodeLockup, decodeStatus } from "./decode.js";
 import { WeakValueRegistry } from "./lifecycle.js";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
-import type { VerifiedQuote } from "./verify.js";
+import { assertExitDelayFloor, type VerifiedQuote } from "./verify.js";
 import { claimLeafDisabled } from "@arkade-taxi/covenant";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
@@ -82,6 +83,8 @@ export interface IncomingClaimExpectation {
     assetUnits?: bigint;
     recoveryRecipient?: "sender" | "receiver";
     claimMode?: "recycle" | "purchase";
+    /** Your own arkd's `unilateralExitDelay`. Omitted accepts any exit delay. */
+    minExitDelay?: RelativeTimelock;
 }
 
 export interface IncomingClaimTrust {
@@ -673,7 +676,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
     exactObjectKeys(
         expect as unknown as Record<string, unknown>,
         ["receiverAddress"],
-        ["assetId", "assetUnits", "recoveryRecipient", "claimMode"],
+        ["assetId", "assetUnits", "recoveryRecipient", "claimMode", "minExitDelay"],
         "incoming claim expectation",
     );
     exactObjectKeys(
@@ -724,6 +727,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
         reject("expected claim mode is invalid");
     if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode)
         reject("incoming claim mode mismatch");
+    assertExitDelayFloor(params.exitDelay, expect.minExitDelay);
     if (expect.assetId !== undefined) {
         exactObjectKeys(
             expect.assetId as unknown as Record<string, unknown>,

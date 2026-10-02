@@ -440,6 +440,27 @@ describe("incoming claim verification", () => {
         await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
     });
 
+    it.each([
+        ["below the floor", { value: 86_017n, type: "seconds" }],
+        ["in the other domain", { value: 144n, type: "blocks" }],
+    ] as const)("refuses an incoming exit delay %s", async (_name, minExitDelay) => {
+        const { incoming } = await incomingFixture();
+        incoming.expect.minExitDelay = minExitDelay;
+        await expect(verifyIncomingClaim(incoming)).rejects.toMatchObject({
+            code: "EXIT_DELAY_BELOW_MIN",
+        });
+    });
+
+    it.each([
+        ["no floor", undefined],
+        ["a lower floor", { value: 512n, type: "seconds" }],
+        ["an equal floor", { value: 86_016n, type: "seconds" }],
+    ] as const)("accepts an incoming exit delay against %s", async (_name, minExitDelay) => {
+        const { incoming } = await incomingFixture();
+        if (minExitDelay) incoming.expect.minExitDelay = minExitDelay;
+        await expect(verifyIncomingClaim(incoming)).resolves.toBeDefined();
+    });
+
     const mutations: [string, (value: VerifyIncomingClaimArgs) => void][] = [
         [
             "receiver address",

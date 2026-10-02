@@ -348,6 +348,40 @@ describe("verifyReceiveQuote", () => {
     });
 });
 
+const refusal = (verify: () => unknown): unknown => {
+    try {
+        verify();
+    } catch (error) {
+        return error;
+    }
+    throw new Error("expected a refusal");
+};
+
+describe("verifyReceiveQuote — exit delay floor", () => {
+    it.each([
+        ["below the floor", { value: 86_017n, type: "seconds" }],
+        ["in the other domain", { value: 144n, type: "blocks" }],
+    ] as const)("refuses an exit delay %s", (_name, minExitDelay) => {
+        const a = args();
+        expect(
+            refusal(() => verifyReceiveQuote({ ...a, expect: { ...a.expect, minExitDelay } })),
+        ).toMatchObject({ code: "EXIT_DELAY_BELOW_MIN" });
+    });
+
+    it.each([
+        ["no floor", undefined],
+        ["a lower floor", { value: 512n, type: "seconds" }],
+        ["an equal floor", { value: 86_016n, type: "seconds" }],
+    ] as const)("accepts the quoted exit delay against %s", (_name, minExitDelay) => {
+        const a = args();
+        const floored = minExitDelay ? { ...a, expect: { ...a.expect, minExitDelay } } : a;
+        expect(verifyReceiveQuote(floored).params.exitDelay).toEqual({
+            value: 86_016n,
+            type: "seconds",
+        });
+    });
+});
+
 describe("TaxiClient receive quotes", () => {
     it("POSTs the exact request and GETs an untrusted quote", async () => {
         const fetch = recordingFetch((_url, init) =>

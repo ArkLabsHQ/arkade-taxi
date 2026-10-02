@@ -8,7 +8,11 @@
  * agrees with its own quote.
  */
 
-import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    type DustCovenantParams,
+    type RelativeTimelock,
+} from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     type AssetIdValue,
@@ -53,6 +57,8 @@ export interface QuoteExpectation {
      */
     maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     minLocktime: bigint;
+    /** Your own arkd's `unilateralExitDelay`. Omitted accepts any exit delay. */
+    minExitDelay?: RelativeTimelock;
     /** The mode the caller asked the covenant to commit to. Checked against
      * what the CALLER named, so an operator cannot echo a swapped leaf back
      * self-consistently. Omitted accepts the operator's resolution. */
@@ -91,6 +97,17 @@ const rewrap = <T>(code: VerificationCode, f: () => T): T => {
 const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" : "bitcoin");
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+
+export const assertExitDelayFloor = (
+    actual: RelativeTimelock,
+    floor: RelativeTimelock | undefined,
+): void => {
+    if (floor !== undefined && (actual.type !== floor.type || actual.value < floor.value))
+        reject(
+            VerificationErrorCode.ExitDelay,
+            `exit delay ${actual.value} ${actual.type} is below your minimum ${floor.value} ${floor.type}`,
+        );
+};
 
 export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     args = immutablePlainCopy(args, "quote verification request");
@@ -177,6 +194,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
             `locktime ${params.locktime} is earlier than your minimum ${expect.minLocktime}`,
         );
     }
+    assertExitDelayFloor(params.exitDelay, expect.minExitDelay);
     if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode) {
         reject(
             VerificationErrorCode.ClaimMode,

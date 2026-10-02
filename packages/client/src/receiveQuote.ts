@@ -1,5 +1,9 @@
 import { ArkAddress, asset } from "@arkade-os/sdk";
-import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    type DustCovenantParams,
+    type RelativeTimelock,
+} from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     assetIdFromWire,
@@ -12,6 +16,7 @@ import { hex } from "@scure/base";
 import { decodeInfo, decodeReceiveQuote, type DecodedReceiveQuote } from "./decode.js";
 import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
 import { immutablePlainCopy } from "./lockup.js";
+import { assertExitDelayFloor } from "./verify.js";
 
 declare const verifiedReceive: unique symbol;
 
@@ -38,6 +43,8 @@ export interface ReceiveQuoteExpectation {
     maxServiceFareSats: bigint;
     minRecoveryLocktime: { kind: "height" | "time"; value: bigint };
     minInputExpiryFloor: { kind: "height" | "time"; value: bigint };
+    /** Your own arkd's `unilateralExitDelay`. Omitted accepts any exit delay. */
+    minExitDelay?: RelativeTimelock;
 }
 
 export interface VerifyReceiveQuoteArgs {
@@ -195,6 +202,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     ] as const)
         if (actual.kind !== minimum.kind || actual.value < minimum.value)
             reject(VerificationErrorCode.Locktime, `${label} is below the caller minimum`);
+    assertExitDelayFloor(quote.params.exitDelay, expect.minExitDelay);
 
     const now = args.now ?? Math.floor(Date.now() / 1000);
     if (quote.createdAt >= quote.expiresAt || now >= quote.expiresAt)
