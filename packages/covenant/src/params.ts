@@ -15,13 +15,17 @@ export interface DustCovenantParams {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
+    operatorSignerKey: Uint8Array;
+    /** CSV on the exit leaf. Relative to the unroll confirmation and nothing
+     * else: an absolute deadline is not expressible in an exit closure. */
+    exitDelay: RelativeTimelock;
     dust: bigint;
     topup: bigint;
     assetId?: AssetIdRef;
     locktime: bigint;
     recoveryRecipient?: "sender" | "receiver";
-    /** Which claim leaf this covenant commits to. Absent is the historical
-     * four-leaf tree; a mode disables the forbidden closure in place, so the
+    /** Which claim leaf this covenant commits to. Absent enables both claim
+     * leaves; a mode disables the forbidden closure in place, so the
      * tree height and every control proof are unchanged. */
     claimMode?: "recycle" | "purchase";
     receiverFare?: ReceiverFare;
@@ -37,6 +41,7 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
         ["receiver", p.receiverKey],
         ["sender", p.senderKey],
         ["operator", p.operatorKey],
+        ["operator signer", p.operatorSignerKey],
     ] as const) {
         if (k?.length !== 32) {
             throw new Error(`covenant: ${name} key must be 32 bytes, got ${k?.length ?? 0}`);
@@ -64,6 +69,17 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
         equalKeys(p.senderKey, p.operatorKey)
     ) {
         throw new Error("covenant: receiver, sender and operator keys must be distinct");
+    }
+    if (equalKeys(p.senderKey, p.operatorSignerKey)) {
+        throw new Error("covenant: sender and operator signer keys must be distinct");
+    }
+    if (
+        !exitDelayEncodable(p.exitDelay.value) ||
+        p.exitDelay.type !== exitTimelock(p.exitDelay.value).type
+    ) {
+        throw new Error(
+            `covenant: exit delay ${p.exitDelay.value} ${p.exitDelay.type} is unusable`,
+        );
     }
     if (p.locktime === 0n) {
         throw new Error("covenant: locktime must be non-zero");

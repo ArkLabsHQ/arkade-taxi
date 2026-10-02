@@ -226,6 +226,8 @@ describe("createQuote", () => {
                 receiverKey,
                 senderKey,
                 operatorKey,
+                operatorSignerKey: config().operatorSignerKey,
+                exitDelay: config().exitDelay,
                 dust: DUST,
                 topup: DUST,
                 locktime: LOCKTIME,

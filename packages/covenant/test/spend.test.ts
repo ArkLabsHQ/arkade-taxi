@@ -20,6 +20,8 @@ const covenant = () =>
             receiverKey: key(1),
             senderKey: key(2),
             operatorKey: key(3),
+            operatorSignerKey: key(6),
+            exitDelay: { value: 86_016n, type: "seconds" },
             dust: 330n,
             topup: 320n,
             locktime: 800_000n,
@@ -84,6 +86,15 @@ describe("covenant spend leaves", () => {
         expect(recovery.params.pubkeys).toHaveLength(2);
     });
 
+    it("materializes the exit leaf and still rejects the index above it", () => {
+        const s = covenant();
+        const input = covenantSpendInput(s, Leaf.Exit, { txid: "12".repeat(32), vout: 0 }, 330n);
+        expect(scriptFromTapLeafScript(input.tapLeafScript)).toEqual(s.scripts[Leaf.Exit]);
+        expect(() =>
+            covenantSpendInput(s, 5 as Leaf, { txid: "12".repeat(32), vout: 0 }, 330n),
+        ).toThrow(/invalid leaf/);
+    });
+
     it("retains exact outpoint, bigint value, and canonical asset bytes without aliases", () => {
         const script = covenant();
         const assetPacket = asset.Packet.create([
@@ -140,6 +151,8 @@ describe("covenant spend modes", () => {
                 receiverKey: key(1),
                 senderKey: key(2),
                 operatorKey: key(3),
+                operatorSignerKey: key(6),
+                exitDelay: { value: 86_016n, type: "seconds" },
                 dust: 330n,
                 topup: 320n,
                 locktime: 800_000n,
@@ -178,5 +191,12 @@ describe("covenant spend modes", () => {
                 expect(
                     covenantSpendInput(withMode(claimMode), leaf, outpoint, 330n).tapLeafScript,
                 ).toHaveLength(2);
+    });
+
+    it("keeps the exit usable under every claim mode", () => {
+        for (const mode of ["recycle", "purchase"] as const)
+            expect(
+                covenantSpendInput(withMode(mode), Leaf.Exit, outpoint, 330n).tapLeafScript,
+            ).toHaveLength(2);
     });
 });

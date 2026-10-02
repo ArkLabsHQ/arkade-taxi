@@ -60,7 +60,7 @@ export function covenantSpendInput(
         throw new Error("covenant spend: invalid vout");
     if (typeof value !== "bigint" || value <= 0n)
         throw new Error("covenant spend: value must be a positive bigint");
-    if (!Number.isInteger(leaf) || leaf < Leaf.Recycle || leaf > Leaf.Recovery)
+    if (!Number.isInteger(leaf) || leaf < Leaf.Recycle || leaf > Leaf.Exit)
         throw new Error("covenant spend: invalid leaf");
     // The slot still parses so the merkle proof is valid; the mode is enforced
     // here, not by the tree shape.

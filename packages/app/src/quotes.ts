@@ -468,6 +468,8 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         receiverKey: req.receiverKey,
         senderKey: req.senderKey,
         operatorKey: config.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
+        exitDelay: config.exitDelay,
         dust: config.dust,
         topup: decision.topup,
         locktime,

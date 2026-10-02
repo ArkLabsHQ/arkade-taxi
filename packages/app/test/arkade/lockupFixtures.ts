@@ -25,6 +25,8 @@ export function buildRequest(): LockupBuildRequest {
         senderKey,
         receiverKey,
         operatorKey,
+        operatorSignerKey: config().operatorSignerKey,
+        exitDelay: config().exitDelay,
         dust: 330n,
         topup: 230n,
         locktime: 899856n,

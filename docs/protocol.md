@@ -138,9 +138,10 @@ that verification or the caller's payment authorization.
 ## No claim-spend or refund-submission endpoints
 
 Both are client-side by construction. Every leaf but the emergency exit is
-`Multisig[server, ⊕script]` — the operator is a payout destination, never a
-signer — so a receiver claims with Arkade Service and emulator signatures alone,
-and a sender refunds with its own signature plus those two.
+`Multisig[server, ⊕script]` — on those leaves the operator is a payout
+destination, never a signer — so a receiver claims with Arkade Service and
+emulator signatures alone, and a sender refunds with its own signature plus
+those two.
 
 The service validates the canonical spending transaction, signatures, covenant
 leaf, pinned outputs, assets and repayment before reconciling. Its own recovery
@@ -155,8 +156,8 @@ live deployment gate; Taxi does not implement an upstream forfeit mechanism.
 ## Emergency exit
 
 Leaf 4 is `CSV(exitDelay) + Multisig[sender, operatorSigner]`, appended after
-the four leaves above. It is for emergencies only: it needs neither the Arkade
-Service nor the emulator.
+leaves 0-3 of the [README's leaf table](../README.md#the-covenant). It is for
+emergencies only: it needs neither the Arkade Service nor the emulator.
 
 - It is a 2-of-2 between `senderKey` and `operatorSignerKey`, the Taxi's own
   signing key. That is not `operatorKey`, a payout destination nobody can sign

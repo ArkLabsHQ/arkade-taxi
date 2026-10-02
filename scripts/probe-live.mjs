@@ -6,7 +6,12 @@
  *   node scripts/probe-live.mjs [arkdUrl] [emulatorUrl]
  */
 
-import { DustCovenantScript, buildScripts, emitArtifact } from "../packages/covenant/dist/index.js";
+import {
+    DustCovenantScript,
+    buildScripts,
+    emitArtifact,
+    exitTimelock,
+} from "../packages/covenant/dist/index.js";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
@@ -46,6 +51,8 @@ const params = {
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(6),
+    exitDelay: exitTimelock(BigInt(info.unilateralExitDelay)),
     dust,
     topup: dust,
     locktime: 800_000n,

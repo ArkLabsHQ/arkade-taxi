@@ -277,7 +277,7 @@ async function createAdmitted(
     const initial = deps.policy.getSnapshot();
     const terms = immutableTerms(req, initial.policy, deps.config);
     try {
-        const probe: ReceiveQuote["params"] = {
+        deriveCovenant(deps.config, {
             receiverKey: req.receiverKey,
             senderKey: req.makerKey,
             operatorKey: deps.config.operatorKey,
@@ -292,8 +292,7 @@ async function createAdmitted(
             ...(terms.payer === "receiver"
                 ? { receiverFare: toCovenantFare(terms.receiverFare) }
                 : {}),
-        };
-        deriveCovenant(deps.config, probe);
+        });
     } catch (cause) {
         throw badRequest("makerPublicKey or receiverAddress is not a valid covenant identity");
     }

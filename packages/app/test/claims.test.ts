@@ -50,8 +50,6 @@ function persisted(
         id: request.advanceId,
         state: "locked",
         ...request.params,
-        operatorSignerKey: cfg.operatorSignerKey,
-        exitDelay: cfg.exitDelay,
         ...(withAsset ? { assetUnits } : {}),
         covenantAddress: request.covenantAddress,
         fare: request.fare,

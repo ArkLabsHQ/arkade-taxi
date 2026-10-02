@@ -10,6 +10,8 @@ const params: DustCovenantParams = {
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,

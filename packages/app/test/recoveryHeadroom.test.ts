@@ -207,8 +207,6 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
         id: request.advanceId,
         state: "locked",
         ...request.params,
-        operatorSignerKey: cfg.operatorSignerKey,
-        exitDelay: cfg.exitDelay,
         batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: { kind: "time", value: BigInt(NOW) },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),

@@ -65,7 +65,7 @@ describe("verifyQuote — happy path", () => {
         expect(v.params.dust).toBe(330n);
         expect(v.params.topup).toBe(330n);
         expect(v.params.locktime).toBe(800_000n);
-        expect(v.script.scripts).toHaveLength(4);
+        expect(v.script.scripts).toHaveLength(5);
     });
 
     it("returns a script whose own address equals the quoted one", () => {

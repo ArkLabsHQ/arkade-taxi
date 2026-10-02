@@ -13,6 +13,8 @@ export function covenantParamsOf(a: Pick<Advance, keyof DustCovenantParams>): Du
         receiverKey: a.receiverKey,
         senderKey: a.senderKey,
         operatorKey: a.operatorKey,
+        operatorSignerKey: a.operatorSignerKey,
+        exitDelay: a.exitDelay,
         dust: a.dust,
         topup: a.topup,
         locktime: a.locktime,

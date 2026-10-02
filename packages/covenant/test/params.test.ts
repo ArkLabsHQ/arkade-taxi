@@ -16,6 +16,8 @@ const base = (): DustCovenantParams => ({
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,
@@ -59,6 +61,24 @@ describe("validateParams", () => {
         ["sender equals operator", { senderKey: key(3) }],
     ])("rejects %s", (_name, overrides) => {
         expect(() => validateParams({ ...base(), ...overrides }, MIN)).toThrow(/distinct/);
+    });
+
+    it("refuses a sender key equal to the operator signer key", () => {
+        expect(() =>
+            validateParams({ ...base(), senderKey: base().operatorSignerKey }, 10n),
+        ).toThrow(/sender and operator signer keys must be distinct/);
+    });
+
+    it("refuses exit params the covenant cannot encode", () => {
+        expect(() =>
+            validateParams({ ...base(), operatorSignerKey: key(1).slice(1) }, 10n),
+        ).toThrow(/operator signer key must be 32 bytes/);
+        expect(() =>
+            validateParams({ ...base(), exitDelay: { value: 86_400n, type: "seconds" } }, 10n),
+        ).toThrow(/exit delay/);
+        expect(() =>
+            validateParams({ ...base(), exitDelay: { value: 5n, type: "seconds" } }, 10n),
+        ).toThrow(/exit delay/);
     });
 
     // A zero absolute locktime is always satisfied, making the recovery leaf

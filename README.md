@@ -29,8 +29,9 @@ the ride ends.
 
 ## The covenant
 
-Four leaves over three scripts, from
-[arkade-os/emulator#150](https://github.com/arkade-os/emulator/pull/150).
+Five leaves: four over three scripts, from
+[arkade-os/emulator#150](https://github.com/arkade-os/emulator/pull/150), then an
+emergency exit.
 
 | #   | Leaf           | Closure                               | What it does                                                                         |
 | --- | -------------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -38,17 +39,20 @@ Four leaves over three scripts, from
 | 1   | `purchase`     | `Multisig[server, ⊕purchase]`         | receiver keeps the whole covenant; the operator was paid at lockup                   |
 | 2   | `refundSender` | `Multisig[server, sender, ⊕refund]`   | sender cancels, operator repaid                                                      |
 | 3   | `recovery`     | `CLTV(L) + Multisig[server, ⊕refund]` | permissionless after timeout                                                         |
+| 4   | `exit`         | `CSV(E) + Multisig[sender, signer]`   | emergency only; no output constraint, and currently does not preserve an asset       |
 
 `⊕script` is the emulator's key tweaked by the Arkade Script it will only sign
-under.
+under. `E` is arkd's unilateral exit delay, counted from the unroll's
+confirmation; `signer` is the Taxi's own signing key, not its payout key.
 
 ### Three properties worth understanding before reading the code
 
-**The operator is a payout destination, never a signer.** No leaf carries the
-operator's key in a multisig — it appears only inside covenant-pinned outputs.
-So the operator **cannot censor a claim**: a receiver spends with the Arkade
-Service and emulator signatures alone. The operator must be reachable at lockup
-and is irrelevant afterwards.
+**On leaves 0-3 the operator is a payout destination, never a signer.** None of
+them carries the operator's key in a multisig — it appears only inside
+covenant-pinned outputs. So the operator **cannot censor a claim**: a receiver
+spends with the Arkade Service and emulator signatures alone. The operator must
+be reachable at lockup and is irrelevant afterwards, except to co-sign an
+emergency exit.
 
 **Transfer principal stays with the receiver or sender.** The operator lends
 sats and receives the covenant's pinned sats repayment. A separately authorized
