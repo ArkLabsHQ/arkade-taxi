@@ -84,6 +84,11 @@ const decimal: Schema = {
     pattern: "^[0-9]+$",
     description: "Non-negative decimal string: JSON has no bigint.",
 };
+const positiveDecimal: Schema = {
+    ...decimal,
+    pattern: "^[1-9][0-9]*$",
+    description: "Positive decimal string: JSON has no bigint.",
+};
 const hex: Schema = { type: "string", pattern: "^([0-9a-f]{2})+$", description: "Lowercase hex." };
 const key32: Schema = {
     type: "string",
@@ -255,7 +260,7 @@ const schemas: Record<string, Schema> = {
                 exitDelay: {
                     description:
                         "CSV on the exit leaf; a value below 512 is blocks, otherwise seconds.",
-                    ...object({ value: decimal, type: oneOfStrings("blocks", "seconds") }),
+                    ...object({ value: positiveDecimal, type: oneOfStrings("blocks", "seconds") }),
                 },
             },
             {
