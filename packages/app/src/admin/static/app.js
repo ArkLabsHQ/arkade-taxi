@@ -378,7 +378,7 @@ function explain(error) {
         text = "The Taxi cannot read its wallet right now.";
     else if (/^header x-taxi-operator/.test(error.message))
         text =
-            "The console could not tell who you are: the proxy in front of it must send the operator header.";
+            "The console could not tell who you are: the proxy in front of it must send the operator header, or set TAXI_ADMIN_OPERATOR on the Taxi.";
     else if (/recovery execution budget/.test(error.message))
         text =
             "Each locktime margin must be larger than the Taxi's recovery budget, set by TAXI_RECOVERY_BROADCAST_BLOCKS and TAXI_RECOVERY_BROADCAST_SECONDS.";
