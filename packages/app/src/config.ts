@@ -140,8 +140,8 @@ export class ConfigError extends Error {
 const HEX_KEY = /^[0-9a-fA-F]{64}$/;
 const DECIMAL = /^[0-9]+$/;
 
-/** What the admin API accepts as an actor, from the operator header or from
- * TAXI_ADMIN_OPERATOR alike. */
+/** What the admin API accepts as an actor, from the operator header, the basic-auth
+ * user or TAXI_ADMIN_OPERATOR alike. */
 export const MAX_ACTOR_LENGTH = 128;
 export const ACTOR_CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
