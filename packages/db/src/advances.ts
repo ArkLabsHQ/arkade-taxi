@@ -603,6 +603,23 @@ export class AdvanceRepository {
             .transaction(() => {
                 const current = this.get(id);
                 if (!current) return "not_found" as const;
+                if (current.state === "locking" && current.submissionPhase === "failed")
+                    // Never back to claimed: prepare would re-sign, and arkd's stored
+                    // copy must still carry the persisted operator signature.
+                    return this.#db
+                        .prepare(
+                            `UPDATE advances SET submission_phase = CASE
+                             WHEN server_final_ark_tx IS NULL THEN 'prepared' ELSE 'responded' END,
+                             submission_next_attempt_at = ?, updated_at = max(updated_at, ?)
+                             WHERE id = ? AND state = 'locking' AND submission_phase = 'failed'
+                             AND prepared_ark_tx IS NOT NULL AND prepared_checkpoints_json IS NOT NULL
+                             AND (server_final_ark_tx IS NULL OR
+                                  (server_checkpoints_json IS NOT NULL AND ark_txid IS NOT NULL))
+                             AND submission_lease_owner IS NULL`,
+                        )
+                        .run(at, at, id).changes === 1
+                        ? ("expedited" as const)
+                        : ("incompatible" as const);
                 if (
                     current.state !== "locking" ||
                     !current.submissionPhase ||

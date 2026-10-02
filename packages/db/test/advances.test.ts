@@ -186,6 +186,40 @@ describe("round-trip fidelity", () => {
         });
     });
 
+    it("re-arms a failed submission that reached arkd to its last durable phase", () => {
+        const failed = {
+            state: "locking" as const,
+            submissionPhase: "failed" as const,
+            preparedArkTx: "operator-signed-ark",
+            preparedCheckpoints: ["checkpoint"],
+            failureCode: "lockup_submission_invalid_provider_response",
+            failureDetail: "server checkpoint 0 changed unsigned fields or metadata",
+        };
+        repo.insert(advance({ ...failed, id: "sent" }));
+        repo.insert(
+            advance({
+                ...failed,
+                id: "answered",
+                serverFinalArkTx: "server-ark",
+                serverCheckpoints: ["server-checkpoint"],
+                arkTxid: "aa".repeat(32),
+            }),
+        );
+
+        expect(repo.expediteSubmission("sent", 100)).toBe("expedited");
+        expect(repo.expediteSubmission("answered", 100)).toBe("expedited");
+        expect(repo.get("sent")).toMatchObject({
+            submissionPhase: "prepared",
+            preparedArkTx: "operator-signed-ark",
+            preparedCheckpoints: ["checkpoint"],
+            submissionNextAttemptAt: 100,
+        });
+        expect(repo.get("answered")).toMatchObject({
+            submissionPhase: "responded",
+            serverFinalArkTx: "server-ark",
+        });
+    });
+
     it("refuses submission retry for live leases, quarantine, terminal, and unknown rows", () => {
         repo.insert(
             advance({
