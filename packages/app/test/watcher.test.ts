@@ -559,6 +559,20 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    it("names an unrolled covenant whose on-chain exit the indexer reports as a spend", async () => {
+        const state = await setup();
+        Object.assign(state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!, {
+            isUnrolled: true,
+            isSpent: true,
+            spentBy: "ee".repeat(32),
+            arkTxId: undefined,
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureCode).toBe("covenant_unrolled");
+        expect(state.policy.get().paused).toBe(true);
+        state.db.close();
+    });
+
     it.each(["purchased", "recycled", "refunded"] as const)(
         "accepts canonical %s while recovery is prepared or submitted and rejects late responses",
         async (kind) => {
