@@ -542,34 +542,29 @@ describe("canonical covenant observation", () => {
         expect(state.advances.get(state.advance.id)?.failureCode).toBe("covenant_unrolled");
         expect(state.advances.get(state.advance.id)?.failureDetail).toMatch(/unrolled/);
         expect(state.watcher.isRecoverable(state.advance.id)).toBe(false);
-        expect(state.policy.get().paused).toBe(true);
+        expect(state.policy.get().paused).toBe(false);
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual(
             state.advance.operatorInputs,
         );
         state.db.close();
     });
 
-    it("keeps an unrolled covenant in the watcher blockers that reach readiness", async () => {
-        const state = await setup();
-        state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!.isUnrolled = true;
-        await state.watcher.catchUp();
-        expect(state.watcher.status().blockers).toEqual([
-            expect.objectContaining({ advanceId: state.advance.id, code: "covenant_unrolled" }),
-        ]);
-        state.db.close();
-    });
-
-    it("names an unrolled covenant whose on-chain exit the indexer reports as a spend", async () => {
+    it.each([
+        ["unspent", {}],
+        ["spent on-chain", { isSpent: true, spentBy: "ee".repeat(32), arkTxId: undefined }],
+    ])("warns, without blocking readiness, about an unrolled covenant %s", async (_, shape) => {
         const state = await setup();
         Object.assign(state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!, {
             isUnrolled: true,
-            isSpent: true,
-            spentBy: "ee".repeat(32),
-            arkTxId: undefined,
+            ...shape,
         });
         await state.watcher.catchUp();
         expect(state.advances.get(state.advance.id)?.failureCode).toBe("covenant_unrolled");
-        expect(state.policy.get().paused).toBe(true);
+        expect(state.policy.get().paused).toBe(false);
+        expect(state.watcher.status().blockers).toEqual([]);
+        expect(state.watcher.status().warnings).toEqual([
+            expect.objectContaining({ advanceId: state.advance.id, code: "covenant_unrolled" }),
+        ]);
         state.db.close();
     });
 
@@ -588,6 +583,11 @@ describe("canonical covenant observation", () => {
             expect(state.advances.get(state.advance.id)?.failureCode).toBe(
                 "covenant_spend_unknown",
             );
+            expect(state.policy.get().paused).toBe(true);
+            expect(state.watcher.status().blockers).toEqual([
+                expect.objectContaining({ code: "covenant_spend_unknown" }),
+            ]);
+            expect(state.watcher.status().warnings).toEqual([]);
             state.db.close();
         },
     );

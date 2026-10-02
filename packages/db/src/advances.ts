@@ -1164,7 +1164,6 @@ export class AdvanceRepository {
                          updated_at = max(updated_at, ?) WHERE id = ? AND state = ?`,
                     )
                     .run(`${reason} at ${tip.hash}:${tip.height}`, at, id, current.state);
-                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
             })
             .immediate();
     }
