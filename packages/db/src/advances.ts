@@ -444,6 +444,7 @@ function fromRow(r: AdvanceRow): Advance {
 export class AdvanceRepository {
     readonly #db: Database;
     readonly #missingFunding: Statement<[], { id: string }>;
+    readonly #missingExitParams: Statement<[], { total: bigint }>;
     readonly #insert: Statement<[AdvanceParams]>;
     readonly #update: Statement<[AdvanceParams]>;
     readonly #get: Statement<[string], AdvanceRow>;
@@ -490,6 +491,10 @@ export class AdvanceRepository {
         this.#missingFunding =
             read(`SELECT id FROM advances WHERE batch_expiry_kind IS NULL OR batch_expiry_value IS NULL
             OR operator_inputs_json IS NULL OR unsigned_lockup_tx IS NULL OR unsigned_lockup_id IS NULL ORDER BY id`);
+        this.#missingExitParams = read(
+            `SELECT count(*) AS total FROM advances WHERE exit_signer_key IS NULL
+             OR exit_delay_type IS NULL OR exit_delay_value IS NULL`,
+        );
         this.#lockupSubmission = db.prepare(`UPDATE advances SET ark_txid = coalesce(ark_txid, ?),
             updated_at = max(updated_at, ?) WHERE id = ? AND state IN ('locking', 'locked')`);
         this.#lockupFailure = db.prepare(`UPDATE advances SET failure_code = ?, failure_detail = ?,
@@ -520,6 +525,17 @@ export class AdvanceRepository {
     listMissingFundingSnapshotIds(): string[] {
         assertNativeAccess(this.#db);
         return this.#missingFunding.all().map(({ id }) => id);
+    }
+
+    /** `fromRow` refuses these rows on read, but startup only reads the active ones: a
+     * database holding only terminal ones would start, then fail the claim feed. */
+    assertExitParamsPresent(): void {
+        assertNativeAccess(this.#db);
+        const total = this.#missingExitParams.get()?.total ?? 0n;
+        if (total > 0n)
+            throw new Error(
+                `Incompatible development data: ${total} advances were written before the covenant exit leaf; recreate the database before starting this service`,
+            );
     }
 
     get(id: string): Advance | undefined {

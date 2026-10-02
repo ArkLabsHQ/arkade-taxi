@@ -107,6 +107,18 @@ describe("round-trip fidelity", () => {
         },
     );
 
+    it.each(["exit_signer_key", "exit_delay_type", "exit_delay_value"])(
+        "refuses a database holding a terminal advance whose %s is missing",
+        (column) => {
+            repo.insert(advance({ state: "recycled" }));
+            expect(() => repo.assertExitParamsPresent()).not.toThrow();
+            db.prepare(`UPDATE advances SET ${column} = NULL WHERE id = 'adv-1'`).run();
+            expect(() => repo.assertExitParamsPresent()).toThrow(
+                /written before the covenant exit leaf.*recreate the database/,
+            );
+        },
+    );
+
     it.each([undefined, 0n, -1n])("rejects asset quantity %s", (assetUnits) => {
         const row = advance({
             assetId: { txid: new Uint8Array(32).fill(1), groupIndex: 0 },
