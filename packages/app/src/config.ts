@@ -24,8 +24,9 @@ export interface TaxiConfig {
     reconcileIntervalMs: number;
     operatorMinReserveSats: bigint;
     proceedsMaxFeeSats: bigint;
-    /** The operator signs its own funding inputs at lockup. It is never a
-     * covenant signer — no leaf carries its key in a multisig. */
+    /** Signs the operator's own funding inputs at lockup and co-signs every
+     * covenant's emergency exit (leaf 4). Keep it until every advance quoted
+     * under it is terminal, or those exits become unspendable. */
     operatorPrivkey: Uint8Array;
     logLevel: LogLevel;
 }

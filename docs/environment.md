@@ -40,7 +40,7 @@ Changing a value means restarting with the new environment.
 Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. It selects the SDK's
 Esplora endpoint from the network advertised by arkd. The same verified network
 selects the address HRP and emulator trust anchor; arkd supplies its signer,
-dust and minimum VTXO amount through `GET /v1/info`.
+dust, minimum VTXO amount and unilateral exit delay through `GET /v1/info`.
 
 Runtime budgets are positive decimal integers. Height budgets are
 `TAXI_MIN_EXPIRY_HEADROOM_BLOCKS=144`, `TAXI_RECOVERY_BROADCAST_BLOCKS=72`, and
@@ -112,7 +112,9 @@ you cannot route around, because it is one.
 ### `TAXI_OPERATOR_PRIVKEY`
 
 A 32-byte secp256k1 private key, 64 lowercase hex. The operator signs its own
-funding inputs at lockup with it and is never a covenant signer.
+funding inputs at lockup with it, and the key co-signs every covenant's
+emergency exit (leaf 4). Keep it until every advance quoted under it is
+terminal: retiring it early makes those exits unspendable.
 
 Malformed or invalid keys stop startup. After verifying the provider identity,
 Taxi derives the SDK wallet's canonical Arkade output key from this signing
