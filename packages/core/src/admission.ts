@@ -21,6 +21,22 @@ function requiredTopup(
     return capped < vtxoMinAmount ? vtxoMinAmount : capped;
 }
 
+/** The advance that leaves the receiver exactly `paymentSats`, or undefined when
+ * no covenant can carry that amount. Both sides of the dust unit must clear
+ * vtxoMinAmount, since the claim pays the operator and the receiver separately. */
+function exactTopup(
+    paymentSats: bigint,
+    req: QuoteRequest,
+    dust: bigint,
+    vtxoMinAmount: bigint,
+    isBitcoinTransfer: boolean,
+): bigint | undefined {
+    if (!isBitcoinTransfer) return undefined;
+    if (paymentSats < vtxoMinAmount || paymentSats > dust - vtxoMinAmount) return undefined;
+    if (paymentSats > req.senderSats) return undefined;
+    return dust - paymentSats;
+}
+
 export function admit(
     req: QuoteRequest,
     policy: Policy,
@@ -37,7 +53,15 @@ export function admit(
     if (!rule) return { ok: false, reason: "asset_not_served" };
     if (!rule.enabled) return { ok: false, reason: "asset_disabled" };
 
-    const topup = requiredTopup(req.senderSats, dust, vtxoMinAmount, req.assetId === undefined);
+    const isBitcoinTransfer = req.assetId === undefined;
+    let topup: bigint;
+    if (req.paymentSats === undefined) {
+        topup = requiredTopup(req.senderSats, dust, vtxoMinAmount, isBitcoinTransfer);
+    } else {
+        const exact = exactTopup(req.paymentSats, req, dust, vtxoMinAmount, isBitcoinTransfer);
+        if (exact === undefined) return { ok: false, reason: "invalid_payment_sats" };
+        topup = exact;
+    }
 
     const perPaymentCap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (topup > perPaymentCap) {

@@ -129,6 +129,17 @@ export interface QuoteRequestBody {
      * operator's rule for this asset. */
     claimMode?: "recycle" | "purchase";
     senderSats: string;
+    /**
+     * Exact sats the receiver must end up with, bitcoin only. Omitted derives
+     * the advance from `senderSats`, which can only ever deliver
+     * `dust - vtxoMinAmount` because a spendable coin is already at least dust.
+     *
+     * No response field reports it, and an operator predating the field ignores
+     * it and quotes the derived advance. A client MUST therefore bind it into
+     * verification — `topup === dust - paymentSats` — rather than read
+     * capability off the response.
+     */
+    paymentSats?: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
     assetUnits?: string;
     /** Which offered fare the client accepts. Omitted takes the operator's first. */
@@ -260,6 +271,10 @@ export interface SponsoredQuoteRequestBody {
     senderKey: string;
     assetId?: AssetIdWire;
     senderSats: string;
+    /** Exact sats the sender contributes to the carrier, bitcoin only; the same
+     * field as `QuoteRequestBody.paymentSats` and bound the same way, against
+     * `contribution === dust - paymentSats`. */
+    paymentSats?: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
     assetUnits?: string;
     /** Which offered fare the client accepts. Omitted takes the operator's first. */

@@ -112,6 +112,14 @@ const isKnown = (r: string): r is AdmissionReason =>
  * An unrecognised reason is still a policy refusal, so it takes 409 too.
  */
 export function admissionError(reason: string): ServiceError {
+    // No operator state would let the same request through, so this one is the
+    // request being wrong rather than a limit it hit.
+    if (reason === "invalid_payment_sats")
+        return new ServiceError(
+            ErrorCode.InvalidRequest,
+            400,
+            "paymentSats must be a bitcoin amount within the covenant's range that the sender's own funding covers",
+        );
     const status: ContentfulStatusCode = reason === "paused" ? 503 : 409;
     const message = isKnown(reason) ? ADMISSION_MESSAGE[reason] : `quote refused: ${reason}`;
     return new ServiceError(reason, status, message);

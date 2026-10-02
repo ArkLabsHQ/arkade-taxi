@@ -136,6 +136,41 @@ describe("verifySponsoredQuote", () => {
         ).toThrow(expect.objectContaining({ code: VerificationErrorCode.Topup }));
     });
 
+    const exactSponsored = (contribution: bigint) => {
+        const base = sponsoredArgs();
+        const senderInputs = base.senderInputs.map((input) => ({ ...input, value: 1_000n }));
+        return {
+            ...base,
+            quote: sponsoredQuote(
+                { ...sponsoredParams(), contribution },
+                { senderInputs, senderSats: 1_000n },
+            ),
+            senderInputs,
+            senderSats: 1_000n,
+        };
+    };
+
+    it("accepts a contribution that leaves the sender paying exactly paymentSats", () => {
+        const a = exactSponsored(230n);
+        const verified = verifySponsoredQuote({
+            ...a,
+            expect: { ...a.expect, paymentSats: 100n },
+        });
+        expect(verified.params.dust - verified.params.contribution).toBe(100n);
+    });
+
+    // Both clear maxContributionSats; 10 is what an old operator quotes.
+    it.each([220n, 10n])("rejects a %s contribution that misses paymentSats", (contribution) => {
+        const a = exactSponsored(contribution);
+        expect(() =>
+            verifySponsoredQuote({ ...a, expect: { ...a.expect, paymentSats: 100n } }),
+        ).toThrow(expect.objectContaining({ code: VerificationErrorCode.PaymentSats }));
+    });
+
+    it("leaves a sponsored quote without paymentSats on the operator's own derivation", () => {
+        expect(() => verifySponsoredQuote(exactSponsored(230n))).not.toThrow();
+    });
+
     it("rejects a fare above the authorized maximum", () => {
         const args = sponsoredAssetArgs();
         expect(() =>
@@ -212,6 +247,20 @@ describe("TaxiClient sponsored transfers", () => {
         });
         const sent = JSON.parse(String(fetch.calls.at(-1)?.init.body));
         expect(sent.extraPacket).toEqual({ type: 0x03, payload: "abcd" });
+    });
+
+    it("sends paymentSats on the sponsored quote request and omits it otherwise", async () => {
+        const { taxi, fetch } = client(() => jsonResponse(200, sponsoredQuote()));
+        const ask = {
+            receiverAddress: sponsoredAddress(),
+            senderKey,
+            senderSats: 1_000n,
+            senderInputs: sponsoredArgs().senderInputs,
+        };
+        await taxi.requestSponsoredQuote({ ...ask, paymentSats: 100n });
+        expect(JSON.parse(String(fetch.calls.at(-1)?.init.body)).paymentSats).toBe("100");
+        await taxi.requestSponsoredQuote(ask);
+        expect(JSON.parse(String(fetch.calls.at(-1)?.init.body))).not.toHaveProperty("paymentSats");
     });
 
     it("requests, signs and submits through the sponsored endpoints", async () => {

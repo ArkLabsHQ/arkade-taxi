@@ -13,6 +13,7 @@ import {
     addressFor,
     args,
     assetArgs,
+    fundingInputs,
     HRP,
     info,
     NOW,
@@ -276,6 +277,43 @@ describe("verifyQuote — pays who the caller asked to pay", () => {
 
     it("rejects a dust the info endpoint did not advertise", () => {
         rejects({ info: { ...info(), dust: "546" } }, "DUST_MISMATCH");
+    });
+});
+
+describe("verifyQuote — exact paymentSats", () => {
+    const exactQuote = (topup: bigint) => {
+        const senderInputs = fundingInputs().map((input) => ({ ...input, value: 1_000n }));
+        return {
+            ...args(),
+            quote: quote({ ...params(), topup }, { senderInputs, senderSats: 1_000n }),
+            senderInputs,
+            senderSats: 1_000n,
+        };
+    };
+    const expecting = (topup: bigint, paymentSats: bigint) => {
+        const a = exactQuote(topup);
+        return { ...a, expect: { ...a.expect, paymentSats } };
+    };
+
+    it("accepts a topup that leaves the receiver exactly paymentSats", () => {
+        const v = verifyQuote(expecting(230n, 100n));
+        expect(v.params.dust - v.params.topup).toBe(100n);
+    });
+
+    // Each of these sits under maxTopupSats, so the pre-existing ceiling admits
+    // all three; only the equality separates them. 10 is what an operator that
+    // ignores the field quotes.
+    it.each([240n, 220n, VTXO_MIN])("rejects a %s topup that misses paymentSats", (topup) => {
+        rejects(expecting(topup, 100n), "PAYMENT_SATS_MISMATCH");
+    });
+
+    it("rejects an exact amount asked of an asset quote", () => {
+        const a = assetArgs();
+        rejects({ ...a, expect: { ...a.expect, paymentSats: 100n } }, "PAYMENT_SATS_MISMATCH");
+    });
+
+    it("leaves a quote without paymentSats on the operator's own derivation", () => {
+        expect(() => verifyQuote(exactQuote(230n))).not.toThrow();
     });
 });
 

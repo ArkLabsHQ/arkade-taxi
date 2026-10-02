@@ -12,6 +12,10 @@ export const SCENARIOS = [
     },
     { id: "329-sat-bitcoin-recycle", title: "Alice sends Bob 329 sats with Taxi's one-sat loan" },
     {
+        id: "exact-sat-bitcoin-recycle",
+        title: "Alice sends Bob exactly 100 sats with Taxi's 230-sat loan",
+    },
+    {
         id: "receiver-sse-recycle",
         title: "Alice sends Bob 200 USDT; Bob has sats and repays Taxi",
     },
@@ -91,7 +95,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 23;
+export const EXPECTED_TOTAL = 24;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

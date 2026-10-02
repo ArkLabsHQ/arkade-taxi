@@ -288,6 +288,42 @@ describe("createSponsoredQuote", () => {
         expect(advances.rows.size).toBe(0);
     });
 
+    it("sponsors the rest of the carrier for an exact paymentSats", async () => {
+        const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
+        const quote = await createSponsoredQuote(d, {
+            ...bitcoinBody("1000"),
+            paymentSats: "100",
+        });
+        expect(quote.params.contribution).toBe("230");
+        const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 900n, 19_770n]);
+    });
+
+    it("leaves a sponsored bitcoin fill unchanged without paymentSats", async () => {
+        const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
+        const quote = await createSponsoredQuote(d, bitcoinBody("1000"));
+        expect(quote.params.contribution).toBe("10");
+    });
+
+    it.each(["321", "9"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
+        const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
+        const bad = await caught(() =>
+            createSponsoredQuote(d, { ...bitcoinBody("1000"), paymentSats }),
+        );
+        expect(bad.code).toBe("invalid_request");
+        expect(bad.status).toBe(400);
+        expect(advances.rows.size).toBe(0);
+    });
+
+    it("refuses paymentSats on an asset fill", async () => {
+        const bad = await caught(() =>
+            createSponsoredQuote(deps(), sponsoredBody({ paymentSats: "100" })),
+        );
+        expect(bad.code).toBe("invalid_request");
+        expect(bad.status).toBe(400);
+    });
+
     it("refuses a sats fare the sender's change cannot cover, before reserving", async () => {
         const d = deps({ policy: satsFarePolicy(10n) });
         const bad = await caught(() =>

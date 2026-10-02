@@ -1000,6 +1000,25 @@ describe("POST /v1/transfers", () => {
         expect(((await res.json()) as ErrorResponse).code).toBe("invalid_request");
     });
 
+    it("quotes an exact paymentSats as the rest of the dust unit", async () => {
+        const res = await post(
+            "/v1/transfers",
+            quoteBody({ senderSats: "1000", paymentSats: "100" }),
+        );
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as QuoteResponse;
+        expect(body.params).toMatchObject({ dust: "330", topup: "230" });
+    });
+
+    it("returns 400 invalid_request for an unsendable paymentSats", async () => {
+        const res = await post(
+            "/v1/transfers",
+            quoteBody({ senderSats: "1000", paymentSats: "321" }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as ErrorResponse).code).toBe("invalid_request");
+    });
+
     it("returns 400 for a body that is not JSON", async () => {
         const res = await app().request("/v1/transfers", {
             method: "POST",

@@ -200,7 +200,7 @@ const badRequest = (message: string) => new ServiceError(ErrorCode.InvalidReques
 export function decodeSenderFunding(
     b: Pick<
         QuoteRequestBody,
-        "senderKey" | "senderSats" | "senderInputs" | "assetUnits" | "fareId"
+        "senderKey" | "senderSats" | "senderInputs" | "assetUnits" | "fareId" | "paymentSats"
     >,
 ) {
     try {
@@ -210,6 +210,9 @@ export function decodeSenderFunding(
             senderInputs: b.senderInputs.map((input, i) =>
                 fundingInputFromWire(input, `senderInputs[${i}]`),
             ),
+            ...(b.paymentSats !== undefined
+                ? { paymentSats: satsFromWire(b.paymentSats, "paymentSats") }
+                : {}),
             ...(b.assetUnits !== undefined
                 ? { assetUnits: satsFromWire(b.assetUnits, "assetUnits") }
                 : {}),
@@ -225,6 +228,7 @@ function decodeBody(body: unknown): {
     senderKey: Uint8Array;
     senderSats: bigint;
     senderInputs: FundingInputValue[];
+    paymentSats?: bigint;
     assetUnits?: bigint;
     fareId?: string;
     claimMode?: "recycle" | "purchase";
@@ -244,6 +248,7 @@ function decodeBody(body: unknown): {
         senderKey: Uint8Array;
         senderSats: bigint;
         senderInputs: FundingInputValue[];
+        paymentSats?: bigint;
         assetUnits?: bigint;
         fareId?: string;
         claimMode?: "recycle" | "purchase";

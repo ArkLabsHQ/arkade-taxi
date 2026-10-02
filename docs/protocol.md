@@ -22,7 +22,7 @@ already trusts** — see [Verification](#verification).
 ## `POST /v1/transfers`
 
 Request: `receiverKey`, `senderKey`, `senderSats`, exact `senderInputs` funding
-facts and optional `assetId`, `assetUnits` and `fareId`. Each input carries its
+facts and optional `assetId`, `assetUnits`, `fareId` and `paymentSats`. Each input carries its
 outpoint, value, tree, spend leaf, tagged expiry and asset packet when present.
 Taxi verifies this evidence against the indexer and atomically reserves its
 own inputs. Outstanding-sat and concurrent-advance capacity is checked atomically
@@ -45,6 +45,25 @@ funded from the sender's change, and the envelope marks it with
 operator revenue; the operator supplies its hosting sats. Omitting `assetUnits` transfers the sender's remaining units
 of the payment asset after any fare in that asset. The envelope records that
 resolved quantity, which the client independently verifies before signing.
+
+### Exact bitcoin amounts
+
+Without `paymentSats` the advance is `clamp(dust - senderSats, vtxoMinAmount, dust)`,
+and a spendable coin is already at least `dust`, so a bitcoin transfer always
+delivers `dust - vtxoMinAmount`. `paymentSats` names what the receiver must end
+up with instead: the advance becomes `dust - paymentSats`, the sender
+contributes exactly `paymentSats` and the rest of its coins return as change.
+It is bitcoin only — an asset transfer's sats are the carrier — must sit within
+`[vtxoMinAmount, dust - vtxoMinAmount]` so both claim outputs clear the
+minimum, and must not exceed `senderSats`. Violations are `400 invalid_request`;
+the resulting advance still faces the ordinary topup caps.
+
+No response field reports it, and an operator predating the field ignores it and
+quotes its own derivation. **A client MUST bind it into verification** —
+`topup == dust - paymentSats`, and `contribution == dust - paymentSats` on a
+sponsored payment — rather than reading capability off the response.
+`paymentSats` is reconstructible from a stored advance as `dust - topup`, so it
+needs no separate record.
 
 ## `POST /v1/transfers/:id/lockup`
 
@@ -79,7 +98,9 @@ the response carries `params` with the operator's `contribution` (the dust
 shortfall it fronts, playing the role of `topup`), the fare, `expiresAt`, an
 `unsignedSponsoredTx` envelope with the same shape as a lockup envelope but
 graphed under `arkade-taxi-sponsored-v1`, and a `commitment` whose output
-index 0 is the direct payment to the receiver.
+index 0 is the direct payment to the receiver. It accepts the same optional
+`paymentSats`, which fixes `contribution` at `dust - paymentSats`; the receiver
+still takes the whole carrier, so here the field pins what the SENDER puts in.
 
 `POST /v1/sponsored-transfers/:id/lockup` takes the envelope signed at the
 sender's inputs, verified and persisted exactly like a lockup; the same leased

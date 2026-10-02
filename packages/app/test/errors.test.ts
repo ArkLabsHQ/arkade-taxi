@@ -187,4 +187,10 @@ describe("admissionError", () => {
         expect(e.code).toBe("something_new");
         expect(e.status).toBe(409);
     });
+
+    it("maps an unsendable paymentSats to 400 invalid_request", () => {
+        const e = admissionError("invalid_payment_sats");
+        expect(e.code).toBe(ErrorCode.InvalidRequest);
+        expect(e.status).toBe(400);
+    });
 });

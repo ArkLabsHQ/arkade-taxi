@@ -38,6 +38,9 @@ export const VerificationErrorCode = {
     AssetId: "ASSET_ID_MISMATCH",
     Dust: "DUST_MISMATCH",
     Topup: "TOPUP_ABOVE_MAX",
+    /** Separate from `Topup`: an exact amount is an equality, and every quote
+     * that misses it still sits under the caller's ceiling. */
+    PaymentSats: "PAYMENT_SATS_MISMATCH",
     Fee: "FEE_ABOVE_MAX",
     Locktime: "LOCKTIME_BELOW_MIN",
     ExitDelay: "EXIT_DELAY_BELOW_MIN",

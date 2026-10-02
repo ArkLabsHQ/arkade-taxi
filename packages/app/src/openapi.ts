@@ -122,6 +122,15 @@ const assetUnits: Schema = {
     ...decimal,
     description: "Units of the asset moved; a proportional fare prices against it.",
 };
+const paymentSats: Schema = {
+    ...decimal,
+    description:
+        "Exact sats the receiver must end up with, bitcoin only. Must be within " +
+        "[vtxoMinAmount, dust - vtxoMinAmount] and covered by senderSats; the advance " +
+        "becomes dust - paymentSats. Omitted derives the advance from senderSats, which " +
+        "can only deliver dust - vtxoMinAmount. No response field reports it: verify it " +
+        "as topup == dust - paymentSats.",
+};
 
 const schemas: Record<string, Schema> = {
     Error: {
@@ -239,6 +248,7 @@ const schemas: Record<string, Schema> = {
             },
             assetUnits,
             fareId,
+            paymentSats,
         },
     ),
     QuoteParams: {
@@ -396,7 +406,19 @@ const schemas: Record<string, Schema> = {
             senderKey: key32,
             senderSats: decimal,
         },
-        { assetId: ref("AssetId"), assetUnits, fareId, extraPacket: ref("ExtraPacket") },
+        {
+            assetId: ref("AssetId"),
+            assetUnits,
+            fareId,
+            extraPacket: ref("ExtraPacket"),
+            paymentSats: {
+                ...paymentSats,
+                description:
+                    "Exact sats the sender contributes to the carrier, bitcoin only. Same " +
+                    "range and verification as on QuoteRequest, against " +
+                    "contribution == dust - paymentSats.",
+            },
+        },
     ),
     SponsoredParams: object(
         {

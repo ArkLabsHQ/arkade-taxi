@@ -240,6 +240,34 @@ describe("requestVerifiedQuote", () => {
         });
     });
 
+    const exactRequest = (topup: bigint) => {
+        const selected = { ...coin(), value: 1_000 };
+        const senderInputs = client.fundingInputsFromVtxos([selected]);
+        const a = {
+            ...args(),
+            quote: quote({ ...params(), topup }, { senderInputs, senderSats: 1_000n }),
+        };
+        return { a, ask: { ...request(a), selectedVtxos: [selected], paymentSats: 100n } };
+    };
+
+    // Declared once at the top level, so the field sent and the field checked
+    // cannot diverge.
+    it("sends paymentSats and binds the quote to it", async () => {
+        const { a, ask } = exactRequest(230n);
+        const { taxi, fetch } = transport(a);
+        const { verified } = await taxi.requestVerifiedQuote(ask);
+        expect(JSON.parse(String(fetch.calls[1].init.body)).paymentSats).toBe("100");
+        expect(verified.params.dust - verified.params.topup).toBe(100n);
+    });
+
+    it("rejects a quote that ignored paymentSats", async () => {
+        const { a, ask } = exactRequest(10n);
+        const { taxi } = transport(a);
+        await expect(taxi.requestVerifiedQuote(ask)).rejects.toMatchObject({
+            code: "PAYMENT_SATS_MISMATCH",
+        });
+    });
+
     it("refuses an operator on another protocol version before requesting a quote", async () => {
         const params: Record<string, unknown> = { ...quote().params };
         delete params.operatorSignerKey;

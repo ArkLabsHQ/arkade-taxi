@@ -186,6 +186,10 @@ export interface QuoteRequest {
     /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
      * payment, where the operator funds the whole thing. */
     senderSats: bigint;
+    /** Exact sats the receiver must end up with. Absent derives the advance
+     * from `senderSats`, which can only ever deliver `dust - vtxoMinAmount`
+     * because a spendable coin is already at least dust. Bitcoin only. */
+    paymentSats?: bigint;
     /** Units of the asset being moved; priced against by a proportional fare. */
     assetUnits?: bigint;
     /** Which of the rule's offered fares the client accepts. Omitted takes the first. */

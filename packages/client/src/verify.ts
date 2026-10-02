@@ -49,6 +49,9 @@ export interface QuoteExpectation {
     senderKey: Uint8Array;
     assetId?: AssetIdValue;
     maxTopupSats: bigint;
+    /** Exact sats the receiver must end up with. No response field reports it,
+     * so this equality is the only way to detect a Taxi that ignored it. */
+    paymentSats?: bigint;
     /**
      * The most the caller will pay, AND in what. Currency is part of the
      * authorisation: "at most 1000" means nothing until it says 1000 of what,
@@ -169,6 +172,20 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
             VerificationErrorCode.Topup,
             `topup ${params.topup} exceeds your max ${expect.maxTopupSats}`,
         );
+    }
+    if (expect.paymentSats !== undefined) {
+        if (params.assetId !== undefined) {
+            reject(
+                VerificationErrorCode.PaymentSats,
+                "an exact sats amount is only defined for a bitcoin transfer",
+            );
+        }
+        if (params.topup !== params.dust - expect.paymentSats) {
+            reject(
+                VerificationErrorCode.PaymentSats,
+                `topup ${params.topup} leaves the receiver ${params.dust - params.topup}, you asked to send ${expect.paymentSats}`,
+            );
+        }
     }
     if (quote.fare.currency !== expect.maxFare.currency) {
         reject(

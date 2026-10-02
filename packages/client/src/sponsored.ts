@@ -63,6 +63,8 @@ export interface SponsoredQuoteExpectation {
     extraPacket?: { type: number; payload: Uint8Array };
     assetId?: { txid: Uint8Array; groupIndex: number };
     maxContributionSats: bigint;
+    /** Exact sats the sender contributes to the carrier; see `QuoteExpectation`. */
+    paymentSats?: bigint;
     maxFare: {
         currency: "sats" | "asset";
         units: bigint;
@@ -449,6 +451,15 @@ export function verifySponsoredQuote(args: VerifySponsoredQuoteArgs): VerifiedSp
         reject(
             VerificationErrorCode.Topup,
             `contribution ${params.contribution} exceeds your max ${expect.maxContributionSats}`,
+        );
+    }
+    if (
+        expect.paymentSats !== undefined &&
+        params.contribution !== params.dust - expect.paymentSats
+    ) {
+        reject(
+            VerificationErrorCode.PaymentSats,
+            `contribution ${params.contribution} leaves you paying ${params.dust - params.contribution}, you asked to pay ${expect.paymentSats}`,
         );
     }
     if (quote.fare.currency !== expect.maxFare.currency) {

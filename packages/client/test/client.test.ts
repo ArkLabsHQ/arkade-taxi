@@ -132,6 +132,20 @@ describe("requestQuote", () => {
         });
     });
 
+    it("encodes an exact paymentSats and omits it otherwise", async () => {
+        const { taxi, fetch } = client(ok(quote()));
+        await taxi.requestQuote({
+            receiverKey,
+            senderKey,
+            senderSats: 1_000n,
+            senderInputs: [],
+            paymentSats: 100n,
+        });
+        expect(JSON.parse(String(fetch.calls[0]!.init.body)).paymentSats).toBe("100");
+        await taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n, senderInputs: [] });
+        expect(JSON.parse(String(fetch.calls[1]!.init.body))).not.toHaveProperty("paymentSats");
+    });
+
     it("throws INVALID_RESPONSE when the quote fails the codecs", async () => {
         const { taxi } = client(ok({ ...quote(), fare: { currency: "sats", units: "1e3" } }));
         await expect(

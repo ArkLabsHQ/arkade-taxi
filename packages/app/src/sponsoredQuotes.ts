@@ -113,6 +113,7 @@ function decodeBody(
     senderKey: Uint8Array;
     senderSats: bigint;
     senderInputs: FundingInputValue[];
+    paymentSats?: bigint;
     assetUnits?: bigint;
     fareId?: string;
     assetId?: { txid: Uint8Array; groupIndex: number };
@@ -215,6 +216,7 @@ async function createReservedSponsoredQuote(
             receiverKey: req.receiverKey,
             senderKey: req.senderKey,
             senderSats: req.senderSats,
+            ...(req.paymentSats !== undefined ? { paymentSats: req.paymentSats } : {}),
             ...(req.assetId ? { assetId: req.assetId } : {}),
             ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),
             ...(req.fareId !== undefined ? { fareId: req.fareId } : {}),

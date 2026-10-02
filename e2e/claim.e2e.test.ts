@@ -92,6 +92,82 @@ async function smallBitcoinPayment() {
 
 liveScenario("329-sat-bitcoin-recycle", smallBitcoinPayment);
 
+/** The same rail with `paymentSats`: Bob gets what Alice named, not what her
+ * coin happened to leave over. */
+async function exactBitcoinPayment() {
+    const live = await openLive();
+    try {
+        const alice = live.actors.sender;
+        const bob = live.actors.receiverSats;
+        const bobFundingTxid = await alice.wallet.send({
+            address: await bob.wallet.getAddress(),
+            amount: 1000,
+        });
+        const bobCoin = await poll(
+            "Bob's spendable coin",
+            () => bob.wallet.getSpendableVtxos({ withRecoverable: false }),
+            (coins) => coins.some((coin) => coin.txid === bobFundingTxid && coin.value === 1000),
+        ).then((coins) => coins.find((coin) => coin.txid === bobFundingTxid)!);
+        const aliceCoin = await sizedSender(live);
+        const [aliceBefore, bobBefore, taxiBefore] = await Promise.all([
+            walletBalance(alice, live.fixture.asset.assetId),
+            walletBalance(bob, live.fixture.asset.assetId),
+            walletBalance(live.actors.operator, live.fixture.asset.assetId),
+        ]);
+        const offered = await quoteFor(
+            live,
+            "receiverSats",
+            aliceCoin,
+            false,
+            false,
+            "recycle",
+            100n,
+        );
+        expect(offered.quote.params.topup).toBe("230");
+        const locked = await lock(live, offered);
+        const txid = await live.client.recycle(
+            locked.transfer,
+            {
+                input: {
+                    txid: bobCoin.txid,
+                    vout: bobCoin.vout,
+                    value: BigInt(bobCoin.value),
+                    tapTree: bobCoin.tapTree,
+                    tapLeafScript: bobCoin.forfeitTapLeafScript,
+                },
+                expiry: fundingOf(bobCoin).expiry,
+                identity: bob.identity,
+            },
+            locked.destination,
+        );
+        const { tx } = await terminal(live, locked, "recycled", txid);
+        expect(tx.inputsLength).toBe(2);
+        expectReceipt(tx, 0, 230n, live.info.operatorKey);
+        expect(
+            await poll(
+                "Bob receives exactly the 100 sats Alice named",
+                () => walletBalance(bob, live.fixture.asset.assetId),
+                (balance) => balance.sats === bobBefore.sats + 100n,
+            ),
+        ).toEqual({ sats: bobBefore.sats + 100n, units: bobBefore.units });
+        expect(await walletBalance(alice, live.fixture.asset.assetId)).toEqual({
+            sats: aliceBefore.sats - 100n,
+            units: aliceBefore.units,
+        });
+        expect(
+            await poll(
+                "Taxi's 230-sat loan is repaid",
+                () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
+                (balance) => balance.sats === taxiBefore.sats && balance.units === taxiBefore.units,
+            ),
+        ).toEqual(taxiBefore);
+    } finally {
+        await live.close();
+    }
+}
+
+liveScenario("exact-sat-bitcoin-recycle", exactBitcoinPayment);
+
 async function receiverSseClaim(mode: "recycle" | "purchase") {
     const live = await openLive();
     const alice = live.actors.sender;

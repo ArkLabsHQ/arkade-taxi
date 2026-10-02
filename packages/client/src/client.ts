@@ -124,6 +124,9 @@ export interface QuoteRequest {
     fareId?: string;
     /** Exact sum of the selected sender input values. */
     senderSats: bigint;
+    /** Exact sats the receiver must end up with, bitcoin only. Omitted leaves
+     * the operator deriving the advance from `senderSats`. */
+    paymentSats?: bigint;
 }
 
 export interface RequestVerifiedQuoteArgs extends Omit<
@@ -138,7 +141,10 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     /** The leaf to authorise. Sent as the request and bound as the expectation
      * from this one field, so a substituted quote cannot pass the check. */
     claimMode?: "recycle" | "purchase";
-    expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId">;
+    /** The exact amount to send. Sent as the request and bound as the
+     * expectation from this one field, for the same reason. */
+    paymentSats?: bigint;
+    expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId" | "paymentSats">;
 }
 
 export interface SponsoredQuoteRequest {
@@ -150,6 +156,8 @@ export interface SponsoredQuoteRequest {
     fareId?: string;
     /** Exact sum of the selected sender input values. */
     senderSats: bigint;
+    /** Exact sats the sender contributes to the carrier, bitcoin only. */
+    paymentSats?: bigint;
     /** An extra extension packet the payment must carry — an offer's, when
      * funding one. Checked against the quote's echo during verification. */
     extraPacket?: { type: number; payload: Uint8Array };
@@ -194,9 +202,11 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     /** An offer's `extension` funds that offer. Declared once: the expectation
      * below is derived from it, so the request and the check cannot diverge. */
     extraPacket?: { type: number; payload: Uint8Array };
+    /** The exact amount to contribute, declared once for the same reason. */
+    paymentSats?: bigint;
     expect: Omit<
         SponsoredQuoteExpectation,
-        "receiverAddress" | "senderKey" | "assetId" | "extraPacket"
+        "receiverAddress" | "senderKey" | "assetId" | "extraPacket" | "paymentSats"
     >;
 }
 
@@ -242,6 +252,7 @@ export class TaxiClient {
         };
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
         if (req.claimMode !== undefined) wire.claimMode = req.claimMode;
+        if (req.paymentSats !== undefined) wire.paymentSats = satsToWire(req.paymentSats);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
@@ -356,6 +367,7 @@ export class TaxiClient {
                 senderKey: request.senderKey,
                 assetId: request.assetId,
                 claimMode: requestedClaimMode,
+                paymentSats: request.paymentSats,
             },
         });
         return { verified, senderInputs };
@@ -385,6 +397,7 @@ export class TaxiClient {
             senderInputs: req.senderInputs.map(fundingInputToWire),
         };
         if (req.assetId !== undefined) wire.assetId = assetIdToWire(req.assetId);
+        if (req.paymentSats !== undefined) wire.paymentSats = satsToWire(req.paymentSats);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
         if (req.extraPacket !== undefined)
@@ -435,6 +448,7 @@ export class TaxiClient {
                 senderKey: request.senderKey,
                 assetId: request.assetId,
                 extraPacket: request.extraPacket,
+                paymentSats: request.paymentSats,
             },
         });
         return { verified, senderInputs };

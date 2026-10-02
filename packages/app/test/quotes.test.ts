@@ -261,6 +261,77 @@ describe("createQuote", () => {
         expect(res.params.topup).toBe("230");
     });
 
+    // Pins the derivation paymentSats opts out of: a spendable coin is already
+    // at least dust, so this quote delivers dust - vtxoMinAmount, not 1000.
+    it("derives the advance from the sender's whole coin without paymentSats", async () => {
+        const res = await createQuote(deps(), quoteBody({ senderSats: "1000" }));
+        expect(res.params.topup).toBe("10");
+        expect(advances.get(res.transferId)!.topup).toBe(VTXO_MIN);
+    });
+
+    it("lends the rest of the dust unit for an exact paymentSats", async () => {
+        const res = await createQuote(
+            deps(),
+            quoteBody({ senderSats: "1000", paymentSats: "100" }),
+        );
+        expect(res.params.topup).toBe("230");
+        expect(advances.get(res.transferId)!.topup).toBe(230n);
+        const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 900n, 19_770n]);
+    });
+
+    it("leaves no sender change when paymentSats takes the whole coin", async () => {
+        const res = await createQuote(deps(), quoteBody({ senderSats: "320", paymentSats: "320" }));
+        expect(res.params.topup).toBe("10");
+        const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
+        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+        expect([0, 1].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 19_990n]);
+    });
+
+    it.each(["321", "9", "0"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
+        const d = deps();
+        const error = await caught(() =>
+            createQuote(d, quoteBody({ senderSats: "1000", paymentSats })),
+        );
+        expect(error.code).toBe("invalid_request");
+        expect(error.status).toBe(400);
+        expect(advances.rows.size).toBe(0);
+        expect(d.reservations.listReservedOutpoints()).toEqual([]);
+    });
+
+    it("refuses a paymentSats above the sender's own funding", async () => {
+        const error = await caught(() =>
+            createQuote(deps(), quoteBody({ senderSats: "100", paymentSats: "200" })),
+        );
+        expect(error.code).toBe("invalid_request");
+        expect(error.status).toBe(400);
+    });
+
+    it("refuses paymentSats on an asset transfer, where sats are the carrier", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, 0n) });
+        const error = await caught(() =>
+            createQuote(
+                d,
+                quoteBody({
+                    assetId: assetIdToWire(ASSET),
+                    senderSats: "1000",
+                    paymentSats: "100",
+                }),
+            ),
+        );
+        expect(error.code).toBe("invalid_request");
+        expect(error.status).toBe(400);
+    });
+
+    it("refuses a paymentSats the wire codec cannot read", async () => {
+        const error = await caught(() =>
+            createQuote(deps(), quoteBody({ senderSats: "1000", paymentSats: "-1" })),
+        );
+        expect(error.code).toBe("invalid_request");
+        expect(error.status).toBe(400);
+    });
+
     it("refuses a positive sats fare on a bitcoin transfer", async () => {
         const d = deps({ policy: satsFareRule(null, 10n) });
         const error = await caught(() => createQuote(d, quoteBody()));

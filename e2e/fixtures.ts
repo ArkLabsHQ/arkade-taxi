@@ -394,11 +394,13 @@ export async function quoteFor(
     withAsset = false,
     omitAssetUnits = false,
     claimMode?: "recycle" | "purchase",
+    paymentSats?: bigint,
 ) {
     const preparedAt = Math.floor(Date.now() / 1000);
     // An asset transfer's sats are only a carrier, so Taxi fronts the whole dust
-    // unit; a bitcoin one nets the advance against what the sender brings.
-    const topup = withAsset ? 330n : 1n;
+    // unit; a bitcoin one nets the advance against what the sender brings — unless
+    // paymentSats names the amount, where the advance is the rest of the unit.
+    const topup = paymentSats !== undefined ? 330n - paymentSats : withAsset ? 330n : 1n;
     const fareUnits = withAsset ? 1n : 0n;
     const senderInputs = [fundingOf(coin)];
     const receiver = live.actors[receiverName];
@@ -413,6 +415,7 @@ export async function quoteFor(
         ...(withAsset ? { assetId: live.assetId } : {}),
         ...(withAsset && !omitAssetUnits ? { assetUnits: 100n } : {}),
         ...(claimMode ? { claimMode } : {}),
+        ...(paymentSats !== undefined ? { paymentSats } : {}),
     };
     await ready(preparedAt);
     const quote = await preEffectRequest(() => live.client.requestQuote(request), {
@@ -434,6 +437,7 @@ export async function quoteFor(
             maxFare: { currency: "sats", units: fareUnits },
             minLocktime: 1n,
             ...(claimMode ? { claimMode } : {}),
+            ...(paymentSats !== undefined ? { paymentSats } : {}),
         },
         trustedServerKey: hexToBytes(live.info.serverKey, "serverKey"),
         trustedEmulatorKey: hexToBytes(live.info.emulatorKey, "emulatorKey"),

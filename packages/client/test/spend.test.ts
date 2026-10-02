@@ -1230,6 +1230,26 @@ describe("covenant transfer capability", () => {
     });
 });
 
+/** A covenant shaped by `paymentSats`: dust 330 less a 230 advance, so the
+ * receiver nets 100 and the claim amounts differ from the full-dust default. */
+const exactArgs = (receiverOverride?: Uint8Array) => {
+    const senderInputs = args().senderInputs.map((input) => ({ ...input, value: 1_000n }));
+    const a = args();
+    a.senderInputs = senderInputs;
+    a.senderSats = 1_000n;
+    a.expect.paymentSats = 100n;
+    if (receiverOverride) a.expect.receiverKey = receiverOverride;
+    a.quote = quote(
+        {
+            ...params(),
+            topup: 230n,
+            ...(receiverOverride ? { receiverKey: receiverOverride } : {}),
+        },
+        { senderInputs, senderSats: 1_000n },
+    );
+    return a;
+};
+
 describe("purchase", () => {
     it("spends all remaining assets when the caller omitted assetUnits", async () => {
         const authorization = assetArgs();
@@ -1276,6 +1296,15 @@ describe("purchase", () => {
         const { transfer, emulator } = await setup();
         await expect(purchase(transfer, new Uint8Array([0x51]))).rejects.toThrow(/destination/i);
         expect(emulator.submitTx).not.toHaveBeenCalled();
+    });
+
+    // The purchase leaf pays the whole carrier out whatever the advance was, so
+    // a paymentSats covenant must still hand over the full dust.
+    it("pays the whole carrier out of a partly advanced covenant", async () => {
+        const { transfer, submitted } = await setup(exactArgs());
+        const destination = new Uint8Array([0x51, 0x20, ...receiverKey]);
+        await purchase(transfer, destination);
+        expect(submitted()!.getOutput(0)).toMatchObject({ amount: 330n, script: destination });
     });
 
     // The tree keeps a parseable slot for the forbidden leaf, so the refusal has
@@ -1729,6 +1758,19 @@ describe("recycle", () => {
             script: payoutPkScript(operatorKey, 330n, 330n),
         });
         expect(tx.getOutput(1)).toMatchObject({ amount: 500n, script: destination });
+    });
+
+    it("repays only the advance and merges the exact paymentSats into the receiver", async () => {
+        const funding = await receiverFunding();
+        const { transfer, submitted } = await setup(exactArgs(funding.receiverKey), [], [funding]);
+        const destination = new Uint8Array([0x51, 0x20, ...funding.receiverKey]);
+        await recycle(transfer, funding.walletInput, destination);
+        const tx = submitted()!;
+        expect(tx.getOutput(0)).toMatchObject({
+            amount: 230n,
+            script: payoutPkScript(operatorKey, 230n, 330n),
+        });
+        expect(tx.getOutput(1)).toMatchObject({ amount: 600n, script: destination });
     });
 
     it("rejects a receiver leaf owned by the wrong identity before emulator submission", async () => {
