@@ -3405,6 +3405,8 @@ async function loadFunding() {
 const CONFIG_MEANINGS = {
     httpPort: "The public port wallets call.",
     adminPort: "The port serving this console; keep it behind the authenticating proxy.",
+    adminOperator:
+        "The name recorded for a console change when the proxy forwards no operator identity.",
     dbPath: "The SQLite file holding the ledger; it must survive restarts.",
     arkdUrl: "The Arkade server the Taxi works with.",
     indexerUrl: "Where the Taxi reads coins: the same Arkade server's indexer.",

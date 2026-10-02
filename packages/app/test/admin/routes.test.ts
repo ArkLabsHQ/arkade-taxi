@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { advance, boardingView, harness, healthySweeper, key } from "./fixtures.js";
+import { advance, boardingView, harness, healthySweeper, key, type Harness } from "./fixtures.js";
 import {
     DUST,
     VTXO_MIN,
@@ -494,6 +494,53 @@ describe("PATCH /admin/api/policy", () => {
         });
 
         expect(res.status).toBe(400);
+    });
+});
+
+describe("the operator a change is attributed to", () => {
+    const json = { "content-type": "application/json" };
+    const patch = (h: Harness, headers: Record<string, string> = {}) =>
+        h.json("/admin/api/policy", {
+            method: "PATCH",
+            headers: { ...json, ...headers },
+            body: JSON.stringify({ quoteTtlSeconds: 30 }),
+        });
+    const rescan = (h: Harness) =>
+        h.json("/admin/api/rescan", { method: "POST", headers: json, body: "{}" });
+    const actors = (h: Harness) => h.policy.history(10).map((row) => row.actor);
+
+    it("falls back to the configured operator when the proxy forwards no identity", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+
+        expect((await patch(h)).status).toBe(200);
+        expect((await rescan(h)).status).toBe(202);
+        expect(actors(h)).toEqual(["taxi-ops", "taxi-ops"]);
+    });
+
+    it("still refuses a change nothing identifies when no operator is configured", async () => {
+        const h = harness();
+
+        for (const res of [await patch(h), await rescan(h)]) {
+            expect(res.status).toBe(400);
+            expect(res.body.error).toBe("header x-taxi-operator: operator identity is required");
+        }
+        expect(h.policy.history(10)).toEqual([]);
+    });
+
+    it("prefers the operator header, and refuses a bad one rather than falling back", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+
+        expect((await patch(h, { "x-taxi-operator": "x".repeat(129) })).status).toBe(400);
+        expect((await patch(h, { "x-taxi-operator": "named-user" })).status).toBe(200);
+        expect(actors(h)).toEqual(["named-user"]);
+    });
+
+    it("prefers the basic-auth user to the configured operator", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+        const basic = `Basic ${Buffer.from("alice:secret").toString("base64")}`;
+
+        expect((await patch(h, { authorization: basic })).status).toBe(200);
+        expect(actors(h)).toEqual(["alice"]);
     });
 });
 

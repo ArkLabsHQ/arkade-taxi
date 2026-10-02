@@ -11,6 +11,7 @@ export interface TaxiConfig {
     dbPath: string;
     httpPort: number;
     adminPort?: number;
+    adminOperator?: string;
     arkdUrl: string;
     indexerUrl: string;
     emulatorUrl: string;
@@ -51,6 +52,7 @@ export interface RuntimeConfig extends TaxiConfig {
 export const SHOWN_CONFIG = {
     httpPort: "TAXI_HTTP_PORT",
     adminPort: "TAXI_ADMIN_PORT",
+    adminOperator: "TAXI_ADMIN_OPERATOR",
     dbPath: "TAXI_DB_PATH",
     arkdUrl: "TAXI_ARKD_URL",
     indexerUrl: "TAXI_ARKD_URL",
@@ -138,6 +140,11 @@ export class ConfigError extends Error {
 const HEX_KEY = /^[0-9a-fA-F]{64}$/;
 const DECIMAL = /^[0-9]+$/;
 
+/** What the admin API accepts as an actor, from the operator header or from
+ * TAXI_ADMIN_OPERATOR alike. */
+export const MAX_ACTOR_LENGTH = 128;
+export const ACTOR_CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
 const hexKey = z
     .string()
     .regex(HEX_KEY, "must be 64 hex characters (32 bytes)")
@@ -165,6 +172,13 @@ const SCHEMA = z
         TAXI_DB_PATH: z.string().min(1, "must not be empty").default(":memory:"),
         TAXI_HTTP_PORT: port.default("8080"),
         TAXI_ADMIN_PORT: port.optional(),
+        TAXI_ADMIN_OPERATOR: z
+            .string()
+            .trim()
+            .min(1, "must not be empty")
+            .max(MAX_ACTOR_LENGTH, `must be at most ${MAX_ACTOR_LENGTH} characters`)
+            .refine((s) => !ACTOR_CONTROL_CHARS.test(s), "must not contain control characters")
+            .optional(),
         TAXI_ARKD_URL: url,
         TAXI_EMULATOR_URL: url,
         TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
@@ -247,6 +261,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         dbPath: v.TAXI_DB_PATH,
         httpPort: v.TAXI_HTTP_PORT,
         adminPort: v.TAXI_ADMIN_PORT,
+        adminOperator: v.TAXI_ADMIN_OPERATOR,
         arkdUrl: v.TAXI_ARKD_URL,
         indexerUrl: v.TAXI_ARKD_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,

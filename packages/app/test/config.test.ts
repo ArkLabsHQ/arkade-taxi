@@ -107,6 +107,24 @@ describe("loadConfig", () => {
             expect(() => loadConfig(env({ TAXI_ADMIN_PORT: value }))).toThrow(/TAXI_ADMIN_PORT/);
     });
 
+    it("takes an optional admin operator name, trimmed", () => {
+        expect(loadConfig(env()).adminOperator).toBeUndefined();
+        expect(loadConfig(env({ TAXI_ADMIN_OPERATOR: "  ops-team  " })).adminOperator).toBe(
+            "ops-team",
+        );
+    });
+
+    it("refuses an admin operator name the admin API would refuse as an actor", () => {
+        for (const value of ["", "   ", "x".repeat(129), "ops\tteam", "ops\u007f"])
+            expect(
+                () => loadConfig(env({ TAXI_ADMIN_OPERATOR: value })),
+                JSON.stringify(value),
+            ).toThrow(/TAXI_ADMIN_OPERATOR/);
+        expect(loadConfig(env({ TAXI_ADMIN_OPERATOR: "x".repeat(128) })).adminOperator).toBe(
+            "x".repeat(128),
+        );
+    });
+
     it("decodes the operator private key to 32 bytes", () => {
         const cfg = loadConfig(env());
         expect(cfg.operatorPrivkey).toHaveLength(32);

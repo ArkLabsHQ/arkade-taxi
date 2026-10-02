@@ -79,6 +79,7 @@ export function harness(
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
         funding?: AdminDeps["funding"];
+        adminOperator?: string;
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -103,6 +104,7 @@ export function harness(
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
         serviceConfig: shownConfig(config()),
+        adminOperator: opts.adminOperator,
         funding:
             opts.funding ??
             (async () => ({
