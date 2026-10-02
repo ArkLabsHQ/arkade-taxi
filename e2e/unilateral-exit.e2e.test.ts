@@ -26,6 +26,7 @@ import {
 } from "./fixtures.js";
 
 const COVENANT = "taxi-dust-covenant";
+const SERVICES = ["arkd", "emulator"];
 
 liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
     const live = await openLive();
@@ -37,7 +38,7 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
             timeout: 60_000,
         }).trim();
     const evidence: Record<string, unknown> = {};
-    let paused = false;
+    const paused = new Set<string>();
     try {
         // The recovery leaf must still be locked once the exit delay matures.
         await admin("policy", { locktimeMarginSeconds: 64_800 });
@@ -119,8 +120,10 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
             expect.objectContaining({ kind: "package", parentTxid: outpoint.txid }),
         );
 
-        setOwnedServices(project, ["arkd", "emulator"], "pause");
-        paused = true;
+        for (const service of SERVICES) {
+            setOwnedServices(project, [service], "pause");
+            paused.add(service);
+        }
         // A paused service never answers, so a bounded read stands in for a refused one.
         for (const url of [required("TAXI_E2E_ARKD_URL"), required("TAXI_E2E_EMULATOR_URL")])
             await expect(
@@ -191,8 +194,10 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         Object.assign(evidence, { confirmedAt, exitTxid, confirmations });
         expect(confirmations).toBeGreaterThan(0);
 
-        setOwnedServices(project, ["arkd", "emulator"], "unpause");
-        paused = false;
+        for (const service of SERVICES) {
+            setOwnedServices(project, [service], "unpause");
+            paused.delete(service);
+        }
         const resumedAt = Math.floor(Date.now() / 1000);
         const flagged = await poll(
             "unrolled covenant alerted by a scan after the resume",
@@ -210,7 +215,13 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         expect(flagged.advance.failureCode).toBe("covenant_unrolled");
         expect((await admin("status")).paused).toBe(true);
     } finally {
-        if (paused) setOwnedServices(project, ["arkd", "emulator"], "unpause");
+        // Best effort: a failure here must not mask the scenario's own error.
+        for (const service of paused)
+            try {
+                setOwnedServices(project, [service], "unpause");
+            } catch (error) {
+                evidence[`unpause ${service}`] = String(error);
+            }
         contractHandlers.unregister(COVENANT);
         writeFileSync(
             artifactPath("unilateral-exit.json"),

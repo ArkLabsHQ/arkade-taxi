@@ -128,17 +128,23 @@ export function ownedServiceIds(project, services, run = docker) {
         if (!Array.isArray(inspected) || inspected.length !== 1 || inspected[0].Id !== id)
             throw new Error(`${service} identity changed`);
         assertCleanupCandidates(inspected, { project, services: [service] });
-        found[service] = { id, running: inspected[0].State?.Running === true };
+        found[service] = {
+            id,
+            running: inspected[0].State?.Running === true,
+            paused: inspected[0].State?.Paused === true,
+        };
     }
     return found;
 }
 
 // Pause, not stop: a restarted container gets a new ephemeral host port, and
 // the Taxi reaches arkd and the emulator through a proxy pinned to the old one.
+// Docker errors on a repeat, so a service already in that state is left alone.
 export function setOwnedServices(project, services, action, run = docker) {
     if (action !== "pause" && action !== "unpause") throw new Error("unsupported service action");
     const found = ownedServiceIds(project, services, run);
-    for (const { id } of Object.values(found)) run([action, id]);
+    for (const { id, paused } of Object.values(found))
+        if (paused !== (action === "pause")) run([action, id]);
     return found;
 }
 

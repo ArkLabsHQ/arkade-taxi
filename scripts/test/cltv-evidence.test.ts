@@ -209,7 +209,7 @@ it("resolves only containers this run owns", () => {
                   },
               ]);
     expect(ownedServiceIds(project, ["arkd"], run)).toEqual({
-        arkd: { id: "a".repeat(64), running: true },
+        arkd: { id: "a".repeat(64), running: true, paused: false },
     });
     const foreign = (args: string[]) =>
         args[0] === "ps"
@@ -228,4 +228,28 @@ it("resolves only containers this run owns", () => {
     setOwnedServices(project, ["arkd"], "pause", recorded);
     expect(calls.at(-1)).toEqual(["pause", "a".repeat(64)]);
     expect(() => setOwnedServices(project, ["arkd"], "rm", recorded)).toThrow();
+});
+
+it("pauses or unpauses only a service not already in that state", () => {
+    for (const [paused, action, issued] of [
+        [false, "unpause", false],
+        [true, "pause", false],
+        [true, "unpause", true],
+        [false, "pause", true],
+    ] as const) {
+        const calls: string[][] = [];
+        setOwnedServices(project, ["arkd"], action, (args: string[]) => {
+            calls.push(args);
+            return args[0] === "ps"
+                ? "a".repeat(64)
+                : JSON.stringify([
+                      {
+                          Id: "a".repeat(64),
+                          State: { Running: true, Paused: paused },
+                          Config: { Labels: labels(project, "arkd") },
+                      },
+                  ]);
+        });
+        expect(calls.some((args) => args[0] === action)).toBe(issued);
+    }
 });
