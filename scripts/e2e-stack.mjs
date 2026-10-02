@@ -1281,7 +1281,7 @@ await import("/app/dist/cli.js");
                     cwd: REPO,
                     env: testEnv,
                     secrets: knownSecrets,
-                    // Whole-run bound; vitest still enforces its own 300s each.
+                    // Whole-run bound; vitest still enforces each scenario's own timeout.
                     timeoutMs: 2_700_000,
                 },
             ),
