@@ -156,6 +156,7 @@ describe("tick", () => {
         expect(recovery.seen).toEqual([]);
         expect(paused).toBe(false);
         expect(sweeper.status().blockers).toEqual([]);
+        expect(sweeper.status().lockedCount).toBe(1);
 
         advances.insert(pastDeadline("live"));
         await sweeper.tick(HEIGHT, BigInt(NOW));

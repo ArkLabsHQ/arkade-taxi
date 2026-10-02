@@ -236,7 +236,8 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         const resumed = await post("resume");
         Object.assign(evidence, { lastingBlockers: recovered.blockers, resume: resumed });
         expect([200, 409]).toContain(resumed.status);
-        expect(resumed.body.blockers ?? []).not.toContain("covenant_unrolled");
+        if (resumed.status === 200) expect(resumed.body.paused).toBe(false);
+        else expect(resumed.body.blockers).not.toContain("covenant_unrolled");
         // An arkd outage past the 30 s provider read may pause the Taxi on its own.
         await admin("policy", { paused: false });
         expect((await post("rescan")).status).toBe(202);

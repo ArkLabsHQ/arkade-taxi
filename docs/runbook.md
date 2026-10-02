@@ -201,7 +201,9 @@ or clear reservations to make readiness green.
 A `covenant_unrolled` warning means a covenant went on-chain. It neither pauses
 admission nor blocks readiness, and the sweeper leaves it alone. The advance
 stays `locked` with its top-up exposed; its funds exit only on-chain through the
-exit leaf, which the sender and the Taxi's signer co-sign.
+exit leaf, which the sender and the Taxi's signer co-sign. It keeps counting
+against the outstanding-sat and concurrent-advance limits, and no operation
+releases it yet: if unrolled advances crowd those limits, raise them in the policy.
 
 ## Pause, rescan and retry
 
