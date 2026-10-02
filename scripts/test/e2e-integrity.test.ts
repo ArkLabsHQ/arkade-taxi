@@ -42,6 +42,12 @@ describe("live E2E result gate", () => {
         expect(() => readScenarioIds("arbitrary")).toThrow(/unknown E2E mode/);
     });
 
+    it("runs the isolated scenarios alone and keeps them out of the shared suite", () => {
+        const isolated = readScenarioIds("isolated");
+        expect(isolated).toEqual(["covenant-unilateral-exit-with-arkd-down"]);
+        expect(readScenarioIds().filter((id: string) => isolated.includes(id))).toEqual([]);
+    });
+
     it("rejects missing integrity checks despite every live scenario passing", () => {
         expect(validateResults(result(), ids, 2)).not.toEqual([]);
         const complete = result();

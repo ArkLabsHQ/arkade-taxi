@@ -36,6 +36,7 @@ import { readFundingSource } from "./arkade/fundingSource.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
+const UNROLLED = "covenant outpoint was unrolled; no off-chain claim or recovery is possible";
 
 export type ObservedSpend =
     | { kind: "recycled"; txid: string }
@@ -894,12 +895,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     );
                 else if (coin) {
                     if (coin.isUnrolled) {
-                        deps.advances.recordCovenantUnrolled(
-                            advance.id,
-                            "covenant outpoint was unrolled; no off-chain claim or recovery is possible",
-                            deps.now(),
-                            tip,
-                        );
+                        deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                         continue;
                     }
                     try {
@@ -946,6 +942,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         deps.now(),
                         tip,
                     );
+                // Spent on-chain, as arkd's IsOnchainSpent reads it: the covenant's own exit.
+                else if (coin.isUnrolled && !coin.arkTxId && !coin.settledBy)
+                    deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                 else
                     deps.advances.recordSpendUnknown(
                         advance.id,

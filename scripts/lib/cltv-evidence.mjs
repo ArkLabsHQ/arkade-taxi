@@ -106,38 +106,56 @@ function docker(args) {
         maxBuffer: 2 * 1024 * 1024,
         windowsHide: true,
     });
-    if (result.error || result.status !== 0) throw new Error("owned recovery log read failed");
+    if (result.error || result.status !== 0) throw new Error("owned Docker command failed");
     return result.stdout + result.stderr;
 }
 
-export function readOwnedRecoveryLogs(window, run = docker) {
-    windowOf(window);
-    const ids = {};
-    for (const service of ["arkd", "emulator"]) {
+export function ownedServiceIds(project, services, run = docker) {
+    if (!/^taxi12-[a-f0-9]{12}$/.test(project)) throw new Error("not an isolated E2E project");
+    const found = {};
+    for (const service of services) {
         const id = run([
             "ps",
             "-aq",
             "--no-trunc",
             "--filter",
-            `label=com.docker.compose.project=${window.project}`,
+            `label=com.docker.compose.project=${project}`,
             "--filter",
             `label=com.docker.compose.service=${service}`,
         ]).trim();
-        if (!/^[a-f0-9]{64}$/.test(id)) throw new Error("expected one owned recovery service");
+        if (!/^[a-f0-9]{64}$/.test(id)) throw new Error(`expected one owned ${service}`);
         const inspected = JSON.parse(run(["inspect", id]));
-        if (
-            !Array.isArray(inspected) ||
-            inspected.length !== 1 ||
-            inspected[0].Id !== id ||
-            !inspected[0].State?.Running
-        )
-            throw new Error("recovery service identity or running state changed");
-        assertCleanupCandidates(inspected, { project: window.project, services: [service] });
-        ids[service] = id;
+        if (!Array.isArray(inspected) || inspected.length !== 1 || inspected[0].Id !== id)
+            throw new Error(`${service} identity changed`);
+        assertCleanupCandidates(inspected, { project, services: [service] });
+        found[service] = {
+            id,
+            running: inspected[0].State?.Running === true,
+            paused: inspected[0].State?.Paused === true,
+        };
     }
+    return found;
+}
+
+// Pause, not stop: a restarted container gets a new ephemeral host port, and
+// the Taxi reaches arkd and the emulator through a proxy pinned to the old one.
+// Docker errors on a repeat, so a service already in that state is left alone.
+export function setOwnedServices(project, services, action, run = docker) {
+    if (action !== "pause" && action !== "unpause") throw new Error("unsupported service action");
+    const found = ownedServiceIds(project, services, run);
+    for (const { id, paused } of Object.values(found))
+        if (paused !== (action === "pause")) run([action, id]);
+    return found;
+}
+
+export function readOwnedRecoveryLogs(window, run = docker) {
+    windowOf(window);
+    const found = ownedServiceIds(window.project, ["arkd", "emulator"], run);
+    if (Object.values(found).some(({ running }) => !running))
+        throw new Error("recovery service is not running");
     return Object.fromEntries([
         ["project", window.project],
-        ...Object.entries(ids).map(([service, id]) => [
+        ...Object.entries(found).map(([service, { id }]) => [
             service,
             run([
                 "logs",

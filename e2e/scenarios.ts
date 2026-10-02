@@ -84,18 +84,27 @@ export const SCENARIOS = [
         id: "receiver-paid-mode1-reclaim",
         title: "unclaimed receiver-paid covenant reclaimed at its locktime without a fare",
     },
+    {
+        id: "covenant-unilateral-exit-with-arkd-down",
+        title: "sender and Taxi exit an unrolled covenant on-chain with arkd and the emulator down",
+        timeout: 600_000,
+    },
 ] as const;
 
-export const EXPECTED_TOTAL = 22;
+export const EXPECTED_TOTAL = 23;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);
     if (!scenario) throw new Error(`e2e: unknown scenario ${id}`);
-    it(`[${id}] ${scenario.title}`, async () => {
-        if (process.env.ARKADE_E2E !== "1" || !process.env.TAXI_E2E_CLIENT_ENTRY)
-            throw new Error(
-                "e2e: run pnpm e2e:stack to provide the isolated production image and packed client",
-            );
-        await runWithCleanup(fn);
-    });
+    it(
+        `[${id}] ${scenario.title}`,
+        async () => {
+            if (process.env.ARKADE_E2E !== "1" || !process.env.TAXI_E2E_CLIENT_ENTRY)
+                throw new Error(
+                    "e2e: run pnpm e2e:stack to provide the isolated production image and packed client",
+                );
+            await runWithCleanup(fn);
+        },
+        "timeout" in scenario ? scenario.timeout : undefined,
+    );
 }

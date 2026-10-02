@@ -721,11 +721,11 @@ const patchPolicy = async (adminUrl) => {
         throw new Error(`policy bootstrap failed: ${response.status} ${await response.text()}`);
 };
 
-async function main() {
+async function main(isolated = false) {
     const options = resolveE2eOptions(process.argv.slice(2));
-    const tests = options.tests;
-    const scenarioIds = readScenarioIds(options.mode);
-    const wallet = options.wallet ? resolve(options.wallet) : undefined;
+    const tests = isolated ? options.isolatedTests : options.tests;
+    const scenarioIds = readScenarioIds(isolated ? "isolated" : options.mode);
+    const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
     if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
         throw new Error("--wallet checkout requires playwright.taxi.config.ts");
     const interruption = createInterruptionState();
@@ -746,7 +746,7 @@ async function main() {
     const artifacts = join(
         REPO,
         "e2e-artifacts",
-        ...(options.mode === "direct" ? [`direct-${id}`] : []),
+        ...(options.mode === "direct" ? [`direct-${id}`] : isolated ? ["isolated"] : []),
     );
     const secretDir = join(root, "secrets");
     const secretFile = join(secretDir, "actors.json");
@@ -759,7 +759,7 @@ async function main() {
     const runAndPublishResults = prepareResultPublication({
         source: resultsFile,
         destinations:
-            options.mode === "direct"
+            options.mode === "direct" || isolated
                 ? [join(artifacts, "results.json")]
                 : [join(REPO, "e2e-results.json"), join(artifacts, "results.json")],
         knownSecrets,
@@ -1281,7 +1281,7 @@ await import("/app/dist/cli.js");
                     cwd: REPO,
                     env: testEnv,
                     secrets: knownSecrets,
-                    // Whole-run bound; vitest still enforces its own 300s each.
+                    // Whole-run bound; vitest still enforces each scenario's own timeout.
                     timeoutMs: 2_700_000,
                 },
             ),
@@ -1291,7 +1291,7 @@ await import("/app/dist/cli.js");
             process.execPath,
             [
                 join(REPO, "e2e", "assert-ran.mjs"),
-                ...(options.mode === "direct" ? ["--direct"] : []),
+                ...(isolated ? ["--isolated"] : options.mode === "direct" ? ["--direct"] : []),
                 resultsFile,
             ],
             {
@@ -1308,7 +1308,7 @@ await import("/app/dist/cli.js");
         await captureTaxiDiagnostics(taxiContainer, project, artifacts, knownSecrets);
         await captureStackDiagnostics(state, artifacts, knownSecrets);
         process.stdout.write(
-            `arkade-regtest master ${sha}; ${options.mode}; ${results.numPassedTests} passed, zero skipped; artifacts ${artifacts}\n`,
+            `arkade-regtest master ${sha}; ${options.mode}${isolated ? " isolated" : ""}; ${results.numPassedTests} passed, zero skipped; artifacts ${artifacts}\n`,
         );
     } catch (error) {
         failure = error;
@@ -1560,7 +1560,9 @@ await import("/app/dist/cli.js");
 
 const mainPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (mainPath && fileURLToPath(import.meta.url) === mainPath)
-    main().catch((error) => {
-        process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-        process.exitCode = 1;
-    });
+    main(true)
+        .then(() => main())
+        .catch((error) => {
+            process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+            process.exitCode = 1;
+        });

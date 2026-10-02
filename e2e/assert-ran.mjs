@@ -8,9 +8,12 @@ const SWAP_SCENARIOS = [
     "receiver-paid-asset-fare-claim",
     "receiver-paid-mode1-reclaim",
 ];
+// Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
+const ISOLATED_SCENARIOS = ["covenant-unilateral-exit-with-arkd-down"];
 
 export function readScenarioIds(mode = "full") {
-    if (!["full", "direct"].includes(mode)) throw new Error(`unknown E2E mode: ${mode}`);
+    if (!["full", "direct", "isolated"].includes(mode))
+        throw new Error(`unknown E2E mode: ${mode}`);
     const manifest = readFileSync(
         join(dirname(fileURLToPath(import.meta.url)), "scenarios.ts"),
         "utf8",
@@ -22,10 +25,14 @@ export function readScenarioIds(mode = "full") {
         total < 1 ||
         ids.length !== total ||
         new Set(ids).size !== total ||
-        SWAP_SCENARIOS.some((id) => !ids.includes(id))
+        [...SWAP_SCENARIOS, ...ISOLATED_SCENARIOS].some((id) => !ids.includes(id))
     )
-        throw new Error("manifest count must match unique live scenarios and swap classification");
-    return mode === "direct" ? ids.filter((id) => !SWAP_SCENARIOS.includes(id)) : ids;
+        throw new Error(
+            "manifest count must match unique live scenarios and swap/isolated classification",
+        );
+    if (mode === "isolated") return [...ISOLATED_SCENARIOS];
+    const shared = ids.filter((id) => !ISOLATED_SCENARIOS.includes(id));
+    return mode === "direct" ? shared.filter((id) => !SWAP_SCENARIOS.includes(id)) : shared;
 }
 
 export function validateResults(result, ids, integrityCount = 0) {
@@ -58,13 +65,15 @@ export function validateResults(result, ids, integrityCount = 0) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
     try {
         const args = process.argv.slice(2);
-        const mode = args[0] === "--direct" ? "direct" : "full";
-        if (mode === "direct") args.shift();
+        const mode =
+            args[0] === "--direct" ? "direct" : args[0] === "--isolated" ? "isolated" : "full";
+        if (mode !== "full") args.shift();
         if (args.length > 1 || args[0]?.startsWith("--"))
-            throw new Error("usage: assert-ran.mjs [--direct] [results.json]");
+            throw new Error("usage: assert-ran.mjs [--direct|--isolated] [results.json]");
         const ids = readScenarioIds(mode);
         const results = JSON.parse(readFileSync(args[0] ?? "e2e-results.json", "utf8"));
-        const problems = validateResults(results, ids, 2);
+        // The integrity file runs with the shared suite only.
+        const problems = validateResults(results, ids, mode === "isolated" ? 0 : 2);
         if (problems.length) throw new Error(problems.join("; "));
         console.log(
             `e2e (${mode}): ${ids.length} scenarios passed, 0 failed, 0 skipped; ${results.numPassedTests} total assertions`,
