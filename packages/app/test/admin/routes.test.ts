@@ -546,7 +546,7 @@ describe("the operator a change is attributed to", () => {
     it("treats a blank operator header as absent and falls back", async () => {
         const h = harness({ adminOperator: "taxi-ops" });
 
-        for (const [i, blank] of ["   ", " "].entries())
+        for (const [i, blank] of ["   ", "\u00a0"].entries())
             expect((await patch(h, { "x-taxi-operator": blank }, 30 + i)).status).toBe(200);
         expect(actors(h)).toEqual(["taxi-ops", "taxi-ops"]);
     });
