@@ -79,7 +79,6 @@ export function harness(
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
         funding?: AdminDeps["funding"];
-        warnings?: AdminDeps["warnings"];
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -101,6 +100,7 @@ export function harness(
                 ({
                     ready: true,
                     body: { blockers: [], status: "ok" },
+                    warnings: [],
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
         serviceConfig: shownConfig(config()),
@@ -112,7 +112,6 @@ export function harness(
                 coins: [],
                 boarding: boardingView(),
             })),
-        warnings: opts.warnings ?? (() => []),
     });
 
     const app = new Hono();

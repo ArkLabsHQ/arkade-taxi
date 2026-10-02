@@ -133,6 +133,7 @@ const readiness = (blockers: string[], usableSats = "2500") =>
             },
             sweeper: { nearestDeadline: { height: null, time: null } },
         },
+        warnings: [],
     }) as unknown as OperationalSnapshot;
 
 const named = (root: DashboardElement, name: string): DashboardElement[] => [
@@ -1232,7 +1233,7 @@ describe("setup guidance", () => {
         let warnings = [{ advanceId: "adv-unrolled", code: "covenant_unrolled", detail: "d" }];
         const dashboard = runDashboard(
             () => dashboardPage([], "b".repeat(64), null),
-            harness({ operationalSnapshot: () => readiness([]), warnings: () => warnings }),
+            harness({ operationalSnapshot: () => ({ ...readiness([]), warnings }) }),
             { realStatus: true },
         );
         const list = dashboard.element("readiness-warnings");

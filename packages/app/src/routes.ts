@@ -24,6 +24,7 @@ import { submitSwapFill, type SwapFillSubmitDeps } from "./swapFillSubmit.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
+import type { WatcherBlocker } from "./watcher.js";
 import type { SwapFillReconciler } from "./swapFillReconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
@@ -120,6 +121,8 @@ export interface HealthResponse {
 export interface OperationalSnapshot {
     ready: boolean;
     body: HealthResponse;
+    /** Admin-only: never in `body`, so they neither gate readiness nor reach /health. */
+    warnings: WatcherBlocker[];
 }
 
 type SerializedRecoveryDeadline = Omit<
@@ -319,6 +322,7 @@ export function operationalSnapshot(
             },
             ...(ready ? {} : { reason }),
         },
+        warnings: reconciler.warnings ?? [],
     };
 }
 

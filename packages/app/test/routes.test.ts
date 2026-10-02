@@ -1708,10 +1708,20 @@ describe("CORS", () => {
     it("lists watcher warnings on the admin status only, never in public readiness", async () => {
         const warning = { advanceId: "adv-unrolled", code: "covenant_unrolled", detail: "d" };
         reconcilerStatus = { ...reconcilerStatus, warnings: [warning] };
-        const deps = serverDeps();
+        let reads = 0;
+        const deps = {
+            ...serverDeps(),
+            reconciler: {
+                status: () => {
+                    reads++;
+                    return reconcilerStatus;
+                },
+            },
+        };
         deps.policy.update({ paused: false }, "test");
 
         const status = await (await createAdminApp(deps).request("/api/status")).json();
+        expect(reads).toBe(1);
         const health = await (await createApp(deps).request("/health")).json();
 
         expect(status.warnings).toEqual([warning]);
