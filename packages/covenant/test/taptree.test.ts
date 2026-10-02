@@ -81,7 +81,7 @@ describe("claim mode is committed to by the tree", () => {
     const recycleOnly = new DustCovenantScript(opts({ ...params(), claimMode: "recycle" }));
     const purchaseOnly = new DustCovenantScript(opts({ ...params(), claimMode: "purchase" }));
 
-    it("keeps the absent-mode tree byte-identical to the historical address", () => {
+    it("rebuilds the absent-mode tree byte-identically from the same params", () => {
         expect(legacy.pkScript).toEqual(new DustCovenantScript(opts()).pkScript);
         expect(legacy.scripts).toEqual(new DustCovenantScript(opts()).scripts);
     });

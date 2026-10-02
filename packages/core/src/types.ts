@@ -108,7 +108,7 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     assetId?: AssetIdRef;
     assetUnits?: bigint;
     recoveryRecipient?: "sender" | "receiver";
-    /** Leaf this covenant committed to; absent is the legacy four-leaf tree. */
+    /** Leaf this covenant committed to; absent enables both claim leaves. */
     claimMode?: "recycle" | "purchase";
     /** Legacy scalar retained for the covenant parameter. Scheduling uses recoveryLocktime.
      * Sponsored advances carry no locktime; the persisted value is a domain

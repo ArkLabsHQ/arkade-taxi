@@ -194,7 +194,7 @@ describe("quoteParamsFromWire", () => {
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
     });
 
-    // Absence keeps every already-funded covenant on its four-leaf address.
+    // Absent enables both claim leaves; a defaulted mode would derive another address.
     it("omits claimMode entirely rather than defaulting it", () => {
         expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty("claimMode");
     });

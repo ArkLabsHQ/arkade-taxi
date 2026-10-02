@@ -150,8 +150,8 @@ export interface QuoteParams {
     /** CSV on the exit leaf; `value` below 512 is blocks, otherwise seconds. */
     exitDelay: { value: string; type: "blocks" | "seconds" };
     recoveryRecipient?: "sender" | "receiver";
-    /** Absent is the historical four-leaf tree; present pins which claim leaf
-     * the covenant actually commits to. */
+    /** Absent enables both claim leaves; present pins which claim leaf the
+     * covenant actually commits to. */
     claimMode?: "recycle" | "purchase";
     /** Present only on a receiver-paid recycle leaf; the fared asset is
      * `assetId` above, not restated here. */

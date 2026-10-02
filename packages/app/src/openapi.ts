@@ -268,7 +268,7 @@ const schemas: Record<string, Schema> = {
                 recoveryRecipient: oneOfStrings("sender", "receiver"),
                 claimMode: {
                     ...oneOfStrings("recycle", "purchase"),
-                    description: "Absent is the historical four-leaf tree.",
+                    description: "Absent enables both claim leaves.",
                 },
                 receiverFare: {
                     description:
