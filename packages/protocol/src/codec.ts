@@ -96,10 +96,12 @@ export interface CovenantParamsValue {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
+    operatorSignerKey: Uint8Array;
     dust: bigint;
     topup: bigint;
     assetId?: AssetIdValue;
     locktime: bigint;
+    exitDelay: { value: bigint; type: "blocks" | "seconds" };
     recoveryRecipient?: "sender" | "receiver";
     claimMode?: "recycle" | "purchase";
     receiverFare?: { currency: "sats"; units: bigint } | { currency: "asset"; units: bigint };
@@ -284,15 +286,30 @@ export function assetIdToWire(a: AssetIdValue): AssetIdWire {
     return { txid: bytesToHex(a.txid), groupIndex: groupIndexFromWire(a.groupIndex, "groupIndex") };
 }
 
+const exitDelayFromWire = (
+    value: QuoteParams["exitDelay"],
+    label: string,
+): CovenantParamsValue["exitDelay"] => {
+    if (value === null || typeof value !== "object") fail(label, "expected an object");
+    exactKeys(value as unknown as Record<string, unknown>, ["value", "type"], [], label);
+    if (value.type !== "blocks" && value.type !== "seconds")
+        fail(`${label}.type`, "must be blocks or seconds");
+    const delay = satsFromWire(value.value, `${label}.value`);
+    if (delay <= 0n) fail(`${label}.value`, "must be positive");
+    return { value: delay, type: value.type };
+};
+
 export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantParamsValue {
     if (p === null || typeof p !== "object") fail(label, `expected an object, got ${typeof p}`);
     const out: CovenantParamsValue = {
         receiverKey: hexToBytes(p.receiverKey, `${label}.receiverKey`),
         senderKey: hexToBytes(p.senderKey, `${label}.senderKey`),
         operatorKey: hexToBytes(p.operatorKey, `${label}.operatorKey`),
+        operatorSignerKey: hexToBytes(p.operatorSignerKey, `${label}.operatorSignerKey`),
         dust: satsFromWire(p.dust, `${label}.dust`),
         topup: satsFromWire(p.topup, `${label}.topup`),
         locktime: satsFromWire(p.locktime, `${label}.locktime`),
+        exitDelay: exitDelayFromWire(p.exitDelay, `${label}.exitDelay`),
     };
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
     if (p.recoveryRecipient !== undefined) {
@@ -323,9 +340,11 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         receiverKey: bytesToHex(p.receiverKey),
         senderKey: bytesToHex(p.senderKey),
         operatorKey: bytesToHex(p.operatorKey),
+        operatorSignerKey: bytesToHex(p.operatorSignerKey),
         dust: satsToWire(p.dust),
         topup: satsToWire(p.topup),
         locktime: satsToWire(p.locktime),
+        exitDelay: { value: satsToWire(p.exitDelay.value), type: p.exitDelay.type },
     };
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     if (p.recoveryRecipient !== undefined) out.recoveryRecipient = p.recoveryRecipient;

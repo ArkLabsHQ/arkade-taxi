@@ -34,6 +34,8 @@ Response: `transferId`, the full covenant `params`, the derived
 versioned envelope containing the joint Arkade transaction, checkpoints and
 funding graph. It is not a single PSBT. `expiresAt` is the quote deadline in
 Unix seconds; the tagged VTXO batch expiry and recovery locktime are separate.
+The `params` include `operatorSignerKey` and `exitDelay`, which fix the
+[exit leaf](#emergency-exit) and so the address.
 
 The lockup output is jointly funded: the sender brings the asset and any sats
 remainder, the operator brings `topup`. Outputs are the covenant at `dust`, the
@@ -135,7 +137,7 @@ that verification or the caller's payment authorization.
 
 ## No claim-spend or refund-submission endpoints
 
-Both are client-side by construction. Every leaf is
+Both are client-side by construction. Every leaf but the emergency exit is
 `Multisig[server, ⊕script]` — the operator is a payout destination, never a
 signer — so a receiver claims with Arkade Service and emulator signatures alone,
 and a sender refunds with its own signature plus those two.
@@ -149,6 +151,21 @@ unsafe admission and remain visible through readiness and the admin API.
 Taxi owns recovery before expiry. The deployed Arkade Service's special
 covenant settlement remains an external assumption verified by the complete
 live deployment gate; Taxi does not implement an upstream forfeit mechanism.
+
+## Emergency exit
+
+Leaf 4 is `CSV(exitDelay) + Multisig[sender, operatorSigner]`, appended after
+the four leaves above. It is for emergencies only: it needs neither the Arkade
+Service nor the emulator.
+
+- It is a 2-of-2 between `senderKey` and `operatorSignerKey`, the Taxi's own
+  signing key. That is not `operatorKey`, a payout destination nobody can sign
+  for.
+- `exitDelay` is relative to the unroll's confirmation. A value below 512 is
+  blocks, otherwise seconds.
+- No output constraint is expressible on it, so it pays wherever both signers
+  send it.
+- An unroll kills the off-chain claim immediately.
 
 ## Verification
 

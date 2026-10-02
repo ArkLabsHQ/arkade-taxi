@@ -625,7 +625,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
 
     return {
         transferId: id,
-        params: quoteParamsToWire(params),
+        params: quoteParamsToWire(advance),
         covenantAddress: covenant.address,
         fare: fareToWire(decision.fare),
         expiresAt: advance.expiresAt,

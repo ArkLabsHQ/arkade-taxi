@@ -12,9 +12,11 @@ import { decodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
 import { config, fundingCoin, operatorTree } from "../../app/test/fixtures.js";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import {
+    PROTOCOL_VERSION,
     bytesToHex,
     quoteParamsToWire,
     sponsoredParamsToWire,
+    type CovenantParamsValue,
     type FundingInputValue,
     type SponsoredParamsValue,
 } from "@arkade-taxi/protocol";
@@ -41,6 +43,7 @@ export const operatorKey = operatorTree.tweakedPublicKey;
 export const serverKey = await xonly(4);
 export const emulatorKey = await xonly(5);
 export const otherKey = await xonly(6);
+export const operatorSignerKey = await xonly(7);
 
 export const HRP = "ark";
 export const VTXO_MIN = 10n;
@@ -65,13 +68,15 @@ export const fundingInputs = (): FundingInputValue[] => [
     },
 ];
 
-export const params = (): DustCovenantParams => ({
+export const params = (): CovenantParamsValue => ({
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey,
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,
+    exitDelay: { value: 86_016n, type: "seconds" },
 });
 
 export const addressFor = (
@@ -83,7 +88,7 @@ export const addressFor = (
         .encode();
 
 export const info = (): InfoResponse => ({
-    protocolVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
     operatorKey: bytesToHex(operatorKey),
     serverKey: bytesToHex(serverKey),
     emulatorKey: bytesToHex(emulatorKey),

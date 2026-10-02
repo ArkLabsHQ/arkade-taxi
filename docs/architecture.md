@@ -129,6 +129,16 @@ out of scope. The full master-stack E2E proves covenant spends and recovery
 before expiry for the recorded provider images; operators must maintain those
 dependencies and enough execution headroom in production.
 
+## The emergency exit
+
+The covenant's last leaf is an [emergency exit](protocol.md#emergency-exit) that
+needs neither the Arkade Service nor the emulator. Nothing in the service spends
+it, and it has two limits:
+
+- It rescues the sats. The asset is currently not preserved by an on-chain exit.
+- An unroll kills the off-chain claim immediately: the receiver's `recycle` and
+  `purchase` stop working at once.
+
 ## Trust
 
 The client verifies rather than trusts. `verifyQuote` independently rebuilds the

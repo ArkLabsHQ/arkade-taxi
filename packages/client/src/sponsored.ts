@@ -16,6 +16,7 @@ import {
     type Identity,
 } from "@arkade-os/sdk";
 import {
+    PROTOCOL_VERSION,
     fundingInputToWire,
     satsFromWire,
     type FundingInputValue,
@@ -396,10 +397,10 @@ export function verifySponsoredQuote(args: VerifySponsoredQuoteArgs): VerifiedSp
     const { expect, trustedServerKey, vtxoMinAmount, hrp } = args;
 
     const info = rewrap(VerificationErrorCode.MalformedInfo, () => decodeInfo(args.info));
-    if (info.protocolVersion !== 1) {
+    if (info.protocolVersion !== PROTOCOL_VERSION) {
         reject(
             VerificationErrorCode.ProtocolVersion,
-            `operator speaks protocol ${info.protocolVersion}, this client speaks 1`,
+            `operator speaks protocol ${info.protocolVersion}, this client speaks ${PROTOCOL_VERSION}`,
         );
     }
     if (!sameBytes(info.serverKey, trustedServerKey)) {

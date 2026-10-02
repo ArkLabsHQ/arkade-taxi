@@ -195,6 +195,16 @@ describe("createReceiveQuote", () => {
         expect(params.exitDelay).toEqual(exitDelay);
     });
 
+    it("carries the operator signer key and exit delay on the wire", async () => {
+        const exitDelay = { value: 86_016n, type: "seconds" as const };
+        const cfg = config({ vtxoMinAmount: 1n, operatorSignerKey: serverKey, exitDelay });
+        const { params } = await createReceiveQuote(deps({ config: cfg }), body());
+        expect(params).toMatchObject({
+            operatorSignerKey: bytesToHex(serverKey),
+            exitDelay: { value: "86016", type: "seconds" },
+        });
+    });
+
     it("shortens only the input floor and recovery locktime for an older safe wallet ceiling", async () => {
         const response = await createReceiveQuote(
             deps(),

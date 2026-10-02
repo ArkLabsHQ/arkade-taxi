@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+    PROTOCOL_VERSION,
     bytesToHex,
     quoteParamsFromWire,
     quoteParamsToWire,
@@ -192,7 +193,16 @@ describe("verifyQuote — trusted key pinning", () => {
     });
 
     it("rejects a protocol version it does not speak", () => {
-        rejects({ info: { ...info(), protocolVersion: 2 } }, "PROTOCOL_VERSION_MISMATCH");
+        rejects(
+            { info: { ...info(), protocolVersion: PROTOCOL_VERSION + 1 } },
+            "PROTOCOL_VERSION_MISMATCH",
+        );
+    });
+
+    it("rejects a quote from an operator speaking the old protocol", () => {
+        expect(() => verifyQuote({ ...args(), info: { ...info(), protocolVersion: 1 } })).toThrow(
+            /PROTOCOL_VERSION_MISMATCH|this client speaks 2/,
+        );
     });
 });
 

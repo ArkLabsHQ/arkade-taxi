@@ -16,6 +16,18 @@ import { covenantSpendInputFromWire, covenantSpendInputToWire } from "../src/cod
 
 const bytes = (...b: number[]) => new Uint8Array(b);
 const hex32 = (byte: string) => byte.repeat(32);
+const params = () => ({
+    receiverKey: new Uint8Array(32).fill(1),
+    senderKey: new Uint8Array(32).fill(2),
+    operatorKey: new Uint8Array(32).fill(3),
+    dust: 330n,
+    topup: 330n,
+    locktime: 800_000n,
+});
+const exitFields = {
+    operatorSignerKey: new Uint8Array(32).fill(8),
+    exitDelay: { value: 86_016n, type: "seconds" as const },
+};
 
 describe("hexToBytes", () => {
     it("decodes lowercase hex", () => {
@@ -133,9 +145,11 @@ describe("quoteParamsFromWire", () => {
         receiverKey: hex32("01"),
         senderKey: hex32("02"),
         operatorKey: hex32("03"),
+        operatorSignerKey: hex32("08"),
         dust: "330",
         topup: "330",
         locktime: "800000",
+        exitDelay: { value: "86016", type: "seconds" },
     });
 
     it("decodes every field to its domain type", () => {
@@ -143,9 +157,11 @@ describe("quoteParamsFromWire", () => {
         expect(p.receiverKey).toEqual(new Uint8Array(32).fill(1));
         expect(p.senderKey).toEqual(new Uint8Array(32).fill(2));
         expect(p.operatorKey).toEqual(new Uint8Array(32).fill(3));
+        expect(p.operatorSignerKey).toEqual(new Uint8Array(32).fill(8));
         expect(p.dust).toBe(330n);
         expect(p.topup).toBe(330n);
         expect(p.locktime).toBe(800000n);
+        expect(p.exitDelay).toEqual({ value: 86016n, type: "seconds" });
         expect(p.assetId).toBeUndefined();
     });
 
@@ -158,6 +174,7 @@ describe("quoteParamsFromWire", () => {
         ["receiverKey", { receiverKey: "zz" }],
         ["senderKey", { senderKey: "abc" }],
         ["operatorKey", { operatorKey: "AB" }],
+        ["operatorSignerKey", { operatorSignerKey: "AB" }],
         ["dust", { dust: "-1" }],
         ["topup", { topup: "1e3" }],
         ["locktime", { locktime: "" }],
@@ -218,6 +235,40 @@ describe("quoteParamsFromWire", () => {
             ).toThrow(/params\.recoveryRecipient/);
         },
     );
+
+    it("round-trips the exit params", () => {
+        const value = {
+            ...params(),
+            operatorSignerKey: new Uint8Array(32).fill(8),
+            exitDelay: { value: 86_016n, type: "seconds" as const },
+        };
+        expect(quoteParamsFromWire(quoteParamsToWire(value))).toEqual(value);
+        expect(quoteParamsToWire(value).exitDelay).toEqual({ value: "86016", type: "seconds" });
+    });
+
+    it("refuses an exit delay that is not a decimal in a known domain", () => {
+        const encoded = quoteParamsToWire({ ...params(), ...exitFields });
+        expect(() =>
+            quoteParamsFromWire({ ...encoded, exitDelay: { value: "-1", type: "seconds" } }),
+        ).toThrow(/params.exitDelay/);
+        expect(() =>
+            quoteParamsFromWire({
+                ...encoded,
+                exitDelay: { value: "512", type: "fortnights" as "seconds" },
+            }),
+        ).toThrow(/params.exitDelay/);
+    });
+
+    it.each([
+        ["a zero value", { value: "0", type: "seconds" }],
+        ["an unknown key", { value: "512", type: "seconds", x: 1 }],
+        ["no object at all", null],
+    ])("refuses an exit delay with %s", (_, exitDelay) => {
+        const encoded = quoteParamsToWire({ ...params(), ...exitFields });
+        expect(() =>
+            quoteParamsFromWire({ ...encoded, exitDelay } as unknown as QuoteParams),
+        ).toThrow(/params.exitDelay/);
+    });
 });
 
 describe("sponsoredParamsFromWire", () => {

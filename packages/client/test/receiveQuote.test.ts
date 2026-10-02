@@ -2,6 +2,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
+    PROTOCOL_VERSION,
     assetIdToWire,
     bytesToHex,
     quoteParamsToWire,
@@ -15,6 +16,7 @@ import {
     HRP,
     jsonResponse,
     operatorKey,
+    operatorSignerKey,
     receiverKey,
     recordingFetch,
     senderKey,
@@ -27,10 +29,12 @@ const params = {
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey,
     dust: 330n,
     topup: 329n,
     assetId: ASSET,
     locktime: 849_856n,
+    exitDelay: { value: 86_016n, type: "seconds" as const },
     claimMode: "recycle" as const,
     recoveryRecipient: "receiver" as const,
 };
@@ -58,7 +62,7 @@ const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse =
     ...over,
 });
 const info = (): InfoResponse => ({
-    protocolVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
     operatorKey: bytesToHex(operatorKey),
     serverKey: bytesToHex(serverKey),
     emulatorKey: bytesToHex(emulatorKey),

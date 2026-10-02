@@ -7,7 +7,7 @@
  * of bug that only shows up on a large payment.
  */
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export {
     assetIdFromWire,
@@ -141,10 +141,14 @@ export interface QuoteParams {
     receiverKey: string;
     senderKey: string;
     operatorKey: string;
+    /** The Taxi's bare signing key, the second signer on the exit leaf. */
+    operatorSignerKey: string;
     dust: string;
     topup: string;
     assetId?: AssetIdWire;
     locktime: string;
+    /** CSV on the exit leaf; `value` below 512 is blocks, otherwise seconds. */
+    exitDelay: { value: string; type: "blocks" | "seconds" };
     recoveryRecipient?: "sender" | "receiver";
     /** Absent is the historical four-leaf tree; present pins which claim leaf
      * the covenant actually commits to. */

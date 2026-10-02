@@ -32,7 +32,12 @@ import {
     type DustCovenantParams,
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
-import { fareFromWire, quoteParamsFromWire, type ReceiverClaimWire } from "@arkade-taxi/protocol";
+import {
+    fareFromWire,
+    quoteParamsFromWire,
+    type CovenantParamsValue,
+    type ReceiverClaimWire,
+} from "@arkade-taxi/protocol";
 import { classifyObservedSpend } from "../../app/src/watcher.js";
 import { config as serverConfig } from "../../app/test/fixtures.js";
 import { TaxiClient } from "../src/client.js";
@@ -1776,7 +1781,7 @@ const receiverPaidTransfer = async (
               ? { currency: "asset", units: fare.fareUnits }
               : undefined;
     const terms = { claimMode: "recycle", recoveryRecipient: "receiver" } as const;
-    const p: DustCovenantParams = {
+    const p: CovenantParamsValue = {
         ...quoteParamsFromWire(a.quote.params),
         ...terms,
         receiverKey: funding.receiverKey,

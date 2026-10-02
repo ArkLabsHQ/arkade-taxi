@@ -71,7 +71,11 @@ it.each([false, true])(
             expect: { ...args().expect, assetId: req.params.assetId, maxFare: req.fare },
             quote: {
                 transferId: req.advanceId,
-                params: quoteParamsToWire(req.params),
+                params: quoteParamsToWire({
+                    ...req.params,
+                    operatorSignerKey: config().operatorSignerKey,
+                    exitDelay: config().exitDelay,
+                }),
                 covenantAddress: req.covenantAddress,
                 fare: fareToWire(req.fare),
                 expiresAt: NOW + 60,

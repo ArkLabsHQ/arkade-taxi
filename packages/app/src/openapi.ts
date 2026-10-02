@@ -244,9 +244,19 @@ const schemas: Record<string, Schema> = {
                 receiverKey: key32,
                 senderKey: key32,
                 operatorKey: key32,
+                operatorSignerKey: {
+                    ...key32,
+                    description:
+                        "The Taxi's bare signing key, the second signer on the exit leaf. Not `operatorKey`, which only receives payouts.",
+                },
                 dust: decimal,
                 topup: decimal,
                 locktime: decimal,
+                exitDelay: {
+                    description:
+                        "CSV on the exit leaf; a value below 512 is blocks, otherwise seconds.",
+                    ...object({ value: decimal, type: oneOfStrings("blocks", "seconds") }),
+                },
             },
             {
                 assetId: ref("AssetId"),
@@ -654,7 +664,7 @@ const schemas: Record<string, Schema> = {
 // Real responses captured from the route test harness.
 const examples = {
     info: {
-        protocolVersion: 1,
+        protocolVersion: 2,
         operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
         serverKey: "462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b",
         emulatorKey: "62c0a046dacce86ddd0343c6d3c7c79c2208ba0d9c9cf24a6d046d21d21f90f7",
@@ -704,9 +714,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
             locktime: "899856",
+            exitDelay: { value: "86016", type: "seconds" },
             claimMode: "recycle",
         },
         covenantAddress:
@@ -759,9 +771,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "320",
             locktime: "849856",
+            exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
                 groupIndex: 1,
@@ -800,9 +814,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
             locktime: "899856",
+            exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
                 groupIndex: 1,
@@ -986,9 +1002,12 @@ const examples = {
                             "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
                         operatorKey:
                             "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                        operatorSignerKey:
+                            "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
                         dust: "330",
                         topup: "330",
                         locktime: "899856",
+                        exitDelay: { value: "86016", type: "seconds" },
                         claimMode: "recycle",
                     },
                     covenantAddress:

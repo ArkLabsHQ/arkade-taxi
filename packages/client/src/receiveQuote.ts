@@ -235,7 +235,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     );
     return Object.freeze({
         quote: immutablePlainCopy(args.quote, "verified receive quote view"),
-        params: immutablePlainCopy(quote.params, "verified receive params"),
+        params: immutablePlainCopy<DustCovenantParams>(quote.params, "verified receive params"),
         script: script!,
         descriptor,
         ...(receiverPaid

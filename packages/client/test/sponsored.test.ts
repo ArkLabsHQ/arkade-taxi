@@ -13,6 +13,7 @@ import {
 } from "../src/sponsored.js";
 import {
     HRP,
+    info,
     jsonResponse,
     otherKey,
     recordingFetch,
@@ -153,6 +154,13 @@ describe("verifySponsoredQuote", () => {
         expect(() => verifySponsoredQuote({ ...args, trustedServerKey: otherKey })).toThrow(
             expect.objectContaining({ code: VerificationErrorCode.ServerKey }),
         );
+    });
+
+    it("names the protocol version it speaks from the shared constant", () => {
+        expect(() =>
+            verifySponsoredQuote({ ...sponsoredArgs(), info: { ...info(), protocolVersion: 1 } }),
+        ).toThrow(/this client speaks 2/);
+        expect(() => verifySponsoredQuote(sponsoredArgs())).not.toThrow();
     });
 
     it("rejects a tampered payment commitment", () => {

@@ -215,13 +215,27 @@ const assetId = (value: unknown, label: string): AssetIdWire => {
 const quoteParams = (value: unknown, label: string): QuoteParams => {
     const wire = exactRecord(
         value,
-        ["receiverKey", "senderKey", "operatorKey", "dust", "topup", "locktime"],
+        [
+            "receiverKey",
+            "senderKey",
+            "operatorKey",
+            "operatorSignerKey",
+            "dust",
+            "topup",
+            "locktime",
+            "exitDelay",
+        ],
         ["assetId", "claimMode", "recoveryRecipient", "receiverFare"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
     bytes32(wire.senderKey, `${label}.senderKey`);
     bytes32(wire.operatorKey, `${label}.operatorKey`);
+    bytes32(wire.operatorSignerKey, `${label}.operatorSignerKey`);
+    const exit = exactRecord(wire.exitDelay, ["value", "type"], [], `${label}.exitDelay`);
+    if (exit.type !== "blocks" && exit.type !== "seconds")
+        invalid(`${label}.exitDelay.type must be blocks or seconds`);
+    satsFromWire(exit.value as string, `${label}.exitDelay.value`);
     if (wire.assetId !== undefined) assetId(wire.assetId, `${label}.assetId`);
     if (
         wire.claimMode !== undefined &&
@@ -430,7 +444,7 @@ export function decodeQuote(quote: QuoteResponse): DecodedQuote {
         if (quote === null || typeof quote !== "object") invalid("quote must be an object");
         return {
             transferId: str(quote.transferId, "quote.transferId"),
-            params: quoteParamsFromWire(quote.params, "quote.params"),
+            params: quoteParamsFromWire(quoteParams(quote.params, "quote.params"), "quote.params"),
             covenantAddress: str(quote.covenantAddress, "quote.covenantAddress"),
             fare: fareFromWire(quote.fare, "quote.fare"),
             expiresAt: uint(quote.expiresAt, "quote.expiresAt"),
