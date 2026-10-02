@@ -139,6 +139,33 @@ describe("tick", () => {
         );
     });
 
+    it("leaves an unrolled covenant to its exit leaf and still escalates a live one", async () => {
+        const pastDeadline = (id: string, failureCode?: string) =>
+            advance({
+                id,
+                state: "locked",
+                locktime: HEIGHT - 100n,
+                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
+                batchExpiry: { kind: "height", value: HEIGHT },
+                failureCode,
+            });
+        advances.insert(pastDeadline("unrolled", "covenant_unrolled"));
+        const sweeper = createSweeper(deps());
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(recovery.seen).toEqual([]);
+        expect(paused).toBe(false);
+        expect(sweeper.status().blockers).toEqual([]);
+
+        advances.insert(pastDeadline("live"));
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(recovery.seen).toEqual(["live"]);
+        expect(paused).toBe(true);
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: "live", severity: "expired" }),
+        ]);
+    });
+
     it("keeps a persisted deterministic recovery quarantine blocking after restart", async () => {
         advances.insert(
             advance({
