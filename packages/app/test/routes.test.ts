@@ -43,7 +43,7 @@ import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
-import { createAdminApp, createApp } from "../src/server.js";
+import { createAdminApp, createApp, type ServerDeps } from "../src/server.js";
 import { INDEX_HTML } from "../src/admin/static.js";
 import { boardingView } from "./admin/fixtures.js";
 import type { SweeperStatus } from "../src/sweeper.js";
@@ -62,6 +62,7 @@ import {
     quoteBody,
     receiverKey,
     registerSenderCoin,
+    runtimeSafety,
     senderKey,
     senderTree,
     serverKey,
@@ -157,7 +158,7 @@ const okSweeper = (): SweeperStatus => ({
     deadlines: [],
 });
 
-const deps = (over: Partial<Policy> = {}): RouteDeps => ({
+const deps = (over: Partial<Policy> = {}): RouteDeps & Pick<ServerDeps, "runtime"> => ({
     ...quoteInfrastructure(advances, () => basePolicy(over)),
     advances,
     config: config(),
@@ -1807,6 +1808,41 @@ describe("CORS", () => {
             expect.objectContaining({ advanceId: unrolled.id, code: "covenant_unrolled" }),
         ]);
         expect(health.blockers).not.toContain("covenant_unrolled");
+    });
+
+    it("settles the runtime check a rescan leaves in flight before judging resume", async () => {
+        const base = serverDeps();
+        let checking = true;
+        const admin = createAdminApp({
+            ...base,
+            runtime: {
+                ...base.runtime,
+                safety: () =>
+                    checking
+                        ? runtimeSafety({
+                              chainHeight: null,
+                              chainTime: null,
+                              walletSynced: false,
+                              providerIdentityOk: false,
+                              blockers: ["runtime_checking"],
+                          })
+                        : runtimeSafety(),
+                refresh: async () => {
+                    checking = false;
+                    return runtimeSafety();
+                },
+            },
+        });
+
+        const res = await admin.request("/api/policy/resume", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-taxi-operator": "taxi-ops" },
+            body: "{}",
+        });
+
+        expect(await res.json()).toMatchObject({ paused: false });
+        expect(res.status).toBe(200);
+        expect(base.policy.get().paused).toBe(false);
     });
 
     it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
