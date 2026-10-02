@@ -124,8 +124,8 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         );
 
         for (const service of SERVICES) {
-            setOwnedServices(project, [service], "pause");
             paused.add(service);
+            setOwnedServices(project, [service], "pause");
         }
         // A paused service never answers, so a bounded read stands in for a refused one.
         for (const url of [required("TAXI_E2E_ARKD_URL"), required("TAXI_E2E_EMULATOR_URL")])
