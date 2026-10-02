@@ -92,6 +92,8 @@ it.each([false, true])(
             id: req.advanceId,
             state: "quoted",
             ...req.params,
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
             assetUnits: BigInt(envelope.assetUnits!),
             ...funding,
             fare: req.fare,

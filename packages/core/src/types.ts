@@ -1,4 +1,4 @@
-import type { AssetIdRef, ReceiverFare } from "@arkade-taxi/covenant";
+import type { AssetIdRef, ReceiverFare, RelativeTimelock } from "@arkade-taxi/covenant";
 import type { AssetRule, ClaimMode, FareSpec, ResolvedClaimMode } from "./fares.js";
 
 /**
@@ -98,6 +98,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
+    /** The Taxi's bare signing key and the delay in the exit leaf. Part of the
+     * address, so a key rotation must not move an existing advance. A sponsored
+     * advance has no covenant and stores them unused. */
+    operatorSignerKey: Uint8Array;
+    exitDelay: RelativeTimelock;
     dust: bigint;
     topup: bigint;
     assetId?: AssetIdRef;

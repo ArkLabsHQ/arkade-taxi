@@ -269,6 +269,8 @@ export const advance = (over: Partial<Advance> = {}): Advance => ({
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey: config().operatorSignerKey,
+    exitDelay: config().exitDelay,
     dust: DUST,
     topup: 330n,
     locktime: 850_000n,

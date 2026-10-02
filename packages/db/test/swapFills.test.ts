@@ -86,10 +86,10 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
 
 describe("swap-fill migration", () => {
     it("adds swap-fill storage as a new migration without touching prior ones", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         const db = fresh();
         applyMigrations(db);
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(10);
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(11);
         expect(
             db
                 .prepare("SELECT name FROM pragma_table_info('swap_fills') WHERE name = ?")
@@ -115,6 +115,10 @@ describe("swap-fill migration", () => {
             state: "locked",
         });
         applyMigrations(db);
+        // Migration 11 refuses a pre-migration row on purpose; stamp its exit params.
+        db.prepare(
+            "UPDATE advances SET exit_signer_key = ?, exit_delay_type = 'blocks', exit_delay_value = 5",
+        ).run(new Uint8Array(32).fill(4));
         expect(new AdvanceRepository(db).get("a1")?.topup).toBe(300n);
         expect(new AdvanceRepository(db).get("a1")?.claimMode).toBeUndefined();
         db.close();

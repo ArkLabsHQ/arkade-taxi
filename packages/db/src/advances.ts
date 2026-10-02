@@ -11,6 +11,9 @@ const COLUMNS = [
     "receiver_key",
     "sender_key",
     "operator_key",
+    "exit_signer_key",
+    "exit_delay_type",
+    "exit_delay_value",
     "dust",
     "topup",
     "asset_txid",
@@ -89,6 +92,9 @@ interface AdvanceRow {
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
+    exit_signer_key: Buffer | null;
+    exit_delay_type: "blocks" | "seconds" | null;
+    exit_delay_value: bigint | null;
     dust: bigint;
     topup: bigint;
     asset_txid: Buffer | null;
@@ -205,6 +211,9 @@ function toParams(a: Advance): AdvanceParams {
         receiver_key: a.receiverKey,
         sender_key: a.senderKey,
         operator_key: a.operatorKey,
+        exit_signer_key: a.operatorSignerKey,
+        exit_delay_type: a.exitDelay.type,
+        exit_delay_value: a.exitDelay.value,
         dust: a.dust,
         topup: a.topup,
         asset_txid: a.assetId?.txid ?? null,
@@ -297,6 +306,8 @@ function fromRow(r: AdvanceRow): Advance {
     ) {
         throw new Error(`advance ${r.id}: missing funding snapshot`);
     }
+    if (r.exit_signer_key === null || r.exit_delay_type === null || r.exit_delay_value === null)
+        throw new Error(`advance ${r.id}: missing exit params`);
     let operatorInputs: Outpoint[];
     try {
         const parsed: unknown = JSON.parse(r.operator_inputs_json);
@@ -328,6 +339,8 @@ function fromRow(r: AdvanceRow): Advance {
         receiverKey: bytes(r.receiver_key),
         senderKey: bytes(r.sender_key),
         operatorKey: bytes(r.operator_key),
+        operatorSignerKey: bytes(r.exit_signer_key),
+        exitDelay: { value: r.exit_delay_value, type: r.exit_delay_type },
         dust: r.dust,
         topup: r.topup,
         locktime: r.locktime,

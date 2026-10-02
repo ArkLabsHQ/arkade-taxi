@@ -1895,6 +1895,8 @@ describe("a client-built claim, classified by the server watcher", () => {
                 id: q.transferId,
                 state: "locked",
                 ...p,
+                operatorSignerKey: serverConfig().operatorSignerKey,
+                exitDelay: serverConfig().exitDelay,
                 assetUnits: DELIVERED,
                 batchExpiry: { kind: "height", value: 900_000n },
                 operatorInputs: [],

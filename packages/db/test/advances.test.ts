@@ -19,6 +19,8 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         receiverKey: new Uint8Array(32).fill(0xa1),
         senderKey: new Uint8Array(32).fill(0xb2),
         operatorKey: new Uint8Array(32).fill(0xc3),
+        operatorSignerKey: new Uint8Array(32).fill(0xd4),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 300n,
         locktime: 850_000n,
@@ -78,6 +80,32 @@ describe("round-trip fidelity", () => {
         repo.insert(advance({ id: "no-fare" }));
         expect(repo.get("no-fare")?.receiverFare).toBeUndefined();
     });
+
+    it("round-trips the exit params", () => {
+        const a = advance({
+            operatorSignerKey: new Uint8Array(32).fill(7),
+            exitDelay: { value: 86_016n, type: "seconds" as const },
+        });
+        repo.insert(a);
+        expect(repo.get(a.id)!.operatorSignerKey).toEqual(new Uint8Array(32).fill(7));
+        expect(repo.get(a.id)!.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    it("refuses to read an advance written before the exit leaf", () => {
+        const a = advance();
+        repo.insert(a);
+        db.prepare("UPDATE advances SET exit_signer_key = NULL WHERE id = ?").run(a.id);
+        expect(() => repo.get(a.id)).toThrow(/missing exit params/);
+    });
+
+    it.each(["exit_delay_type", "exit_delay_value"])(
+        "refuses to read an advance whose %s is missing",
+        (column) => {
+            repo.insert(advance());
+            db.prepare(`UPDATE advances SET ${column} = NULL WHERE id = 'adv-1'`).run();
+            expect(() => repo.get("adv-1")).toThrow(/missing exit params/);
+        },
+    );
 
     it.each([undefined, 0n, -1n])("rejects asset quantity %s", (assetUnits) => {
         const row = advance({

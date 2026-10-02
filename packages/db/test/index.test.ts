@@ -24,6 +24,8 @@ function seedAdvance(repo: AdvanceRepository, id: string): void {
         receiverKey: new Uint8Array(32).fill(1),
         senderKey: new Uint8Array(32).fill(2),
         operatorKey: new Uint8Array(32).fill(3),
+        operatorSignerKey: new Uint8Array(32).fill(4),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: ABOVE_MAX_SAFE,
         topup: 300n,
         locktime: 850_000n,

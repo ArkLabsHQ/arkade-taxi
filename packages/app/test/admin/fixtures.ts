@@ -27,6 +27,8 @@ export function advance(over: Partial<Advance> = {}): Advance {
         receiverKey: key(0x11),
         senderKey: key(0x22),
         operatorKey: key(0x33),
+        operatorSignerKey: config().operatorSignerKey,
+        exitDelay: config().exitDelay,
         dust: 330n,
         topup: 300n,
         locktime: 800_000n,

@@ -616,6 +616,9 @@ export class ReceiveQuoteRepository {
                     !sameBytes(advance.receiverKey, quote.params.receiverKey) ||
                     !sameBytes(advance.senderKey, quote.params.senderKey) ||
                     !sameBytes(advance.operatorKey, quote.params.operatorKey) ||
+                    !sameBytes(advance.operatorSignerKey, quote.params.operatorSignerKey) ||
+                    advance.exitDelay.type !== quote.params.exitDelay.type ||
+                    advance.exitDelay.value !== quote.params.exitDelay.value ||
                     !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
                     advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
                     advance.locktime !== quote.params.locktime ||

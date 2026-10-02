@@ -43,6 +43,8 @@ const persistedQuote = (): Advance => {
         id: request.advanceId,
         state: "quoted",
         ...request.params,
+        operatorSignerKey: config().operatorSignerKey,
+        exitDelay: config().exitDelay,
         batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: {
             kind: request.funding.batchExpiry.kind,
@@ -339,6 +341,8 @@ describe("sponsored settlement", () => {
             receiverKey: request.params.receiverKey,
             senderKey: request.params.senderKey,
             operatorKey: request.params.operatorKey,
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
             dust: request.params.dust,
             topup: request.params.contribution,
             locktime: 0n,

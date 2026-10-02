@@ -533,6 +533,8 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         receiverKey: params.receiverKey,
         senderKey: params.senderKey,
         operatorKey: params.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
+        exitDelay: config.exitDelay,
         dust: params.dust,
         topup: params.topup,
         locktime: params.locktime,

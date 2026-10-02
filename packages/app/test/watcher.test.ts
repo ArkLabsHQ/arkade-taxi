@@ -164,6 +164,8 @@ async function setup(
         id: request.advanceId,
         state: "quoted",
         ...request.params,
+        operatorSignerKey: cfg.operatorSignerKey,
+        exitDelay: cfg.exitDelay,
         ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
         batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: {
