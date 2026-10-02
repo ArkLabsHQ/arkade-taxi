@@ -29,6 +29,8 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
         receiverKey: new Uint8Array(32).fill(0x11),
         senderKey: new Uint8Array(32).fill(0x22),
         operatorKey: new Uint8Array(32).fill(0x33),
+        operatorSignerKey: new Uint8Array(32).fill(0x44),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 329n,
         assetId: ASSET,
@@ -127,6 +129,8 @@ const boundAdvance = (over: Partial<Advance> = {}): Advance => ({
     receiverKey: quote().params.receiverKey,
     senderKey: quote().params.senderKey,
     operatorKey: quote().params.operatorKey,
+    operatorSignerKey: quote().params.operatorSignerKey,
+    exitDelay: quote().params.exitDelay,
     dust: 330n,
     topup: 329n,
     assetId: ASSET,
@@ -193,6 +197,69 @@ describe("receive quote repository", () => {
             "receive-1",
         );
         expect(() => repo.get("receive-1")).toThrow(/params/);
+        db.close();
+    });
+
+    it("round-trips the exit params through params_json", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(
+            repo,
+            policy,
+            quote({
+                params: {
+                    ...quote().params,
+                    operatorSignerKey: new Uint8Array(32).fill(9),
+                    exitDelay: { value: 86_016n, type: "seconds" as const },
+                },
+            }),
+        );
+        const { params } = repo.get("receive-1")!;
+        expect(params.operatorSignerKey).toEqual(new Uint8Array(32).fill(9));
+        expect(params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+        db.close();
+    });
+
+    it("refuses a stored params object missing the exit params", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        const { params_json } = db
+            .prepare<[], { params_json: string }>("SELECT params_json FROM receive_quotes")
+            .get()!;
+        const { operatorSignerKey, exitDelay, ...legacy } = JSON.parse(params_json);
+        db.prepare("UPDATE receive_quotes SET params_json = ?").run(JSON.stringify(legacy));
+        expect(() => repo.get("receive-1")).toThrow(/params/);
+        db.close();
+    });
+
+    it.each(
+        (["quoted", "expired", "bound"] as const).flatMap((state) =>
+            (["operatorSignerKey", "exitDelay"] as const).map((field) => [state, field] as const),
+        ),
+    )("refuses a database holding a quote in state %s whose params lack %s", (state, field) => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        if (state === "expired") repo.expireQuotes(NOW + 60);
+        if (state === "bound")
+            repo.bind({
+                quoteId: "receive-1",
+                fill: boundFill(),
+                advance: boundAdvance(),
+                expectedPolicyRevision: policy.getSnapshot().revision,
+                now: NOW,
+            });
+        expect(() => repo.assertExitParamsPresent()).not.toThrow();
+        db.prepare("UPDATE receive_quotes SET params_json = json_remove(params_json, ?)").run(
+            `$.${field}`,
+        );
+        expect(() => repo.assertExitParamsPresent()).toThrow(
+            /receive quotes were written before the covenant exit leaf.*recreate the database/,
+        );
         db.close();
     });
 
@@ -418,6 +485,32 @@ describe("receive quote repository", () => {
             ).not.toThrow();
             db.close();
         });
+    });
+
+    describe("bind: exit params agreement", () => {
+        it.each([
+            ["signer key", { operatorSignerKey: new Uint8Array(32).fill(0x45) }],
+            ["delay type", { exitDelay: { value: 5n, type: "seconds" as const } }],
+            ["delay value", { exitDelay: { value: 6n, type: "blocks" as const } }],
+        ])(
+            "refuses to bind when the advance's exit %s differs from the quote's",
+            (_field, over) => {
+                const db = openDatabase(":memory:");
+                const policy = configure(db);
+                const repo = new ReceiveQuoteRepository(db);
+                insert(repo, policy);
+                expect(() =>
+                    repo.bind({
+                        quoteId: "receive-1",
+                        fill: boundFill(),
+                        advance: boundAdvance(over),
+                        expectedPolicyRevision: policy.getSnapshot().revision,
+                        now: NOW,
+                    }),
+                ).toThrow(/economics mismatch/);
+                db.close();
+            },
+        );
     });
 
     it("isolates an inconsistent bound row so unrelated expiries still complete", () => {

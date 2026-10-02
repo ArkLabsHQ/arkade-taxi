@@ -1,5 +1,9 @@
 import { ArkAddress, asset } from "@arkade-os/sdk";
-import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    type DustCovenantParams,
+    type RelativeTimelock,
+} from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     assetIdFromWire,
@@ -12,6 +16,7 @@ import { hex } from "@scure/base";
 import { decodeInfo, decodeReceiveQuote, type DecodedReceiveQuote } from "./decode.js";
 import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
 import { immutablePlainCopy } from "./lockup.js";
+import { assertExitDelayFloor } from "./verify.js";
 
 declare const verifiedReceive: unique symbol;
 
@@ -38,6 +43,8 @@ export interface ReceiveQuoteExpectation {
     maxServiceFareSats: bigint;
     minRecoveryLocktime: { kind: "height" | "time"; value: bigint };
     minInputExpiryFloor: { kind: "height" | "time"; value: bigint };
+    /** Floor for params.exitDelay (omit to accept any); see docs/protocol.md "Verification". */
+    minExitDelay?: RelativeTimelock;
 }
 
 export interface VerifyReceiveQuoteArgs {
@@ -85,10 +92,10 @@ const sameReceiverFare = (
 export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceiveQuote {
     const args = immutablePlainCopy(raw, "receive quote verification request");
     const info = decodeInfo(args.info);
-    const quote = decodeReceiveQuote(args.quote);
-    const { expect } = args;
     if (info.protocolVersion !== PROTOCOL_VERSION)
         reject(VerificationErrorCode.ProtocolVersion, "receive quote protocol version differs");
+    const quote = decodeReceiveQuote(args.quote);
+    const { expect } = args;
     if (!sameBytes(info.serverKey, args.trustedServerKey))
         reject(VerificationErrorCode.ServerKey, "receive quote names an untrusted server");
     if (!sameBytes(info.emulatorKey, args.trustedEmulatorKey))
@@ -195,6 +202,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     ] as const)
         if (actual.kind !== minimum.kind || actual.value < minimum.value)
             reject(VerificationErrorCode.Locktime, `${label} is below the caller minimum`);
+    assertExitDelayFloor(quote.params.exitDelay, expect.minExitDelay);
 
     const now = args.now ?? Math.floor(Date.now() / 1000);
     if (quote.createdAt >= quote.expiresAt || now >= quote.expiresAt)
@@ -235,7 +243,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     );
     return Object.freeze({
         quote: immutablePlainCopy(args.quote, "verified receive quote view"),
-        params: immutablePlainCopy(quote.params, "verified receive params"),
+        params: immutablePlainCopy<DustCovenantParams>(quote.params, "verified receive params"),
         script: script!,
         descriptor,
         ...(receiverPaid

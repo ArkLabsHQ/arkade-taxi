@@ -8,7 +8,7 @@ import {
     LockupShapeError,
     type LockupOutput,
 } from "../src/lockup.js";
-import { DUST, operatorKey, receiverKey, senderKey, VTXO_MIN } from "./fixtures.js";
+import { config, DUST, operatorKey, receiverKey, senderKey, VTXO_MIN } from "./fixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 const TOKEN = { txid: new Uint8Array(32).fill(0x99), groupIndex: 0 };
@@ -17,6 +17,8 @@ const params = () => ({
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey: config().operatorSignerKey,
+    exitDelay: config().exitDelay,
     dust: DUST,
     topup: DUST,
     locktime: 900_000n,

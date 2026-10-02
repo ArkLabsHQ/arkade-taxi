@@ -82,6 +82,8 @@ const advance = (): Advance => {
         receiverKey,
         senderKey,
         operatorKey,
+        operatorSignerKey: config().operatorSignerKey,
+        exitDelay: config().exitDelay,
         dust: request.params.dust,
         topup: request.params.topup,
         locktime: request.params.locktime,

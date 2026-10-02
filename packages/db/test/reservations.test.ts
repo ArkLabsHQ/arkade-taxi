@@ -24,6 +24,8 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         receiverKey: new Uint8Array(32),
         senderKey: new Uint8Array(32),
         operatorKey: new Uint8Array(32),
+        operatorSignerKey: new Uint8Array(32).fill(4),
+        exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 300n,
         locktime: 100n,

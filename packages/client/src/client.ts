@@ -51,6 +51,7 @@ import {
 import { ArkAddress, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
 import { PubT, validatePubkey } from "@scure/btc-signer/utils.js";
 import {
+    assertProtocolVersion,
     verifyQuote,
     type QuoteExpectation,
     type VerifiedQuote,
@@ -280,6 +281,7 @@ export class TaxiClient {
         const request = immutablePlainCopy(raw, "verified receive quote request");
         await preflightReceiveRequest(request);
         const info = await this.info();
+        assertProtocolVersion(info.protocolVersion);
         const quote = await this.requestReceiveQuote(request);
         return {
             verified: verifyReceiveQuote({
@@ -334,6 +336,7 @@ export class TaxiClient {
         const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
         const receiverKey = receiver.vtxoTaprootKey;
         const info = await this.info();
+        assertProtocolVersion(info.protocolVersion);
         const quote = await this.requestQuote({
             ...request,
             receiverKey,

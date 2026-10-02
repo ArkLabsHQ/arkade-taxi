@@ -1,4 +1,6 @@
 export {
+    exitDelayEncodable,
+    exitTimelock,
     recycleFare,
     refundTopup,
     unrecoveredTopup,
@@ -7,6 +9,7 @@ export {
     type DustCovenantParams,
     type RecycleFare,
     type ReceiverFare,
+    type RelativeTimelock,
 } from "./params.js";
 export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
 export { appendAssetLookup } from "./asset.js";

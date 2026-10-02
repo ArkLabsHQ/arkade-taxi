@@ -48,6 +48,8 @@ async function runServe(): Promise<void> {
     const reservations = new ReservationRepository(db);
     const swapFills = new SwapFillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
+    advances.assertExitParamsPresent();
+    receiveQuotes.assertExitParamsPresent();
     assertRecoveryStartupInvariants(
         ["locking", "locked", "recovering"]
             .flatMap((state) => advances.byState(state as "locking" | "locked" | "recovering"))

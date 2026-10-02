@@ -228,6 +228,23 @@ describe("resolveRuntimeConfig", () => {
         },
     );
 
+    it.each([5n, 86_016n])("resolves the covenant exit delay from arkd at %s", async (delay) => {
+        const cfg = await resolveRuntimeConfig(
+            configured(),
+            providers(arkInfo({ unilateralExitDelay: delay })),
+        );
+        expect(cfg.exitDelay).toEqual({ value: delay, type: delay < 512n ? "blocks" : "seconds" });
+        expect(shownConfig(cfg).find((entry) => entry.key === "exitDelay")?.value).toBe(
+            `${delay} ${delay < 512n ? "blocks" : "seconds"}`,
+        );
+    });
+
+    it("refuses to start when arkd advertises an exit delay the Taxi cannot use", async () => {
+        await expect(
+            resolveRuntimeConfig(configured(), providers(arkInfo({ unilateralExitDelay: 0n }))),
+        ).rejects.toThrow(/provider_exit_delay_invalid/);
+    });
+
     it("pins the resolved server identity for later provider refreshes", async () => {
         const cfg = await resolveRuntimeConfig(configured(), providers());
         const result = await verifyProviders(cfg, {

@@ -72,10 +72,10 @@ export interface InfoResponse {
     protocolVersion: number;
     /** Payout destination for every covenant repayment. Never a signer. */
     operatorKey: string;
-    /** Arkade Service key, present in every leaf. The client MUST check this
-     * against the arkd it already trusts; otherwise an operator could name a
-     * service it controls and the address check would be self-consistent and
-     * worthless. */
+    /** Arkade Service key, present in every leaf but the emergency exit. The
+     * client MUST check this against the arkd it already trusts; otherwise an
+     * operator could name a service it controls and the address check would be
+     * self-consistent and worthless. */
     serverKey: string;
     /** Emulator key the covenant leaves are tweaked from. Same warning. */
     emulatorKey: string;
@@ -141,13 +141,17 @@ export interface QuoteParams {
     receiverKey: string;
     senderKey: string;
     operatorKey: string;
+    /** The Taxi's bare signing key, the second signer on the exit leaf. */
+    operatorSignerKey: string;
     dust: string;
     topup: string;
     assetId?: AssetIdWire;
     locktime: string;
+    /** CSV on the exit leaf; `value` below 512 is blocks, otherwise seconds. */
+    exitDelay: { value: string; type: "blocks" | "seconds" };
     recoveryRecipient?: "sender" | "receiver";
-    /** Absent is the historical four-leaf tree; present pins which claim leaf
-     * the covenant actually commits to. */
+    /** Absent enables both claim leaves; present pins which claim leaf the
+     * covenant actually commits to. */
     claimMode?: "recycle" | "purchase";
     /** Present only on a receiver-paid recycle leaf; the fared asset is
      * `assetId` above, not restated here. */

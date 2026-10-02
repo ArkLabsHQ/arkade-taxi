@@ -35,6 +35,9 @@ const toParams = (v: Vector): DustCovenantParams => ({
     receiverKey: hex.decode(v.params.receiverKey),
     senderKey: hex.decode(v.params.senderKey),
     operatorKey: hex.decode(v.params.operatorKey),
+    // Validated but never encoded into these scripts, so the Go vectors omit them.
+    operatorSignerKey: new Uint8Array(32).fill(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: BigInt(v.params.dust),
     topup: BigInt(v.params.topup),
     locktime: BigInt(v.params.locktime),

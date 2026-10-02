@@ -26,6 +26,7 @@ export {
     type VerifiedQuote,
     type VerifyQuoteArgs,
 } from "./verify.js";
+export { exitTimelock } from "@arkade-taxi/covenant";
 export {
     verifyReceiveQuote,
     type ReceiveQuoteExpectation,

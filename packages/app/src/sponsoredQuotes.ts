@@ -350,6 +350,8 @@ async function createReservedSponsoredQuote(
         receiverKey: params.receiverKey,
         senderKey: params.senderKey,
         operatorKey: params.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
+        exitDelay: config.exitDelay,
         dust: params.dust,
         topup: params.contribution,
         locktime,

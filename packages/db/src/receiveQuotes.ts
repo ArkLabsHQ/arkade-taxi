@@ -25,6 +25,9 @@ export interface ReceiveQuoteParams {
     receiverKey: Uint8Array;
     senderKey: Uint8Array;
     operatorKey: Uint8Array;
+    /** The Taxi's bare x-only signing key. `operatorKey` is a taproot output key. */
+    operatorSignerKey: Uint8Array;
+    exitDelay: { value: bigint; type: "blocks" | "seconds" };
     dust: bigint;
     topup: bigint;
     assetId: { txid: Uint8Array; groupIndex: number };
@@ -170,6 +173,8 @@ const encodeParams = (params: ReceiveQuoteParams): string =>
         receiverKey: hex(params.receiverKey),
         senderKey: hex(params.senderKey),
         operatorKey: hex(params.operatorKey),
+        operatorSignerKey: hex(params.operatorSignerKey),
+        exitDelay: { value: params.exitDelay.value.toString(10), type: params.exitDelay.type },
         dust: params.dust.toString(10),
         topup: params.topup.toString(10),
         assetId: { txid: hex(params.assetId.txid), groupIndex: params.assetId.groupIndex },
@@ -194,6 +199,8 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
             "receiverKey",
             "senderKey",
             "operatorKey",
+            "operatorSignerKey",
+            "exitDelay",
             "dust",
             "topup",
             "assetId",
@@ -204,6 +211,9 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
         ["receiverFare"],
         "params",
     );
+    const exit = object(value.exitDelay, "params.exitDelay");
+    exact(exit, ["value", "type"], [], "params.exitDelay");
+    if (exit.type !== "blocks" && exit.type !== "seconds") fail("params.exitDelay");
     const asset = object(value.assetId, "params.assetId");
     exact(asset, ["txid", "groupIndex"], [], "params.assetId");
     if (!Number.isSafeInteger(asset.groupIndex) || Number(asset.groupIndex) < 0)
@@ -222,6 +232,11 @@ const decodeParams = (json: string): ReceiveQuoteParams => {
         receiverKey: bytes(value.receiverKey, 32, "params.receiverKey"),
         senderKey: bytes(value.senderKey, 32, "params.senderKey"),
         operatorKey: bytes(value.operatorKey, 32, "params.operatorKey"),
+        operatorSignerKey: bytes(value.operatorSignerKey, 32, "params.operatorSignerKey"),
+        exitDelay: {
+            value: amount(exit.value, "params.exitDelay.value"),
+            type: exit.type as "blocks" | "seconds",
+        },
         dust: amount(value.dust, "params.dust"),
         topup: amount(value.topup, "params.topup"),
         assetId: {
@@ -601,6 +616,9 @@ export class ReceiveQuoteRepository {
                     !sameBytes(advance.receiverKey, quote.params.receiverKey) ||
                     !sameBytes(advance.senderKey, quote.params.senderKey) ||
                     !sameBytes(advance.operatorKey, quote.params.operatorKey) ||
+                    !sameBytes(advance.operatorSignerKey, quote.params.operatorSignerKey) ||
+                    advance.exitDelay.type !== quote.params.exitDelay.type ||
+                    advance.exitDelay.value !== quote.params.exitDelay.value ||
                     !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
                     advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
                     advance.locktime !== quote.params.locktime ||
@@ -717,5 +735,22 @@ export class ReceiveQuoteRepository {
         assertNativeAccess(this.db);
         if (!Number.isSafeInteger(at) || at < 0) fail("expiry clock");
         return this.db.transaction(() => expireReceiveQuotes(this.db, at)).immediate();
+    }
+
+    /** Startup decodes no receive quote, so a legacy row would fail at its first read. */
+    assertExitParamsPresent(): void {
+        assertNativeAccess(this.db);
+        const { total } = this.db
+            .prepare<[], { total: bigint }>(
+                `SELECT count(*) AS total FROM receive_quotes
+                 WHERE json_extract(params_json, '$.operatorSignerKey') IS NULL
+                    OR json_extract(params_json, '$.exitDelay') IS NULL`,
+            )
+            .safeIntegers(true)
+            .get()!;
+        if (total > 0n)
+            throw new Error(
+                `Incompatible development data: ${total} receive quotes were written before the covenant exit leaf; recreate the database before starting this service`,
+            );
     }
 }

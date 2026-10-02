@@ -333,6 +333,17 @@ export const MIGRATIONS: readonly Migration[] = [
                 CHECK (receiver_fare_units IS NULL
                     OR (receiver_fare_units GLOB '[0-9]*' AND receiver_fare_units NOT GLOB '*[^0-9]*'));`,
     },
+    {
+        id: 11,
+        // Additive and nullable: SQLite cannot add a NOT NULL column without a
+        // default, and a default here would be an address nobody can reproduce.
+        // A NULL is a pre-exit-leaf row, and fromRow refuses to read one.
+        up: `ALTER TABLE advances ADD COLUMN exit_signer_key BLOB;
+             ALTER TABLE advances ADD COLUMN exit_delay_type TEXT
+                CHECK (exit_delay_type IS NULL OR exit_delay_type IN ('blocks', 'seconds'));
+             ALTER TABLE advances ADD COLUMN exit_delay_value INTEGER
+                CHECK (exit_delay_value IS NULL OR exit_delay_value > 0)`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -448,6 +459,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'receiver_fare_currency' AND type = 'TEXT'",
             )
             .get();
+    const hasExitParams =
+        hasReceiverPaid &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'exit_signer_key' AND type = 'BLOB'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -461,7 +479,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 7 && !hasReceiveQuotes) ||
             (current === 8 && !hasReceiveQuoteLink) ||
             (current === 9 && !hasSwapFillDeadline) ||
-            (current === 10 && !hasReceiverPaid))
+            (current === 10 && !hasReceiverPaid) ||
+            (current === 11 && !hasExitParams))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

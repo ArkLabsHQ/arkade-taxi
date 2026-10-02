@@ -7,10 +7,16 @@ import {
     type CovenantParamsValue,
     type InfoResponse,
     type QuoteParams,
+    type QuoteResponse,
     type ReceiveQuoteResponse,
     type ReceiverClaimDescriptorWire,
 } from "@arkade-taxi/protocol";
-import { decodeInfo, decodeReceiveQuote, decodeReceiverClaimDescriptor } from "../src/decode.js";
+import {
+    decodeInfo,
+    decodeQuote,
+    decodeReceiveQuote,
+    decodeReceiverClaimDescriptor,
+} from "../src/decode.js";
 
 const hex32 = (byte: string) => byte.repeat(32);
 const fill32 = (byte: number) => new Uint8Array(32).fill(byte);
@@ -25,15 +31,34 @@ const paramsWire = (): QuoteParams => ({
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey: hex32("08"),
     dust: "330",
     topup: "330",
     locktime: "800000",
+    exitDelay: { value: "86016", type: "seconds" },
+});
+
+const quoteFixture = (): QuoteResponse => ({
+    transferId: "tr_01",
+    params: paramsWire(),
+    covenantAddress: "ark1qcovenant",
+    fare: { currency: "sats", units: "3" },
+    expiresAt: 1_000_000_060,
+    unsignedLockupTx: "e30=",
+    lockup: {
+        covenantOutputIndex: 0,
+        senderInputIndexes: [0],
+        operatorInputIndexes: [1],
+        unsignedTxId: hex32("aa"),
+    },
 });
 
 export const receiverPaidParams = (): CovenantParamsValue => ({
     receiverKey: fill32(1),
     senderKey: fill32(2),
     operatorKey: fill32(3),
+    operatorSignerKey: fill32(8),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,
@@ -165,5 +190,37 @@ describe("decode", () => {
             assetRules: [{ ...ruleWire(), unclaimedMode: "reclaim" as const, future: 1 }],
         };
         expect(() => decodeInfo(info)).not.toThrow();
+    });
+});
+
+describe.each([
+    [
+        "decodeQuote",
+        (params: unknown) => decodeQuote({ ...quoteFixture(), params } as QuoteResponse),
+    ],
+    [
+        "decodeReceiveQuote",
+        (params: unknown) => decodeReceiveQuote({ ...receiveQuoteWire(), params }),
+    ],
+    [
+        "decodeReceiverClaimDescriptor",
+        (params: unknown) => decodeReceiverClaimDescriptor({ ...descriptorWire(), params }),
+    ],
+])("%s exit params", (_, decode) => {
+    it.each(["operatorSignerKey", "exitDelay"] as const)("rejects params that omit %s", (field) => {
+        const { [field]: _omitted, ...rest } = paramsWire();
+        expect(() => decode(rest)).toThrow(new RegExp(`params is missing ${field}`));
+    });
+
+    it("rejects an unknown key inside exitDelay", () => {
+        const params = { ...paramsWire(), exitDelay: { value: "512", type: "seconds", x: 1 } };
+        expect(() => decode(params)).toThrow(/params.exitDelay has unexpected x/);
+    });
+
+    it.each([
+        ["a negative value", { value: "-1", type: "seconds" }],
+        ["an unknown domain", { value: "512", type: "fortnights" }],
+    ])("rejects %s", (_name, exitDelay) => {
+        expect(() => decode({ ...paramsWire(), exitDelay })).toThrow(/params.exitDelay/);
     });
 });

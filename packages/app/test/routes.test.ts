@@ -1833,6 +1833,19 @@ describe("API documentation", () => {
         expect(mismatches(body, { $ref: "#/components/schemas/InfoResponse" })).toEqual([]);
     });
 
+    it("documents the exit delay as positive, as POST /v1/transfers serves it", async () => {
+        const quote = (await (await post("/v1/transfers", quoteBody())).json()) as QuoteResponse;
+        const schema: Schema = { $ref: "#/components/schemas/QuoteParams" };
+        expect(mismatches(quote.params, schema)).toEqual([]);
+        for (const value of ["0", "00"])
+            expect(
+                mismatches(
+                    { ...quote.params, exitDelay: { ...quote.params.exitDelay, value } },
+                    schema,
+                ),
+            ).toEqual([expect.stringContaining("$.exitDelay.value")]);
+    });
+
     it("documents exactly the public routes the app registers", () => {
         const registered = app()
             .routes.map(({ method, path }) => `${method} ${path.replace(/:(\w+)/g, "{$1}")}`)

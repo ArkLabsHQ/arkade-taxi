@@ -84,6 +84,11 @@ const decimal: Schema = {
     pattern: "^[0-9]+$",
     description: "Non-negative decimal string: JSON has no bigint.",
 };
+const positiveDecimal: Schema = {
+    ...decimal,
+    pattern: "^[1-9][0-9]*$",
+    description: "Positive decimal string: JSON has no bigint.",
+};
 const hex: Schema = { type: "string", pattern: "^([0-9a-f]{2})+$", description: "Lowercase hex." };
 const key32: Schema = {
     type: "string",
@@ -186,7 +191,7 @@ const schemas: Record<string, Schema> = {
         serverKey: {
             ...key32,
             description:
-                "Arkade Service key present in every leaf. Check it against the arkd you already trust.",
+                "Arkade Service key present in every leaf but the emergency exit. Check it against the arkd you already trust.",
         },
         emulatorKey: {
             ...key32,
@@ -244,16 +249,26 @@ const schemas: Record<string, Schema> = {
                 receiverKey: key32,
                 senderKey: key32,
                 operatorKey: key32,
+                operatorSignerKey: {
+                    ...key32,
+                    description:
+                        "The Taxi's bare signing key, the second signer on the exit leaf. Not `operatorKey`, which only receives payouts.",
+                },
                 dust: decimal,
                 topup: decimal,
                 locktime: decimal,
+                exitDelay: {
+                    description:
+                        "CSV on the exit leaf; a value below 512 is blocks, otherwise seconds.",
+                    ...object({ value: positiveDecimal, type: oneOfStrings("blocks", "seconds") }),
+                },
             },
             {
                 assetId: ref("AssetId"),
                 recoveryRecipient: oneOfStrings("sender", "receiver"),
                 claimMode: {
                     ...oneOfStrings("recycle", "purchase"),
-                    description: "Absent is the historical four-leaf tree.",
+                    description: "Absent enables both claim leaves.",
                 },
                 receiverFare: {
                     description:
@@ -704,9 +719,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
             locktime: "899856",
+            exitDelay: { value: "86016", type: "seconds" },
             claimMode: "recycle",
         },
         covenantAddress:
@@ -759,9 +776,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "320",
             locktime: "849856",
+            exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
                 groupIndex: 1,
@@ -800,9 +819,11 @@ const examples = {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
             operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+            operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
             locktime: "899856",
+            exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
                 groupIndex: 1,
@@ -986,9 +1007,12 @@ const examples = {
                             "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
                         operatorKey:
                             "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                        operatorSignerKey:
+                            "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
                         dust: "330",
                         topup: "330",
                         locktime: "899856",
+                        exitDelay: { value: "86016", type: "seconds" },
                         claimMode: "recycle",
                     },
                     covenantAddress:

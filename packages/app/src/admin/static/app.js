@@ -67,6 +67,10 @@ const BLOCKER_GROUPS = [
         "The Arkade server reports amount limits the Taxi cannot work with.",
         "provider_limits_invalid",
     ],
+    [
+        "The Arkade server reports a unilateral exit delay the Taxi cannot use.",
+        "provider_exit_delay_invalid",
+    ],
     ["The Arkade server's exit script failed the Taxi's safety check.", "server_unroll_invalid"],
     [
         "The Arkade server changed while the Taxi was settling; it waits for the settlement to finish.",
@@ -142,6 +146,11 @@ const BLOCKER_GROUPS = [
     [
         "A payment's coin was spent in a way the Taxi does not recognise." + ATTENTION,
         "covenant_spend_unknown",
+    ],
+    [
+        "A payment's coin was moved on-chain, so it can no longer be claimed, refunded or recovered off-chain." +
+            ATTENTION,
+        "covenant_unrolled",
     ],
     [
         "The Taxi saw conflicting chain data about a payment." + ATTENTION,
@@ -1614,6 +1623,8 @@ const CONFIG_MEANINGS = {
     dust: "The network dust: the most one payment can borrow.",
     vtxoMinAmount: "The smallest coin the Arkade server accepts, and the least a payment borrows.",
     addressHrp: "The prefix of Arkade addresses on this network.",
+    exitDelay:
+        "The Arkade server's unilateral exit delay, which a payment's emergency exit leaf waits out before it can be spent without the server.",
 };
 
 function renderServiceConfig(entries) {

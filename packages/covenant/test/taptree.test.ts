@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MultisigTapscript, VtxoScript, arkade } from "@arkade-os/sdk";
+import { CSVMultisigTapscript, MultisigTapscript, VtxoScript, arkade } from "@arkade-os/sdk";
 import { p2tr, TAPROOT_UNSPENDABLE_KEY, taprootListToTree } from "@scure/btc-signer";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
@@ -14,10 +14,21 @@ const params = (): DustCovenantParams => ({
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,
 });
+
+// Captured at f3de5de from this fixture, before leaf 4 existed.
+const GOLDEN_SCRIPTS = [
+    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad20f09b70026fd7394d4743912128010bb87b1fbd3823a7d09bc93df2bb6d34ee9aac",
+    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad207049caabf9dcc7c2de3d96a5d66dfae4fb883334849918f694e8ed69989283deac",
+    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad204d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766ad2090522dd225ac25761e75cc5cdd93e40c1738d47bb683aeeaf6bec4dea5e95296ac",
+    "0300350cb17520462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad2090522dd225ac25761e75cc5cdd93e40c1738d47bb683aeeaf6bec4dea5e95296ac",
+];
+const GOLDEN_PK_SCRIPT = "51203aace253edc3274123e0aff6eb4eb16d9bfcf5dc1d60a2cc38ff45f5bcd28e9e";
 
 const opts = (p: DustCovenantParams = params()) => ({
     serverKey: key(4),
@@ -27,11 +38,12 @@ const opts = (p: DustCovenantParams = params()) => ({
 });
 
 describe("DustCovenantScript", () => {
-    it("has four leaves in the order that fixes the merkle root", () => {
+    it("has five leaves in the order that fixes the merkle root", () => {
         const s = new DustCovenantScript(opts());
-        expect(s.scripts).toHaveLength(4);
+        expect(s.scripts).toHaveLength(5);
         expect(Leaf.Recycle).toBe(0);
         expect(Leaf.Recovery).toBe(3);
+        expect(Leaf.Exit).toBe(4);
     });
 
     it("is deterministic for the same parameters", () => {
@@ -69,18 +81,19 @@ describe("claim mode is committed to by the tree", () => {
     const recycleOnly = new DustCovenantScript(opts({ ...params(), claimMode: "recycle" }));
     const purchaseOnly = new DustCovenantScript(opts({ ...params(), claimMode: "purchase" }));
 
-    it("keeps the absent-mode tree byte-identical to the historical address", () => {
+    it("rebuilds the absent-mode tree byte-identically from the same params", () => {
         expect(legacy.pkScript).toEqual(new DustCovenantScript(opts()).pkScript);
         expect(legacy.scripts).toEqual(new DustCovenantScript(opts()).scripts);
     });
 
-    it("keeps all four leaf indexes in place for every mode", () => {
+    it("keeps all five leaf indexes in place for every mode", () => {
         for (const script of [legacy, recycleOnly, purchaseOnly]) {
-            expect(script.scripts).toHaveLength(4);
+            expect(script.scripts).toHaveLength(5);
             expect(Leaf.Recycle).toBe(0);
             expect(Leaf.Purchase).toBe(1);
             expect(Leaf.RefundSender).toBe(2);
             expect(Leaf.Recovery).toBe(3);
+            expect(Leaf.Exit).toBe(4);
         }
     });
 
@@ -130,10 +143,43 @@ describe("claim mode is committed to by the tree", () => {
     });
 });
 
+describe("unilateral exit leaf", () => {
+    const script = () => new DustCovenantScript(opts());
+
+    it("appends the exit at index 4 and leaves 0-3 byte-identical", () => {
+        const s = script();
+        expect(s.scripts).toHaveLength(5);
+        expect(Leaf.Exit).toBe(4);
+        expect(s.scripts.slice(0, 4).map((leaf) => hex.encode(leaf))).toEqual(GOLDEN_SCRIPTS);
+        expect(hex.encode(new VtxoScript(s.scripts.slice(0, 4)).pkScript)).toBe(GOLDEN_PK_SCRIPT);
+    });
+
+    it("locks the exit to sender and operator signer at the configured delay", () => {
+        const closure = CSVMultisigTapscript.decode(script().scripts[Leaf.Exit]);
+        expect(closure.params.pubkeys).toEqual([key(2), key(6)]);
+        expect(closure.params.timelock).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    it("exposes exactly one exit path to the SDK", () => {
+        expect(script().exitPaths()).toHaveLength(1);
+    });
+
+    it("moves the address when either exit param changes", () => {
+        const base = script().pkScript;
+        expect(
+            new DustCovenantScript(opts({ ...params(), operatorSignerKey: key(7) })).pkScript,
+        ).not.toEqual(base);
+        expect(
+            new DustCovenantScript(
+                opts({ ...params(), exitDelay: { value: 1024n, type: "seconds" } }),
+            ).pkScript,
+        ).not.toEqual(base);
+    });
+});
+
 // VtxoScript uses btcd's AssembleTaprootScriptTree. @scure/btc-signer's default
 // taprootListToTree is a Huffman builder that only agrees with arkd for
-// power-of-2 leaf counts. At 4 leaves both happen to agree; splitting the shared
-// refund leaf would make it 5 and silently change the address.
+// power-of-2 leaf counts: it agrees at 4 leaves and not at the covenant's 5.
 describe("taptree assembly", () => {
     // Tapscript leaves, not scriptPubKeys: <32-byte key> OP_CHECKSIG.
     const leaves = (n: number) =>

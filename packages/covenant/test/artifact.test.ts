@@ -38,6 +38,8 @@ const toParams = (v: Vector): DustCovenantParams => ({
     receiverKey: hex.decode(v.params.receiverKey),
     senderKey: hex.decode(v.params.senderKey),
     operatorKey: hex.decode(v.params.operatorKey),
+    operatorSignerKey: schnorr.getPublicKey(new Uint8Array(32).fill(6)),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: BigInt(v.params.dust),
     topup: BigInt(v.params.topup),
     locktime: BigInt(v.params.locktime),
@@ -77,13 +79,14 @@ describe("leaf shapes the artifact must express", () => {
     const p = toParams(v);
     const min = BigInt(v.vtxoMinAmount);
 
-    it("emits the four leaves in the order that fixes the merkle root", () => {
+    it("emits the five leaves in the order that fixes the merkle root", () => {
         const compiled = compile(emitArtifact(p, min), p, min);
         expect(compiled.compiled.map((f) => f.name)).toEqual([
             "recycle",
             "purchase",
             "refundSender",
             "recovery",
+            "exit",
         ]);
         expect(compiled.scripts).toEqual(builder(p, min).scripts);
     });

@@ -1,5 +1,5 @@
 import { ArkAddress, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
-import { bytesToHex } from "@arkade-taxi/protocol";
+import { PROTOCOL_VERSION, bytesToHex } from "@arkade-taxi/protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as client from "../src/index.js";
 import {
@@ -240,6 +240,25 @@ describe("requestVerifiedQuote", () => {
         });
     });
 
+    it("refuses an operator on another protocol version before requesting a quote", async () => {
+        const params: Record<string, unknown> = { ...quote().params };
+        delete params.operatorSignerKey;
+        delete params.exitDelay;
+        const fetch = recordingFetch((url) =>
+            jsonResponse(
+                200,
+                url.endsWith("/info")
+                    ? { ...info(), protocolVersion: PROTOCOL_VERSION + 1 }
+                    : { ...quote(), params },
+            ),
+        );
+        const taxi = new client.TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        await expect(taxi.requestVerifiedQuote(request())).rejects.toMatchObject({
+            code: "PROTOCOL_VERSION_MISMATCH",
+        });
+        expect(fetch.calls).toHaveLength(1);
+    });
+
     it.each(["canonical", "network", "server"])(
         "rejects wrong receiver address %s before networking",
         async (kind) => {
@@ -265,6 +284,7 @@ describe("requestVerifiedQuote", () => {
         "fare",
         "currency",
         "locktime",
+        "exitDelay",
         "amount",
         "expiry",
     ])("applies explicit %s verification", async (kind) => {
@@ -279,6 +299,7 @@ describe("requestVerifiedQuote", () => {
         if (kind === "fare") r.expect.maxFare.units = 9n;
         if (kind === "currency") r.expect.maxFare = { currency: "asset", units: 10n };
         if (kind === "locktime") r.expect.minLocktime = 800_001n;
+        if (kind === "exitDelay") r.expect.minExitDelay = { value: 86_017n, type: "seconds" };
         if (kind === "amount") r.selectedVtxos[0].value = 9;
         if (kind === "expiry") r.now = 1_000_000_060;
         await expect(transport().taxi.requestVerifiedQuote(r)).rejects.toThrow();

@@ -505,7 +505,7 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    it.each(["script", "value", "assets", "swept", "unrolled", "spentBy", "missing"])(
+    it.each(["script", "value", "assets", "swept", "spentBy", "missing"])(
         "retains quarantine and blocks recovery for inconsistent unspent %s evidence",
         async (field) => {
             const state = await setup();
@@ -521,7 +521,6 @@ describe("canonical covenant observation", () => {
             else if (field === "assets")
                 coin.assets = [{ assetId: "12".repeat(32) + "0000", amount: 1n }];
             else if (field === "swept") coin.isSwept = true;
-            else if (field === "unrolled") coin.isUnrolled = true;
             else coin.spentBy = "ff".repeat(32);
             await state.watcher.catchUp();
             expect(state.watcher.isRecoverable(state.advance.id)).toBe(false);
@@ -534,6 +533,31 @@ describe("canonical covenant observation", () => {
             state.db.close();
         },
     );
+
+    it("names an unrolled covenant outpoint instead of a generic mismatch", async () => {
+        const state = await setup();
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.get(key)!.isUnrolled = true;
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureCode).toBe("covenant_unrolled");
+        expect(state.advances.get(state.advance.id)?.failureDetail).toMatch(/unrolled/);
+        expect(state.watcher.isRecoverable(state.advance.id)).toBe(false);
+        expect(state.policy.get().paused).toBe(true);
+        expect(state.reservations.listForAdvance(state.advance.id)).toEqual(
+            state.advance.operatorInputs,
+        );
+        state.db.close();
+    });
+
+    it("keeps an unrolled covenant in the watcher blockers that reach readiness", async () => {
+        const state = await setup();
+        state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!.isUnrolled = true;
+        await state.watcher.catchUp();
+        expect(state.watcher.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: state.advance.id, code: "covenant_unrolled" }),
+        ]);
+        state.db.close();
+    });
 
     it.each(["purchased", "recycled", "refunded"] as const)(
         "accepts canonical %s while recovery is prepared or submitted and rejects late responses",
@@ -1268,6 +1292,8 @@ describe("canonical covenant observation", () => {
                         return state.advances.recordSpendObservation(...args);
                     },
                     recordSpendUnknown: (...args) => state.advances.recordSpendUnknown(...args),
+                    recordCovenantUnrolled: (...args) =>
+                        state.advances.recordCovenantUnrolled(...args),
                     clearSpendUnknown: (...args) => state.advances.clearSpendUnknown(...args),
                     recordSpendDisagreement: (...args) =>
                         state.advances.recordSpendDisagreement(...args),

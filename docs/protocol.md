@@ -34,6 +34,8 @@ Response: `transferId`, the full covenant `params`, the derived
 versioned envelope containing the joint Arkade transaction, checkpoints and
 funding graph. It is not a single PSBT. `expiresAt` is the quote deadline in
 Unix seconds; the tagged VTXO batch expiry and recovery locktime are separate.
+The `params` include `operatorSignerKey` and `exitDelay`, which fix the
+[exit leaf](#emergency-exit) and so the address.
 
 The lockup output is jointly funded: the sender brings the asset and any sats
 remainder, the operator brings `topup`. Outputs are the covenant at `dust`, the
@@ -135,10 +137,11 @@ that verification or the caller's payment authorization.
 
 ## No claim-spend or refund-submission endpoints
 
-Both are client-side by construction. Every leaf is
-`Multisig[server, ⊕script]` — the operator is a payout destination, never a
-signer — so a receiver claims with Arkade Service and emulator signatures alone,
-and a sender refunds with its own signature plus those two.
+Both are client-side by construction. Every leaf but the emergency exit is
+`Multisig[server, ⊕script]` — on those leaves the operator is a payout
+destination, never a signer — so a receiver claims with Arkade Service and
+emulator signatures alone, and a sender refunds with its own signature plus
+those two.
 
 The service validates the canonical spending transaction, signatures, covenant
 leaf, pinned outputs, assets and repayment before reconciling. Its own recovery
@@ -150,6 +153,21 @@ Taxi owns recovery before expiry. The deployed Arkade Service's special
 covenant settlement remains an external assumption verified by the complete
 live deployment gate; Taxi does not implement an upstream forfeit mechanism.
 
+## Emergency exit
+
+Leaf 4 is `CSV(exitDelay) + Multisig[sender, operatorSigner]`, appended after
+leaves 0-3 of the [README's leaf table](../README.md#the-covenant). It is for
+emergencies only: it needs neither the Arkade Service nor the emulator.
+
+- It is a 2-of-2 between `senderKey` and `operatorSignerKey`, the Taxi's own
+  signing key. That is not `operatorKey`, a payout destination nobody can sign
+  for.
+- `exitDelay` is relative to the unroll's confirmation. A value below 512 is
+  blocks, otherwise seconds.
+- No output constraint is expressible on it, so it pays wherever both signers
+  send it.
+- An unroll kills the off-chain claim immediately.
+
 ## Verification
 
 `verifyQuote` in `@arkade-taxi/client` rebuilds the covenant from the quoted
@@ -157,6 +175,18 @@ parameters and refuses unless the derived address equals `covenantAddress`. It
 also checks the quoted receiver, sender and asset against what the caller asked
 to pay, and that `topup`, fare currency/asset/units and `locktime` are within the caller's
 authorisation.
+
+A verifier should pass its own arkd's `unilateralExitDelay` as `expect.minExitDelay`
+to `verifyQuote`, `verifyReceiveQuote` and `verifyIncomingClaim`, which then refuse
+an `exitDelay` of another type or a smaller value. Without it, a Taxi could quote an
+exit delay below arkd's floor, and arkd would then refuse every off-chain spend of
+that covenant: griefing, not theft.
+
+The floor is a `RelativeTimelock`, not arkd's bare number, typed by the same `< 512`
+rule the Taxi quotes with: below 512 is blocks, otherwise seconds. `exitTimelock`,
+exported by `@arkade-taxi/client`, builds it from arkd's `unilateralExitDelay`. An
+`exitDelay` of the other type is refused rather than compared across domains, even when
+its number is larger.
 
 The address check alone is not sufficient. It is only meaningful once the client
 has pinned `serverKey` and `emulatorKey` against values it already trusts —

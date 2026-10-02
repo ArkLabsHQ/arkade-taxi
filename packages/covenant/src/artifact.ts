@@ -30,6 +30,8 @@ const PARAM_TYPES = {
     refundTopup: "int",
     refundRemainder: "int",
     locktime: "int",
+    operatorSignerKey: "pubkey",
+    exitDelay: "int",
 } as const satisfies Record<string, InputDef["type"]>;
 
 /** Mirrors pinOutput. The branch is a structural choice, so it is resolved here, not in the artifact. */
@@ -167,6 +169,7 @@ function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
     for (const fn of Object.values(functions)) {
         collect(fn.tapscript.signers);
         collect(fn.tapscript.cltv === undefined ? [] : [fn.tapscript.cltv]);
+        collect([fn.tapscript.csv?.value]);
         collect(fn.arkadeScript?.asm);
     }
     return (Object.keys(PARAM_TYPES) as (keyof typeof PARAM_TYPES)[])
@@ -192,6 +195,12 @@ export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): Arka
         recovery: {
             tapscript: { signers: ["$serverKey"], cltv: "$locktime" },
             arkadeScript: refund,
+        },
+        exit: {
+            tapscript: {
+                signers: ["$senderKey", "$operatorSignerKey"],
+                csv: { type: p.exitDelay.type, value: "$exitDelay" },
+            },
         },
     };
     return {
@@ -224,6 +233,8 @@ export function artifactArgs(
         refundTopup: topup,
         refundRemainder: p.dust - topup,
         locktime: p.locktime,
+        operatorSignerKey: p.operatorSignerKey,
+        exitDelay: p.exitDelay.value,
         ...(p.assetId ? { assetTxid: p.assetId.txid, assetGroupIndex: p.assetId.groupIndex } : {}),
     };
 }

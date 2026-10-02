@@ -8,7 +8,11 @@
  * agrees with its own quote.
  */
 
-import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    DustCovenantScript,
+    type DustCovenantParams,
+    type RelativeTimelock,
+} from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     type AssetIdValue,
@@ -53,6 +57,8 @@ export interface QuoteExpectation {
      */
     maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     minLocktime: bigint;
+    /** Floor for params.exitDelay (omit to accept any); see docs/protocol.md "Verification". */
+    minExitDelay?: RelativeTimelock;
     /** The mode the caller asked the covenant to commit to. Checked against
      * what the CALLER named, so an operator cannot echo a swapped leaf back
      * self-consistently. Omitted accepts the operator's resolution. */
@@ -92,18 +98,32 @@ const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" :
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
+export const assertProtocolVersion = (version: number): void => {
+    if (version !== PROTOCOL_VERSION)
+        reject(
+            VerificationErrorCode.ProtocolVersion,
+            `operator speaks protocol ${version}, this client speaks ${PROTOCOL_VERSION}`,
+        );
+};
+
+export const assertExitDelayFloor = (
+    actual: RelativeTimelock,
+    floor: RelativeTimelock | undefined,
+): void => {
+    if (floor !== undefined && (actual.type !== floor.type || actual.value < floor.value))
+        reject(
+            VerificationErrorCode.ExitDelay,
+            `exit delay ${actual.value} ${actual.type} is below your minimum ${floor.value} ${floor.type}`,
+        );
+};
+
 export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     args = immutablePlainCopy(args, "quote verification request");
     const { expect, trustedServerKey, trustedEmulatorKey, vtxoMinAmount, hrp } = args;
 
     const info = rewrap(VerificationErrorCode.MalformedInfo, () => decodeInfo(args.info));
 
-    if (info.protocolVersion !== PROTOCOL_VERSION) {
-        reject(
-            VerificationErrorCode.ProtocolVersion,
-            `operator speaks protocol ${info.protocolVersion}, this client speaks ${PROTOCOL_VERSION}`,
-        );
-    }
+    assertProtocolVersion(info.protocolVersion);
     if (!sameBytes(info.serverKey, trustedServerKey)) {
         reject(
             VerificationErrorCode.ServerKey,
@@ -177,6 +197,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
             `locktime ${params.locktime} is earlier than your minimum ${expect.minLocktime}`,
         );
     }
+    assertExitDelayFloor(params.exitDelay, expect.minExitDelay);
     if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode) {
         reject(
             VerificationErrorCode.ClaimMode,

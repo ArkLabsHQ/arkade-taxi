@@ -76,6 +76,8 @@ function setup(): void {
             receiverKey: new Uint8Array(32).fill(1),
             senderKey: new Uint8Array(32).fill(2),
             operatorKey: new Uint8Array(32).fill(3),
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
             dust: 330n,
             topup: 300n,
             locktime: 100n,

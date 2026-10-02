@@ -11,6 +11,9 @@ const COLUMNS = [
     "receiver_key",
     "sender_key",
     "operator_key",
+    "exit_signer_key",
+    "exit_delay_type",
+    "exit_delay_value",
     "dust",
     "topup",
     "asset_txid",
@@ -89,6 +92,9 @@ interface AdvanceRow {
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
+    exit_signer_key: Buffer | null;
+    exit_delay_type: "blocks" | "seconds" | null;
+    exit_delay_value: bigint | null;
     dust: bigint;
     topup: bigint;
     asset_txid: Buffer | null;
@@ -205,6 +211,9 @@ function toParams(a: Advance): AdvanceParams {
         receiver_key: a.receiverKey,
         sender_key: a.senderKey,
         operator_key: a.operatorKey,
+        exit_signer_key: a.operatorSignerKey,
+        exit_delay_type: a.exitDelay.type,
+        exit_delay_value: a.exitDelay.value,
         dust: a.dust,
         topup: a.topup,
         asset_txid: a.assetId?.txid ?? null,
@@ -297,6 +306,8 @@ function fromRow(r: AdvanceRow): Advance {
     ) {
         throw new Error(`advance ${r.id}: missing funding snapshot`);
     }
+    if (r.exit_signer_key === null || r.exit_delay_type === null || r.exit_delay_value === null)
+        throw new Error(`advance ${r.id}: missing exit params`);
     let operatorInputs: Outpoint[];
     try {
         const parsed: unknown = JSON.parse(r.operator_inputs_json);
@@ -328,6 +339,8 @@ function fromRow(r: AdvanceRow): Advance {
         receiverKey: bytes(r.receiver_key),
         senderKey: bytes(r.sender_key),
         operatorKey: bytes(r.operator_key),
+        operatorSignerKey: bytes(r.exit_signer_key),
+        exitDelay: { value: r.exit_delay_value, type: r.exit_delay_type },
         dust: r.dust,
         topup: r.topup,
         locktime: r.locktime,
@@ -431,6 +444,7 @@ function fromRow(r: AdvanceRow): Advance {
 export class AdvanceRepository {
     readonly #db: Database;
     readonly #missingFunding: Statement<[], { id: string }>;
+    readonly #missingExitParams: Statement<[], { total: bigint }>;
     readonly #insert: Statement<[AdvanceParams]>;
     readonly #update: Statement<[AdvanceParams]>;
     readonly #get: Statement<[string], AdvanceRow>;
@@ -477,6 +491,10 @@ export class AdvanceRepository {
         this.#missingFunding =
             read(`SELECT id FROM advances WHERE batch_expiry_kind IS NULL OR batch_expiry_value IS NULL
             OR operator_inputs_json IS NULL OR unsigned_lockup_tx IS NULL OR unsigned_lockup_id IS NULL ORDER BY id`);
+        this.#missingExitParams = read(
+            `SELECT count(*) AS total FROM advances WHERE exit_signer_key IS NULL
+             OR exit_delay_type IS NULL OR exit_delay_value IS NULL`,
+        );
         this.#lockupSubmission = db.prepare(`UPDATE advances SET ark_txid = coalesce(ark_txid, ?),
             updated_at = max(updated_at, ?) WHERE id = ? AND state IN ('locking', 'locked')`);
         this.#lockupFailure = db.prepare(`UPDATE advances SET failure_code = ?, failure_detail = ?,
@@ -507,6 +525,17 @@ export class AdvanceRepository {
     listMissingFundingSnapshotIds(): string[] {
         assertNativeAccess(this.#db);
         return this.#missingFunding.all().map(({ id }) => id);
+    }
+
+    /** `fromRow` refuses these rows on read, but startup only reads the active ones: a
+     * database holding only terminal ones would start, then fail the claim feed. */
+    assertExitParamsPresent(): void {
+        assertNativeAccess(this.#db);
+        const total = this.#missingExitParams.get()?.total ?? 0n;
+        if (total > 0n)
+            throw new Error(
+                `Incompatible development data: ${total} advances were written before the covenant exit leaf; recreate the database before starting this service`,
+            );
     }
 
     get(id: string): Advance | undefined {
@@ -1105,6 +1134,36 @@ export class AdvanceRepository {
                         id,
                         current.state,
                     );
+                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+            })
+            .immediate();
+    }
+
+    recordCovenantUnrolled(
+        id: string,
+        reason: string,
+        at: number,
+        tip: { hash: string; height: number },
+    ): void {
+        assertNativeAccess(this.#db);
+        this.#db
+            .transaction(() => {
+                const current = this.get(id);
+                if (!current) throw new Error(`advance ${id} not found`);
+                if (
+                    current.state !== "locking" &&
+                    current.state !== "locked" &&
+                    current.state !== "recovering"
+                )
+                    return;
+                this.#db
+                    .prepare(
+                        `UPDATE advances SET failure_code = 'covenant_unrolled', failure_detail = ?,
+                         observation_stable_tip_hash = NULL,
+                         observation_stable_tip_height = NULL, observation_stable_count = 0,
+                         updated_at = max(updated_at, ?) WHERE id = ? AND state = ?`,
+                    )
+                    .run(`${reason} at ${tip.hash}:${tip.height}`, at, id, current.state);
                 new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
             })
             .immediate();

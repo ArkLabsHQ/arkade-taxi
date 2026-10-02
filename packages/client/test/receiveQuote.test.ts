@@ -2,6 +2,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
+    PROTOCOL_VERSION,
     assetIdToWire,
     bytesToHex,
     quoteParamsToWire,
@@ -15,6 +16,7 @@ import {
     HRP,
     jsonResponse,
     operatorKey,
+    operatorSignerKey,
     receiverKey,
     recordingFetch,
     senderKey,
@@ -27,10 +29,12 @@ const params = {
     receiverKey,
     senderKey,
     operatorKey,
+    operatorSignerKey,
     dust: 330n,
     topup: 329n,
     assetId: ASSET,
     locktime: 849_856n,
+    exitDelay: { value: 86_016n, type: "seconds" as const },
     claimMode: "recycle" as const,
     recoveryRecipient: "receiver" as const,
 };
@@ -58,7 +62,7 @@ const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse =
     ...over,
 });
 const info = (): InfoResponse => ({
-    protocolVersion: 1,
+    protocolVersion: PROTOCOL_VERSION,
     operatorKey: bytesToHex(operatorKey),
     serverKey: bytesToHex(serverKey),
     emulatorKey: bytesToHex(emulatorKey),
@@ -344,6 +348,40 @@ describe("verifyReceiveQuote", () => {
     });
 });
 
+const refusal = (verify: () => unknown): unknown => {
+    try {
+        verify();
+    } catch (error) {
+        return error;
+    }
+    throw new Error("expected a refusal");
+};
+
+describe("verifyReceiveQuote — exit delay floor", () => {
+    it.each([
+        ["below the floor", { value: 86_017n, type: "seconds" }],
+        ["in the other domain", { value: 144n, type: "blocks" }],
+    ] as const)("refuses an exit delay %s", (_name, minExitDelay) => {
+        const a = args();
+        expect(
+            refusal(() => verifyReceiveQuote({ ...a, expect: { ...a.expect, minExitDelay } })),
+        ).toMatchObject({ code: "EXIT_DELAY_BELOW_MIN" });
+    });
+
+    it.each([
+        ["no floor", undefined],
+        ["a lower floor", { value: 512n, type: "seconds" }],
+        ["an equal floor", { value: 86_016n, type: "seconds" }],
+    ] as const)("accepts the quoted exit delay against %s", (_name, minExitDelay) => {
+        const a = args();
+        const floored = minExitDelay ? { ...a, expect: { ...a.expect, minExitDelay } } : a;
+        expect(verifyReceiveQuote(floored).params.exitDelay).toEqual({
+            value: 86_016n,
+            type: "seconds",
+        });
+    });
+});
+
 describe("TaxiClient receive quotes", () => {
     it("POSTs the exact request and GETs an untrusted quote", async () => {
         const fetch = recordingFetch((_url, init) =>
@@ -428,5 +466,52 @@ describe("TaxiClient receive quotes", () => {
             }),
         ).rejects.toThrow();
         expect(fetch).not.toHaveBeenCalled();
+    });
+});
+
+// An operator on another protocol version may quote a shape this client cannot decode.
+const otherVersion = () => {
+    const params: Record<string, unknown> = { ...quote().params };
+    delete params.operatorSignerKey;
+    delete params.exitDelay;
+    return {
+        info: { ...info(), protocolVersion: PROTOCOL_VERSION + 1 },
+        quote: { ...quote(), params } as unknown as ReceiveQuoteResponse,
+    };
+};
+
+describe("receive quotes from an operator on another protocol version", () => {
+    it("refuses with a version mismatch before decoding the quote", () => {
+        expect(refusal(() => verifyReceiveQuote({ ...args(), ...otherVersion() }))).toMatchObject({
+            code: "PROTOCOL_VERSION_MISMATCH",
+        });
+    });
+
+    it("refuses with a version mismatch before requesting a quote", async () => {
+        const other = otherVersion();
+        const fetch = recordingFetch((_url, init) =>
+            jsonResponse(200, init.method === "GET" ? other.info : other.quote),
+        );
+        const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        await expect(
+            taxi.requestVerifiedReceiveQuote({
+                receiverAddress,
+                makerPublicKey: senderKey,
+                assetId: ASSET,
+                fareId: "receive",
+                fundingExpiry: { kind: "height", value: 850_000n },
+                trustedServerKey: serverKey,
+                trustedEmulatorKey: emulatorKey,
+                dust: 330n,
+                vtxoMinAmount: 1n,
+                hrp: HRP,
+                expect: {
+                    maxServiceFareSats: 3n,
+                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minInputExpiryFloor: { kind: "height", value: 850_000n },
+                },
+            }),
+        ).rejects.toMatchObject({ code: "PROTOCOL_VERSION_MISMATCH" });
+        expect(fetch.calls).toHaveLength(1);
     });
 });

@@ -200,9 +200,11 @@ describe("createQuote", () => {
             receiverKey: bytesToHex(receiverKey),
             senderKey: bytesToHex(senderKey),
             operatorKey: bytesToHex(operatorKey),
+            operatorSignerKey: bytesToHex(config().operatorSignerKey),
             dust: "330",
             topup: "330",
             locktime: LOCKTIME.toString(),
+            exitDelay: { value: "5", type: "blocks" },
             claimMode: "recycle",
         });
         expect(res.fare.units).toBe("0");
@@ -224,6 +226,8 @@ describe("createQuote", () => {
                 receiverKey,
                 senderKey,
                 operatorKey,
+                operatorSignerKey: config().operatorSignerKey,
+                exitDelay: config().exitDelay,
                 dust: DUST,
                 topup: DUST,
                 locktime: LOCKTIME,

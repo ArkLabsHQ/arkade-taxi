@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+    exitDelayEncodable,
+    exitTimelock,
     refundTopup,
     unrecoveredTopup,
     validateParams,
@@ -14,6 +16,8 @@ const base = (): DustCovenantParams => ({
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
     locktime: 800_000n,
@@ -57,6 +61,30 @@ describe("validateParams", () => {
         ["sender equals operator", { senderKey: key(3) }],
     ])("rejects %s", (_name, overrides) => {
         expect(() => validateParams({ ...base(), ...overrides }, MIN)).toThrow(/distinct/);
+    });
+
+    it("refuses a sender key equal to the operator signer key", () => {
+        expect(() =>
+            validateParams({ ...base(), senderKey: base().operatorSignerKey }, 10n),
+        ).toThrow(/sender and operator signer keys must be distinct/);
+    });
+
+    it("refuses a receiver key equal to the operator signer key", () => {
+        expect(() =>
+            validateParams({ ...base(), receiverKey: base().operatorSignerKey }, 10n),
+        ).toThrow(/receiver and operator signer keys must be distinct/);
+    });
+
+    it("refuses exit params the covenant cannot encode", () => {
+        expect(() =>
+            validateParams({ ...base(), operatorSignerKey: key(1).slice(1) }, 10n),
+        ).toThrow(/operator signer key must be 32 bytes/);
+        expect(() =>
+            validateParams({ ...base(), exitDelay: { value: 86_400n, type: "seconds" } }, 10n),
+        ).toThrow(/exit delay/);
+        expect(() =>
+            validateParams({ ...base(), exitDelay: { value: 5n, type: "seconds" } }, 10n),
+        ).toThrow(/exit delay/);
     });
 
     // A zero absolute locktime is always satisfied, making the recovery leaf
@@ -147,5 +175,23 @@ describe("refundTopup", () => {
         expect(unrecoveredTopup(full, 1n)).toBe(1n);
         expect(unrecoveredTopup(precharged, 1n)).toBe(0n);
         expect(precharged.dust - refundTopup(precharged, 1n)).toBe(1n);
+    });
+});
+
+describe("exitTimelock", () => {
+    it("types the delay the way DefaultVtxo does, at the 512 boundary", () => {
+        expect(exitTimelock(511n)).toEqual({ value: 511n, type: "blocks" });
+        expect(exitTimelock(512n)).toEqual({ value: 512n, type: "seconds" });
+        expect(exitTimelock(86_016n)).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    // arkd rounds seconds DOWN to a multiple of 512 before advertising
+    // (arklib.ParseRelativeLocktime), so a live value is encodable; 0 is not.
+    it("refuses what BIP68 cannot encode", () => {
+        expect(exitDelayEncodable(0n)).toBe(false);
+        expect(exitDelayEncodable(86_400n)).toBe(false);
+        expect(exitDelayEncodable(86_016n)).toBe(true);
+        expect(exitDelayEncodable(5n)).toBe(true);
+        expect(exitDelayEncodable(33_554_432n)).toBe(false);
     });
 });

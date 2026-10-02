@@ -26,7 +26,7 @@ import {
 } from "@arkade-taxi/covenant";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import { fundingInputToWire } from "@arkade-taxi/protocol";
-import type { Advance } from "@arkade-taxi/core";
+import { covenantParamsOf, type Advance } from "@arkade-taxi/core";
 import {
     advance,
     config,
@@ -69,7 +69,9 @@ afterEach(() => {
 const sourceAdvance = (
     kind: "height" | "time" = "height",
     withAsset = false,
-    terms: Pick<DustCovenantParams, "recoveryRecipient" | "claimMode" | "receiverFare"> = {},
+    terms: Partial<
+        Pick<DustCovenantParams, "recoveryRecipient" | "claimMode" | "receiverFare" | "exitDelay">
+    > = {},
 ) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
     const cfg = config();
@@ -90,6 +92,8 @@ const sourceAdvance = (
             receiverKey: base.receiverKey,
             senderKey: base.senderKey,
             operatorKey: base.operatorKey,
+            operatorSignerKey: base.operatorSignerKey,
+            exitDelay: base.exitDelay,
             dust: base.dust,
             topup: base.topup,
             locktime,
@@ -141,6 +145,8 @@ const sourceAdvance = (
                     receiverKey: base.receiverKey,
                     senderKey: base.senderKey,
                     operatorKey: base.operatorKey,
+                    operatorSignerKey: base.operatorSignerKey,
+                    exitDelay: base.exitDelay,
                     dust: base.dust,
                     topup: base.topup,
                     locktime,
@@ -381,6 +387,8 @@ describe("recovery graph", () => {
                 receiverKey: persisted.receiverKey,
                 senderKey: persisted.senderKey,
                 operatorKey: persisted.operatorKey,
+                operatorSignerKey: persisted.operatorSignerKey,
+                exitDelay: persisted.exitDelay,
                 dust: persisted.dust,
                 topup: persisted.topup,
                 locktime: persisted.locktime,
@@ -438,6 +446,31 @@ describe("recovery graph", () => {
         const intent = buildRecoveryIntent(persisted, config());
         const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
         expect(checkpoint.getInput(0).witnessUtxo!.script).toEqual(quoted);
+    });
+
+    it("rebuilds a stored advance at its own exit delay, not today's config", () => {
+        const stored = sourceAdvance("height", false, {
+            exitDelay: { value: 86_016n, type: "seconds" },
+        });
+        const cfg = config();
+        const rebuilt = new DustCovenantScript({
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+            params: covenantParamsOf(stored),
+        });
+        const moved = { ...cfg, exitDelay: { value: 1024n, type: "seconds" as const } };
+        expect(buildRecoveryIntent(stored, moved).expectedTxid).toBe(
+            buildRecoveryIntent(stored, cfg).expectedTxid,
+        );
+        expect(rebuilt.pkScript).toEqual(
+            new DustCovenantScript({
+                serverKey: moved.serverPubkey,
+                emulatorKey: moved.emulatorPubkey,
+                vtxoMinAmount: moved.vtxoMinAmount,
+                params: covenantParamsOf(stored),
+            }).pkScript,
+        );
     });
 
     it("rejects drift in persisted operator funding and fare facts", () => {

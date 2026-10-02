@@ -84,7 +84,7 @@ export interface InsertedReceiveQuote {
 }
 
 /**
- * Opens a fresh in-memory database and inserts a live "quoted" receive quote
+ * Opens a fresh in-memory database, or fills `db`, and inserts a live "quoted" receive quote
  * through the real repository — the setup every test that binds one, sender- or
  * receiver-paid, shares.
  */
@@ -92,8 +92,9 @@ export function insertReceiveQuote(opts: {
     wantAmount: bigint;
     receiverFare?: ReceiverFare;
     operatorCoin?: ExtendedVirtualCoin;
+    db?: Database;
 }): InsertedReceiveQuote {
-    const db = openDatabase(":memory:");
+    const db = opts.db ?? openDatabase(":memory:");
     const cfg = config({ vtxoMinAmount: 1n });
     const policies = new PolicyRepository(db);
     const base = basePolicy();
@@ -139,6 +140,8 @@ export function insertReceiveQuote(opts: {
         receiverKey,
         senderKey: makerKey,
         operatorKey: cfg.operatorKey,
+        operatorSignerKey: cfg.operatorSignerKey,
+        exitDelay: cfg.exitDelay,
         dust: 330n,
         topup: loan,
         assetId: WANTED_ASSET,

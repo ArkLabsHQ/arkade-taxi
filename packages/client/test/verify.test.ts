@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+    PROTOCOL_VERSION,
     bytesToHex,
     quoteParamsFromWire,
     quoteParamsToWire,
     type AssetIdValue,
 } from "@arkade-taxi/protocol";
 import { QuoteVerificationError, TaxiError } from "../src/errors.js";
+import { exitTimelock } from "../src/index.js";
 import { verifyQuote } from "../src/verify.js";
 import {
     addressFor,
@@ -64,7 +66,7 @@ describe("verifyQuote — happy path", () => {
         expect(v.params.dust).toBe(330n);
         expect(v.params.topup).toBe(330n);
         expect(v.params.locktime).toBe(800_000n);
-        expect(v.script.scripts).toHaveLength(4);
+        expect(v.script.scripts).toHaveLength(5);
     });
 
     it("returns a script whose own address equals the quoted one", () => {
@@ -192,7 +194,17 @@ describe("verifyQuote — trusted key pinning", () => {
     });
 
     it("rejects a protocol version it does not speak", () => {
-        rejects({ info: { ...info(), protocolVersion: 2 } }, "PROTOCOL_VERSION_MISMATCH");
+        rejects(
+            { info: { ...info(), protocolVersion: PROTOCOL_VERSION + 1 } },
+            "PROTOCOL_VERSION_MISMATCH",
+        );
+    });
+
+    it("names both versions when the operator speaks another protocol version", () => {
+        const other = PROTOCOL_VERSION + 1;
+        expect(() =>
+            verifyQuote({ ...args(), info: { ...info(), protocolVersion: other } }),
+        ).toThrow(`operator speaks protocol ${other}, this client speaks ${PROTOCOL_VERSION}`);
     });
 });
 
@@ -287,6 +299,35 @@ describe("verifyQuote — caller authorisation bounds", () => {
     it("rejects a locktime below minLocktime", () => {
         const a = args();
         rejects({ expect: { ...a.expect, minLocktime: 800_001n } }, "LOCKTIME_BELOW_MIN");
+    });
+});
+
+describe("verifyQuote — exit delay floor", () => {
+    it.each([
+        ["below the floor", { value: 86_017n, type: "seconds" }],
+        ["in the other domain", { value: 144n, type: "blocks" }],
+    ] as const)("rejects an exit delay %s", (_name, minExitDelay) => {
+        rejects({ expect: { ...args().expect, minExitDelay } }, "EXIT_DELAY_BELOW_MIN");
+    });
+
+    it.each([
+        ["no floor", undefined],
+        ["a lower floor", { value: 512n, type: "seconds" }],
+        ["an equal floor", { value: 86_016n, type: "seconds" }],
+    ] as const)("accepts the quoted exit delay against %s", (_name, minExitDelay) => {
+        const a = args();
+        if (minExitDelay) a.expect.minExitDelay = minExitDelay;
+        expect(verifyQuote(a).params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    it("builds the floor from arkd's bare delay with the exported exitTimelock", () => {
+        const a = args();
+        a.expect.minExitDelay = exitTimelock(86_016n);
+        expect(verifyQuote(a).params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+        rejects(
+            { expect: { ...args().expect, minExitDelay: exitTimelock(144n) } },
+            "EXIT_DELAY_BELOW_MIN",
+        );
     });
 });
 

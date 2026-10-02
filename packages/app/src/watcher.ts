@@ -70,6 +70,7 @@ export interface SpendWatcherDeps {
         | "byState"
         | "recordSpendObservation"
         | "recordSpendUnknown"
+        | "recordCovenantUnrolled"
         | "clearSpendUnknown"
         | "recordSpendDisagreement"
         | "recordStableSpendObservation"
@@ -745,9 +746,11 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     const persistedBlockers = (): WatcherBlocker[] =>
         rows()
             .filter((advance) =>
-                ["covenant_spend_unknown", "covenant_observation_disagreement"].includes(
-                    advance.failureCode ?? "",
-                ),
+                [
+                    "covenant_spend_unknown",
+                    "covenant_unrolled",
+                    "covenant_observation_disagreement",
+                ].includes(advance.failureCode ?? ""),
             )
             .map((advance) => ({
                 advanceId: advance.id,
@@ -890,6 +893,15 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         tip,
                     );
                 else if (coin) {
+                    if (coin.isUnrolled) {
+                        deps.advances.recordCovenantUnrolled(
+                            advance.id,
+                            "covenant outpoint was unrolled; no off-chain claim or recovery is possible",
+                            deps.now(),
+                            tip,
+                        );
+                        continue;
+                    }
                     try {
                         const facts = covenantFacts(observedAdvance, deps.config);
                         const assets = holdings(coin, "covenant outpoint");

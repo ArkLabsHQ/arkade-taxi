@@ -1,4 +1,10 @@
-import { arkade, CLTVMultisigTapscript, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
+import {
+    arkade,
+    CLTVMultisigTapscript,
+    CSVMultisigTapscript,
+    MultisigTapscript,
+    VtxoScript,
+} from "@arkade-os/sdk";
 import { buildScripts, type CovenantScripts } from "./scripts.js";
 import type { DustCovenantParams } from "./params.js";
 
@@ -8,6 +14,7 @@ export enum Leaf {
     Purchase = 1,
     RefundSender = 2,
     Recovery = 3,
+    Exit = 4,
 }
 
 export interface DustCovenantOptions {
@@ -31,7 +38,7 @@ export function claimLeafDisabled(params: DustCovenantParams, leaf: Leaf): boole
 }
 
 /**
- * Every leaf but RefundSender is arkade-only, so anyone able to construct a
+ * Every leaf but RefundSender and Exit is arkade-only, so anyone able to construct a
  * satisfying transaction may spend it — that is what lets the receiver stay
  * offline at payment time.
  */
@@ -60,6 +67,12 @@ export class DustCovenantScript extends VtxoScript {
             CLTVMultisigTapscript.encode({
                 absoluteTimelock: params.locktime,
                 pubkeys: [serverKey, tweak(covenant.refund)],
+            }).script,
+            // Index 4 on the Go mirror is the unused optional LeafReclaim, so the
+            // two numberings disagree there.
+            CSVMultisigTapscript.encode({
+                timelock: params.exitDelay,
+                pubkeys: [params.senderKey, params.operatorSignerKey],
             }).script,
         ]);
 

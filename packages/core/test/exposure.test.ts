@@ -11,6 +11,8 @@ const advance = (state: AdvanceState, topup: bigint, locktime: bigint): Advance 
     receiverKey: key(1),
     senderKey: key(2),
     operatorKey: key(3),
+    operatorSignerKey: key(4),
+    exitDelay: { value: 5n, type: "blocks" },
     dust: 330n,
     topup,
     locktime,

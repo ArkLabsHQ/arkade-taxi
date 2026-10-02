@@ -29,9 +29,8 @@ and say so in the commit message.
 
 `VtxoScript` uses btcd's `AssembleTaprootScriptTree`. `@scure/btc-signer`'s
 default `taprootListToTree` is a Huffman builder that only agrees with arkd for
-power-of-2 leaf counts. The covenant has 4 leaves today, so both happen to work;
-splitting the shared refund leaf would make it 5 and silently change the address.
-`test/taptree.test.ts` guards this.
+power-of-2 leaf counts. The covenant has 5 leaves, so the Huffman builder would
+silently derive a different address. `test/taptree.test.ts` guards this.
 
 ## Comments
 

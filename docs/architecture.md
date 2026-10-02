@@ -7,7 +7,7 @@
 | Sender wallet           | asset, maybe sats  | requests the transfer, signs lockup inputs, can refund      |
 | Operator (this service) | sats, agreed fares | fronts `topup`, co-signs lockup, sweeps on timeout          |
 | Receiver wallet         | —                  | claims via `recycle` or `purchase`; offline at payment time |
-| Arkade Service (arkd)   | server key         | signs every leaf                                            |
+| Arkade Service (arkd)   | server key         | signs every leaf but the emergency exit                     |
 | Emulator                | emulator key       | signs a leaf iff its Arkade Script is satisfied             |
 
 A sponsored direct send keeps these roles but drops the covenant: the joint
@@ -128,6 +128,16 @@ capability advertised by `/v1/info`. A dedicated upstream forfeit mechanism is
 out of scope. The full master-stack E2E proves covenant spends and recovery
 before expiry for the recorded provider images; operators must maintain those
 dependencies and enough execution headroom in production.
+
+## The emergency exit
+
+The covenant's last leaf is an [emergency exit](protocol.md#emergency-exit) that
+needs neither the Arkade Service nor the emulator. Nothing in the service spends
+it, and it has two limits:
+
+- It rescues the sats. The asset is currently not preserved by an on-chain exit.
+- An unroll kills the off-chain claim immediately: the receiver's `recycle` and
+  `purchase` stop working at once.
 
 ## Trust
 

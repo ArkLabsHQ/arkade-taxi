@@ -339,6 +339,8 @@ describe("sponsored settlement", () => {
             receiverKey: request.params.receiverKey,
             senderKey: request.params.senderKey,
             operatorKey: request.params.operatorKey,
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
             dust: request.params.dust,
             topup: request.params.contribution,
             locktime: 0n,

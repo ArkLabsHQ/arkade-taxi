@@ -468,6 +468,8 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         receiverKey: req.receiverKey,
         senderKey: req.senderKey,
         operatorKey: config.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
+        exitDelay: config.exitDelay,
         dust: config.dust,
         topup: decision.topup,
         locktime,
@@ -533,6 +535,8 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         receiverKey: params.receiverKey,
         senderKey: params.senderKey,
         operatorKey: params.operatorKey,
+        operatorSignerKey: config.operatorSignerKey,
+        exitDelay: config.exitDelay,
         dust: params.dust,
         topup: params.topup,
         locktime: params.locktime,
@@ -623,7 +627,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
 
     return {
         transferId: id,
-        params: quoteParamsToWire(params),
+        params: quoteParamsToWire(advance),
         covenantAddress: covenant.address,
         fare: fareToWire(decision.fare),
         expiresAt: advance.expiresAt,
