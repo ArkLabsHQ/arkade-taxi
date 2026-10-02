@@ -47,6 +47,7 @@ import {
     resolveMasterSha,
     resolveInstalledClientEntry,
     resolveE2eOptions,
+    resolveWalletTimeoutMs,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
 } from "./lib/harness.mjs";
@@ -723,6 +724,7 @@ const patchPolicy = async (adminUrl) => {
 
 async function main(isolated = false) {
     const options = resolveE2eOptions(process.argv.slice(2));
+    const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);
     const tests = isolated ? options.isolatedTests : options.tests;
     const scenarioIds = readScenarioIds(isolated ? "isolated" : options.mode);
     const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
@@ -1263,7 +1265,7 @@ await import("/app/dist/cli.js");
                     TAXI_E2E_WALLET_ARTIFACTS: walletArtifacts,
                 },
                 secrets: knownSecrets,
-                timeoutMs: 900_000,
+                timeoutMs: walletTimeoutMs,
             });
         }
         await runAndPublishResults(() =>

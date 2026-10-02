@@ -210,6 +210,16 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
     };
 }
 
+// setTimeout runs any delay above 2^31 - 1 ms after 1 ms, killing the wallet run at once.
+export function resolveWalletTimeoutMs(value) {
+    const timeoutMs = Number(value ?? 900_000);
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2 ** 31 - 1)
+        throw new Error(
+            `TAXI_E2E_WALLET_TIMEOUT_MS must be whole milliseconds from 1 to ${2 ** 31 - 1}, got ${JSON.stringify(value)}`,
+        );
+    return timeoutMs;
+}
+
 export function packageManagerInvocation(
     args,
     {

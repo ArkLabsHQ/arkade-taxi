@@ -38,6 +38,9 @@ build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on t
 same stack before the SDK actor scenarios. This explicit local mode requires
 18 named scenarios and both integrity assertions plus the isolated run below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
+The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
+(whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
+the run before any stack starts.
 
 ### Isolated scenarios
 

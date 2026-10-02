@@ -47,6 +47,7 @@ import {
     resolveMasterSha,
     resolveTask12Tests,
     resolveE2eOptions,
+    resolveWalletTimeoutMs,
     resolveInstalledClientEntry,
     renewalFundingAmount,
     removeStaleFailureDiagnostics,
@@ -417,6 +418,21 @@ describe("package manager process boundary", () => {
         ])
             expect(() => resolveE2eOptions(args, { ci: "" })).toThrow();
         expect(() => resolveE2eOptions(["--direct"], { ci: "true" })).toThrow(/forbidden in CI/);
+    });
+
+    it("bounds the wallet run by TAXI_E2E_WALLET_TIMEOUT_MS before any stack starts", () => {
+        expect(resolveWalletTimeoutMs(undefined)).toBe(900_000);
+        expect(resolveWalletTimeoutMs("3600000")).toBe(3_600_000);
+        expect(resolveWalletTimeoutMs("2147483647")).toBe(2_147_483_647);
+        for (const value of ["", "0", "-1", "1.5", "15m", "2147483648"])
+            expect(() => resolveWalletTimeoutMs(value)).toThrow("TAXI_E2E_WALLET_TIMEOUT_MS");
+        const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
+        const resolved = stack.indexOf(
+            "const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);",
+        );
+        expect(resolved).toBeGreaterThan(0);
+        expect(resolved).toBeLessThan(stack.indexOf("const root = mkdtempSync("));
+        expect(stack).toContain("timeoutMs: walletTimeoutMs,");
     });
 
     it.each([
