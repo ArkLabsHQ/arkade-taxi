@@ -32,7 +32,7 @@ const ATTENTION = " Check it under Advances.";
 const PROCEEDS_STUCK =
     "Collecting the fares and repayments the Taxi received is stuck; the code beside this names the cause.";
 
-// Readiness blockers by meaning, one sentence each. A code missing here is shown raw.
+// Readiness blockers and warnings by meaning, one sentence each. A code missing here is shown raw.
 const BLOCKER_GROUPS = [
     ["The Taxi is paused, so it refuses every new payment.", "manual_pause"],
     ["The Taxi's spendable balance is below the reserve it must keep.", "operator_reserve_low"],
@@ -532,6 +532,17 @@ function renderOperational(readiness) {
         : "none";
 }
 
+function renderWarnings(warnings) {
+    const list = $("readiness-warnings");
+    list.textContent = "";
+    list.hidden = warnings.length === 0;
+    for (const { advanceId, code } of warnings) {
+        const item = cell("li", blockerText(code));
+        item.append(cell("code", code), cell("code", advanceId));
+        list.append(item);
+    }
+}
+
 function step(id, done, detail) {
     view.done[id] = done;
     $("step-" + id).classList.toggle("is-done", done);
@@ -1029,6 +1040,16 @@ function renderAdvances(rows) {
         state.append(tag);
         if (due) state.append(" ", cell("span", "due", "due"));
 
+        const phase = cell("td", a.recoveryPhase || a.submissionPhase || "observing", "dim");
+        if (a.failureCode)
+            phase.append(
+                cell(
+                    "div",
+                    a.failureCode + (a.failureDetail ? ": " + a.failureDetail : ""),
+                    "warn",
+                ),
+            );
+
         tr.append(
             id,
             state,
@@ -1036,7 +1057,7 @@ function renderAdvances(rows) {
             cell("td", group(a.fare.units), "n dim"),
             cell("td", group(a.locktime), due ? "n due" : "n"),
             cell("td", duration(a.ageSeconds * 1000), "n dim"),
-            cell("td", a.recoveryPhase || a.submissionPhase || "observing", "dim"),
+            phase,
         );
 
         const action = document.createElement("td");
@@ -1461,6 +1482,7 @@ async function loadStatus() {
     renderStates(status.counts);
     renderSweeper(status.sweeper);
     renderOperational(status.readiness);
+    renderWarnings(status.warnings);
     renderServiceState(status.paused);
     $("hint-dust").textContent = group(status.dust);
     renderSetup();

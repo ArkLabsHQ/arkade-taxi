@@ -101,6 +101,7 @@ export function harness(
                 ({
                     ready: true,
                     body: { blockers: [], status: "ok" },
+                    warnings: [],
                 }) as unknown as OperationalSnapshot),
         now: opts.now ?? (() => 100),
         serviceConfig: shownConfig(config()),

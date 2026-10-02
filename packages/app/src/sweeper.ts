@@ -272,10 +272,13 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             const recovering = deps.advances
                 .byState("recovering")
                 .filter((advance) => advanceKind(advance) === "covenant");
-            const active = [...locked, ...recovering];
-            const byId = new Map(active.map((advance) => [advance.id, advance]));
             lockedCount = locked.length;
             recoveringCount = recovering.length;
+            // Unrolled, it can leave only on-chain through the exit leaf: nothing to recover.
+            const active = [...locked, ...recovering].filter(
+                (advance) => advance.failureCode !== "covenant_unrolled",
+            );
+            const byId = new Map(active.map((advance) => [advance.id, advance]));
             for (const advance of active) {
                 if (!hasRecoveryFailure(advance)) continue;
                 const at = advance.recoveryLastAttemptAt ?? advance.updatedAt;

@@ -242,6 +242,7 @@ interface AdvanceWire {
     submissionNextAttemptAt?: number;
     recoveryNextAttemptAt?: number;
     failureCode?: string;
+    failureDetail?: string;
 }
 
 function toAdvanceWire(a: Advance, now: number): AdvanceWire {
@@ -284,6 +285,11 @@ function toAdvanceWire(a: Advance, now: number): AdvanceWire {
     if (a.recoveryNextAttemptAt !== undefined) out.recoveryNextAttemptAt = a.recoveryNextAttemptAt;
     if (a.failureCode && /^[a-z0-9_.:-]{1,128}$/i.test(a.failureCode))
         out.failureCode = a.failureCode;
+    if (a.failureDetail)
+        out.failureDetail = sanitizeOperationalError(
+            new Error(a.failureDetail),
+            "operation failed",
+        );
     return out;
 }
 
@@ -513,6 +519,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             if (oldest[deadline.kind] === null || deadline.value < oldest[deadline.kind]!)
                 oldest[deadline.kind] = deadline.value;
         }
+        const snapshot = deps.operationalSnapshot();
 
         return ok(c, {
             now: Date.now(),
@@ -530,7 +537,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             counts,
             total: byState.reduce((n, [, rows]) => n + rows.length, 0),
             sweeper: sweeperView(deps.sweeperStatus, Date.now()),
-            readiness: deps.operationalSnapshot().body,
+            readiness: snapshot.body,
+            warnings: snapshot.warnings,
         });
     });
 
