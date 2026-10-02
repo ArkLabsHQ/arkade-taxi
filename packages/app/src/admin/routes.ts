@@ -242,6 +242,7 @@ interface AdvanceWire {
     submissionNextAttemptAt?: number;
     recoveryNextAttemptAt?: number;
     failureCode?: string;
+    failureDetail?: string;
 }
 
 function toAdvanceWire(a: Advance, now: number): AdvanceWire {
@@ -284,6 +285,11 @@ function toAdvanceWire(a: Advance, now: number): AdvanceWire {
     if (a.recoveryNextAttemptAt !== undefined) out.recoveryNextAttemptAt = a.recoveryNextAttemptAt;
     if (a.failureCode && /^[a-z0-9_.:-]{1,128}$/i.test(a.failureCode))
         out.failureCode = a.failureCode;
+    if (a.failureDetail)
+        out.failureDetail = sanitizeOperationalError(
+            new Error(a.failureDetail),
+            "operation failed",
+        );
     return out;
 }
 

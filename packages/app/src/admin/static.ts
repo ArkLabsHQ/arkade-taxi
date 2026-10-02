@@ -2856,6 +2856,16 @@ function renderAdvances(rows) {
         state.append(tag);
         if (due) state.append(" ", cell("span", "due", "due"));
 
+        const phase = cell("td", a.recoveryPhase || a.submissionPhase || "observing", "dim");
+        if (a.failureCode)
+            phase.append(
+                cell(
+                    "div",
+                    a.failureCode + (a.failureDetail ? ": " + a.failureDetail : ""),
+                    "warn",
+                ),
+            );
+
         tr.append(
             id,
             state,
@@ -2863,7 +2873,7 @@ function renderAdvances(rows) {
             cell("td", group(a.fare.units), "n dim"),
             cell("td", group(a.locktime), due ? "n due" : "n"),
             cell("td", duration(a.ageSeconds * 1000), "n dim"),
-            cell("td", a.recoveryPhase || a.submissionPhase || "observing", "dim"),
+            phase,
         );
 
         const action = document.createElement("td");
