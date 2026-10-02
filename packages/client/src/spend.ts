@@ -83,7 +83,9 @@ export interface IncomingClaimExpectation {
     assetUnits?: bigint;
     recoveryRecipient?: "sender" | "receiver";
     claimMode?: "recycle" | "purchase";
-    /** Your own arkd's `unilateralExitDelay`. Omitted accepts any exit delay. */
+    /** Your own arkd's `unilateralExitDelay` as a `RelativeTimelock`, typed by the `< 512` rule
+     * (blocks below 512, else seconds), the type the Taxi quotes; `exitTimelock` builds it. The
+     * other type is refused, not compared across domains. Omitted accepts any exit delay. */
     minExitDelay?: RelativeTimelock;
 }
 

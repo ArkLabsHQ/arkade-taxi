@@ -57,7 +57,9 @@ export interface QuoteExpectation {
      */
     maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
     minLocktime: bigint;
-    /** Your own arkd's `unilateralExitDelay`. Omitted accepts any exit delay. */
+    /** Your own arkd's `unilateralExitDelay` as a `RelativeTimelock`, typed by the `< 512` rule
+     * (blocks below 512, else seconds), the type the Taxi quotes; `exitTimelock` builds it. The
+     * other type is refused, not compared across domains. Omitted accepts any exit delay. */
     minExitDelay?: RelativeTimelock;
     /** The mode the caller asked the covenant to commit to. Checked against
      * what the CALLER named, so an operator cannot echo a swapped leaf back

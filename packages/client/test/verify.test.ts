@@ -7,6 +7,7 @@ import {
     type AssetIdValue,
 } from "@arkade-taxi/protocol";
 import { QuoteVerificationError, TaxiError } from "../src/errors.js";
+import { exitTimelock } from "../src/index.js";
 import { verifyQuote } from "../src/verify.js";
 import {
     addressFor,
@@ -316,6 +317,16 @@ describe("verifyQuote — exit delay floor", () => {
         const a = args();
         if (minExitDelay) a.expect.minExitDelay = minExitDelay;
         expect(verifyQuote(a).params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+    });
+
+    it("builds the floor from arkd's bare delay with the exported exitTimelock", () => {
+        const a = args();
+        a.expect.minExitDelay = exitTimelock(86_016n);
+        expect(verifyQuote(a).params.exitDelay).toEqual({ value: 86_016n, type: "seconds" });
+        rejects(
+            { expect: { ...args().expect, minExitDelay: exitTimelock(144n) } },
+            "EXIT_DELAY_BELOW_MIN",
+        );
     });
 });
 

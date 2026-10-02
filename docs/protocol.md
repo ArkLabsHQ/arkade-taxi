@@ -182,6 +182,12 @@ an `exitDelay` of another type or a smaller value. Without it, a Taxi could quot
 exit delay below arkd's floor, and arkd would then refuse every off-chain spend of
 that covenant: griefing, not theft.
 
+The floor is a `RelativeTimelock`, not arkd's bare number, typed by the same `< 512`
+rule the Taxi quotes with: below 512 is blocks, otherwise seconds. `exitTimelock`,
+exported by `@arkade-taxi/client`, builds it from arkd's `unilateralExitDelay`. An
+`exitDelay` of the other type is refused rather than compared across domains, even when
+its number is larger.
+
 The address check alone is not sufficient. It is only meaningful once the client
 has pinned `serverKey` and `emulatorKey` against values it already trusts —
 otherwise an operator could name an emulator it controls and the derivation
