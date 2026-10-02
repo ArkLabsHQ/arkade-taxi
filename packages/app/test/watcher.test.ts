@@ -12,6 +12,7 @@ import {
     Transaction,
     UnknownPacket,
     VtxoScript,
+    VtxoTaprootTree,
     asset,
     buildOffchainTx,
     type IndexerProvider,
@@ -91,6 +92,36 @@ const setLockTime = (tx: Transaction, lockTime: number): void => {
     (tx as unknown as { global: { fallbackLocktime?: number } }).global.fallbackLocktime = lockTime;
 };
 
+const compactSize = (length: number): number[] =>
+    length < 0xfd ? [length] : [0xfd, length & 0xff, length >>> 8];
+
+/** arkd's taptree encoder, whose per-leaf depth byte both decoders discard. */
+const arkdTapTree = (scripts: readonly Uint8Array[]): Uint8Array =>
+    Uint8Array.from(
+        scripts.flatMap((script, index) => [
+            Math.min(index + 1, scripts.length - 1),
+            0xc0,
+            ...compactSize(script.length),
+            ...script,
+        ]),
+    );
+
+const reencodeTapTrees = (txs: Iterable<Transaction>): void => {
+    for (const tx of txs)
+        for (let index = 0; index < tx.inputsLength; index++) {
+            const entries = tx.getInput(index).unknown;
+            if (!entries) continue;
+            tx.updateInput(index, {
+                unknown: entries.map((entry) => {
+                    const raw = VtxoTaprootTree.decode(entry);
+                    return raw === null
+                        ? entry
+                        : VtxoTaprootTree.encode(arkdTapTree(VtxoScript.decode(raw).scripts));
+                }),
+            });
+        }
+};
+
 type SpendKind = "recycled" | "purchased" | "refunded" | "recovered";
 
 async function setup(
@@ -109,10 +140,12 @@ async function setup(
     recoveryRecipient?: "sender" | "receiver",
     receiverFare?: ReceiverFare,
     cfg = config(),
+    receiverExtraLeaves: Uint8Array[] = [],
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
         receiverLeaf ?? MultisigTapscript.encode({ pubkeys: [serverKey, receiverOwner] }).script,
+        ...receiverExtraLeaves,
     ]);
     const request = buildRequest();
     request.params.operatorKey = cfg.operatorKey;
@@ -687,6 +720,46 @@ describe("canonical covenant observation", () => {
             spentTxid: state.finalArk!.id,
         });
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual([]);
+        state.db.close();
+    });
+
+    it("classifies a covenant spend whose taptrees arrive in arkd's depth encoding", async () => {
+        const state = await setup("purchased");
+        reencodeTapTrees(state.txs.values());
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "purchased",
+            spentTxid: state.finalArk!.id,
+        });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        state.db.close();
+    });
+
+    it("accepts a three-leaf receiver funding tree in arkd's depth encoding", async () => {
+        const receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6));
+        const owner = await receiverIdentity.xOnlyPublicKey();
+        const state = await setup(
+            "recycled",
+            ":memory:",
+            false,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            receiverIdentity,
+            undefined,
+            undefined,
+            undefined,
+            config(),
+            [unroll.script, MultisigTapscript.encode({ pubkeys: [owner, serverKey] }).script],
+        );
+        reencodeTapTrees(state.txs.values());
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recycled",
+            spentTxid: state.finalArk!.id,
+        });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         state.db.close();
     });
 

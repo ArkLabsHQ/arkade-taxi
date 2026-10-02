@@ -42,7 +42,7 @@ import {
     senderKey,
     serverKey,
 } from "../fixtures.js";
-import { buildRequest, operatorTree, receiverPays, unroll } from "./lockupFixtures.js";
+import { buildRequest, operatorTree, receiverPays, senderTree, unroll } from "./lockupFixtures.js";
 
 const senderIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
 const operatorIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(3));
@@ -616,7 +616,9 @@ describe("public provider submission", () => {
                         const tree = VtxoTaprootTree.decode(entry);
                         if (tree === null) return entry;
                         const changed = Uint8Array.from(tree);
-                        changed[0] ^= 1;
+                        // A leaf script byte, not the depth byte: depth 0 is
+                        // arkd's own encoding of a one-leaf tree.
+                        changed[changed.length - 1] ^= 1;
                         return VtxoTaprootTree.encode(changed);
                     });
                     checkpoint.updateInput(0, { unknown: entries });
@@ -650,6 +652,50 @@ describe("public provider submission", () => {
             expect(external.finalizeTx).not.toHaveBeenCalled();
         },
     );
+
+    it("accepts a server checkpoint re-encoded with arkd's taptree depth bytes", async () => {
+        const arkd = Uint8Array.of(
+            0x00,
+            0xc0,
+            senderTree.scripts[0]!.length,
+            ...senderTree.scripts[0]!,
+        );
+        expect(arkd).not.toEqual(senderTree.encode());
+        const external = provider();
+        const implementation = external.submitTx.getMockImplementation()!;
+        external.submitTx.mockImplementationOnce(async (...args) => {
+            const response = await implementation(...args);
+            const checkpoint = Transaction.fromPSBT(
+                base64.decode(response.signedCheckpointTxs[0]!),
+            );
+            checkpoint.updateInput(0, { tapScriptSig: undefined });
+            checkpoint.updateInput(0, {
+                unknown: checkpoint
+                    .getInput(0)
+                    .unknown!.map((entry) =>
+                        VtxoTaprootTree.decode(entry) === null
+                            ? entry
+                            : VtxoTaprootTree.encode(arkd),
+                    ),
+            });
+            response.signedCheckpointTxs[0] = base64.encode(
+                (await serverIdentity.sign(checkpoint, [0])).toPSBT(),
+            );
+            return response;
+        });
+        const submitter = createLockupSubmitter({
+            identity: operatorIdentity,
+            provider: external,
+            serverPubkey: serverKey,
+        });
+
+        const validated = validateLockupSubmission(advance(), await signedEnvelope(), config());
+        await expect(submitter.submit(validated)).resolves.toEqual({
+            arkTxid: validated.outpoint.txid,
+            outpoint: validated.outpoint,
+        });
+        expect(external.finalizeTx).toHaveBeenCalledTimes(1);
+    });
 
     it.each([false, true])(
         "finalizes each matching graph and owner in local order (reordered=%s)",

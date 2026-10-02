@@ -34,6 +34,7 @@ import {
     type LockupEnvelope,
 } from "./psbt.js";
 import { buildLockupEnvelope } from "./lockupBuilder.js";
+import { canonicalCheckpointPsbt } from "./tapTree.js";
 import {
     buildSponsoredEnvelope,
     sponsoredGraphId,
@@ -188,8 +189,8 @@ const verifyOwnerCheckpoints = (
         assertCanonical(checkpoint, `owner checkpoint ${index}`);
         if (
             !sameBytes(
-                unsignedCopy(checkpoint).toPSBT(),
-                validated.unsignedCheckpoints[index]!.toPSBT(),
+                canonicalCheckpointPsbt(unsignedCopy(checkpoint)),
+                canonicalCheckpointPsbt(validated.unsignedCheckpoints[index]!),
             )
         )
             throw new LockupShapeError(`owner signer changed checkpoint ${index}`);
@@ -412,7 +413,12 @@ export function validateLockupSubmission(
         throw new LockupShapeError("signed checkpoint count mismatch");
     checkpoints.forEach((checkpoint, index) => {
         assertCanonical(checkpoint, `checkpoint ${index}`);
-        if (!sameBytes(unsignedCopy(checkpoint).toPSBT(), unsignedCheckpoints[index]!.toPSBT()))
+        if (
+            !sameBytes(
+                canonicalCheckpointPsbt(unsignedCopy(checkpoint)),
+                canonicalCheckpointPsbt(unsignedCheckpoints[index]!),
+            )
+        )
             throw new LockupShapeError(
                 `checkpoint ${index} differs from persisted unsigned transaction`,
             );
@@ -560,7 +566,12 @@ export function createLockupSubmitter(deps: {
         return validated.unsignedCheckpoints.map((local, index) => {
             const server = matched.get(local.id);
             if (!server) throw new LockupShapeError(`missing server checkpoint ${local.id}`);
-            if (!sameBytes(unsignedCopy(server).toPSBT(), local.toPSBT()))
+            if (
+                !sameBytes(
+                    canonicalCheckpointPsbt(unsignedCopy(server)),
+                    canonicalCheckpointPsbt(local),
+                )
+            )
                 throw new LockupShapeError(
                     `server checkpoint ${index} changed unsigned fields or metadata`,
                 );
@@ -582,7 +593,12 @@ export function createLockupSubmitter(deps: {
                 throw new LockupShapeError(
                     `server checkpoint ${index} signature was not preserved`,
                 );
-            if (!sameBytes(unsignedCopy(server).toPSBT(), local.toPSBT()))
+            if (
+                !sameBytes(
+                    canonicalCheckpointPsbt(unsignedCopy(server)),
+                    canonicalCheckpointPsbt(local),
+                )
+            )
                 throw new LockupShapeError(
                     `final checkpoint ${index} changed unsigned fields or metadata`,
                 );

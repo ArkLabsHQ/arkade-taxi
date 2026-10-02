@@ -33,6 +33,7 @@ import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
+import { sameTapTree } from "./arkade/tapTree.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
@@ -112,9 +113,9 @@ const exactOutput = (
         fail(`${label} differs from the exact covenant shape`);
 };
 
-const exactTree = (tx: Transaction, index: number, expected: Uint8Array, label: string): void => {
+const exactTree = (tx: Transaction, index: number, expected: VtxoScript, label: string): void => {
     const fields = getArkPsbtFields(tx, index, VtxoTaprootTree);
-    if (fields.length !== 1 || !sameBytes(fields[0], expected))
+    if (fields.length !== 1 || !sameTapTree(fields[0], expected))
         fail(`${label} taproot tree mismatch`);
 };
 
@@ -413,7 +414,7 @@ const directCheckpoint = (
         !sameBytes(input.witnessUtxo.script, sourceTree.pkScript)
     )
         fail(`${label} does not spend the exact persisted prevout`);
-    exactTree(tx, 0, sourceTree.encode(), label);
+    exactTree(tx, 0, sourceTree, label);
     const selected = selectedLeaf(tx, 0, leaf, label);
     exactSignatures(tx, 0, selected, signers, label);
     const tree = new VtxoScript([unroll.script, scriptFromTapLeafScript(leaf)]);
@@ -441,7 +442,7 @@ const arkInput = (
         !sameBytes(input.witnessUtxo.script, tree.pkScript)
     )
         fail(`${label} does not spend its exact checkpoint`);
-    exactTree(arkTx, index, tree.encode(), label);
+    exactTree(arkTx, index, tree, label);
     const expected = tree.findLeaf(hex.encode(leaf));
     const selected = selectedLeaf(arkTx, index, expected, label);
     exactSignatures(arkTx, index, selected, signers, label);
@@ -571,7 +572,7 @@ export async function classifyObservedSpend(
             if (trees.length !== 1) fail("receiver funding tree is missing or ambiguous");
             const receiverTree = VtxoScript.decode(trees[0]!);
             if (
-                !sameBytes(receiverTree.encode(), trees[0]!) ||
+                !sameTapTree(trees[0]!, receiverTree) ||
                 !sameBytes(
                     receiverTree.pkScript,
                     new Uint8Array([0x51, 0x20, ...advance.receiverKey]),
