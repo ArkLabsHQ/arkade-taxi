@@ -240,6 +240,23 @@ describe("requestVerifiedQuote", () => {
         });
     });
 
+    it("refuses a protocol-1 operator with a version mismatch before requesting a quote", async () => {
+        const params: Record<string, unknown> = { ...quote().params };
+        delete params.operatorSignerKey;
+        delete params.exitDelay;
+        const fetch = recordingFetch((url) =>
+            jsonResponse(
+                200,
+                url.endsWith("/info") ? { ...info(), protocolVersion: 1 } : { ...quote(), params },
+            ),
+        );
+        const taxi = new client.TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        await expect(taxi.requestVerifiedQuote(request())).rejects.toMatchObject({
+            code: "PROTOCOL_VERSION_MISMATCH",
+        });
+        expect(fetch.calls).toHaveLength(1);
+    });
+
     it.each(["canonical", "network", "server"])(
         "rejects wrong receiver address %s before networking",
         async (kind) => {

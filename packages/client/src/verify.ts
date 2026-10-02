@@ -98,6 +98,14 @@ const describeAsset = (a: AssetIdValue | undefined): string => (a ? "an asset" :
 
 const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 
+export const assertProtocolVersion = (version: number): void => {
+    if (version !== PROTOCOL_VERSION)
+        reject(
+            VerificationErrorCode.ProtocolVersion,
+            `operator speaks protocol ${version}, this client speaks ${PROTOCOL_VERSION}`,
+        );
+};
+
 export const assertExitDelayFloor = (
     actual: RelativeTimelock,
     floor: RelativeTimelock | undefined,
@@ -115,12 +123,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
 
     const info = rewrap(VerificationErrorCode.MalformedInfo, () => decodeInfo(args.info));
 
-    if (info.protocolVersion !== PROTOCOL_VERSION) {
-        reject(
-            VerificationErrorCode.ProtocolVersion,
-            `operator speaks protocol ${info.protocolVersion}, this client speaks ${PROTOCOL_VERSION}`,
-        );
-    }
+    assertProtocolVersion(info.protocolVersion);
     if (!sameBytes(info.serverKey, trustedServerKey)) {
         reject(
             VerificationErrorCode.ServerKey,

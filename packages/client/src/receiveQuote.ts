@@ -92,10 +92,10 @@ const sameReceiverFare = (
 export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceiveQuote {
     const args = immutablePlainCopy(raw, "receive quote verification request");
     const info = decodeInfo(args.info);
-    const quote = decodeReceiveQuote(args.quote);
-    const { expect } = args;
     if (info.protocolVersion !== PROTOCOL_VERSION)
         reject(VerificationErrorCode.ProtocolVersion, "receive quote protocol version differs");
+    const quote = decodeReceiveQuote(args.quote);
+    const { expect } = args;
     if (!sameBytes(info.serverKey, args.trustedServerKey))
         reject(VerificationErrorCode.ServerKey, "receive quote names an untrusted server");
     if (!sameBytes(info.emulatorKey, args.trustedEmulatorKey))

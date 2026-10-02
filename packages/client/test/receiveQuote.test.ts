@@ -468,3 +468,50 @@ describe("TaxiClient receive quotes", () => {
         expect(fetch).not.toHaveBeenCalled();
     });
 });
+
+// A protocol-1 operator quotes without the exit fields a protocol-2 decode requires.
+const protocolOne = () => {
+    const params: Record<string, unknown> = { ...quote().params };
+    delete params.operatorSignerKey;
+    delete params.exitDelay;
+    return {
+        info: { ...info(), protocolVersion: 1 },
+        quote: { ...quote(), params } as unknown as ReceiveQuoteResponse,
+    };
+};
+
+describe("receive quotes from a protocol-1 operator", () => {
+    it("refuses with a version mismatch before decoding the quote", () => {
+        expect(refusal(() => verifyReceiveQuote({ ...args(), ...protocolOne() }))).toMatchObject({
+            code: "PROTOCOL_VERSION_MISMATCH",
+        });
+    });
+
+    it("refuses with a version mismatch before requesting a quote", async () => {
+        const old = protocolOne();
+        const fetch = recordingFetch((_url, init) =>
+            jsonResponse(200, init.method === "GET" ? old.info : old.quote),
+        );
+        const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
+        await expect(
+            taxi.requestVerifiedReceiveQuote({
+                receiverAddress,
+                makerPublicKey: senderKey,
+                assetId: ASSET,
+                fareId: "receive",
+                fundingExpiry: { kind: "height", value: 850_000n },
+                trustedServerKey: serverKey,
+                trustedEmulatorKey: emulatorKey,
+                dust: 330n,
+                vtxoMinAmount: 1n,
+                hrp: HRP,
+                expect: {
+                    maxServiceFareSats: 3n,
+                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minInputExpiryFloor: { kind: "height", value: 850_000n },
+                },
+            }),
+        ).rejects.toMatchObject({ code: "PROTOCOL_VERSION_MISMATCH" });
+        expect(fetch.calls).toHaveLength(1);
+    });
+});
