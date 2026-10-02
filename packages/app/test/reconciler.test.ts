@@ -120,6 +120,7 @@ describe("locking reconciliation", () => {
                     blockers: [
                         { advanceId: state.quote.id, code: "watcher_block", detail: "detail" },
                     ],
+                    warnings: [{ advanceId: "unrolled", code: "covenant_unrolled", detail: "d" }],
                 }),
             },
             advances: state.advances,
@@ -142,6 +143,7 @@ describe("locking reconciliation", () => {
             watching: 1,
             blockers: ["watcher_block"],
             blockerDetails: [{ advanceId: state.quote.id, detail: "detail" }],
+            warnings: [{ advanceId: "unrolled", code: "covenant_unrolled", detail: "d" }],
         });
         state.db.close();
     });

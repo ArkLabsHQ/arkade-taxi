@@ -32,7 +32,7 @@ const ATTENTION = " Check it under Advances.";
 const PROCEEDS_STUCK =
     "Collecting the fares and repayments the Taxi received is stuck; the code beside this names the cause.";
 
-// Readiness blockers by meaning, one sentence each. A code missing here is shown raw.
+// Readiness blockers and warnings by meaning, one sentence each. A code missing here is shown raw.
 const BLOCKER_GROUPS = [
     ["The Taxi is paused, so it refuses every new payment.", "manual_pause"],
     ["The Taxi's spendable balance is below the reserve it must keep.", "operator_reserve_low"],
@@ -530,6 +530,17 @@ function renderOperational(readiness) {
     $("time-expiry").textContent = deadlines.time
         ? deadlines.time.remaining + " seconds / " + deadlines.time.severity
         : "none";
+}
+
+function renderWarnings(warnings) {
+    const list = $("readiness-warnings");
+    list.textContent = "";
+    list.hidden = warnings.length === 0;
+    for (const { advanceId, code } of warnings) {
+        const item = cell("li", blockerText(code));
+        item.append(cell("code", code), cell("code", advanceId));
+        list.append(item);
+    }
 }
 
 function step(id, done, detail) {
@@ -1461,6 +1472,7 @@ async function loadStatus() {
     renderStates(status.counts);
     renderSweeper(status.sweeper);
     renderOperational(status.readiness);
+    renderWarnings(status.warnings);
     renderServiceState(status.paused);
     $("hint-dust").textContent = group(status.dust);
     renderSetup();

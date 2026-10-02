@@ -139,6 +139,10 @@ it, and it has two limits:
 - An unroll kills the off-chain claim immediately: the receiver's `recycle` and
   `purchase` stop working at once.
 
+An unroll is a `covenant_unrolled` warning, not a pause or a readiness blocker.
+The advance stays `locked` with its top-up still exposed, and its funds can exit
+only on-chain through this leaf.
+
 ## Trust
 
 The client verifies rather than trusts. `verifyQuote` independently rebuilds the

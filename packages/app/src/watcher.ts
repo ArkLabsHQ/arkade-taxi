@@ -55,6 +55,7 @@ export interface SpendWatcherStatus {
     lastScanAt: number | null;
     watching: number;
     blockers: WatcherBlocker[];
+    warnings: WatcherBlocker[];
 }
 
 export interface SpendWatcher {
@@ -744,15 +745,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             // cannot classify; the reconciler settles them on exact-outpoint
             // observation instead.
         ].filter((advance) => advanceKind(advance) === "covenant");
-    const persistedBlockers = (): WatcherBlocker[] =>
-        rows()
-            .filter((advance) =>
-                [
-                    "covenant_spend_unknown",
-                    "covenant_unrolled",
-                    "covenant_observation_disagreement",
-                ].includes(advance.failureCode ?? ""),
-            )
+    const persisted = (current: Advance[], codes: string[]): WatcherBlocker[] =>
+        current
+            .filter((advance) => codes.includes(advance.failureCode ?? ""))
             .map((advance) => ({
                 advanceId: advance.id,
                 code: advance.failureCode!,
@@ -1059,10 +1054,22 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             controller?.abort();
             await streamTask;
         },
-        status: () => ({
-            lastScanAt,
-            watching,
-            blockers: [...scanBlockers, ...streamBlockers, ...persistedBlockers()],
-        }),
+        status: () => {
+            const current = rows();
+            return {
+                lastScanAt,
+                watching,
+                blockers: [
+                    ...scanBlockers,
+                    ...streamBlockers,
+                    ...persisted(current, [
+                        "covenant_spend_unknown",
+                        "covenant_observation_disagreement",
+                    ]),
+                ],
+                // Its funds can only leave on-chain through the exit leaf; it costs one advance.
+                warnings: persisted(current, ["covenant_unrolled"]),
+            };
+        },
     };
 }

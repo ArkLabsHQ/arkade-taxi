@@ -28,6 +28,15 @@ import {
 const COVENANT = "taxi-dust-covenant";
 const SERVICES = ["arkd", "emulator"];
 
+const post = async (path: string) => {
+    const response = await fetch(`${required("TAXI_E2E_ADMIN_URL")}/admin/api/${path}`, {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json", "x-taxi-operator": "task13-e2e" },
+    });
+    return { status: response.status, body: await response.json() };
+};
+
 liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
     const live = await openLive();
     const project = required("TAXI_E2E_PROJECT");
@@ -216,7 +225,36 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         );
         Object.assign(evidence, { resumedAt, scannedAt: flagged.scannedAt });
         expect(flagged.advance.failureCode).toBe("covenant_unrolled");
-        expect((await admin("status")).paused).toBe(true);
+        // A day-ahead chain clock leaves the operator's coins short of expiry headroom.
+        const lasting = ["manual_pause", "vtxo_expiry_headroom", "operator_reserve_low"];
+        const recovered = await poll(
+            "outage blockers cleared",
+            health,
+            (body) => body.blockers.every((code: string) => lasting.includes(code)),
+            120_000,
+        );
+        const resumed = await post("resume");
+        Object.assign(evidence, { lastingBlockers: recovered.blockers, resume: resumed });
+        expect([200, 409]).toContain(resumed.status);
+        if (resumed.status === 200) expect(resumed.body.paused).toBe(false);
+        else {
+            expect(resumed.body.blockers).not.toContain("covenant_unrolled");
+            expect(resumed.body.blockers).not.toContain("runtime_checking");
+        }
+        // An arkd outage past the 30 s provider read may pause the Taxi on its own.
+        await admin("policy", { paused: false });
+        expect((await post("rescan")).status).toBe(202);
+        const status = await admin("status");
+        const blockers = (await health()).blockers;
+        evidence.policyHistory = (await admin("policy/history")).history;
+        expect(status.paused).toBe(false);
+        expect(status.warnings).toContainEqual(
+            expect.objectContaining({
+                advanceId: locked.quote.transferId,
+                code: "covenant_unrolled",
+            }),
+        );
+        expect(blockers).not.toContain("covenant_unrolled");
     } finally {
         // Best effort: a failure here must not mask the scenario's own error.
         for (const service of paused)

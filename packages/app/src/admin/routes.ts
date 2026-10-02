@@ -513,6 +513,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             if (oldest[deadline.kind] === null || deadline.value < oldest[deadline.kind]!)
                 oldest[deadline.kind] = deadline.value;
         }
+        const snapshot = deps.operationalSnapshot();
 
         return ok(c, {
             now: Date.now(),
@@ -530,7 +531,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             counts,
             total: byState.reduce((n, [, rows]) => n + rows.length, 0),
             sweeper: sweeperView(deps.sweeperStatus, Date.now()),
-            readiness: deps.operationalSnapshot().body,
+            readiness: snapshot.body,
+            warnings: snapshot.warnings,
         });
     });
 
