@@ -127,6 +127,13 @@ covenant as uneconomic, so it reaches the chain only because the Taxi's change
 output in the same lockup shares its branch: a sender cannot drive this exit
 alone.
 
+The sender and the sats receiver hold delegate VTXOs, the production wallet's
+three-leaf shape, whose taptree depth bytes arkd re-encodes: a stub delegate
+provider adds the third leaf, so every lockup the sender signs and every recycle
+claim by that receiver spends one. Actor setup recomputes each of their
+addresses and fails rather than let the SDK fall back to two leaves. The
+operator stays two-leaf, the shape the Taxi derives for its own key.
+
 The receiver scenarios mint dedicated six-decimal regtest USDT assets. They
 select a single asset VTXO carrying 1,000 sats, with no separate bitcoin input,
 verify and submit the sender lockup, and discover `locking` then `locked` through

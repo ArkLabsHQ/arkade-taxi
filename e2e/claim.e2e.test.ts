@@ -40,6 +40,9 @@ async function smallBitcoinPayment() {
             (coins) => coins.some((coin) => coin.txid === bobFundingTxid && coin.value === 1000),
         ).then((coins) => coins.find((coin) => coin.txid === bobFundingTxid)!);
         const aliceCoin = await sizedSender(live);
+        // The lockup and the claim each spend a production-wallet 3-leaf coin.
+        for (const coin of [aliceCoin, bobCoin])
+            expect(VtxoScript.decode(coin.tapTree).scripts).toHaveLength(3);
         const [aliceBefore, bobBefore, taxiBefore] = await Promise.all([
             walletBalance(alice, live.fixture.asset.assetId),
             walletBalance(bob, live.fixture.asset.assetId),

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
+import { DefaultVtxo, DelegateVtxo, SingleKey } from "@arkade-os/sdk";
+import { hex } from "@scure/base";
 import {
     assertArtifactSafe,
     assertCleanupCandidates,
@@ -56,7 +58,7 @@ import {
 } from "../lib/harness.mjs";
 import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
-import { expiryOf } from "../e2e-wallets.mjs";
+import { assertDelegateLeaf, expiryOf, stubDelegateProvider } from "../e2e-wallets.mjs";
 
 it("pins and verifies the zero-fee settlement fixture without raising Taxi fee authority", () => {
     expect(Object.values(ARKD_FEES)).toEqual(["0.0", "0.0", "0.0", "0.0"]);
@@ -1229,6 +1231,28 @@ describe("wallet bootstrap", () => {
         ]);
         expect(generated).toBe(4);
         expect(second).toEqual(first);
+    });
+
+    it("recognizes only the 3-leaf address the stub delegate yields, never a 2-leaf fallback", async () => {
+        const options = {
+            pubKey: await SingleKey.fromHex("22".repeat(32)).xOnlyPublicKey(),
+            serverPubKey: await SingleKey.fromHex("33".repeat(32)).xOnlyPublicKey(),
+            csvTimelock: { value: 144n, type: "blocks" as const },
+        };
+        const { pubkey } = await stubDelegateProvider.getDelegateInfo();
+        const delegated = new DelegateVtxo.Script({
+            ...options,
+            delegatePubKey: hex.decode(pubkey).subarray(1),
+        });
+        const fallback = new DefaultVtxo.Script(options);
+        expect(delegated.scripts).toHaveLength(3);
+        expect(() =>
+            assertDelegateLeaf(delegated.address("tark", options.serverPubKey).encode(), options),
+        ).not.toThrow();
+        expect(() =>
+            assertDelegateLeaf(fallback.address("tark", options.serverPubKey).encode(), options),
+        ).toThrow("3-leaf");
+        await expect(stubDelegateProvider.delegate()).rejects.toThrow("never delegates");
     });
 });
 
