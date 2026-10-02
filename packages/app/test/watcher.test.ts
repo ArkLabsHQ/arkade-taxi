@@ -543,6 +543,9 @@ describe("canonical covenant observation", () => {
         expect(state.advances.get(state.advance.id)?.failureDetail).toMatch(/unrolled/);
         expect(state.watcher.isRecoverable(state.advance.id)).toBe(false);
         expect(state.policy.get().paused).toBe(true);
+        expect(state.reservations.listForAdvance(state.advance.id)).toEqual(
+            state.advance.operatorInputs,
+        );
         state.db.close();
     });
 
