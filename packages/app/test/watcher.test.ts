@@ -573,6 +573,25 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    it.each([{ arkTxId: "dd".repeat(32) }, { settledBy: "cc".repeat(32) }])(
+        "keeps an unrolled covenant's unclassified off-chain spend %o as unknown",
+        async (offchain) => {
+            const state = await setup();
+            Object.assign(state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!, {
+                isUnrolled: true,
+                isSpent: true,
+                spentBy: "ee".repeat(32),
+                arkTxId: undefined,
+                ...offchain,
+            });
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)?.failureCode).toBe(
+                "covenant_spend_unknown",
+            );
+            state.db.close();
+        },
+    );
+
     it.each(["purchased", "recycled", "refunded"] as const)(
         "accepts canonical %s while recovery is prepared or submitted and rejects late responses",
         async (kind) => {

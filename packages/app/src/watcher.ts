@@ -942,8 +942,8 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         deps.now(),
                         tip,
                     );
-                // An indexer that tracks on-chain spends reports the covenant's own exit as spent.
-                else if (coin.isUnrolled)
+                // Spent on-chain, as arkd's IsOnchainSpent reads it: the covenant's own exit.
+                else if (coin.isUnrolled && !coin.arkTxId && !coin.settledBy)
                     deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                 else
                     deps.advances.recordSpendUnknown(
