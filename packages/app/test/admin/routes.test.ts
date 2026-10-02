@@ -690,6 +690,25 @@ describe("GET /admin/api/advances", () => {
         expect(body.advances[0].id).toBe("urgent");
     });
 
+    it("says why an advance failed, not only that it did", async () => {
+        const h = harness();
+        h.advances.insert(
+            advance({
+                id: "failed",
+                state: "locking",
+                failureCode: "lockup_submission_invalid_provider_response",
+                failureDetail: "server checkpoint 0 changed unsigned fields or metadata",
+            }),
+        );
+
+        const { body } = await h.json("/admin/api/advances");
+
+        expect(body.advances[0]).toMatchObject({
+            failureCode: "lockup_submission_invalid_provider_response",
+            failureDetail: "server checkpoint 0 changed unsigned fields or metadata",
+        });
+    });
+
     it.each([
         ["time", "height"],
         ["height", "time"],
