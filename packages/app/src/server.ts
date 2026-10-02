@@ -98,6 +98,7 @@ function adminDeps(deps: ServerDeps) {
                 deposits: await deposits().catch(() => null),
             },
         }),
+        warnings: () => deps.reconciler.status().warnings ?? [],
     };
 }
 

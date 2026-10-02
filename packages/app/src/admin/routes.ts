@@ -34,6 +34,7 @@ import type { RuntimeConfig, ShownConfigEntry } from "../config.js";
 import { holdings } from "../proceeds.js";
 import type { OperationalSnapshot } from "../routes.js";
 import type { RecoveryDeadline } from "../sweeper.js";
+import type { WatcherBlocker } from "../watcher.js";
 
 /** What the admin surface needs to know about the sweeper. Only the first three
  * fields are required, so a sweeper that tracks less can still report. */
@@ -72,6 +73,8 @@ export interface AdminDeps {
         /** Each field is null when its read failed. */
         boarding: { address: string | null; deposits: BoardingDeposits | null };
     }>;
+    /** Shown beside readiness, never in it: they neither block nor pause. */
+    warnings(): readonly WatcherBlocker[];
 }
 
 const MAX_LIMIT = 1_000;
@@ -524,6 +527,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             total: byState.reduce((n, [, rows]) => n + rows.length, 0),
             sweeper: sweeperView(deps.sweeperStatus, Date.now()),
             readiness: deps.operationalSnapshot().body,
+            warnings: deps.warnings(),
         });
     });
 

@@ -1705,6 +1705,21 @@ describe("CORS", () => {
         expect((await closing.request("/api/status")).status).toBe(503);
     });
 
+    it("lists watcher warnings on the admin status only, never in public readiness", async () => {
+        const warning = { advanceId: "adv-unrolled", code: "covenant_unrolled", detail: "d" };
+        reconcilerStatus = { ...reconcilerStatus, warnings: [warning] };
+        const deps = serverDeps();
+        deps.policy.update({ paused: false }, "test");
+
+        const status = await (await createAdminApp(deps).request("/api/status")).json();
+        const health = await (await createApp(deps).request("/health")).json();
+
+        expect(status.warnings).toEqual([warning]);
+        expect(status.readiness).toMatchObject({ status: "ok", blockers: [] });
+        expect(health).not.toHaveProperty("warnings");
+        expect(JSON.stringify(health)).not.toContain("covenant_unrolled");
+    });
+
     it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
         let nowMs = 1_000_000;
         let reads = 0;

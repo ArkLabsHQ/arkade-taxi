@@ -79,6 +79,7 @@ export function harness(
         operationalSnapshot?: (options?: { ignoreManualPause?: boolean }) => OperationalSnapshot;
         now?: () => number;
         funding?: AdminDeps["funding"];
+        warnings?: AdminDeps["warnings"];
     } = {},
 ): Harness {
     const db = openDatabase(":memory:");
@@ -111,6 +112,7 @@ export function harness(
                 coins: [],
                 boarding: boardingView(),
             })),
+        warnings: opts.warnings ?? (() => []),
     });
 
     const app = new Hono();

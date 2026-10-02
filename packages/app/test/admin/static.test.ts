@@ -251,6 +251,7 @@ function runDashboard(
                     },
                     sweeper: { nearestDeadline: { height: null, time: null } },
                 },
+                warnings: [],
             });
         // The authenticating proxy, not the page, supplies the operator header.
         return admin.app.request(path, {
@@ -1225,6 +1226,37 @@ describe("setup guidance", () => {
         expect(codes.length).toBeGreaterThan(100);
         expect(codes.filter((code) => context.blockerText(code) === code)).toEqual([]);
         expect(context.blockerText("no_such_blocker")).toBe("no_such_blocker");
+    });
+
+    it("lists warnings apart from the blockers, each with its advance", async () => {
+        let warnings = [{ advanceId: "adv-unrolled", code: "covenant_unrolled", detail: "d" }];
+        const dashboard = runDashboard(
+            () => dashboardPage([], "b".repeat(64), null),
+            harness({ operationalSnapshot: () => readiness([]), warnings: () => warnings }),
+            { realStatus: true },
+        );
+        const list = dashboard.element("readiness-warnings");
+        const rendered = () =>
+            list.children.map((item) => [
+                item.textContent,
+                ...item.children.map((c) => c.textContent),
+            ]);
+
+        await vi.waitFor(() => expect(list.children).toHaveLength(1));
+        expect(list.hidden).toBe(false);
+        expect(rendered()).toEqual([
+            [
+                dashboard.context.blockerText("covenant_unrolled"),
+                "covenant_unrolled",
+                "adv-unrolled",
+            ],
+        ]);
+        expect(dashboard.element("step-connected-detail").children).toEqual([]);
+
+        warnings = [];
+        await dashboard.poll();
+        expect(list.hidden).toBe(true);
+        expect(rendered()).toEqual([]);
     });
 
     it("walks a fresh Taxi through the checklist and the setup wizard in one PATCH", async () => {
