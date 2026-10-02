@@ -499,15 +499,16 @@ describe("PATCH /admin/api/policy", () => {
 
 describe("the operator a change is attributed to", () => {
     const json = { "content-type": "application/json" };
-    const patch = (h: Harness, headers: Record<string, string> = {}) =>
+    const patch = (h: Harness, headers: Record<string, string> = {}, quoteTtlSeconds = 30) =>
         h.json("/admin/api/policy", {
             method: "PATCH",
             headers: { ...json, ...headers },
-            body: JSON.stringify({ quoteTtlSeconds: 30 }),
+            body: JSON.stringify({ quoteTtlSeconds }),
         });
     const rescan = (h: Harness) =>
         h.json("/admin/api/rescan", { method: "POST", headers: json, body: "{}" });
     const actors = (h: Harness) => h.policy.history(10).map((row) => row.actor);
+    const basic = (credentials: string) => `Basic ${Buffer.from(credentials).toString("base64")}`;
 
     it("falls back to the configured operator when the proxy forwards no identity", async () => {
         const h = harness({ adminOperator: "taxi-ops" });
@@ -537,10 +538,42 @@ describe("the operator a change is attributed to", () => {
 
     it("prefers the basic-auth user to the configured operator", async () => {
         const h = harness({ adminOperator: "taxi-ops" });
-        const basic = `Basic ${Buffer.from("alice:secret").toString("base64")}`;
 
-        expect((await patch(h, { authorization: basic })).status).toBe(200);
+        expect((await patch(h, { authorization: basic("alice:secret") })).status).toBe(200);
         expect(actors(h)).toEqual(["alice"]);
+    });
+
+    it("treats a blank operator header as absent and falls back", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+
+        for (const [i, blank] of ["   ", " "].entries())
+            expect((await patch(h, { "x-taxi-operator": blank }, 30 + i)).status).toBe(200);
+        expect(actors(h)).toEqual(["taxi-ops", "taxi-ops"]);
+    });
+
+    it("falls back when basic auth names nobody", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+        const nameless = [
+            basic(":secret"),
+            basic("  :secret"),
+            basic("alice"),
+            "Basic !!!",
+            "Bearer token",
+        ];
+
+        for (const [i, authorization] of nameless.entries())
+            expect((await patch(h, { authorization }, 30 + i)).status, authorization).toBe(200);
+        expect(actors(h)).toEqual(nameless.map(() => "taxi-ops"));
+    });
+
+    it("refuses a basic-auth user the actor limits reject rather than falling back", async () => {
+        const h = harness({ adminOperator: "taxi-ops" });
+
+        for (const user of ["x".repeat(129), "ops\tteam"])
+            expect((await patch(h, { authorization: basic(`${user}:secret`) })).status, user).toBe(
+                400,
+            );
+        expect(h.policy.history(10)).toEqual([]);
     });
 });
 
