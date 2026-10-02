@@ -7,7 +7,7 @@
 | Sender wallet           | asset, maybe sats  | requests the transfer, signs lockup inputs, can refund      |
 | Operator (this service) | sats, agreed fares | fronts `topup`, co-signs lockup, sweeps on timeout          |
 | Receiver wallet         | —                  | claims via `recycle` or `purchase`; offline at payment time |
-| Arkade Service (arkd)   | server key         | signs every leaf                                            |
+| Arkade Service (arkd)   | server key         | signs every leaf but the emergency exit                     |
 | Emulator                | emulator key       | signs a leaf iff its Arkade Script is satisfied             |
 
 A sponsored direct send keeps these roles but drops the covenant: the joint

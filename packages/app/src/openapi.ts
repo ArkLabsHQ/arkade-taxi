@@ -191,7 +191,7 @@ const schemas: Record<string, Schema> = {
         serverKey: {
             ...key32,
             description:
-                "Arkade Service key present in every leaf. Check it against the arkd you already trust.",
+                "Arkade Service key present in every leaf but the emergency exit. Check it against the arkd you already trust.",
         },
         emulatorKey: {
             ...key32,

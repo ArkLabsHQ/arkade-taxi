@@ -104,10 +104,10 @@ key pinned for arkd's advertised network by `@arkade-os/sdk`. Later refreshes
 fail closed if the signer, network, limits or capabilities drift.
 
 The emulator is on the critical path for the operator's **own** recovery, not
-only for claims. Every leaf, including the timelocked `recovery` one, is
-`Multisig[server, ⊕script]` — an emulator that is unreachable when a sweep is
-due means the advance cannot be recovered at all. Monitor it like a dependency
-you cannot route around, because it is one.
+only for claims. Every leaf but the emergency exit, including the timelocked
+`recovery` one, is `Multisig[server, ⊕script]` — an emulator that is
+unreachable when a sweep is due means the advance cannot be recovered at all.
+Monitor it like a dependency you cannot route around, because it is one.
 
 ### `TAXI_OPERATOR_PRIVKEY`
 

@@ -72,10 +72,10 @@ export interface InfoResponse {
     protocolVersion: number;
     /** Payout destination for every covenant repayment. Never a signer. */
     operatorKey: string;
-    /** Arkade Service key, present in every leaf. The client MUST check this
-     * against the arkd it already trusts; otherwise an operator could name a
-     * service it controls and the address check would be self-consistent and
-     * worthless. */
+    /** Arkade Service key, present in every leaf but the emergency exit. The
+     * client MUST check this against the arkd it already trusts; otherwise an
+     * operator could name a service it controls and the address check would be
+     * self-consistent and worthless. */
     serverKey: string;
     /** Emulator key the covenant leaves are tweaked from. Same warning. */
     emulatorKey: string;
