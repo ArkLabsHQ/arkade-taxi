@@ -1379,4 +1379,31 @@ describe("setup guidance", () => {
         );
         expect(broken.element("funding-state").title).toBe("funding_unavailable: indexer timeout");
     });
+
+    it("offers TAXI_ADMIN_OPERATOR when no operator identity arrived", () => {
+        const { context } = runDashboard(() => dashboardPage([], "d".repeat(64), null));
+        const error = {
+            status: 400,
+            message: "header x-taxi-operator: operator identity is required",
+        };
+
+        expect(context.explain(error).text).toBe(
+            "The console could not tell who you are: the proxy in front of it must send the operator header; or set TAXI_ADMIN_OPERATOR on the Taxi itself.",
+        );
+    });
+
+    it("does not offer it when an identity arrived and was refused", () => {
+        const { context } = runDashboard(() => dashboardPage([], "d".repeat(64), null));
+
+        for (const reason of ["too long", "invalid"])
+            expect(
+                context.explain({
+                    status: 400,
+                    message: `header x-taxi-operator: operator identity is ${reason}`,
+                }).text,
+                reason,
+            ).toBe(
+                "The console could not tell who you are: the proxy in front of it must send the operator header.",
+            );
+    });
 });

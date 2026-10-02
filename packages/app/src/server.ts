@@ -89,6 +89,7 @@ function adminDeps(deps: ServerDeps) {
             operationalSnapshot(deps, options),
         now: deps.now,
         serviceConfig: shownConfig(deps.config),
+        adminOperator: deps.config.adminOperator,
         funding: async () => ({
             config: deps.config,
             inventory: deps.runtime.safety().inventory,

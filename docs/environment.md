@@ -23,6 +23,7 @@ deliberate — it refuses to guess a price.
 | `TAXI_DB_PATH`               | `:memory:` | no       | path                         |
 | `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                      |
 | `TAXI_ADMIN_PORT`            | —          | no       | 1–65535                      |
+| `TAXI_ADMIN_OPERATOR`        | —          | no       | name, 1–128 characters       |
 | `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                 |
 | `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                 |
 | `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key) |
@@ -93,6 +94,25 @@ The console has **no authentication**. Whoever reaches this port can pause
 admission and rewrite caps and fares, so keep it behind an authenticating
 reverse proxy and never publish it directly. The
 [runbook](runbook.md#deployment) covers the operator header that proxy sets.
+
+### `TAXI_ADMIN_OPERATOR`
+
+The operator name Taxi records for a console change when the proxy forwards no
+identity of its own. Optional, with no default. For each change Taxi takes the
+actor from the `X-Taxi-Operator` header, else from the user name of a Basic
+`Authorization` header, else from this variable, and refuses the change when none
+of the three names anyone.
+
+Use it when the proxy authenticates operators but does not pass the result on, as
+a basic-auth middleware with `removeHeader` does, and cannot be set to forward the
+authenticated user instead (see the `headerField` note in the
+[runbook](runbook.md#deployment)). It is a single fixed name: every console change
+is attributed to it, whoever made it, so the audit trail can no longer tell
+operators apart. It is not a credential and authenticates no one. The admin port
+must still be reachable only through the authenticating proxy.
+
+The value is trimmed. An empty one, one longer than 128 characters, or one with a
+control character stops startup.
 
 ### `TAXI_ARKD_URL` and `TAXI_EMULATOR_URL`
 

@@ -1705,6 +1705,23 @@ describe("CORS", () => {
         expect((await closing.request("/api/status")).status).toBe(503);
     });
 
+    it("hands the configured admin operator to the console it serves", async () => {
+        const base = serverDeps();
+        const admin = createAdminApp({
+            ...base,
+            config: { ...base.config, adminOperator: "taxi-ops" },
+        });
+
+        const res = await admin.request("/api/rescan", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{}",
+        });
+
+        expect(res.status).toBe(202);
+        expect(base.policy.history(10).map((row) => row.actor)).toEqual(["taxi-ops"]);
+    });
+
     it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
         let nowMs = 1_000_000;
         let reads = 0;
