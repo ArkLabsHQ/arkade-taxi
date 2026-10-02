@@ -119,14 +119,8 @@ export function quoteInfrastructure(
     getPolicy: () => Policy,
 ): Pick<
     QuoteDeps,
-    | "runtime"
-    | "inventory"
-    | "reservations"
-    | "policy"
-    | "nowMs"
-    | "senderInventory"
-    | "getServerUnroll"
-> {
+    "inventory" | "reservations" | "policy" | "nowMs" | "senderInventory" | "getServerUnroll"
+> & { runtime: QuoteDeps["runtime"] & { refresh(): Promise<RuntimeSafety> } } {
     return {
         getServerUnroll: () => serverUnroll,
         senderInventory: {
@@ -142,6 +136,7 @@ export function quoteInfrastructure(
             assertAdmission: async () => {},
             withAdmission: async (work) => work(() => {}),
             safety: () => runtimeSafety(),
+            refresh: async () => runtimeSafety(),
         },
         inventory: {
             getSpendableVtxos: async () => [

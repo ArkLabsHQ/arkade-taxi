@@ -9,6 +9,7 @@ import { shownConfig } from "./config.js";
 export interface ServerDeps extends Omit<RouteDeps, "advances" | "policy" | "claimFeed"> {
     advances: AdvanceRepository;
     policy: PolicyRepository;
+    runtime: RouteDeps["runtime"] & { refresh(): Promise<unknown> };
     /** Tick period, so the admin surface can derive its own staleness bar. */
     sweeperIntervalMs: number;
     sweeperRunning: () => boolean;
@@ -84,7 +85,13 @@ function adminDeps(deps: ServerDeps) {
                 deadlines: s.deadlines,
             };
         },
-        rescan: deps.rescan,
+        /** The lifecycle refresh resolves with a runtime check still in flight, which
+         * publishes `runtime_checking` and no chain height; settle it here, so every
+         * admin rescan ends on a snapshot its caller can read synchronously. */
+        rescan: async () => {
+            await deps.rescan();
+            await deps.runtime.refresh();
+        },
         operationalSnapshot: (options?: { ignoreManualPause?: boolean }) =>
             operationalSnapshot(deps, options),
         now: deps.now,
