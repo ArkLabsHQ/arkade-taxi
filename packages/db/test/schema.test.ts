@@ -362,6 +362,7 @@ describe("migrations", () => {
     it("rejects a v9 stamp without the swap-fill deadline column", () => {
         const db = migrated();
         db.exec("ALTER TABLE swap_fills DROP COLUMN valid_until");
+        db.pragma("user_version = 9");
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
@@ -482,6 +483,7 @@ describe("migrations", () => {
         db.exec(
             "ALTER TABLE advances DROP COLUMN receiver_fare_units; ALTER TABLE advances DROP COLUMN receiver_fare_currency;",
         );
+        db.pragma("user_version = 10");
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
