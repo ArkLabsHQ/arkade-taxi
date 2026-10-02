@@ -874,6 +874,16 @@ describe("update", () => {
         expect(new PolicyRepository(db).get().paused).toBe(true);
     });
 
+    it("records an unrolled covenant only for a live advance", () => {
+        const tip = { hash: "34".repeat(32), height: 700000 };
+        repo.insert({ ...advance(), state: "locked" });
+        repo.recordCovenantUnrolled("adv-1", "covenant outpoint was unrolled", 10, tip);
+        expect(repo.get("adv-1")!.failureCode).toBe("covenant_unrolled");
+        repo.insert({ ...advance({ id: "b" }), state: "recycled" });
+        repo.recordCovenantUnrolled("b", "covenant outpoint was unrolled", 10, tip);
+        expect(repo.get("b")!.failureCode).toBeUndefined();
+    });
+
     it("shares the recovery claim across independent database connections", () => {
         const dir = mkdtempSync(join(tmpdir(), "taxi-recovery-claim-"));
         const first = new DatabaseCtor(join(dir, "taxi.sqlite"));

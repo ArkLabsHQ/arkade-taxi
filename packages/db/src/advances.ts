@@ -1139,6 +1139,36 @@ export class AdvanceRepository {
             .immediate();
     }
 
+    recordCovenantUnrolled(
+        id: string,
+        reason: string,
+        at: number,
+        tip: { hash: string; height: number },
+    ): void {
+        assertNativeAccess(this.#db);
+        this.#db
+            .transaction(() => {
+                const current = this.get(id);
+                if (!current) throw new Error(`advance ${id} not found`);
+                if (
+                    current.state !== "locking" &&
+                    current.state !== "locked" &&
+                    current.state !== "recovering"
+                )
+                    return;
+                this.#db
+                    .prepare(
+                        `UPDATE advances SET failure_code = 'covenant_unrolled', failure_detail = ?,
+                         observation_stable_tip_hash = NULL,
+                         observation_stable_tip_height = NULL, observation_stable_count = 0,
+                         updated_at = max(updated_at, ?) WHERE id = ? AND state = ?`,
+                    )
+                    .run(`${reason} at ${tip.hash}:${tip.height}`, at, id, current.state);
+                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+            })
+            .immediate();
+    }
+
     recordSpendDisagreement(
         id: string,
         reason: string,

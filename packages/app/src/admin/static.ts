@@ -1963,6 +1963,11 @@ const BLOCKER_GROUPS = [
         "covenant_spend_unknown",
     ],
     [
+        "A payment's coin was taken on-chain, so the Taxi can no longer claim or recover it off-chain." +
+            ATTENTION,
+        "covenant_unrolled",
+    ],
+    [
         "The Taxi saw conflicting chain data about a payment." + ATTENTION,
         "covenant_observation_disagreement",
     ],
