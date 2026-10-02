@@ -1367,6 +1367,12 @@ describe("canonical covenant observation", () => {
             state: "purchased",
             failureCode: "covenant_observation_disagreement",
         });
+        expect(state.watcher.status().blockers).toEqual([
+            expect.objectContaining({
+                advanceId: state.advance.id,
+                code: "covenant_observation_disagreement",
+            }),
+        ]);
         state.coins.set(`${state.outpoint.txid}:${state.outpoint.vout}`, coin);
         await state.watcher.catchUp();
         expect(state.advances.get(state.advance.id)?.failureCode).toBe(
