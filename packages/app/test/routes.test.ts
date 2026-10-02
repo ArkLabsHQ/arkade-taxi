@@ -6,6 +6,7 @@ import {
     AdvanceRepository,
     openDatabase,
     PolicyRepository,
+    ReservationRepository,
     type InsertReceiveQuoteRequest,
     type ReceiveQuote,
     type ReceiveQuoteRepository,
@@ -46,7 +47,8 @@ import { createAdminApp, createApp } from "../src/server.js";
 import { INDEX_HTML } from "../src/admin/static.js";
 import { boardingView } from "./admin/fixtures.js";
 import type { SweeperStatus } from "../src/sweeper.js";
-import type { ReconcilerStatus } from "../src/reconciler.js";
+import { createLockupReconciler, type ReconcilerStatus } from "../src/reconciler.js";
+import { createSpendWatcher } from "../src/watcher.js";
 import {
     advance,
     config,
@@ -1728,6 +1730,66 @@ describe("CORS", () => {
         expect(status.readiness).toMatchObject({ status: "ok", blockers: [] });
         expect(health).not.toHaveProperty("warnings");
         expect(JSON.stringify(health)).not.toContain("covenant_unrolled");
+    });
+
+    it("resumes an operator pause once an unrolled covenant is only a warning", async () => {
+        const db = openDatabase(":memory:");
+        const advances = new AdvanceRepository(db);
+        const policy = new PolicyRepository(db);
+        const unrolled = advance({ outpoint: { txid: "cc".repeat(32), vout: 0 } });
+        const tip = { hash: "41".repeat(32), height: 700000, time: NOW };
+        advances.insert(unrolled);
+        advances.recordCovenantUnrolled(unrolled.id, "covenant outpoint was unrolled", NOW, tip);
+        const indexer = {
+            getVtxos: async () => ({
+                vtxos: [fundingCoin({ ...unrolled.outpoint!, isUnrolled: true })],
+            }),
+            getVirtualTxs: async () => ({ txs: [] }),
+        };
+        const watcher = createSpendWatcher({
+            advances,
+            policy,
+            indexer,
+            config: config(),
+            now: () => clock,
+            tip: async () => tip,
+        });
+        const reconciler = createLockupReconciler({
+            advances,
+            reservations: new ReservationRepository(db),
+            policy,
+            indexer,
+            submission: { resume: async () => false },
+            watcher,
+            now: () => clock,
+            clock: () => ({ height: tip.height, timestamp: new Date(NOW * 1000) }),
+        });
+        await reconciler.tick();
+        policy.update({ paused: false }, "setup");
+        policy.update({ paused: true }, "alice");
+        const deps = {
+            ...serverDeps(),
+            advances,
+            policy,
+            reconciler,
+            rescan: () => reconciler.tick(),
+        };
+        const admin = createAdminApp(deps);
+
+        const resumed = await admin.request("/admin/api/resume", {
+            method: "POST",
+            headers: { "content-type": "application/json", "x-taxi-operator": "alice" },
+            body: "{}",
+        });
+        const status = await (await admin.request("/admin/api/status")).json();
+        const health = await (await createApp(deps).request("/health")).json();
+
+        expect(resumed.status).toBe(200);
+        expect(policy.get().paused).toBe(false);
+        expect(status.warnings).toEqual([
+            expect.objectContaining({ advanceId: unrolled.id, code: "covenant_unrolled" }),
+        ]);
+        expect(health.blockers).not.toContain("covenant_unrolled");
     });
 
     it("shares one funding wallet read for 10 s and does not cache a failed one", async () => {
