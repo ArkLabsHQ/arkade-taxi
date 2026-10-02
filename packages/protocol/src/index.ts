@@ -7,7 +7,7 @@
  * of bug that only shows up on a large payment.
  */
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 1;
 
 export {
     assetIdFromWire,

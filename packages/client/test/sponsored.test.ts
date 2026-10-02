@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
-import { bytesToHex } from "@arkade-taxi/protocol";
+import { PROTOCOL_VERSION, bytesToHex } from "@arkade-taxi/protocol";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
 import { sponsoredGraphId } from "../../app/src/arkade/sponsoredBuilder.js";
 import { TaxiClient } from "../src/client.js";
@@ -157,9 +157,13 @@ describe("verifySponsoredQuote", () => {
     });
 
     it("names the protocol version it speaks from the shared constant", () => {
+        const other = PROTOCOL_VERSION + 1;
         expect(() =>
-            verifySponsoredQuote({ ...sponsoredArgs(), info: { ...info(), protocolVersion: 1 } }),
-        ).toThrow(/this client speaks 2/);
+            verifySponsoredQuote({
+                ...sponsoredArgs(),
+                info: { ...info(), protocolVersion: other },
+            }),
+        ).toThrow(`operator speaks protocol ${other}, this client speaks ${PROTOCOL_VERSION}`);
         expect(() => verifySponsoredQuote(sponsoredArgs())).not.toThrow();
     });
 

@@ -669,7 +669,7 @@ const schemas: Record<string, Schema> = {
 // Real responses captured from the route test harness.
 const examples = {
     info: {
-        protocolVersion: 2,
+        protocolVersion: 1,
         operatorKey: "531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
         serverKey: "462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0b",
         emulatorKey: "62c0a046dacce86ddd0343c6d3c7c79c2208ba0d9c9cf24a6d046d21d21f90f7",

@@ -469,28 +469,28 @@ describe("TaxiClient receive quotes", () => {
     });
 });
 
-// A protocol-1 operator quotes without the exit fields a protocol-2 decode requires.
-const protocolOne = () => {
+// An operator on another protocol version may quote a shape this client cannot decode.
+const otherVersion = () => {
     const params: Record<string, unknown> = { ...quote().params };
     delete params.operatorSignerKey;
     delete params.exitDelay;
     return {
-        info: { ...info(), protocolVersion: 1 },
+        info: { ...info(), protocolVersion: PROTOCOL_VERSION + 1 },
         quote: { ...quote(), params } as unknown as ReceiveQuoteResponse,
     };
 };
 
-describe("receive quotes from a protocol-1 operator", () => {
+describe("receive quotes from an operator on another protocol version", () => {
     it("refuses with a version mismatch before decoding the quote", () => {
-        expect(refusal(() => verifyReceiveQuote({ ...args(), ...protocolOne() }))).toMatchObject({
+        expect(refusal(() => verifyReceiveQuote({ ...args(), ...otherVersion() }))).toMatchObject({
             code: "PROTOCOL_VERSION_MISMATCH",
         });
     });
 
     it("refuses with a version mismatch before requesting a quote", async () => {
-        const old = protocolOne();
+        const other = otherVersion();
         const fetch = recordingFetch((_url, init) =>
-            jsonResponse(200, init.method === "GET" ? old.info : old.quote),
+            jsonResponse(200, init.method === "GET" ? other.info : other.quote),
         );
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
         await expect(

@@ -1,5 +1,5 @@
 import { ArkAddress, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
-import { bytesToHex } from "@arkade-taxi/protocol";
+import { PROTOCOL_VERSION, bytesToHex } from "@arkade-taxi/protocol";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import * as client from "../src/index.js";
 import {
@@ -240,14 +240,16 @@ describe("requestVerifiedQuote", () => {
         });
     });
 
-    it("refuses a protocol-1 operator with a version mismatch before requesting a quote", async () => {
+    it("refuses an operator on another protocol version before requesting a quote", async () => {
         const params: Record<string, unknown> = { ...quote().params };
         delete params.operatorSignerKey;
         delete params.exitDelay;
         const fetch = recordingFetch((url) =>
             jsonResponse(
                 200,
-                url.endsWith("/info") ? { ...info(), protocolVersion: 1 } : { ...quote(), params },
+                url.endsWith("/info")
+                    ? { ...info(), protocolVersion: PROTOCOL_VERSION + 1 }
+                    : { ...quote(), params },
             ),
         );
         const taxi = new client.TaxiClient({ baseUrl: "https://taxi.example", fetch });

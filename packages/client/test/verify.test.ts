@@ -200,10 +200,11 @@ describe("verifyQuote — trusted key pinning", () => {
         );
     });
 
-    it("rejects a quote from an operator speaking the old protocol", () => {
-        expect(() => verifyQuote({ ...args(), info: { ...info(), protocolVersion: 1 } })).toThrow(
-            /PROTOCOL_VERSION_MISMATCH|this client speaks 2/,
-        );
+    it("names both versions when the operator speaks another protocol version", () => {
+        const other = PROTOCOL_VERSION + 1;
+        expect(() =>
+            verifyQuote({ ...args(), info: { ...info(), protocolVersion: other } }),
+        ).toThrow(`operator speaks protocol ${other}, this client speaks ${PROTOCOL_VERSION}`);
     });
 });
 
