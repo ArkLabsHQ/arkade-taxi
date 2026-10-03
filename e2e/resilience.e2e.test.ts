@@ -222,7 +222,8 @@ liveScenario("dropped-submit-response", async () => {
     const locked = await observeLock(live, offered);
     expect(locked.lockup.outpoint.txid).toBe(lockupTxid(offered));
     const before = await admin("status");
-    expect(await submitSame(live, offered, signed)).toEqual(locked.lockup);
+    await ready();
+    expect(await live.client.submitLockup(offered.verified, signed)).toEqual(locked.lockup);
     expect((await admin("status")).exposure).toEqual(before.exposure);
     for (const input of offered.verified.envelope.operatorInputs) {
         const { vtxos } = await live.indexer.getVtxos({
@@ -247,9 +248,10 @@ liveScenario("duplicate-lockup-idempotent", async () => {
     const before = await admin("status");
     const rows = (await admin("advances")).advances.length;
     const submits = (await arkdSubmits()).length;
+    await ready();
     const duplicates = await Promise.all([
-        submitSame(live, offered, signed),
-        submitSame(live, offered, signed),
+        live.client.submitLockup(offered.verified, signed),
+        live.client.submitLockup(offered.verified, signed),
     ]);
     expect(duplicates).toEqual([first, first]);
     expect((await admin("advances")).advances.length).toBe(rows);
