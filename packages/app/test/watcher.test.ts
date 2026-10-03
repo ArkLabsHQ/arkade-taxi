@@ -1552,6 +1552,55 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    it("scans initially and after restart without rescanning an already running stream", async () => {
+        const state = await setup("purchased");
+        let connections = 0;
+        let aborted = 0;
+        const onPrompt = vi.fn(async () => watcher.catchUp());
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 30,
+            tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
+            arkProvider: {
+                getTransactionsStream(signal) {
+                    connections++;
+                    return (async function* () {
+                        try {
+                            await new Promise<void>((resolve) =>
+                                signal.addEventListener("abort", () => resolve(), { once: true }),
+                            );
+                        } finally {
+                            if (signal.aborted) aborted++;
+                        }
+                    })();
+                },
+            },
+            onPrompt,
+        });
+        try {
+            await watcher.start();
+            expect(onPrompt).toHaveBeenCalledOnce();
+            expect(state.advances.get(state.advance.id)).toMatchObject({ state: "purchased" });
+            await watcher.start();
+            expect(onPrompt).toHaveBeenCalledOnce();
+            expect(connections).toBe(1);
+            await watcher.stop();
+            expect(aborted).toBe(1);
+            await watcher.start();
+            expect(onPrompt).toHaveBeenCalledTimes(2);
+            expect(connections).toBe(2);
+            await watcher.start();
+            expect(onPrompt).toHaveBeenCalledTimes(2);
+        } finally {
+            await watcher.stop();
+            state.db.close();
+        }
+        expect(aborted).toBe(2);
+    });
+
     it("uses duplicate stream events only as polling prompts and aborts cleanly", async () => {
         const state = await setup("purchased");
         let streamAborted = false;

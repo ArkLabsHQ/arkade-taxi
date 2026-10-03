@@ -1009,6 +1009,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         catchUp,
         isRecoverable: (id) => recoverable.has(id),
         async start() {
+            if (streamTask) return;
             await prompt();
             if (!deps.arkProvider || streamTask) return;
             controller = new AbortController();
