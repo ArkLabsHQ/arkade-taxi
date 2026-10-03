@@ -15,6 +15,7 @@ import {
     VtxoTaprootTree,
     asset,
     buildOffchainTx,
+    verifyTapscriptSignatures,
     type IndexerProvider,
     type VirtualCoin,
 } from "@arkade-os/sdk";
@@ -55,6 +56,11 @@ import {
 } from "./fixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
+
+vi.mock("@arkade-os/sdk", async (importOriginal) => {
+    const sdk = await importOriginal<typeof import("@arkade-os/sdk")>();
+    return { ...sdk, verifyTapscriptSignatures: vi.fn(sdk.verifyTapscriptSignatures) };
+});
 
 const directories: string[] = [];
 afterEach(() => {
@@ -1272,6 +1278,191 @@ describe("canonical covenant observation", () => {
         expect(state.advances.get(state.advance.id)).toEqual(first);
         state.db.close();
     });
+
+    it("reuses successful signature checks while refetching canonical recycle evidence", async () => {
+        const state = await setup("recycled");
+        const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        const coins = vi.spyOn(state.indexer, "getVtxos");
+        const transactions = vi.spyOn(state.indexer, "getVirtualTxs");
+        try {
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(4);
+            expect(coins).toHaveBeenCalledTimes(2);
+            expect(transactions).toHaveBeenCalledTimes(2);
+            state.setTip({ hash: "42".repeat(32), height: 700001, time: NOW + 1 });
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(4);
+            expect(coins).toHaveBeenCalledTimes(4);
+            expect(transactions).toHaveBeenCalledTimes(4);
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "recycled",
+                observationTipHash: "42".repeat(32),
+                observationTipHeight: 700001,
+            });
+        } finally {
+            coins.mockRestore();
+            transactions.mockRestore();
+            state.db.close();
+        }
+    });
+
+    it.each(["signature", "signer", "leaf", "witness"] as const)(
+        "rejects changed %s evidence after caching a valid spend with the same txid",
+        async (mutation) => {
+            const state = await setup("purchased");
+            const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+            try {
+                await state.watcher.catchUp();
+                expect(verify).toHaveBeenCalledTimes(2);
+                const tx = state.finalArk!;
+                const id = tx.id;
+                const input = tx.getInput(0);
+                if (mutation === "witness") {
+                    tx.updateInput(0, { tapScriptSig: undefined });
+                    tx.updateInput(0, { witnessUtxo: undefined });
+                    tx.updateInput(0, { witnessUtxo: { ...input.witnessUtxo!, amount: 331n } });
+                    tx.updateInput(0, { tapScriptSig: input.tapScriptSig });
+                } else {
+                    const signatures = input.tapScriptSig!;
+                    const [metadata, signature] = signatures[0]!;
+                    const changed = Uint8Array.from(signature);
+                    changed[0] ^= 1;
+                    signatures[0] = [
+                        {
+                            ...metadata,
+                            ...(mutation === "signer"
+                                ? { pubKey: new Uint8Array(32).fill(7) }
+                                : {}),
+                        },
+                        mutation === "signature" ? changed : signature,
+                    ];
+                    if (mutation === "leaf")
+                        for (const entry of signatures)
+                            entry[0] = { ...entry[0], leafHash: new Uint8Array(32).fill(8) };
+                    tx.updateInput(0, { tapScriptSig: undefined });
+                    tx.updateInput(0, { tapScriptSig: signatures });
+                }
+                expect(tx.id).toBe(id);
+                await state.watcher.catchUp();
+                expect(state.advances.get(state.advance.id)).toMatchObject({
+                    state: "purchased",
+                    failureCode: "covenant_observation_disagreement",
+                });
+                expect(state.policy.get().paused).toBe(true);
+                if (mutation === "signature" || mutation === "leaf") {
+                    const failed = verify.mock.calls.length;
+                    expect(failed).toBeGreaterThan(2);
+                    await state.watcher.catchUp();
+                    expect(verify.mock.calls.length).toBeGreaterThan(failed);
+                }
+            } finally {
+                state.db.close();
+            }
+        },
+    );
+
+    it("reverifies changed PSBT bytes even when signatures and transaction id are unchanged", async () => {
+        const state = await setup("purchased");
+        const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        try {
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(2);
+            const tx = state.finalArk!;
+            const id = tx.id;
+            tx.updateInput(0, {
+                unknown: [
+                    ...(tx.getInput(0).unknown ?? []),
+                    [{ type: 0xfc, key: new Uint8Array([1]) }, new Uint8Array([2])],
+                ],
+            });
+            expect(tx.id).toBe(id);
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(3);
+            expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        } finally {
+            state.db.close();
+        }
+    });
+
+    it("rejects changed outputs and a newly observed spend after caching the original transaction", async () => {
+        const state = await setup("purchased");
+        const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        try {
+            await state.watcher.catchUp();
+            const tx = state.finalArk!;
+            const original = tx.id;
+            const signatures = tx.getInput(0).tapScriptSig;
+            tx.updateInput(0, { tapScriptSig: undefined });
+            tx.updateOutput(0, { amount: 331n });
+            tx.updateInput(0, { tapScriptSig: signatures });
+            expect(tx.id).not.toBe(original);
+            state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!.arkTxId = tx.id;
+            state.txs.delete(original);
+            state.txs.set(tx.id, tx);
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(3);
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "purchased",
+                spentTxid: original,
+                failureCode: "covenant_observation_disagreement",
+            });
+            expect(state.policy.get().paused).toBe(true);
+        } finally {
+            state.db.close();
+        }
+    });
+
+    it("discards successful signature checks when the watcher stops", async () => {
+        const state = await setup("purchased");
+        const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        try {
+            await state.watcher.start();
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(2);
+            await state.watcher.stop();
+            await state.watcher.start();
+            expect(verify).toHaveBeenCalledTimes(4);
+        } finally {
+            await state.watcher.stop();
+            state.db.close();
+        }
+    });
+
+    it("bounds retained successful checks and reverifies an evicted signed PSBT", async () => {
+        const state = await setup("purchased");
+        const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        const implementation = verify.getMockImplementation()!;
+        const tx = state.finalArk!;
+        const unknown = tx.getInput(0).unknown;
+        try {
+            await state.watcher.catchUp();
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalledTimes(2);
+            verify.mockImplementation(() => {});
+            for (let nonce = 0; nonce < 1024; nonce++) {
+                tx.updateInput(0, { unknown: undefined });
+                tx.updateInput(0, {
+                    unknown: [
+                        ...(unknown ?? []),
+                        [
+                            { type: 0xfc, key: new Uint8Array([1]) },
+                            new Uint8Array([nonce >>> 8, nonce & 255]),
+                        ],
+                    ],
+                });
+                await state.watcher.catchUp();
+            }
+            tx.updateInput(0, { unknown: undefined });
+            tx.updateInput(0, { unknown });
+            verify.mockImplementation(implementation).mockClear();
+            await state.watcher.catchUp();
+            expect(verify).toHaveBeenCalled();
+            expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        } finally {
+            verify.mockImplementation(implementation);
+            state.db.close();
+        }
+    }, 30_000);
 
     it("catches up a missed spend after a real SQLite restart", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-watcher-"));

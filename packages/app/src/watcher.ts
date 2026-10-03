@@ -30,6 +30,7 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
+import { createHash } from "node:crypto";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
@@ -37,7 +38,12 @@ import { sameTapTree } from "./arkade/tapTree.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
+const SIGNATURE_CACHE_LIMIT = 1024;
 const UNROLLED = "covenant outpoint was unrolled; no off-chain claim or recovery is possible";
+
+type SignatureCheck = (tx: Transaction, index: number, signers: string[]) => void;
+const verifySignatures: SignatureCheck = (tx, index, signers) =>
+    verifyTapscriptSignatures(tx, index, signers, [], [DEFAULT_SIGHASH]);
 
 export type ObservedSpend =
     | { kind: "recycled"; txid: string }
@@ -146,6 +152,7 @@ const exactSignatures = (
     leaf: TapLeafScript,
     signers: Uint8Array[],
     label: string,
+    verify: SignatureCheck,
 ): void => {
     try {
         assertAllowedSighashTypes(tx, [DEFAULT_SIGHASH]);
@@ -168,7 +175,7 @@ const exactSignatures = (
     )
         fail(`${label} signer set mismatch`);
     try {
-        verifyTapscriptSignatures(tx, index, [...expected], [], [DEFAULT_SIGHASH]);
+        verify(tx, index, [...expected]);
     } catch {
         fail(`${label} signature verification failed`);
     }
@@ -404,6 +411,7 @@ const directCheckpoint = (
     unroll: CSVMultisigTapscript.Type,
     signers: Uint8Array[],
     label: string,
+    verify: SignatureCheck,
 ): VtxoScript => {
     if (tx.inputsLength !== 1 || tx.outputsLength !== 2) fail(`${label} shape mismatch`);
     const input = tx.getInput(0);
@@ -417,7 +425,7 @@ const directCheckpoint = (
         fail(`${label} does not spend the exact persisted prevout`);
     exactTree(tx, 0, sourceTree, label);
     const selected = selectedLeaf(tx, 0, leaf, label);
-    exactSignatures(tx, 0, selected, signers, label);
+    exactSignatures(tx, 0, selected, signers, label, verify);
     const tree = new VtxoScript([unroll.script, scriptFromTapLeafScript(leaf)]);
     exactOutput(tx, 0, value, tree.pkScript, `${label} output`);
     exactAnchor(tx, 1);
@@ -433,6 +441,7 @@ const arkInput = (
     leaf: Uint8Array,
     signers: Uint8Array[],
     label: string,
+    verify: SignatureCheck,
 ): void => {
     const input = arkTx.getInput(index);
     if (
@@ -446,14 +455,15 @@ const arkInput = (
     exactTree(arkTx, index, tree, label);
     const expected = tree.findLeaf(hex.encode(leaf));
     const selected = selectedLeaf(arkTx, index, expected, label);
-    exactSignatures(arkTx, index, selected, signers, label);
+    exactSignatures(arkTx, index, selected, signers, label, verify);
 };
 
-export async function classifyObservedSpend(
+async function classifySpend(
     advance: Advance,
     coin: VirtualCoin,
     deps: Pick<SpendWatcherDeps, "indexer" | "config">,
     tip: Pick<Awaited<ReturnType<SpendWatcherDeps["tip"]>>, "height" | "time">,
+    verify: SignatureCheck,
 ): Promise<ObservedSpend> {
     const candidate = /^[0-9a-f]{64}$/.test(coin.arkTxId ?? "") ? coin.arkTxId! : "unknown";
     try {
@@ -522,6 +532,7 @@ export async function classifyObservedSpend(
             facts.unroll,
             covenantSigners,
             "covenant checkpoint",
+            verify,
         );
         arkInput(
             arkTx,
@@ -532,6 +543,7 @@ export async function classifyObservedSpend(
             facts.script.scripts[leaf],
             covenantSigners,
             "covenant Arkade input",
+            verify,
         );
 
         if (leaf === Leaf.Purchase) {
@@ -630,6 +642,7 @@ export async function classifyObservedSpend(
                 facts.unroll,
                 receiverSigners,
                 "receiver checkpoint",
+                verify,
             );
             arkInput(
                 arkTx,
@@ -640,6 +653,7 @@ export async function classifyObservedSpend(
                 receiverLeafBody,
                 receiverSigners,
                 "receiver Arkade input",
+                verify,
             );
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             const merged = advance.dust + BigInt(exactReceiverCoin.value) - operatorSats;
@@ -725,6 +739,15 @@ export async function classifyObservedSpend(
     }
 }
 
+export async function classifyObservedSpend(
+    advance: Advance,
+    coin: VirtualCoin,
+    deps: Pick<SpendWatcherDeps, "indexer" | "config">,
+    tip: Pick<Awaited<ReturnType<SpendWatcherDeps["tip"]>>, "height" | "time">,
+): Promise<ObservedSpend> {
+    return classifySpend(advance, coin, deps, tip, verifySignatures);
+}
+
 const activeStates = ["locking", "locked", "recovering"] as const;
 const terminalStates = ["recycled", "purchased", "refunded", "recovered"] as const;
 
@@ -737,6 +760,19 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     let controller: AbortController | undefined;
     let streamTask: Promise<void> | undefined;
     const recoverable = new Set<string>();
+    const signatureChecks = new Set<string>();
+    const verify: SignatureCheck = (tx, index, signers) => {
+        const key = [
+            createHash("sha256").update(tx.toPSBT()).digest("hex"),
+            index,
+            ...[...signers].sort(),
+        ].join(":");
+        if (signatureChecks.has(key)) return;
+        verifySignatures(tx, index, signers);
+        if (signatureChecks.size >= SIGNATURE_CACHE_LIMIT)
+            signatureChecks.delete(signatureChecks.values().next().value!);
+        signatureChecks.add(key);
+    };
 
     const rows = () =>
         [
@@ -929,7 +965,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 }
                 continue;
             }
-            const observed = await classifyObservedSpend(observedAdvance, coin, deps, tip);
+            const observed = await classifySpend(observedAdvance, coin, deps, tip, verify);
             if (observed.kind === "unknown") {
                 if (terminal)
                     deps.advances.recordSpendDisagreement(
@@ -1055,6 +1091,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         async stop() {
             controller?.abort();
             await streamTask;
+            signatureChecks.clear();
         },
         status: () => {
             const current = rows();
