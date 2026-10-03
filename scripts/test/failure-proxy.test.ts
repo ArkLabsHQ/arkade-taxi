@@ -1,5 +1,6 @@
-import { createServer } from "node:http";
-import { afterEach, expect, it } from "vitest";
+import { createServer, request as httpRequest } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { afterEach, expect, it, vi } from "vitest";
 import { createFailureProxy } from "../lib/failure-proxy.mjs";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -7,9 +8,10 @@ afterEach(async () => {
     for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-async function setup() {
+async function setup(serve?: (request: IncomingMessage, response: ServerResponse) => void) {
     let effects = 0;
     const upstream = createServer((request, response) => {
+        if (serve) return serve(request, response);
         if (request.method === "POST") effects++;
         response.statusCode = request.url === "/unavailable" ? 503 : 200;
         response.setHeader("content-type", "application/json");
@@ -44,6 +46,54 @@ it("drops exactly one response after the upstream mutation completed", async () 
     expect(event).toMatchObject({ action: "forwarded", responseStatus: 503 });
     expect(Number.isFinite(event.responseAt)).toBe(true);
     expect(event.responseAt).toBeGreaterThanOrEqual(event.at);
+});
+
+it("distinguishes response headers from body completion and client finish", async () => {
+    let finish: () => void = () => {
+        throw new Error("upstream response has not started");
+    };
+    const { proxy } = await setup((_request, response) => {
+        response.writeHead(200, { "content-type": "text/plain" });
+        response.write("first");
+        finish = () => response.end("last");
+    });
+    const response = await fetch(`${proxy.url}/arkd/stream`);
+    const event = proxy.events.at(-1);
+    expect(event.responseAt).toEqual(expect.any(Number));
+    expect(event.responseEndAt).toBeUndefined();
+    expect(event.clientFinishAt).toBeUndefined();
+    finish();
+    expect(await response.text()).toBe("firstlast");
+    await vi.waitFor(() => expect(event.clientFinishAt).toEqual(expect.any(Number)));
+    expect(event.responseEndAt).toBeGreaterThanOrEqual(event.responseAt);
+    expect(event.clientFinishAt).toBeGreaterThanOrEqual(event.responseEndAt);
+    expect(event.responseAbortedAt).toBeUndefined();
+    expect(event.clientAbortAt).toBeUndefined();
+});
+
+it("records an unfinished client disconnect and upstream body abort without completion", async () => {
+    const { proxy } = await setup((_request, response) => {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write("data: open\n\n");
+    });
+    await new Promise<void>((resolve, reject) => {
+        const request = httpRequest(`${proxy.url}/arkd/stream`, (response) => {
+            response.on("error", () => {});
+            response.destroy();
+            resolve();
+        });
+        request.on("error", reject);
+        request.end();
+    });
+    const event = proxy.events.at(-1);
+    await vi.waitFor(() => {
+        expect(event.clientAbortAt).toEqual(expect.any(Number));
+        expect(event.responseAbortedAt).toEqual(expect.any(Number));
+    });
+    expect(event.clientAbortAt).toBeGreaterThanOrEqual(event.responseAt);
+    expect(event.responseAbortedAt).toBeGreaterThanOrEqual(event.clientAbortAt);
+    expect(event.responseEndAt).toBeUndefined();
+    expect(event.clientFinishAt).toBeUndefined();
 });
 
 it("replaces only provider identity while preserving the real response", async () => {

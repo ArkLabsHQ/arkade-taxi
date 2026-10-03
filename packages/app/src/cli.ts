@@ -41,6 +41,30 @@ const seconds = () => Math.floor(Date.now() / 1000);
 async function runServe(): Promise<void> {
     const config = await resolveRuntimeConfig(loadConfig(process.env));
     const log = pino({ level: config.logLevel });
+    const timed = <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+        if (!log.isLevelEnabled("debug")) return work();
+        const started = performance.now();
+        const emit = (outcome: "start" | "ok" | "error") => {
+            try {
+                log.debug(
+                    { phase, elapsedMs: performance.now() - started, outcome },
+                    "operational phase",
+                );
+            } catch {}
+        };
+        emit("start");
+        try {
+            const result = work();
+            void result.then(
+                () => emit("ok"),
+                () => emit("error"),
+            );
+            return result;
+        } catch (error) {
+            emit("error");
+            throw error;
+        }
+    };
 
     const db = openDatabase(config.dbPath);
     const advances = new AdvanceRepository(db);
@@ -58,6 +82,7 @@ async function runServe(): Promise<void> {
     );
     const jobs = new ProceedsRepository(db);
     const runtime = createOperatorRuntime(config, db, {
+        phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
         reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
         heldOutpoints: () => [
             ...unionReservedOutpoints(reservations, swapFills, receiveQuotes),
@@ -99,7 +124,7 @@ async function runServe(): Promise<void> {
             return runtime.wallet.onchainProvider.getChainTip();
         },
         arkProvider: runtime.providers.arkProvider,
-        onPrompt: () => reconciler.tick(),
+        onPrompt: () => timed("watcher.reconcile", () => reconciler.tick()),
     });
 
     const intervalSeconds = Math.max(1, Math.ceil(config.reconcileIntervalMs / 1000));
@@ -278,11 +303,11 @@ async function runServe(): Promise<void> {
             };
         },
         verifyRuntime: async () => {
-            await runtime.assertRecovery();
+            await timed("lifecycle.verifyRuntime", () => runtime.assertRecovery());
         },
         reconcile: async () => {
-            await reconciler.tick();
-            await swapFillReconciler.tick();
+            await timed("lifecycle.reconcile", () => reconciler.tick());
+            await timed("lifecycle.swapFills", () => swapFillReconciler.tick());
             return {
                 blockers: [
                     ...reconciler.status().blockers,
@@ -294,8 +319,10 @@ async function runServe(): Promise<void> {
             reservations.expireQuotes(seconds());
             swapFills.expireQuotes(seconds());
             receiveQuotes.expireQuotes(seconds());
-            const safety = await runtime.assertRecovery();
-            const result = await sweeper.tick(safety.chainHeight, safety.chainTime);
+            const safety = await timed("lifecycle.recoveryRuntime", () => runtime.assertRecovery());
+            const result = await timed("lifecycle.sweep", () =>
+                sweeper.tick(safety.chainHeight, safety.chainTime),
+            );
             if (result.considered > 0)
                 log.info(
                     {
@@ -306,14 +333,14 @@ async function runServe(): Promise<void> {
                     "sweep",
                 );
             if (result.failed > 0) throw new Error("recovery_tick_failed");
-            void proceeds.tick();
+            void timed("lifecycle.proceeds", () => proceeds.tick());
         },
-        startStreams: () => watcher.start(),
+        startStreams: () => timed("lifecycle.streams", () => watcher.start()),
         startBackground(prompt) {
             running = true;
             timer = setInterval(
                 () =>
-                    void prompt().catch((error) =>
+                    void timed("lifecycle.refresh", prompt).catch((error) =>
                         log.error(
                             { error: sanitizeOperationalError(error, "operational tick failed") },
                             "operational tick failed",
@@ -338,7 +365,7 @@ async function runServe(): Promise<void> {
         async drain() {
             await Promise.all([watcherStop, submission.drain(), proceeds.drain()]);
         },
-        disposeProviders: () => runtime.dispose(),
+        disposeProviders: () => timed("lifecycle.dispose", () => runtime.dispose()),
         closeDatabase: () => db.close(),
         shutdownTimeoutMs: Math.max(5_000, intervalSeconds * 2_000),
         forceTerminate: (code, reason) => {

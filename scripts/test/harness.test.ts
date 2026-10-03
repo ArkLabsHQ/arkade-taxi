@@ -1733,12 +1733,12 @@ describe("artifacts", () => {
         }
     });
 
-    it("bounds separately-run Taxi diagnostics to the last 300 timestamped lines", () => {
+    it("bounds separately-run Taxi diagnostics to the last 30000 timestamped lines", () => {
         expect(taxiLogArgs("taxi12-a1b2c3d4-taxi")).toEqual([
             "logs",
             "--timestamps",
             "--tail",
-            "300",
+            "30000",
             "taxi12-a1b2c3d4-taxi",
         ]);
     });

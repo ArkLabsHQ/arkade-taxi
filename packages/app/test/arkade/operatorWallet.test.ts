@@ -21,7 +21,10 @@ import {
     serverKey,
 } from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
-import { createOperatorRuntime } from "../../src/arkade/operatorWallet.js";
+import {
+    createOperatorRuntime,
+    type OperatorRuntimeOptions,
+} from "../../src/arkade/operatorWallet.js";
 import { resolveRuntimeConfig } from "../../src/config.js";
 
 const proofOf = (inputs: { txid: string; vout: number }[]) =>
@@ -47,7 +50,12 @@ afterEach(() => {
 function setup({
     withoutHeld = false,
     reconcileIntervalMs,
-}: { withoutHeld?: boolean; reconcileIntervalMs?: number } = {}) {
+    phaseLogger,
+}: {
+    withoutHeld?: boolean;
+    reconcileIntervalMs?: number;
+    phaseLogger?: OperatorRuntimeOptions["phaseLogger"];
+} = {}) {
     const db = openDatabase(":memory:");
     databases.push(db);
     let now = 1000;
@@ -131,6 +139,7 @@ function setup({
         config({ addressHrp: "tark", ...(reconcileIntervalMs && { reconcileIntervalMs }) }),
         db,
         {
+            phaseLogger,
             now: () => now,
             providers: {
                 arkProvider: {
@@ -231,6 +240,79 @@ function setup({
 }
 
 describe("persistent operator runtime safety", () => {
+    it("records a pending runtime wait without changing parallel checks or publishing their values", async () => {
+        const debug = vi.fn();
+        const s = setup({ phaseLogger: { debug } });
+        s.pause();
+        const pending = s.runtime.refresh();
+        try {
+            await vi.waitFor(() =>
+                expect(debug.mock.calls).toContainEqual([
+                    expect.objectContaining({ phase: "runtime.spendableVtxos", outcome: "start" }),
+                    "operational phase",
+                ]),
+            );
+            expect(s.runtime.safety().blockers).toContain("runtime_checking");
+            expect(debug.mock.calls).toContainEqual([
+                expect.objectContaining({ phase: "runtime.chainTip", outcome: "ok" }),
+                "operational phase",
+            ]);
+            expect(debug.mock.calls).not.toContainEqual([
+                expect.objectContaining({ phase: "runtime.spendableVtxos", outcome: "ok" }),
+                "operational phase",
+            ]);
+        } finally {
+            s.release();
+            await pending;
+        }
+        expect(s.runtime.safety().blockers).toEqual([]);
+        for (const [fields, message] of debug.mock.calls) {
+            expect(Object.keys(fields).sort()).toEqual(["elapsedMs", "outcome", "phase"]);
+            expect(fields.elapsedMs).toBeGreaterThanOrEqual(0);
+            expect(Number.isFinite(fields.elapsedMs)).toBe(true);
+            expect(message).toBe("operational phase");
+        }
+    });
+
+    it.each([false, true])(
+        "records failure without exposing its cause or changing sync throw handling (%s)",
+        async (synchronous) => {
+            const debug = vi.fn();
+            const s = setup({ phaseLogger: { debug } });
+            await s.runtime.refresh();
+            debug.mockClear();
+            const failure = new Error("credentials=PRIVATE_PHASE_FAILURE");
+            const inventory = vi.spyOn(s.runtime.wallet!, "getSpendableVtxos");
+            const tip = vi.spyOn(s.runtime.wallet!.onchainProvider, "getChainTip");
+            if (synchronous)
+                tip.mockImplementation(() => {
+                    throw failure;
+                });
+            else tip.mockRejectedValue(failure);
+            const state = await s.runtime.refresh();
+            expect(state.blockers).toContain(
+                synchronous ? "wallet_unavailable" : "chain_tip_unavailable",
+            );
+            expect(debug.mock.calls).toContainEqual([
+                expect.objectContaining({ phase: "runtime.chainTip", outcome: "error" }),
+                "operational phase",
+            ]);
+            expect(JSON.stringify(debug.mock.calls)).not.toContain("PRIVATE_PHASE_FAILURE");
+            expect(inventory).toHaveBeenCalledTimes(synchronous ? 0 : 1);
+        },
+    );
+
+    it("keeps runtime safety checks working when the diagnostic logger throws", async () => {
+        const debug = vi.fn(() => {
+            throw new Error("PRIVATE_LOGGER_FAILURE");
+        });
+        const s = setup({ phaseLogger: { debug } });
+        const state = await s.runtime.refresh();
+        expect(state.blockers).toEqual([]);
+        expect(s.ioCounts()).toEqual({ providerReads: 1, inventoryReads: 1 });
+        expect(debug).toHaveBeenCalled();
+    });
+
     it("awaits the current settlement guard before registering an intent", async () => {
         const s = setup();
         const register = vi

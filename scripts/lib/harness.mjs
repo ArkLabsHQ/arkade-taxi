@@ -1201,7 +1201,7 @@ export async function captureOwnedTaxiLogs({
 export function taxiLogArgs(container) {
     if (typeof container !== "string" || !/^taxi12-[a-z0-9]+-taxi$/.test(container))
         throw new Error("invalid run-scoped Taxi container name");
-    return ["logs", "--timestamps", "--tail", "300", container];
+    return ["logs", "--timestamps", "--tail", "30000", container];
 }
 
 export function redactSecrets(value, knownSecrets = [], key = "") {

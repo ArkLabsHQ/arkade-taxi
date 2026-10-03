@@ -3,6 +3,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
+    appendFileSync,
     cpSync,
     existsSync,
     mkdirSync,
@@ -562,7 +563,10 @@ const captureTaxiDiagnostics = async (container, project, artifacts, knownSecret
                 secrets: knownSecrets,
             }),
     });
-    writeFileSync(join(artifacts, "taxi.log"), logs);
+    appendFileSync(
+        join(artifacts, "taxi.log"),
+        `## Taxi snapshot ${new Date().toISOString()}\n${logs}\n`,
+    );
 };
 
 const cleanSourceEnvironment = (source, values) => {
@@ -1341,7 +1345,10 @@ await import("/app/dist/cli.js");
                 );
                 const safeTaxiFailure = safeDiagnosticError.stack ?? safeDiagnosticError.message;
                 assertArtifactSafe({ taxiLogs: safeTaxiFailure }, knownSecrets);
-                writeFileSync(join(artifacts, "taxi.log"), `${safeTaxiFailure}\n`);
+                appendFileSync(
+                    join(artifacts, "taxi.log"),
+                    `## Taxi diagnostic failure ${new Date().toISOString()}\n${safeTaxiFailure}\n`,
+                );
             }
         }
         if (state) {

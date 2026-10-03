@@ -64,6 +64,12 @@ export interface OperatorRuntimeOptions {
     reservedOutpoints?: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
     /** Coins the SDK's background settlement must never spend. Without it, it spends none. */
     heldOutpoints: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
+    phaseLogger?: {
+        debug(
+            fields: { phase: string; elapsedMs: number; outcome: "start" | "ok" | "error" },
+            message: string,
+        ): void;
+    };
 }
 
 export function createOperatorRuntime(
@@ -72,6 +78,30 @@ export function createOperatorRuntime(
     options: OperatorRuntimeOptions,
 ) {
     const now = options.now ?? Date.now;
+    const timed = <T>(phase: string, work: () => Promise<T>): Promise<T> => {
+        if (!options.phaseLogger) return work();
+        const started = performance.now();
+        const emit = (outcome: "start" | "ok" | "error") => {
+            try {
+                options.phaseLogger!.debug(
+                    { phase, elapsedMs: performance.now() - started, outcome },
+                    "operational phase",
+                );
+            } catch {}
+        };
+        emit("start");
+        try {
+            const result = work();
+            void result.then(
+                () => emit("ok"),
+                () => emit("error"),
+            );
+            return result;
+        } catch (error) {
+            emit("error");
+            throw error;
+        }
+    };
     const providers = createProviders(config);
     const storage = createOperatorStorage(db);
     let wallet: Wallet | undefined;
@@ -115,12 +145,14 @@ export function createOperatorRuntime(
     // sessions it is cancelled, unless every VTXO it spends was consumed. A boarding input is
     // on-chain, unknown to the indexer, and can't be double-spent, so it never stops this.
     const handleEarlierIntents = async (info: ArkInfo) => {
-        const taken = await held();
+        const taken = await timed("runtime.earlier.held", held);
         const quiet = Math.max(60_000, 3 * Number(info.sessionDuration) * 1000);
         const earlier = (
-            await storage.intentRepository.getIntents({
-                states: ["waiting_for_batch", "batch_in_progress"],
-            })
+            await timed("runtime.earlier.storage", () =>
+                storage.intentRepository.getIntents({
+                    states: ["waiting_for_batch", "batch_in_progress"],
+                }),
+            )
         ).filter(
             (i) =>
                 i.createdAt < startedAt &&
@@ -129,25 +161,29 @@ export function createOperatorRuntime(
         );
         const due = earlier.filter((i) => now() - i.updatedAt >= quiet);
         if (due.length) {
-            const { vtxos } = await providers.indexerProvider.getVtxos({
-                outpoints: due.flatMap((i) => i.intentVtxos),
-            });
+            const { vtxos } = await timed("runtime.earlier.coins", () =>
+                providers.indexerProvider.getVtxos({
+                    outpoints: due.flatMap((i) => i.intentVtxos),
+                }),
+            );
             const known = new Map(vtxos.map((v) => [outpointKey(v), v]));
             for (const intent of due) {
                 const spends = intent.intentVtxos.flatMap((o) => known.get(outpointKey(o)) ?? []);
                 if (!spends.length || !spends.every(isVtxoSpent)) {
-                    await providers.arkProvider
-                        .deleteIntent({
+                    await timed("runtime.earlier.delete", () =>
+                        providers.arkProvider.deleteIntent({
                             proof: intent.deleteProof,
                             message: JSON.parse(intent.deleteProofMessage),
-                        })
-                        .catch(() => {});
-                    await storage.intentRepository.saveIntent({
-                        ...intent,
-                        state: "cancelled",
-                        cancellationReason: "registered by an earlier Taxi process",
-                        updatedAt: now(),
-                    });
+                        }),
+                    ).catch(() => {});
+                    await timed("runtime.earlier.save", () =>
+                        storage.intentRepository.saveIntent({
+                            ...intent,
+                            state: "cancelled",
+                            cancellationReason: "registered by an earlier Taxi process",
+                            updatedAt: now(),
+                        }),
+                    );
                 }
                 handled.add(intent.intentTxId);
             }
@@ -178,12 +214,14 @@ export function createOperatorRuntime(
         retire();
         const old = wallet;
         wallet = undefined;
-        await old?.dispose();
+        await timed("runtime.wallet.dispose", () => Promise.resolve(old?.dispose()));
     };
 
     const check = async (): Promise<RuntimeSafety> => {
         snapshot = closed("runtime_checking");
-        const verified = await verifyProviders(config, options.providers ?? providers);
+        const verified = await timed("runtime.providers", () =>
+            verifyProviders(config, options.providers ?? providers),
+        );
         serverUnrollScript = verified.blockers.length ? undefined : verified.serverUnrollScript;
         const result: RuntimeSafety = {
             checkedAt: now(),
@@ -229,39 +267,45 @@ export function createOperatorRuntime(
                 });
                 retired.catch(() => {});
                 const created = await sdkBackground.run(true, async () => {
-                    const made = await (options.walletFactory ?? Wallet.create)({
-                        identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
-                        arkProvider: Object.assign(Object.create(providers.arkProvider), {
-                            getInfo: async () => verified.info!,
-                            registerIntent: async (
-                                intent: Parameters<typeof providers.arkProvider.registerIntent>[0],
-                            ) => {
-                                if (sdkBackground.getStore()) {
-                                    if (!backgroundSettling || stopped || live !== token)
-                                        throw new Error("background_settlement_not_authorized");
-                                    const taken = await held();
-                                    if (proofInputs(intent).some((coin) => taken.has(coin)))
-                                        throw new Error("background_settlement_spends_held_coin");
+                    const made = await timed("runtime.wallet.create", () =>
+                        (options.walletFactory ?? Wallet.create)({
+                            identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
+                            arkProvider: Object.assign(Object.create(providers.arkProvider), {
+                                getInfo: async () => verified.info!,
+                                registerIntent: async (
+                                    intent: Parameters<
+                                        typeof providers.arkProvider.registerIntent
+                                    >[0],
+                                ) => {
+                                    if (sdkBackground.getStore()) {
+                                        if (!backgroundSettling || stopped || live !== token)
+                                            throw new Error("background_settlement_not_authorized");
+                                        const taken = await held();
+                                        if (proofInputs(intent).some((coin) => taken.has(coin)))
+                                            throw new Error(
+                                                "background_settlement_spends_held_coin",
+                                            );
+                                        return providers.arkProvider.registerIntent(intent);
+                                    }
+                                    if (!settlementGuard || live !== token)
+                                        throw new Error("proceeds_submission_not_authorized");
+                                    const enter = await settlementGuard(intent);
+                                    enter();
                                     return providers.arkProvider.registerIntent(intent);
-                                }
-                                if (!settlementGuard || live !== token)
-                                    throw new Error("proceeds_submission_not_authorized");
-                                const enter = await settlementGuard(intent);
-                                enter();
-                                return providers.arkProvider.registerIntent(intent);
+                                },
+                            }),
+                            indexerProvider: providers.indexerProvider,
+                            onchainProvider:
+                                options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
+                            storage,
+                            settlementConfig: {
+                                vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
+                                deprecatedSignerMigration: false,
                             },
                         }),
-                        indexerProvider: providers.indexerProvider,
-                        onchainProvider:
-                            options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
-                        storage,
-                        settlementConfig: {
-                            vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
-                            deprecatedSignerMigration: false,
-                        },
-                    });
+                    );
                     // Wallet.create builds it today; a lazy one must still start its timers in here.
-                    await made.getVtxoManager();
+                    await timed("runtime.wallet.create.vtxoManager", () => made.getVtxoManager());
                     return made;
                 });
                 const settle = created.settle.bind(created);
@@ -295,21 +339,25 @@ export function createOperatorRuntime(
                         (c) => !taken.has(outpointKey(c)) && !isSubdust(c, config.dust),
                     );
                 };
-                const manager = await created.getVtxoManager();
+                const manager = await timed("runtime.wallet.vtxoManager", () =>
+                    created.getVtxoManager(),
+                );
                 const renew = manager.renewVtxos.bind(manager);
                 manager.renewVtxos = (...args) => sdkBackground.run(true, () => renew(...args));
                 wallet = created;
                 infoFingerprint = fingerprint;
             }
             if (!earlierIntentsHandled)
-                earlierIntentsHandled = await handleEarlierIntents(verified.info!).catch(
-                    () => false,
-                );
+                earlierIntentsHandled = await timed("runtime.earlierIntents", () =>
+                    handleEarlierIntents(verified.info!),
+                ).catch(() => false);
             if (stopped) {
                 await dropWallet();
                 return closed("runtime_stopped");
             }
-            const address = ArkAddress.decode(await wallet.getAddress());
+            const address = ArkAddress.decode(
+                await timed("runtime.wallet.address", () => wallet!.getAddress()),
+            );
             if (
                 address.encode() !==
                 new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).encode()
@@ -319,8 +367,8 @@ export function createOperatorRuntime(
                 return result;
             }
             const [tip, coins] = await Promise.allSettled([
-                wallet.onchainProvider.getChainTip(),
-                wallet.getSpendableVtxos(),
+                timed("runtime.chainTip", () => wallet!.onchainProvider.getChainTip()),
+                timed("runtime.spendableVtxos", () => wallet!.getSpendableVtxos()),
             ]);
             if (
                 tip.status === "fulfilled" &&
@@ -332,7 +380,9 @@ export function createOperatorRuntime(
                 result.chainHeight = BigInt(tip.value.height);
                 result.chainTime = BigInt(tip.value.time);
             } else result.blockers.push("chain_tip_unavailable");
-            const manager = await wallet.getContractManager();
+            const manager = await timed("runtime.wallet.contractManager", () =>
+                wallet!.getContractManager(),
+            );
             const sync = manager.getSyncState();
             result.walletSynced =
                 coins.status === "fulfilled" &&
@@ -343,14 +393,16 @@ export function createOperatorRuntime(
             if (coins.status === "fulfilled") {
                 let sdkLocks: readonly Outpoint[];
                 try {
-                    sdkLocks = await storage.intentRepository.getLockedVtxoOutpoints();
+                    sdkLocks = await timed("runtime.storage.locks", () =>
+                        storage.intentRepository.getLockedVtxoOutpoints(),
+                    );
                 } catch {
                     result.blockers.push("intent_locks_unavailable");
                     return result;
                 }
-                const waiting = await storage.intentRepository
-                    .getIntents({ states: WAITING })
-                    .catch(() => []);
+                const waiting = await timed("runtime.storage.waitingIntents", () =>
+                    storage.intentRepository.getIntents({ states: WAITING }),
+                ).catch(() => []);
                 if (
                     waiting.some(
                         (i) => now() - i.createdAt > STALE_INTENT_MS && !handled.has(i.intentTxId),
@@ -359,7 +411,10 @@ export function createOperatorRuntime(
                     result.blockers.push("operator_intent_stale");
                 let taxiLocks: readonly Outpoint[] = [];
                 try {
-                    taxiLocks = (await options.reservedOutpoints?.()) ?? [];
+                    taxiLocks =
+                        (await timed("runtime.reservations", () =>
+                            Promise.resolve(options.reservedOutpoints?.()),
+                        )) ?? [];
                 } catch {
                     result.blockers.push("reservation_locks_unavailable");
                     return result;
@@ -436,7 +491,7 @@ export function createOperatorRuntime(
     const refreshNow = (): Promise<RuntimeSafety> => {
         if (stopped) return Promise.resolve(safety());
         if (!pending) {
-            pending = check()
+            pending = timed("runtime.check", check)
                 .then((result) => {
                     snapshot = result;
                     return safety();
@@ -455,7 +510,9 @@ export function createOperatorRuntime(
     const refresh = (): Promise<RuntimeSafety> => {
         if (!admission) return refreshNow();
         if (!queuedRefresh) {
-            queuedRefresh = Promise.resolve(activeAdmission)
+            queuedRefresh = timed("runtime.refresh.admission", () =>
+                Promise.resolve(activeAdmission),
+            )
                 .then(refreshNow)
                 .finally(() => {
                     queuedRefresh = undefined;
@@ -534,8 +591,8 @@ export function createOperatorRuntime(
             let release!: () => void;
             const current = new Promise<void>((resolve) => (release = resolve));
             admission = current;
-            await previous;
-            await queuedRefresh;
+            await timed("runtime.admission.previous", () => Promise.resolve(previous));
+            await timed("runtime.admission.refresh", () => Promise.resolve(queuedRefresh));
             activeAdmission = current;
             let active = true;
             let timer: ReturnType<typeof setTimeout> | undefined;

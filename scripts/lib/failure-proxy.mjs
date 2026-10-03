@@ -40,6 +40,10 @@ export async function createFailureProxy(targets) {
             method: request.method,
             action: "forwarded",
         });
+        response.once("finish", () => (forwarded.clientFinishAt = Date.now()));
+        response.once("close", () => {
+            if (!response.writableFinished) forwarded.clientAbortAt = Date.now();
+        });
         const send = () => {
             const upstream = httpRequest(
                 `${targets[target].replace(/\/$/, "")}${path}`,
@@ -50,6 +54,8 @@ export async function createFailureProxy(targets) {
                 (result) => {
                     forwarded.responseStatus = result.statusCode;
                     forwarded.responseAt = Date.now();
+                    result.once("end", () => (forwarded.responseEndAt = Date.now()));
+                    result.once("aborted", () => (forwarded.responseAbortedAt = Date.now()));
                     const forward = () => {
                         response.writeHead(result.statusCode, result.headers);
                         result.pipe(response);

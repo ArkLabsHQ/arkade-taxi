@@ -129,7 +129,9 @@ vi.mock("../src/lifecycle.js", async (original) => {
         },
     };
 });
-vi.mock("pino", () => ({ pino: () => ({ info() {}, error() {} }) }));
+vi.mock("pino", () => ({
+    pino: () => ({ info() {}, error() {}, debug() {}, isLevelEnabled: () => false }),
+}));
 
 interface Harness {
     config: ReturnType<typeof config>;
