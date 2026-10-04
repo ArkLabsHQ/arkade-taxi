@@ -893,6 +893,10 @@ export async function submitLockup(
     }
     let claim;
     try {
+        if (current.state === "locking" || current.state === "locked") {
+            const pending = deps.runtime?.pendingCheck?.();
+            if (pending) await pending;
+        }
         const claimLockup = (assertCurrent?: () => void) => {
             assertReady?.();
             assertCurrent?.();

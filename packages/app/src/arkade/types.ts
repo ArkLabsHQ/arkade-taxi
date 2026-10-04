@@ -21,6 +21,7 @@ export interface RuntimeSafety {
 
 export interface RuntimeGate {
     safety(): RuntimeSafety;
+    pendingCheck?(): Promise<RuntimeSafety> | undefined;
     assertAdmission(): Promise<void>;
     withAdmission<T>(work: (assertCurrent: () => void) => Promise<T>): Promise<T>;
 }

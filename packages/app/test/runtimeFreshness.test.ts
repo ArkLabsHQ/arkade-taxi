@@ -61,6 +61,8 @@ function setup() {
     let online = true;
     let height = 700000;
     let walletEntered = gate();
+    let providerEntered = gate();
+    const checkReads = { provider: 0, emulator: 0, wallet: 0 };
     let coins = [fundingCoin(), fundingCoin({ vout: 1, expiresAtHeight: 900001 })];
     const wallet = {
         settle: async () => "",
@@ -68,6 +70,7 @@ function setup() {
         getAddress: async () =>
             new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode(),
         getSpendableVtxos: async () => {
+            checkReads.wallet += 1;
             walletEntered.release();
             await walletGate;
             return coins;
@@ -86,13 +89,18 @@ function setup() {
         providers: {
             arkProvider: {
                 getInfo: async () => {
+                    checkReads.provider += 1;
+                    providerEntered.release();
                     await checkGate;
                     if (providerFails) throw new Error("credentials=PRIVATE_PROVIDER_FAILURE");
                     return info;
                 },
             },
             emulatorProvider: {
-                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+                getInfo: async () => {
+                    checkReads.emulator += 1;
+                    return { signerPubkey: bytesToHex(providerEmulatorKey) };
+                },
             },
         },
         walletFactory: async () => wallet,
@@ -213,6 +221,8 @@ function setup() {
         reservations,
         builder,
         observed,
+        checkReads,
+        databaseSnapshot: () => db.serialize(),
         router,
         setNow: (value: number) => (now = value),
         setInfo: (value: ArkInfo) => (info = value),
@@ -220,7 +230,11 @@ function setup() {
         setOnline: (value: boolean) => (online = value),
         setHeight: (value: number) => (height = value),
         setCoins: (value: typeof coins) => (coins = value),
-        pauseCheck: (value: Promise<void>) => (checkGate = value),
+        pauseCheck: (value: Promise<void>) => {
+            checkGate = value;
+            providerEntered = gate();
+            return providerEntered.pending;
+        },
         pauseWallet: (value: Promise<void>) => {
             walletGate = value;
             walletEntered = gate();
@@ -230,6 +244,89 @@ function setup() {
 }
 
 describe("quote and runtime refresh interleaving", () => {
+    it.each(
+        (["locking", "locked"] as const).flatMap((state) =>
+            (["healthy", "wallet_unsynced", "server_unavailable"] as const).map((result) => ({
+                state,
+                result,
+            })),
+        ),
+    )(
+        "keeps two single-POST $state replays pending until the existing check reports $result",
+        async ({ state, result }) => {
+            const h = setup();
+            await h.lifecycle.start();
+            await h.lifecycle.refresh();
+            const router = h.router();
+            const quoted = await createQuote(h.deps, quoteBody());
+            const signedLockupTx = await signedEnvelope(quoted.unsignedLockupTx);
+            const post = () =>
+                router.request(`/v1/transfers/${quoted.transferId}/lockup`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ signedLockupTx }),
+                });
+            const initial = await post();
+            expect(initial.status).toBe(202);
+            const expected = await initial.json();
+            if (state === "locked")
+                h.advances.update({
+                    ...h.advances.get(quoted.transferId)!,
+                    state,
+                    outpoint: expected.outpoint,
+                    submissionPhase: "finalized",
+                });
+            const persisted = h.advances.get(quoted.transferId);
+            const reserved = h.reservations.listReservedOutpoints();
+            const database = h.databaseSnapshot();
+            const admission = vi.spyOn(h.deps.runtime, "withAdmission");
+            const assertAdmission = vi.spyOn(h.deps.runtime, "assertAdmission");
+            const release = gate();
+            const entered =
+                result === "server_unavailable"
+                    ? h.pauseCheck(release.pending)
+                    : h.pauseWallet(release.pending);
+            const check = h.runtime.refresh();
+            await entered;
+            const reads = { ...h.checkReads };
+            expect(h.runtime.safety().blockers).toContain("runtime_checking");
+            expect((await router.request("/ready")).status).toBe(503);
+            let settled = 0;
+            const requests = [post(), post()].map((request) =>
+                Promise.resolve(request).then((response) => {
+                    settled += 1;
+                    return response;
+                }),
+            );
+            try {
+                await new Promise<void>((resolve) => setImmediate(resolve));
+                expect(settled).toBe(0);
+                expect(h.databaseSnapshot()).toEqual(database);
+                if (result === "wallet_unsynced") h.setOnline(false);
+                if (result === "server_unavailable") h.failProvider();
+                if (result !== "server_unavailable") h.setNow(NOW * 1_000 + 250);
+            } finally {
+                release.release();
+                await check;
+            }
+            for (const response of await Promise.all(requests)) {
+                expect({ status: response.status, body: await response.json() }).toEqual({
+                    status: result === "healthy" ? (state === "locked" ? 200 : 202) : 503,
+                    body: result === "healthy" ? expected : { code: "not_ready", error: result },
+                });
+            }
+            expect(settled).toBe(2);
+            expect(h.checkReads).toEqual(reads);
+            expect(admission).not.toHaveBeenCalled();
+            expect(assertAdmission).not.toHaveBeenCalled();
+            expect(h.runtime.safety().checkedAt).toBe(NOW * 1_000);
+            expect(h.advances.get(quoted.transferId)).toEqual(persisted);
+            expect(h.reservations.listReservedOutpoints()).toEqual(reserved);
+            expect(h.databaseSnapshot()).toEqual(database);
+            expect(h.advances.byState(state)).toHaveLength(1);
+            expect(h.builder.submitted).toEqual([]);
+        },
+    );
     it.each(["proceeds_collecting", "runtime_stale"])(
         "preserves the exact pre-effect %s refusal during final inventory revalidation",
         async (reason) => {

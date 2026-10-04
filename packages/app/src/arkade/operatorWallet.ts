@@ -535,6 +535,7 @@ export function createOperatorRuntime(
         providers,
         storage,
         safety,
+        pendingCheck: () => pending,
         refresh,
         getChainTip: async () => onchainProvider.getChainTip(),
         getServerUnroll() {
