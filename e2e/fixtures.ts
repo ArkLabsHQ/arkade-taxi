@@ -34,13 +34,13 @@ import {
 export const artifactPath = (name: string) =>
     join(process.env.TAXI_E2E_ARTIFACTS || "e2e-artifacts", name);
 
-const admissionTiming = (operation: "quote" | "lockup"): AdmissionWindow["timing"] => ({
+export const admissionTiming = (operation: "quote" | "lockup"): AdmissionWindow["timing"] => ({
     operation,
     observe: (entry) =>
         appendFileSync(artifactPath("admission-timing.jsonl"), `${JSON.stringify(entry)}\n`),
 });
 
-const admissionFailure =
+export const admissionFailure =
     (endpoint: "/v1/transfers" | "/v1/transfers/:id/lockup") =>
     (phase: Parameters<NonNullable<AdmissionWindow["onFailure"]>>[0]) => {
         try {

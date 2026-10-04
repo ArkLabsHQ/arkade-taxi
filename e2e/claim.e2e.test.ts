@@ -10,6 +10,8 @@ import { preEffectRequest, submitWithReadiness } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
     admin,
+    admissionFailure,
+    admissionTiming,
     artifactPath,
     assetOutputs,
     control,
@@ -303,6 +305,8 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             {
                 readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
                 expiresAt: Date.now() / 1000 + 10,
+                onFailure: admissionFailure("/v1/transfers"),
+                timing: admissionTiming("quote"),
             },
         );
         const quote = verified.quote;
@@ -337,6 +341,8 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
         });
         const lockup = await submitWithReadiness(live.client, verified, alice.identity, {
             readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
+            onFailure: admissionFailure("/v1/transfers/:id/lockup"),
+            timing: admissionTiming("lockup"),
         });
         const locking = await eventFor(quote.transferId, "locking");
         expect(locking.receiverAddress).toBe(receiverAddress);
