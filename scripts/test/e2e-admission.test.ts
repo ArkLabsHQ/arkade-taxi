@@ -4,11 +4,286 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaxiClient, TaxiError, verifyQuote } from "@arkade-taxi/client";
 import type { Identity } from "@arkade-os/sdk";
 import { args, senderIdentity } from "../../packages/client/test/fixtures.js";
-import { preEffectRequest, submitWithReadiness } from "../../e2e/admission.js";
+import {
+    preEffectRequest,
+    submitWithReadiness,
+    type AdmissionTiming,
+} from "../../e2e/admission.js";
 
 const ready = { status: "ok", paused: false, blockers: [] };
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("pre-effect timing diagnostics", () => {
+    it.each([
+        [9999, 1],
+        [1000, 5000],
+    ])(
+        "retains the original %i clock budget and selects a %i ms abort",
+        async (requestNow, duration) => {
+            vi.useFakeTimers();
+            let monotonic = 0;
+            const clock = vi.spyOn(performance, "now").mockImplementation(() => monotonic);
+            const failure = new DOMException("private transport detail", "TimeoutError");
+            const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
+                const controller = new AbortController();
+                setTimeout(() => {
+                    monotonic += milliseconds;
+                    controller.abort(failure);
+                }, milliseconds);
+                return controller.signal;
+            });
+            const entries: AdmissionTiming[] = [];
+            const now = vi.fn().mockReturnValueOnce(1000).mockReturnValue(requestNow);
+            const fetcher = vi.fn(
+                (_url: string, { signal }: RequestInit) =>
+                    new Promise((_resolve, reject) => {
+                        signal!.addEventListener("abort", () => reject(signal!.reason), {
+                            once: true,
+                        });
+                    }),
+            );
+            vi.stubGlobal("fetch", fetcher);
+            const attempt = vi.fn(async () => {
+                throw new TaxiError("not_ready", "runtime_checking");
+            });
+            const unchanged = vi.fn();
+            const failureObserver = vi.fn();
+            try {
+                const pending = preEffectRequest(
+                    attempt,
+                    {
+                        readyUrl: "http://private-host/ready?secret=hidden",
+                        expiresAt: 10,
+                        now,
+                        onFailure: failureObserver,
+                        timing: { operation: "lockup", observe: (entry) => entries.push(entry) },
+                    },
+                    unchanged,
+                );
+                const rejected = expect(pending).rejects.toBe(failure);
+                await vi.advanceTimersByTimeAsync(duration);
+                await rejected;
+                expect(timeout).toHaveBeenCalledExactlyOnceWith(duration);
+                expect(now).toHaveBeenCalledTimes(2);
+                expect(attempt).toHaveBeenCalledTimes(1);
+                expect(fetcher).toHaveBeenCalledTimes(1);
+                expect(unchanged).not.toHaveBeenCalled();
+                expect(failureObserver).toHaveBeenCalledExactlyOnceWith("readiness-headers");
+                expect(
+                    entries.filter((entry) => entry.phase === "readiness-headers"),
+                ).toMatchObject([
+                    {
+                        operation: "lockup",
+                        endpoint: "/ready",
+                        event: "start",
+                        outcome: "pending",
+                        remainingOriginalBudgetMs: 10000 - requestNow,
+                        selectedAbortDurationMs: duration,
+                        elapsedMs: 0,
+                    },
+                    {
+                        operation: "lockup",
+                        endpoint: "/ready",
+                        event: "finish",
+                        outcome: "timeout",
+                        remainingOriginalBudgetMs: 10000 - requestNow,
+                        selectedAbortDurationMs: duration,
+                        elapsedMs: duration,
+                    },
+                ]);
+                expect(JSON.stringify(entries)).not.toMatch(/private|secret|hidden|transport/);
+            } finally {
+                timeout.mockRestore();
+                clock.mockRestore();
+                vi.useRealTimers();
+            }
+        },
+    );
+
+    it("records successful readiness transitions with bounded codes before one effect", async () => {
+        const entries: AdmissionTiming[] = [];
+        const responses = [
+            {
+                status: 503,
+                body: {
+                    status: "degraded",
+                    reason: "runtime_stale",
+                    blockers: ["runtime_stale", "chain_time_unavailable"],
+                },
+            },
+            {
+                status: 503,
+                body: {
+                    status: "degraded",
+                    reason: "runtime_checking",
+                    blockers: ["runtime_checking"],
+                },
+            },
+            { status: 200, body: ready },
+        ];
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => {
+                const response = responses.shift()!;
+                return { status: response.status, json: async () => response.body };
+            }),
+        );
+        const attempt = vi
+            .fn()
+            .mockRejectedValueOnce(new TaxiError("not_ready", "runtime_stale"))
+            .mockResolvedValueOnce("one-effect");
+        await expect(
+            preEffectRequest(attempt, {
+                readyUrl: "http://private-host/ready",
+                expiresAt: Date.now() / 1000 + 10,
+                timing: { operation: "quote", observe: (entry) => entries.push(entry) },
+            }),
+        ).resolves.toBe("one-effect");
+        expect(
+            entries.filter((entry) => entry.phase === "readiness-json" && entry.event === "finish"),
+        ).toMatchObject([
+            {
+                operation: "quote",
+                endpoint: "/ready",
+                status: 503,
+                reason: "runtime_stale",
+                blockers: ["runtime_stale", "chain_time_unavailable"],
+            },
+            { status: 503, reason: "runtime_checking", blockers: ["runtime_checking"] },
+            { status: 200, blockers: [] },
+        ]);
+        expect(
+            entries.filter((entry) => entry.phase === "attempt" && entry.event === "start"),
+        ).toHaveLength(2);
+        expect(attempt).toHaveBeenCalledTimes(2);
+    });
+
+    it("distinguishes expiry before readiness fetch from a started request", async () => {
+        const entries: AdmissionTiming[] = [];
+        const fetcher = vi.fn();
+        vi.stubGlobal("fetch", fetcher);
+        const now = vi.fn().mockReturnValueOnce(1000).mockReturnValueOnce(10000);
+        const attempt = vi.fn(async () => {
+            throw new TaxiError("not_ready", "runtime_stale");
+        });
+        const onFailure = vi.fn();
+        await expect(
+            preEffectRequest(attempt, {
+                readyUrl: "http://private-host/ready",
+                expiresAt: 10,
+                now,
+                onFailure,
+                timing: { operation: "quote", observe: (entry) => entries.push(entry) },
+            }),
+        ).rejects.toThrow("pre-effect request reached its original expiry");
+        expect(entries.filter((entry) => entry.phase === "readiness-headers")).toMatchObject([
+            { event: "blocked", outcome: "rejected", remainingOriginalBudgetMs: 0 },
+        ]);
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(now).toHaveBeenCalledTimes(2);
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith("readiness-headers");
+        expect(attempt).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        { reason: "private-reason", blockers: ["private-blocker", "runtime_stale"] },
+        { reason: { secret: "private-reason" }, blockers: { secret: "private-blocker" } },
+    ])("redacts unknown readiness data while preserving refusal %#", async (unsafe) => {
+        const lines: string[] = [];
+        const attempt = vi.fn(async () => {
+            throw new TaxiError("not_ready", "runtime_stale");
+        });
+        vi.stubGlobal(
+            "fetch",
+            vi.fn(async () => ({
+                status: 503,
+                json: async () => ({
+                    status: "degraded",
+                    ...unsafe,
+                    seed: "private-seed",
+                    authorization: "private-auth",
+                    id: "private-id",
+                    psbt: "private-psbt",
+                }),
+            })),
+        );
+        await expect(
+            preEffectRequest(attempt, {
+                readyUrl: "http://private-host/ready?authorization=private-auth",
+                expiresAt: Date.now() / 1000 + 10,
+                timing: {
+                    operation: "quote",
+                    observe: (entry) => lines.push(JSON.stringify(entry)),
+                },
+            }),
+        ).rejects.toThrow("readiness did not confirm the exact transient pre-effect state");
+        expect(attempt).toHaveBeenCalledTimes(1);
+        expect(lines.join("\n")).not.toMatch(/private|seed|authorization|psbt/);
+        const json = lines
+            .map((line) => JSON.parse(line))
+            .find((entry) => entry.phase === "readiness-json" && entry.event === "finish");
+        expect(json).toBeDefined();
+        expect(json).not.toHaveProperty("reason");
+        expect(json.blockers).toEqual(
+            Array.isArray(unsafe.blockers) ? ["runtime_stale"] : undefined,
+        );
+        expect(
+            lines.every((line) =>
+                Object.keys(JSON.parse(line)).every((key) =>
+                    [
+                        "operation",
+                        "endpoint",
+                        "phase",
+                        "event",
+                        "outcome",
+                        "at",
+                        "monotonicMs",
+                        "elapsedMs",
+                        "remainingOriginalBudgetMs",
+                        "selectedAbortDurationMs",
+                        "status",
+                        "reason",
+                        "blockers",
+                    ].includes(key),
+                ),
+            ),
+        ).toBe(true);
+    });
+
+    it("contains throwing timing observers without replacing failure or adding an effect", async () => {
+        const failure = new DOMException("private failure", "TimeoutError");
+        const attempt = vi.fn(async () => {
+            throw new TaxiError("not_ready", "runtime_checking");
+        });
+        const fetcher = vi.fn(async () => {
+            throw failure;
+        });
+        vi.stubGlobal("fetch", fetcher);
+        const observe = vi.fn(() => {
+            throw new Error("private observer failure");
+        });
+        const onFailure = vi.fn();
+        const unchanged = vi.fn();
+        await expect(
+            preEffectRequest(
+                attempt,
+                {
+                    readyUrl: "http://private-host/ready",
+                    expiresAt: Date.now() / 1000 + 10,
+                    onFailure,
+                    timing: { operation: "lockup", observe },
+                },
+                unchanged,
+            ),
+        ).rejects.toBe(failure);
+        expect(observe).toHaveBeenCalledTimes(4);
+        expect(onFailure).toHaveBeenCalledExactlyOnceWith("readiness-headers");
+        expect(attempt).toHaveBeenCalledTimes(1);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(unchanged).not.toHaveBeenCalled();
+    });
+});
 
 describe("pre-effect failure diagnostics", () => {
     it.each(["attempt", "readiness-headers", "readiness-json"] as const)(

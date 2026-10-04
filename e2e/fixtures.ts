@@ -34,6 +34,12 @@ import {
 export const artifactPath = (name: string) =>
     join(process.env.TAXI_E2E_ARTIFACTS || "e2e-artifacts", name);
 
+const admissionTiming = (operation: "quote" | "lockup"): AdmissionWindow["timing"] => ({
+    operation,
+    observe: (entry) =>
+        appendFileSync(artifactPath("admission-timing.jsonl"), `${JSON.stringify(entry)}\n`),
+});
+
 const admissionFailure =
     (endpoint: "/v1/transfers" | "/v1/transfers/:id/lockup") =>
     (phase: Parameters<NonNullable<AdmissionWindow["onFailure"]>>[0]) => {
@@ -438,6 +444,7 @@ export async function quoteFor(
         readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
         expiresAt: Date.now() / 1000 + 10,
         onFailure: admissionFailure("/v1/transfers"),
+        timing: admissionTiming("quote"),
     }).catch(async (error) => {
         await boundary("quote-refusal").catch(() => undefined);
         throw error;
@@ -485,6 +492,7 @@ export async function lock(live: Live, offered: Awaited<ReturnType<typeof quoteF
         {
             readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
             onFailure: admissionFailure("/v1/transfers/:id/lockup"),
+            timing: admissionTiming("lockup"),
         },
     ).catch(async (error) => {
         await boundary("lockup-refusal").catch(() => undefined);
