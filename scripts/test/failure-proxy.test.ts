@@ -20,10 +20,52 @@ async function setup(serve?: (request: IncomingMessage, response: ServerResponse
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
     cleanup.push(() => new Promise((resolve) => upstream.close(() => resolve())));
     const address = upstream.address() as { port: number };
-    const proxy = await createFailureProxy({ arkd: `http://127.0.0.1:${address.port}` });
+    const proxy = await createFailureProxy({
+        arkd: `http://127.0.0.1:${address.port}`,
+        emulator: `http://127.0.0.1:${address.port}`,
+    });
     cleanup.push(proxy.close);
     return { proxy, effects: () => effects };
 }
+
+it.each([
+    ["arkd", "/v1/tx/submit", "emulator"],
+    ["emulator", "/v1/tx", "arkd"],
+])("retains %s submission counts after event eviction and reset", async (target, path, other) => {
+    const { proxy } = await setup();
+    const request = async (service: string, endpoint: string, method: string) => {
+        const response = await fetch(`${proxy.url}/${service}${endpoint}`, { method });
+        expect(response.status).toBe(200);
+        await response.json();
+    };
+    const retainedSubmits = () =>
+        proxy.events.filter(
+            (event: any) =>
+                event.target === target &&
+                event.path === path &&
+                event.method === "POST" &&
+                event.action === "forwarded",
+        );
+    await request(target, `${path}?probe=1`, "POST");
+    expect(retainedSubmits()).toHaveLength(1);
+    const first = proxy.submissionCounts;
+    for (let index = 1; index < 30000; index++)
+        proxy.events.push({ target: "arkd", path: "/read", method: "GET", action: "forwarded" });
+    await request(target, path, "GET");
+    await request(other, path, "POST");
+    await request(target, `${path}/extra`, "POST");
+    expect(proxy.events).toHaveLength(30000);
+    expect(retainedSubmits()).toHaveLength(0);
+    expect(proxy.submissionCounts).toEqual({
+        arkd: target === "arkd" ? 1 : 0,
+        emulator: target === "emulator" ? 1 : 0,
+    });
+    proxy.reset();
+    expect(proxy.submissionCounts).toEqual(first);
+    await request(target, path, "POST");
+    expect(proxy.submissionCounts).toEqual({ ...first, [target]: 2 });
+    expect(first[target]).toBe(1);
+});
 
 it("drops exactly one response after the upstream mutation completed", async () => {
     const { proxy, effects } = await setup();

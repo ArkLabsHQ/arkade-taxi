@@ -31,22 +31,9 @@ const rowFor = async (id: string) =>
 const lockupTxid = (offered: Awaited<ReturnType<typeof quoteFor>>) =>
     Transaction.fromPSBT(base64.decode(offered.verified.envelope.arkTx)).id;
 
-const emulatorSubmits = async () =>
-    (await control("events")).events.filter(
-        (event: any) =>
-            event.target === "emulator" &&
-            event.path === "/v1/tx" &&
-            event.method === "POST" &&
-            event.action === "forwarded",
-    ).length;
+const emulatorSubmits = async () => (await control("events")).submissionCounts.emulator;
 
-const arkdSubmits = async () =>
-    (await control("events")).events.filter(
-        (event: any) =>
-            event.target === "arkd" &&
-            event.path === "/v1/tx/submit" &&
-            event.action === "forwarded",
-    );
+const arkdSubmits = async () => (await control("events")).submissionCounts.arkd;
 
 const resumeAfterFault = async () => {
     const snapshot = await poll(
@@ -247,7 +234,7 @@ liveScenario("duplicate-lockup-idempotent", async () => {
     const locked = await observeLock(live, offered, first);
     const before = await admin("status");
     const rows = (await admin("advances")).advances.length;
-    const submits = (await arkdSubmits()).length;
+    const submits = await arkdSubmits();
     await ready();
     const duplicates = await Promise.all([
         live.client.submitLockup(offered.verified, signed),
@@ -256,7 +243,7 @@ liveScenario("duplicate-lockup-idempotent", async () => {
     expect(duplicates).toEqual([first, first]);
     expect((await admin("advances")).advances.length).toBe(rows);
     expect((await admin("status")).exposure).toEqual(before.exposure);
-    expect(await arkdSubmits()).toHaveLength(submits);
+    expect(await arkdSubmits()).toBe(submits);
     await purchase(live, locked);
 });
 

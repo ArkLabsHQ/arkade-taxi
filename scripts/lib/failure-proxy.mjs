@@ -3,10 +3,16 @@ import { createServer, request as httpRequest } from "node:http";
 export async function createFailureProxy(targets) {
     let rules = [];
     const events = [];
+    const submissionCounts = { arkd: 0, emulator: 0 };
     const paused = new Set();
     const sockets = new Set();
     const record = (event) => {
         const recorded = { at: Date.now(), ...event };
+        if (event.action === "forwarded" && event.method === "POST") {
+            if (event.target === "arkd" && event.path === "/v1/tx/submit") submissionCounts.arkd++;
+            else if (event.target === "emulator" && event.path === "/v1/tx")
+                submissionCounts.emulator++;
+        }
         events.push(recorded);
         if (events.length > 30000) events.shift();
         return recorded;
@@ -123,6 +129,9 @@ export async function createFailureProxy(targets) {
         },
         reset,
         events,
+        get submissionCounts() {
+            return { ...submissionCounts };
+        },
         close: () =>
             new Promise((resolve) => {
                 reset();

@@ -1087,7 +1087,11 @@ await import("/app/dist/cli.js");
                 let result = { ok: true };
                 if (command.action === "configure") failureProxy.configure(command.rule);
                 else if (command.action === "reset") failureProxy.reset();
-                else if (command.action === "events") result = { events: failureProxy.events };
+                else if (command.action === "events")
+                    result = {
+                        events: failureProxy.events,
+                        submissionCounts: failureProxy.submissionCounts,
+                    };
                 else if (command.action === "restart") {
                     const [container] = await jsonRun("docker", ["inspect", taxiContainer]);
                     const [volume] = await jsonRun("docker", ["volume", "inspect", taxiVolume]);
