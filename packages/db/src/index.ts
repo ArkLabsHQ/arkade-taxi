@@ -34,6 +34,8 @@ export { assertNativeAccess, withSdkAccess, DatabaseBusyError } from "./coordina
  * BigInt: sats above 2^53 do not survive the default number mode. */
 export function openDatabase(path: string): Database {
     const db = new DatabaseCtor(path);
+    db.pragma("journal_mode = WAL");
+    db.pragma("synchronous = FULL");
     db.defaultSafeIntegers(true);
     applyMigrations(db);
     return db;
