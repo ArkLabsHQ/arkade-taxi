@@ -10,6 +10,7 @@ import {
     getTransfer,
     submitLockup,
     type QuoteDeps,
+    type QuotePhaseFields,
 } from "../src/quotes.js";
 import {
     advance,
@@ -33,12 +34,14 @@ import {
     signedEnvelope,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
+import { ProductionLockupBuilder } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
 import {
     openDatabase,
     AdvanceRepository,
     PolicyRepository,
     ReservationRepository,
+    ReservationConflictError,
 } from "@arkade-taxi/db";
 
 const MARGIN = 144;
@@ -1330,5 +1333,275 @@ describe("getTransfer", () => {
 
     it("404s an unknown transfer", async () => {
         await expect(async () => getTransfer(deps(), "nope")).rejects.toThrow(/not found/i);
+    });
+});
+
+describe("quote phase diagnostics", () => {
+    const diagnosticDeps = () => {
+        const ledger = new MemoryAdvances();
+        const cfg = config({ reconcileIntervalMs: 5000 });
+        const d: QuoteDeps = {
+            ...deps(),
+            ...quoteInfrastructure(ledger, () => basePolicy({ locktimeMarginBlocks: MARGIN })),
+            advances: ledger,
+            config: cfg,
+            randomId: () => "diagnostic-fixture",
+            lockupBuilder: new ProductionLockupBuilder(cfg, () => serverUnroll),
+        };
+        return { d, ledger };
+    };
+    it("observes actual production subphases using only bounded safe fields", async () => {
+        const { d } = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        d.phaseLogger = {
+            debug: (fields) => {
+                rows.push(fields);
+            },
+        };
+        await createQuote(d, quoteBody());
+        const starts = rows.filter((row) => row.outcome === "start").map((row) => row.phase);
+        expect(starts).toEqual([
+            "quote.total",
+            "quote.admission",
+            "quote.initial-guard",
+            "quote.attempt-guard",
+            "quote.sender.first",
+            "quote.inventory.first",
+            "quote.locks.first",
+            "quote.selection.first",
+            "quote.covenant",
+            "quote.builder",
+            "quote.graph.build",
+            "quote.graph.self-parse",
+            "quote.outer-parse",
+            "quote.sender.second",
+            "quote.after-sender-snapshot",
+            "quote.inventory.second",
+            "quote.locks.second",
+            "quote.selection.second",
+            "quote.final-guard",
+            "quote.persist",
+        ]);
+        expect(rows.filter((row) => row.outcome === "ok")).toHaveLength(starts.length);
+        expect(rows).toHaveLength(40);
+        expect(new Set(rows.map((row) => row.quoteSequence)).size).toBe(1);
+        expect(rows.map((row) => row.sequence)).toEqual(rows.map((_, index) => index + 1));
+        for (const row of rows) {
+            expect(Number.isSafeInteger(row.quoteSequence) && row.quoteSequence > 0).toBe(true);
+            expect(Number.isFinite(row.elapsedMs) && row.elapsedMs >= 0).toBe(true);
+            expect(
+                Object.keys(row).every((key) =>
+                    [
+                        "quoteSequence",
+                        "sequence",
+                        "attempt",
+                        "phase",
+                        "outcome",
+                        "elapsedMs",
+                        "sampledOriginalSnapshotAgeMs",
+                        "snapshotAgeSampleElapsedMs",
+                    ].includes(key),
+                ),
+            ).toBe(true);
+        }
+        expect(
+            rows.find((row) => row.phase === "quote.final-guard" && row.outcome === "ok")
+                ?.sampledOriginalSnapshotAgeMs,
+        ).toBe(0);
+    });
+    it("contains logging failure without changing clocks, guards, funding calls or bytes", async () => {
+        const run = async (enabled: boolean) => {
+            const { d, ledger } = diagnosticDeps();
+            const calls: string[] = [];
+            const safety = d.runtime.safety;
+            d.runtime.safety = () => {
+                calls.push("safety");
+                return safety();
+            };
+            d.nowMs = () => {
+                calls.push("nowMs");
+                return NOW * 1000;
+            };
+            d.now = () => {
+                calls.push("now");
+                return NOW;
+            };
+            const sender = d.senderInventory.getVtxos.bind(d.senderInventory);
+            d.senderInventory.getVtxos = (input) => {
+                calls.push("sender");
+                return sender(input);
+            };
+            const inventory = d.inventory.getSpendableVtxos.bind(d.inventory);
+            d.inventory.getSpendableVtxos = () => {
+                calls.push("inventory");
+                return inventory();
+            };
+            const locks = d.inventory.getLockedVtxoOutpoints.bind(d.inventory);
+            d.inventory.getLockedVtxoOutpoints = () => {
+                calls.push("locks");
+                return locks();
+            };
+            const reserve = d.reservations.reserveQuote.bind(d.reservations);
+            d.reservations.reserveQuote = (input) => {
+                calls.push("persist");
+                return reserve(input);
+            };
+            if (enabled)
+                d.phaseLogger = {
+                    debug: () => {
+                        throw new Error("logger failed");
+                    },
+                };
+            const response = await createQuote(d, quoteBody(), () => {
+                calls.push("ready");
+            });
+            return { response, calls, advance: ledger.get(response.transferId) };
+        };
+        const baseline = await run(false);
+        const observed = await run(true);
+        expect(observed).toEqual(baseline);
+        expect(observed.calls.filter((call) => call === "sender")).toHaveLength(2);
+        expect(observed.calls.filter((call) => call === "inventory")).toHaveLength(2);
+        expect(observed.calls.filter((call) => call === "locks")).toHaveLength(2);
+        expect(observed.calls.filter((call) => call === "persist")).toHaveLength(1);
+    });
+    it("keeps the second sender barrier and refuses expired safety before persistence", async () => {
+        const { d, ledger } = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        d.phaseLogger = {
+            debug: (fields) => {
+                rows.push(fields);
+            },
+        };
+        let nowMs = NOW * 1000;
+        d.nowMs = () => nowMs;
+        const read = d.senderInventory.getVtxos.bind(d.senderInventory);
+        let reads = 0;
+        let release!: () => void;
+        let started!: () => void;
+        const pause = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const pending = new Promise<void>((resolve) => {
+            started = resolve;
+        });
+        d.senderInventory.getVtxos = async (input) => {
+            const result = await read(input);
+            if (++reads === 2) {
+                started();
+                await pause;
+            }
+            return result;
+        };
+        const quote = createQuote(d, quoteBody());
+        await pending;
+        expect(ledger.rows.size).toBe(0);
+        nowMs += d.config.reconcileIntervalMs + 1;
+        release();
+        await expect(quote).rejects.toMatchObject({ code: "runtime_unsafe" });
+        expect(reads).toBe(2);
+        expect(ledger.rows.size).toBe(0);
+        expect(d.reservations.listReservedOutpoints()).toEqual([]);
+        expect(
+            rows.find((row) => row.phase === "quote.selection.second" && row.outcome === "error"),
+        ).toMatchObject({ sampledOriginalSnapshotAgeMs: 5001 });
+        expect(rows.some((row) => row.phase === "quote.persist")).toBe(false);
+    });
+    it("caps rows and discards nonallowlisted phases from a builder observer", async () => {
+        const { d } = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        d.phaseLogger = {
+            debug: (fields) => {
+                rows.push(fields);
+            },
+        };
+        const builder = d.lockupBuilder;
+        d.lockupBuilder = {
+            buildUnsigned: (request, observe) => {
+                for (let index = 0; index < 300; index++) {
+                    observe?.("untrusted-private-phase" as never, "start");
+                    observe?.("quote.graph.build", "start");
+                    observe?.("quote.graph.build", "ok");
+                }
+                return builder.buildUnsigned(request, observe);
+            },
+        };
+        await createQuote(d, quoteBody());
+        expect(rows).toHaveLength(128);
+        expect(JSON.stringify(rows)).not.toContain("untrusted-private-phase");
+    });
+    it("preserves a rejected funding cause while emitting only fixed outcomes", async () => {
+        const { d, ledger } = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        d.phaseLogger = {
+            debug: (fields) => {
+                rows.push(fields);
+            },
+        };
+        const original = new Error("private-provider-error");
+        d.senderInventory.getVtxos = () => Promise.reject(original);
+        const failure = await caught(() => createQuote(d, quoteBody()));
+        expect(failure).toMatchObject({ code: "runtime_unsafe", cause: original });
+        expect(failure.cause).toBe(original);
+        expect(
+            rows.some((row) => row.phase === "quote.sender.first" && row.outcome === "error"),
+        ).toBe(true);
+        expect(rows.some((row) => row.phase === "quote.total" && row.outcome === "error")).toBe(
+            true,
+        );
+        expect(JSON.stringify(rows)).not.toContain(original.message);
+        expect(ledger.rows.size).toBe(0);
+    });
+    it("keeps concurrent request sequences and phase rows separate", async () => {
+        const left = diagnosticDeps();
+        const right = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        const logger = {
+            debug: (fields: QuotePhaseFields) => {
+                rows.push(fields);
+            },
+        };
+        left.d.phaseLogger = logger;
+        right.d.phaseLogger = logger;
+        await Promise.all([createQuote(left.d, quoteBody()), createQuote(right.d, quoteBody())]);
+        const sequences = [...new Set(rows.map((row) => row.quoteSequence))];
+        expect(sequences).toHaveLength(2);
+        for (const sequence of sequences) {
+            const requestRows = rows.filter((row) => row.quoteSequence === sequence);
+            expect(requestRows).toHaveLength(40);
+            expect(requestRows.map((row) => row.sequence)).toEqual(
+                requestRows.map((_, index) => index + 1),
+            );
+            expect(requestRows.at(-1)).toMatchObject({
+                phase: "quote.total",
+                outcome: "ok",
+                attempt: 1,
+            });
+        }
+    });
+    it("keeps exactly three reservation attempts with bounded failure rows", async () => {
+        const { d, ledger } = diagnosticDeps();
+        const rows: QuotePhaseFields[] = [];
+        d.phaseLogger = {
+            debug: (fields) => {
+                rows.push(fields);
+            },
+        };
+        const reserve = d.reservations.reserveQuote.bind(d.reservations);
+        let attempts = 0;
+        d.reservations.reserveQuote = (input) => {
+            if (++attempts < 3) throw new ReservationConflictError();
+            return reserve(input);
+        };
+        await createQuote(d, quoteBody());
+        expect(attempts).toBe(3);
+        expect(ledger.rows.size).toBe(1);
+        expect(rows.length).toBeLessThanOrEqual(128);
+        expect(
+            rows
+                .filter((row) => row.phase === "quote.persist" && row.outcome === "error")
+                .map((row) => row.attempt),
+        ).toEqual([1, 2]);
+        expect(rows.at(-1)).toMatchObject({ phase: "quote.total", outcome: "ok", attempt: 3 });
     });
 });

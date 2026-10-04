@@ -206,6 +206,7 @@ async function runServe(): Promise<void> {
         now: seconds,
         randomId: () => randomUUID(),
         nowMs: Date.now,
+        phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
         reservations,
         receiveQuotes,
         inventory,

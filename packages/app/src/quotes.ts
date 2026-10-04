@@ -71,7 +71,10 @@ export interface LockupBuildRequest {
 }
 
 export interface LockupBuilder {
-    buildUnsigned(req: LockupBuildRequest): Promise<Omit<FundingSnapshot, "batchExpiry">>;
+    buildUnsigned(
+        req: LockupBuildRequest,
+        observe?: QuotePhaseObserver,
+    ): Promise<Omit<FundingSnapshot, "batchExpiry">>;
 }
 
 /** Builds a real unsigned graph with deterministic submission behavior for tests. */
@@ -87,7 +90,10 @@ export class FakeLockupBuilder implements LockupBuilder {
     outpoint: Outpoint = { txid: "aa".repeat(32), vout: 1 };
     failSubmit: Error | null = null;
 
-    async buildUnsigned(req: LockupBuildRequest): Promise<Omit<FundingSnapshot, "batchExpiry">> {
+    async buildUnsigned(
+        req: LockupBuildRequest,
+        _observe?: QuotePhaseObserver,
+    ): Promise<Omit<FundingSnapshot, "batchExpiry">> {
         this.built.push(req);
         this.unsignedTx = buildLockupEnvelope(req, this.config, this.unroll);
         this.unsignedId = parseLockupEnvelope(
@@ -191,8 +197,121 @@ export interface QuoteDeps {
     now(): number;
     nowMs(): number;
     randomId(): string;
+    phaseLogger?: { debug(fields: QuotePhaseFields, message: string): void };
     lockupBuilder: LockupBuilder;
     lockupSubmitter: Pick<LockupSubmitter, "validate"> & Partial<Pick<LockupSubmitter, "submit">>;
+}
+
+const QUOTE_PHASES = [
+    "quote.total",
+    "quote.admission",
+    "quote.initial-guard",
+    "quote.attempt-guard",
+    "quote.sender.first",
+    "quote.inventory.first",
+    "quote.locks.first",
+    "quote.selection.first",
+    "quote.covenant",
+    "quote.builder",
+    "quote.graph.build",
+    "quote.graph.self-parse",
+    "quote.outer-parse",
+    "quote.sender.second",
+    "quote.after-sender-snapshot",
+    "quote.inventory.second",
+    "quote.locks.second",
+    "quote.selection.second",
+    "quote.final-guard",
+    "quote.persist",
+] as const;
+export type QuotePhase = (typeof QUOTE_PHASES)[number];
+export interface QuotePhaseFields {
+    quoteSequence: number;
+    sequence: number;
+    attempt: number;
+    phase: QuotePhase;
+    outcome: "start" | "ok" | "error";
+    elapsedMs: number;
+    sampledOriginalSnapshotAgeMs?: number;
+    snapshotAgeSampleElapsedMs?: number;
+}
+export type QuotePhaseObserver = (phase: QuotePhase, outcome: "start" | "ok") => void;
+interface QuoteTrace {
+    observe: QuotePhaseObserver;
+    nextAttempt(): void;
+    sample(checkedAt: number, nowMs: number): void;
+    failedAttempt(): void;
+    finish(outcome: "ok" | "error"): void;
+}
+let quotePhaseSequence = 0;
+function createQuoteTrace(logger: QuoteDeps["phaseLogger"]): QuoteTrace | undefined {
+    if (!logger || quotePhaseSequence === Number.MAX_SAFE_INTEGER) return undefined;
+    const quoteSequence = ++quotePhaseSequence;
+    const started = performance.now();
+    const active = new Map<QuotePhase, number>();
+    let sequence = 0;
+    let attempt = 0;
+    let originalCheckedAt: number | undefined;
+    let sampledOriginalSnapshotAgeMs: number | undefined;
+    let snapshotAgeSampleElapsedMs: number | undefined;
+    let finished = false;
+    const emit = (phase: QuotePhase, outcome: QuotePhaseFields["outcome"], elapsedMs: number) => {
+        if (sequence >= 128 || !Number.isFinite(elapsedMs)) return;
+        sequence++;
+        try {
+            logger.debug(
+                {
+                    quoteSequence,
+                    sequence,
+                    attempt,
+                    phase,
+                    outcome,
+                    elapsedMs,
+                    ...(sampledOriginalSnapshotAgeMs !== undefined
+                        ? {
+                              sampledOriginalSnapshotAgeMs,
+                              snapshotAgeSampleElapsedMs,
+                          }
+                        : {}),
+                },
+                "quote phase",
+            );
+        } catch {}
+    };
+    const close = (phase: QuotePhase, outcome: "ok" | "error") => {
+        const at = active.get(phase);
+        if (at === undefined) return;
+        active.delete(phase);
+        emit(phase, outcome, performance.now() - at);
+    };
+    return {
+        observe: (phase, outcome) => {
+            if (finished || !QUOTE_PHASES.includes(phase)) return;
+            if (outcome === "start") {
+                active.set(phase, performance.now());
+                emit(phase, "start", 0);
+            } else if (outcome === "ok") close(phase, "ok");
+        },
+        nextAttempt: () => {
+            attempt++;
+        },
+        sample: (checkedAt, nowMs) => {
+            if (originalCheckedAt === undefined && Number.isFinite(checkedAt))
+                originalCheckedAt = checkedAt;
+            const age = originalCheckedAt === undefined ? NaN : nowMs - originalCheckedAt;
+            if (!Number.isFinite(age) || Math.abs(age) > Number.MAX_SAFE_INTEGER) return;
+            sampledOriginalSnapshotAgeMs = age;
+            snapshotAgeSampleElapsedMs = performance.now() - started;
+        },
+        failedAttempt: () => {
+            for (const phase of [...active.keys()].reverse())
+                if (phase !== "quote.total") close(phase, "error");
+        },
+        finish: (outcome) => {
+            for (const phase of [...active.keys()].reverse()) close(phase, outcome);
+            finished = true;
+        },
+    };
 }
 
 const badRequest = (message: string) => new ServiceError(ErrorCode.InvalidRequest, 400, message);
@@ -344,16 +463,41 @@ export async function createQuote(
     body: unknown,
     assertReady?: () => void,
 ): Promise<QuoteResponse> {
-    return withQuoteAdmission(deps, assertReady, (admitted) =>
-        createAdmittedQuote(admitted, () => createReservedQuote(admitted, body)),
-    );
+    const trace = createQuoteTrace(deps.phaseLogger);
+    trace?.observe("quote.total", "start");
+    trace?.observe("quote.admission", "start");
+    try {
+        const result = withQuoteAdmission(deps, assertReady, (admitted) => {
+            trace?.observe("quote.admission", "ok");
+            return createAdmittedQuote(
+                admitted,
+                () => createReservedQuote(admitted, body, trace),
+                trace,
+            );
+        });
+        if (trace)
+            void result.then(
+                () => trace.finish("ok"),
+                () => trace.finish("error"),
+            );
+        return result;
+    } catch (error) {
+        trace?.finish("error");
+        throw error;
+    }
 }
 
 export async function createAdmittedQuote<T>(
     deps: Omit<QuoteDeps, "lockupBuilder" | "lockupSubmitter">,
     reserve: () => Promise<T>,
+    trace?: QuoteTrace,
 ): Promise<T> {
-    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+    trace?.observe("quote.initial-guard", "start");
+    const initialSafety = deps.runtime.safety();
+    const initialNowMs = deps.nowMs();
+    trace?.sample(initialSafety.checkedAt, initialNowMs);
+    assertFreshSafety(initialSafety, initialNowMs, deps.config.reconcileIntervalMs);
+    trace?.observe("quote.initial-guard", "ok");
     deps.reservations.expireQuotes(deps.now());
     deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes?.expireQuotes(deps.now());
@@ -361,6 +505,7 @@ export async function createAdmittedQuote<T>(
         try {
             return await reserve();
         } catch (error) {
+            trace?.failedAttempt();
             if (!(error instanceof ReservationConflictError)) throw error;
             if (attempt === 2)
                 throw new ServiceError(
@@ -374,11 +519,19 @@ export async function createAdmittedQuote<T>(
     throw new Error("unreachable");
 }
 
-async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<QuoteResponse> {
+async function createReservedQuote(
+    deps: QuoteDeps,
+    body: unknown,
+    trace?: QuoteTrace,
+): Promise<QuoteResponse> {
+    trace?.nextAttempt();
+    trace?.observe("quote.attempt-guard", "start");
     assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+    trace?.observe("quote.attempt-guard", "ok");
     const req = decodeBody(body);
     const { policy, revision } = deps.policy.getSnapshot();
     const { config } = deps;
+    trace?.observe("quote.sender.first", "start");
     await verifySenderFunding(
         req.senderInputs,
         req.senderKey,
@@ -387,6 +540,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         deps.runtime.safety(),
         config,
     );
+    trace?.observe("quote.sender.first", "ok");
 
     const exposure = computeExposure(
         ["locking", "locked", "recovering"].flatMap((state) =>
@@ -417,8 +571,12 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
     try {
+        trace?.observe("quote.inventory.first", "start");
         spendable = await deps.inventory.getSpendableVtxos();
+        trace?.observe("quote.inventory.first", "ok");
+        trace?.observe("quote.locks.first", "start");
         intentLocks = await deps.inventory.getLockedVtxoOutpoints();
+        trace?.observe("quote.locks.first", "ok");
     } catch (cause) {
         throw new ServiceError(
             "runtime_unsafe",
@@ -427,6 +585,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
             { cause },
         );
     }
+    trace?.observe("quote.selection.first", "start");
     const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
@@ -447,6 +606,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         minReserveSats: config.operatorMinReserveSats,
         dustSats: config.dust,
     };
+    trace?.sample(selectionOptions.safety.checkedAt, selectionOptions.nowMs);
     const selection = structuredClone(selectOperatorFunding(selectionOptions));
     const expiry = { ...selection.batchExpiry };
     for (const input of req.senderInputs) {
@@ -481,7 +641,10 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         claimMode: decision.claim,
         ...(req.assetId ? { assetId: req.assetId } : {}),
     };
+    trace?.observe("quote.selection.first", "ok");
+    trace?.observe("quote.covenant", "start");
     const covenant = deriveCovenant(config, params);
+    trace?.observe("quote.covenant", "ok");
 
     const id = deps.randomId();
     const buildRequest: LockupBuildRequest = {
@@ -495,7 +658,12 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),
     };
-    const funding = await deps.lockupBuilder.buildUnsigned(structuredClone(buildRequest));
+    trace?.observe("quote.builder", "start");
+    const funding = await deps.lockupBuilder.buildUnsigned(
+        structuredClone(buildRequest),
+        trace?.observe,
+    );
+    trace?.observe("quote.builder", "ok");
 
     const selected = new Set(selection.inputs.map(({ txid, vout }) => `${txid}:${vout}`));
     if (
@@ -520,12 +688,14 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
     if (assetUnits !== undefined && assetUnits <= 0n)
         throw new LockupShapeError("builder asset quantity must be positive");
 
+    trace?.observe("quote.outer-parse", "start");
     const envelope = parseLockupEnvelope(
         funding.unsignedLockupTx,
         buildRequest,
         config,
         deps.getServerUnroll(),
     );
+    trace?.observe("quote.outer-parse", "ok");
     if (envelope.unsignedTxId !== funding.unsignedLockupId)
         throw new ServiceError(
             "funding_snapshot_invalid",
@@ -557,6 +727,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         ...(params.assetId ? { assetId: params.assetId, assetUnits } : {}),
     };
     validateFundingSnapshot(advance);
+    trace?.observe("quote.sender.second", "start");
     await verifySenderFunding(
         req.senderInputs,
         req.senderKey,
@@ -565,13 +736,18 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         deps.runtime.safety(),
         config,
     );
+    trace?.observe("quote.sender.second", "ok");
+    trace?.observe("quote.after-sender-snapshot", "start");
     let latestSafety = deps.runtime.safety();
+    trace?.observe("quote.after-sender-snapshot", "ok");
     const { spendable: currentSpendable, locks: currentLocks } = await rereadInventory(
         deps.inventory,
         intentLocks,
+        trace?.observe,
     );
+    trace?.observe("quote.selection.second", "start");
     latestSafety = deps.runtime.safety();
-    const latest = selectOperatorFunding({
+    const latestSelectionOptions = {
         ...selectionOptions,
         spendable: currentSpendable,
         reserved: [
@@ -580,7 +756,9 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
-    });
+    };
+    trace?.sample(latestSelectionOptions.safety.checkedAt, latestSelectionOptions.nowMs);
+    const latest = selectOperatorFunding(latestSelectionOptions);
     for (const input of req.senderInputs) {
         const clock =
             input.expiry.kind === "height" ? latestSafety.chainHeight! : latestSafety.chainTime!;
@@ -616,7 +794,14 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         locktime <= latestClock
     )
         throw new ServiceError("runtime_unsafe", 503, "funding safety changed during construction");
-    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), deps.config.reconcileIntervalMs);
+    trace?.observe("quote.selection.second", "ok");
+    trace?.observe("quote.final-guard", "start");
+    const finalSafety = deps.runtime.safety();
+    const finalNowMs = deps.nowMs();
+    trace?.sample(finalSafety.checkedAt, finalNowMs);
+    assertFreshSafety(finalSafety, finalNowMs, deps.config.reconcileIntervalMs);
+    trace?.observe("quote.final-guard", "ok");
+    trace?.observe("quote.persist", "start");
     deps.reservations.reserveQuote({
         advance,
         expectedPolicyRevision: revision,
@@ -629,6 +814,7 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
         },
         expectedReservedOutpoints: reserved,
     });
+    trace?.observe("quote.persist", "ok");
 
     return {
         transferId: id,
@@ -649,10 +835,20 @@ async function createReservedQuote(deps: QuoteDeps, body: unknown): Promise<Quot
 export async function rereadInventory(
     inventory: QuoteDeps["inventory"],
     intentLocks: Outpoint[],
+    observe?: QuotePhaseObserver,
 ): Promise<{ spendable: ExtendedVirtualCoin[]; locks: Outpoint[] }> {
+    const mark = (phase: QuotePhase, outcome: "start" | "ok") => {
+        try {
+            observe?.(phase, outcome);
+        } catch {}
+    };
     try {
+        mark("quote.inventory.second", "start");
         const spendable = await inventory.getSpendableVtxos();
+        mark("quote.inventory.second", "ok");
+        mark("quote.locks.second", "start");
         const locks = await inventory.getLockedVtxoOutpoints();
+        mark("quote.locks.second", "ok");
         const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
         if (
             locks.length !== before.size ||

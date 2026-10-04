@@ -16,7 +16,7 @@ import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { fundingInputToWire, type FundingInputValue } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "../config.js";
-import type { LockupBuilder, LockupBuildRequest } from "../quotes.js";
+import type { LockupBuilder, LockupBuildRequest, QuotePhaseObserver } from "../quotes.js";
 import { normalizeExpiry } from "./providers.js";
 import { LockupShapeError, assertDistinctScripts } from "../lockup.js";
 import {
@@ -374,10 +374,22 @@ export class ProductionLockupBuilder implements LockupBuilder {
         private readonly config: RuntimeConfig,
         private readonly getUnroll: () => CSVMultisigTapscript.Type,
     ) {}
-    async buildUnsigned(req: LockupBuildRequest) {
+    async buildUnsigned(req: LockupBuildRequest, observe?: QuotePhaseObserver) {
+        const mark = (
+            phase: "quote.graph.build" | "quote.graph.self-parse",
+            outcome: "start" | "ok",
+        ) => {
+            try {
+                observe?.(phase, outcome);
+            } catch {}
+        };
         const unroll = this.getUnroll();
+        mark("quote.graph.build", "start");
         const unsignedLockupTx = buildLockupEnvelope(req, this.config, unroll);
+        mark("quote.graph.build", "ok");
+        mark("quote.graph.self-parse", "start");
         const parsed = parseLockupEnvelope(unsignedLockupTx, req, this.config, unroll);
+        mark("quote.graph.self-parse", "ok");
         return {
             unsignedLockupTx,
             unsignedLockupId: parsed.unsignedTxId,
