@@ -97,6 +97,7 @@ async function runServe(): Promise<void> {
         swapFills,
         receiveQuotes,
         jobs,
+        phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
     });
     const boarding = createBoarding(runtime);
     const lockupSubmitter = productionLockupSubmitter(
@@ -119,10 +120,7 @@ async function runServe(): Promise<void> {
         indexer: runtime.providers.indexerProvider,
         config,
         now: seconds,
-        tip: async () => {
-            if (!runtime.wallet) throw new Error("on-chain provider unavailable");
-            return runtime.wallet.onchainProvider.getChainTip();
-        },
+        tip: runtime.getChainTip,
         arkProvider: runtime.providers.arkProvider,
         onPrompt: () => timed("watcher.reconcile", () => reconciler.tick()),
     });

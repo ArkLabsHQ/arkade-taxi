@@ -1,12 +1,111 @@
 import { createServer, type IncomingMessage } from "node:http";
 import { once } from "node:events";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaxiClient, TaxiError, verifyQuote } from "@arkade-taxi/client";
 import type { Identity } from "@arkade-os/sdk";
 import { args, senderIdentity } from "../../packages/client/test/fixtures.js";
 import { preEffectRequest, submitWithReadiness } from "../../e2e/admission.js";
 
 const ready = { status: "ok", paused: false, blockers: [] };
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("pre-effect failure diagnostics", () => {
+    it.each(["attempt", "readiness-headers", "readiness-json"] as const)(
+        "reports %s without replacing the original failure",
+        async (phase) => {
+            const failure = new DOMException("private timeout detail", "TimeoutError");
+            const observer = vi.fn();
+            const json = vi.fn(() => Promise.reject(failure));
+            const fetcher = vi.fn(() =>
+                phase === "readiness-headers" ? Promise.reject(failure) : Promise.resolve({ json }),
+            );
+            vi.stubGlobal("fetch", fetcher);
+            const attempt = vi.fn(async () => {
+                throw phase === "attempt"
+                    ? failure
+                    : new TaxiError("not_ready", "runtime_checking");
+            });
+            await expect(
+                preEffectRequest(attempt, {
+                    readyUrl: "http://127.0.0.1/ready",
+                    expiresAt: Date.now() / 1000 + 5,
+                    onFailure: observer,
+                }),
+            ).rejects.toBe(failure);
+            expect(observer).toHaveBeenCalledExactlyOnceWith(phase);
+            expect(attempt).toHaveBeenCalledTimes(1);
+            expect(fetcher).toHaveBeenCalledTimes(phase === "attempt" ? 0 : 1);
+            expect(json).toHaveBeenCalledTimes(phase === "readiness-json" ? 1 : 0);
+        },
+    );
+
+    it.each(["attempt", "readiness-headers", "readiness-json"] as const)(
+        "contains a throwing %s observer",
+        async (phase) => {
+            const failure = new Error("original failure");
+            vi.stubGlobal("fetch", () =>
+                phase === "readiness-headers"
+                    ? Promise.reject(failure)
+                    : Promise.resolve({ json: () => Promise.reject(failure) }),
+            );
+            const observer = vi.fn(() => {
+                throw new Error("diagnostics unavailable");
+            });
+            await expect(
+                preEffectRequest(
+                    async () => {
+                        throw phase === "attempt"
+                            ? failure
+                            : new TaxiError("not_ready", "runtime_stale");
+                    },
+                    {
+                        readyUrl: "http://127.0.0.1/ready",
+                        expiresAt: Date.now() / 1000 + 5,
+                        onFailure: observer,
+                    },
+                ),
+            ).rejects.toBe(failure);
+            expect(observer).toHaveBeenCalledExactlyOnceWith(phase);
+        },
+    );
+
+    it("records only the terminal attempt refusal", async () => {
+        vi.stubGlobal("fetch", () => Promise.resolve({ status: 200, json: async () => ready }));
+        const observer = vi.fn();
+        const failure = new TaxiError("not_ready", "runtime_checking");
+        const attempt = vi.fn(async () => {
+            throw failure;
+        });
+        await expect(
+            preEffectRequest(attempt, {
+                readyUrl: "http://127.0.0.1/ready",
+                expiresAt: Date.now() / 1000 + 5,
+                onFailure: observer,
+            }),
+        ).rejects.toMatchObject({ cause: failure });
+        expect(attempt).toHaveBeenCalledTimes(3);
+        expect(observer).toHaveBeenCalledExactlyOnceWith("attempt");
+    });
+
+    it("does not diagnose a transient refusal that reaches one successful effect", async () => {
+        vi.stubGlobal("fetch", () => Promise.resolve({ status: 200, json: async () => ready }));
+        const observer = vi.fn();
+        const attempt = vi
+            .fn()
+            .mockRejectedValueOnce(new TaxiError("not_ready", "proceeds_collecting"))
+            .mockResolvedValueOnce("one-effect");
+        await expect(
+            preEffectRequest(attempt, {
+                readyUrl: "http://127.0.0.1/ready",
+                expiresAt: Date.now() / 1000 + 5,
+                onFailure: observer,
+            }),
+        ).resolves.toBe("one-effect");
+        expect(attempt).toHaveBeenCalledTimes(2);
+        expect(observer).not.toHaveBeenCalled();
+    });
+});
 
 it.each(["runtime_checking", "runtime_stale"])(
     "retries only the exact pre-effect runtime_unsafe %s refusal",

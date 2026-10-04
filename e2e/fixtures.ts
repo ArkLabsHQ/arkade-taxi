@@ -23,7 +23,7 @@ import { hexToBytes, type FundingInputValue } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
 import { createActorWallets, disposeActorWallets, expiryOf } from "../scripts/e2e-wallets.mjs";
 import { routeProviderFetch } from "../scripts/lib/harness.mjs";
-import { preEffectRequest, submitWithReadiness } from "./admission.js";
+import { preEffectRequest, submitWithReadiness, type AdmissionWindow } from "./admission.js";
 import {
     assertScenarioBoundary,
     ownCleanup,
@@ -33,6 +33,22 @@ import {
 
 export const artifactPath = (name: string) =>
     join(process.env.TAXI_E2E_ARTIFACTS || "e2e-artifacts", name);
+
+const admissionFailure =
+    (endpoint: "/v1/transfers" | "/v1/transfers/:id/lockup") =>
+    (phase: Parameters<NonNullable<AdmissionWindow["onFailure"]>>[0]) => {
+        try {
+            appendFileSync(
+                artifactPath("boundary-diagnostics.jsonl"),
+                `${JSON.stringify({
+                    at: Date.now(),
+                    method: phase === "attempt" ? "POST" : "GET",
+                    endpoint: phase === "attempt" ? endpoint : "/ready",
+                    phase,
+                })}\n`,
+            );
+        } catch {}
+    };
 
 export async function control(action: string, rule?: unknown) {
     const response = await fetch(required("TAXI_E2E_CONTROL_URL"), {
@@ -421,6 +437,7 @@ export async function quoteFor(
     const quote = await preEffectRequest(() => live.client.requestQuote(request), {
         readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
         expiresAt: Date.now() / 1000 + 10,
+        onFailure: admissionFailure("/v1/transfers"),
     }).catch(async (error) => {
         await boundary("quote-refusal").catch(() => undefined);
         throw error;
@@ -465,7 +482,10 @@ export async function lock(live: Live, offered: Awaited<ReturnType<typeof quoteF
         live.client,
         offered.verified,
         live.actors.sender.identity,
-        { readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready` },
+        {
+            readyUrl: `${required("TAXI_E2E_BASE_URL")}/ready`,
+            onFailure: admissionFailure("/v1/transfers/:id/lockup"),
+        },
     ).catch(async (error) => {
         await boundary("lockup-refusal").catch(() => undefined);
         throw error;

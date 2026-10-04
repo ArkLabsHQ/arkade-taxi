@@ -53,6 +53,7 @@ vi.mock("../src/arkade/operatorWallet.js", async (original) => {
                 ...options,
                 now: () => h.now,
                 providers: h.providers,
+                onchainProvider: h.wallet.onchainProvider,
                 walletFactory: async () => {
                     if (h.failure === "key") throw new Error("operator key unavailable");
                     return h.wallet;

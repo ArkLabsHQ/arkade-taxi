@@ -649,6 +649,84 @@ describe("proceeds restart reconciliation", () => {
 });
 
 describe("durable proceeds collector", () => {
+    it.each([false, true])(
+        "keeps settlement counts, blockers and cleanup with a throwing logger: %s",
+        async (throws) => {
+            const s = setup();
+            const debug = vi.fn(
+                (
+                    _fields: {
+                        phase: string;
+                        elapsedMs: number;
+                        outcome: "start" | "ok" | "error";
+                    },
+                    _message: string,
+                ) => {
+                    if (throws) throw new Error("diagnostics unavailable");
+                },
+            );
+            s.deps.phaseLogger = { debug };
+            const recovery = vi.spyOn(s.deps.runtime, "assertRecovery");
+            const collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            expect(s.settle).toHaveBeenCalledTimes(1);
+            expect(collector.status().blocker).toBe("proceeds_output_pending");
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+            s.finish();
+            await collector.tick();
+            expect(recovery).toHaveBeenCalledTimes(2);
+            expect(s.settle).toHaveBeenCalledTimes(1);
+            expect(s.jobs.active()).toBeUndefined();
+            expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
+            expect(collector.status().blocker).toBeNull();
+            expect(debug).toHaveBeenCalledTimes(4);
+            for (const [fields, message] of debug.mock.calls) {
+                expect(Object.keys(fields).sort()).toEqual(["elapsedMs", "outcome", "phase"]);
+                expect(fields.phase).toBe("proceeds.assertRecovery");
+                expect(fields.elapsedMs).toBeGreaterThanOrEqual(0);
+                expect(["start", "ok"]).toContain(fields.outcome);
+                expect(message).toBe("operational phase");
+            }
+            expect(s.jobs.claim("job", "another-worker", 100, 60_100)).toBe(false);
+            expect(collector.status().running).toBe(false);
+        },
+    );
+
+    it.each([false, true])(
+        "observes a pre-job provider rejection before the generic blocker with a throwing logger: %s",
+        async (throws) => {
+            const s = setup();
+            s.jobs.complete("job", "cc".repeat(32));
+            const failure = new TypeError("private provider detail");
+            const events: { phase: string; elapsedMs: number; outcome: string }[] = [];
+            s.deps.phaseLogger = {
+                debug(fields) {
+                    events.push(fields);
+                    if (throws) throw new Error("diagnostics unavailable");
+                },
+            };
+            const tip = vi
+                .spyOn(s.deps.runtime.wallet!.onchainProvider, "getChainTip")
+                .mockRejectedValue(failure);
+            await expect(discoverProceeds(s.deps, [receipt])).rejects.toBe(failure);
+            events.length = 0;
+            const collector = createProceedsCollector(s.deps);
+            await expect(collector.tick()).resolves.toBeUndefined();
+            expect(tip).toHaveBeenCalledTimes(2);
+            expect(
+                events.filter((event) => event.outcome === "error").map((event) => event.phase),
+            ).toEqual(["proceeds.discovery.chainTip", "proceeds.discovery"]);
+            expect(events.every((fields) => Object.keys(fields).length === 3)).toBe(true);
+            expect(collector.status()).toMatchObject({
+                blocker: "proceeds_collection_failed",
+                jobId: null,
+                state: "idle",
+            });
+            expect(s.settle).not.toHaveBeenCalled();
+            expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
+        },
+    );
+
     it("fences a lease takeover between asynchronous validation and synchronous network entry", async () => {
         const s = setup();
         s.beforeEntry(() => {

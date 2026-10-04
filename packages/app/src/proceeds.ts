@@ -26,7 +26,11 @@ import type {
     SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
-import { proofInputs, type createOperatorRuntime } from "./arkade/operatorWallet.js";
+import {
+    proofInputs,
+    type createOperatorRuntime,
+    type OperatorRuntimeOptions,
+} from "./arkade/operatorWallet.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { validatePersistedLockupGraph } from "./arkade/submit.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
@@ -381,14 +385,47 @@ interface Deps {
     receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
+    phaseLogger?: OperatorRuntimeOptions["phaseLogger"];
 }
+
+const phaseTimer =
+    (logger: Deps["phaseLogger"]) =>
+    <T>(phase: string, work: () => T): T => {
+        if (!logger) return work();
+        const started = performance.now();
+        const emit = (outcome: "start" | "ok" | "error") => {
+            try {
+                logger.debug(
+                    { phase, elapsedMs: performance.now() - started, outcome },
+                    "operational phase",
+                );
+            } catch {}
+        };
+        emit("start");
+        try {
+            const result = work();
+            if (result instanceof Promise)
+                void result.then(
+                    () => emit("ok"),
+                    () => emit("error"),
+                );
+            else emit("ok");
+            return result;
+        } catch (error) {
+            emit("error");
+            throw error;
+        }
+    };
 
 export async function discoverProceeds(
     deps: Deps,
     coins: ExtendedVirtualCoin[],
 ): Promise<ExtendedVirtualCoin[]> {
     const { config, runtime, advances } = deps;
-    const tip = await runtime.wallet!.onchainProvider.getChainTip();
+    const timed = phaseTimer(deps.phaseLogger);
+    const tip = await timed("proceeds.discovery.chainTip", () =>
+        runtime.wallet!.onchainProvider.getChainTip(),
+    );
     const clock = { height: tip.height, timestamp: new Date(tip.time * 1000) };
     const candidates = new Map(
         coins
@@ -401,7 +438,9 @@ export async function discoverProceeds(
     const check = async (point: Outpoint, amount: bigint, assets: ReturnType<typeof holdings>) => {
         const candidate = candidates.get(key(point));
         if (!candidate) return;
-        const result = await indexer.getVtxos({ outpoints: [point] });
+        const result = await timed("proceeds.discovery.receipt", () =>
+            indexer.getVtxos({ outpoints: [point] }),
+        );
         if (result.vtxos.length !== 1) fail("proceeds_receipt_missing");
         const observed = result.vtxos[0]!;
         if (key(observed) !== key(point) || observed.isSpent) return;
@@ -449,13 +488,12 @@ export async function discoverProceeds(
             ),
         );
         if (tx.id !== advance.arkTxid) fail("proceeds_lockup_mismatch");
-        const covenant = await indexer.getVtxos({ outpoints: [advance.outpoint] });
+        const covenant = await timed("proceeds.discovery.covenant", () =>
+            indexer.getVtxos({ outpoints: [advance.outpoint!] }),
+        );
         if (covenant.vtxos.length !== 1) fail("proceeds_covenant_missing");
-        const spend = await classifyObservedSpend(
-            advance,
-            covenant.vtxos[0]!,
-            { config, indexer },
-            tip,
+        const spend = await timed("proceeds.discovery.classifySpend", () =>
+            classifyObservedSpend(advance, covenant.vtxos[0]!, { config, indexer }, tip),
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
@@ -500,6 +538,7 @@ export async function discoverProceeds(
 
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
+    const timed = phaseTimer(deps.phaseLogger);
     const taxiLocksOf = () =>
         unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
@@ -543,12 +582,14 @@ export function createProceedsCollector(deps: Deps) {
         blocker = null;
     };
     const run = async () => {
-        await runtime.assertRecovery();
+        await timed("proceeds.assertRecovery", () => runtime.assertRecovery());
         let job = jobs.active();
         if (!job) {
             const wallet = runtime.wallet!;
-            const coins = await wallet.getSpendableVtxos({ withRecoverable: true });
-            const receipts = await discoverProceeds(deps, coins);
+            const coins = await timed("proceeds.inventory", () =>
+                wallet.getSpendableVtxos({ withRecoverable: true }),
+            );
+            const receipts = await timed("proceeds.discovery", () => discoverProceeds(deps, coins));
             if (!receipts.length) {
                 blocker = null;
                 return;
@@ -556,22 +597,30 @@ export function createProceedsCollector(deps: Deps) {
             const taxiLocks = taxiLocksOf();
             const locks = [
                 ...taxiLocks,
-                ...(await runtime.storage.intentRepository.getLockedVtxoOutpoints()),
+                ...(await timed("proceeds.intentLocks", () =>
+                    runtime.storage.intentRepository.getLockedVtxoOutpoints(),
+                )),
             ];
-            const info = await wallet.arkProvider.getInfo();
-            const tip = await wallet.onchainProvider.getChainTip();
-            const plan = planProceeds(
-                receipts,
-                coins,
-                locks,
-                config,
-                info.fees?.intentFee ?? {},
-                await wallet.getAddress(),
-                { height: tip.height, timestamp: new Date(tip.time * 1000) },
-                info.vtxoMaxAmount,
+            const info = await timed("proceeds.providerInfo", () => wallet.arkProvider.getInfo());
+            const tip = await timed("proceeds.chainTip", () =>
+                wallet.onchainProvider.getChainTip(),
+            );
+            const fees = info.fees?.intentFee ?? {};
+            const address = await timed("proceeds.address", () => wallet.getAddress());
+            const plan = timed("proceeds.plan", () =>
+                planProceeds(
+                    receipts,
+                    coins,
+                    locks,
+                    config,
+                    fees,
+                    address,
+                    { height: tip.height, timestamp: new Date(tip.time * 1000) },
+                    info.vtxoMaxAmount,
+                ),
             );
             if (stopped) return;
-            jobs.create(randomUUID(), plan, now(), taxiLocks);
+            timed("proceeds.createJob", () => jobs.create(randomUUID(), plan, now(), taxiLocks));
             job = jobs.active()!;
         }
         if (!jobs.claim(job.id, owner, now(), now() + leaseMs)) {

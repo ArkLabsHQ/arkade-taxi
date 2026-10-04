@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openDatabase, type Database } from "@arkade-taxi/db";
+import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import {
     Wallet,
     ArkAddress,
@@ -19,6 +19,7 @@ import {
     operatorKey,
     providerEmulatorKey,
     serverKey,
+    policy,
 } from "../fixtures.js";
 import { arkInfo } from "./fixtures.js";
 import {
@@ -26,6 +27,7 @@ import {
     type OperatorRuntimeOptions,
 } from "../../src/arkade/operatorWallet.js";
 import { resolveRuntimeConfig } from "../../src/config.js";
+import { createSpendWatcher } from "../../src/watcher.js";
 
 const proofOf = (inputs: { txid: string; vout: number }[]) =>
     ({ proof: intentProof(inputs) }) as never;
@@ -82,6 +84,11 @@ function setup({
     let startBackground!: () => void;
     const backgroundStart = new Promise<void>((resolve) => (startBackground = resolve));
     let backgroundPoll: Promise<string> | undefined;
+    let creationGate: Promise<void> | undefined;
+    let creationEntered: (() => void) | undefined;
+    const onchainProvider = {
+        getChainTip: async () => ({ height, hash: "aa".repeat(32), time }),
+    } as WalletConfig["onchainProvider"];
     type FakeWallet = ReturnType<typeof makeWallet>;
     // What the first wallet's poll does: board a deposit plus whatever renewal selects.
     let backgroundWork = async (self: FakeWallet): Promise<string> =>
@@ -124,7 +131,7 @@ function setup({
                 getSyncState: () => ({ mode: online ? "online" : "degraded", lastSyncedAt: now }),
             }),
             getProviderConnectionState: () => ({ mode: online ? "online" : "degraded" }),
-            onchainProvider: { getChainTip: async () => ({ height, hash: "aa".repeat(32), time }) },
+            onchainProvider: cfg.onchainProvider!,
             dispose: async () => {
                 disposed++;
             },
@@ -135,40 +142,49 @@ function setup({
         };
         return self;
     };
-    const runtime = createOperatorRuntime(
-        config({ addressHrp: "tark", ...(reconcileIntervalMs && { reconcileIntervalMs }) }),
-        db,
-        {
-            phaseLogger,
-            now: () => now,
-            providers: {
-                arkProvider: {
-                    getInfo: async () => {
-                        providerReads++;
-                        return info;
-                    },
-                },
-                emulatorProvider: {
-                    getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
+    const cfg = config({ addressHrp: "tark", ...(reconcileIntervalMs && { reconcileIntervalMs }) });
+    const runtime = createOperatorRuntime(cfg, db, {
+        phaseLogger,
+        now: () => now,
+        providers: {
+            arkProvider: {
+                getInfo: async () => {
+                    providerReads++;
+                    return info;
                 },
             },
-            walletFactory: async (cfg: WalletConfig) => {
-                walletConfig = cfg;
-                created++;
-                return makeWallet(cfg) as unknown as Wallet;
+            emulatorProvider: {
+                getInfo: async () => ({ signerPubkey: bytesToHex(providerEmulatorKey) }),
             },
-            reservedOutpoints: () => {
-                if (reservationReadFails) throw new Error("reservation read failed");
-                return taxiReserved;
-            },
-            // The e2e suite is not typechecked: a caller there could leave it out.
-            heldOutpoints: withoutHeld ? (undefined as never) : () => held,
         },
-    );
+        walletFactory: async (cfg: WalletConfig) => {
+            walletConfig = cfg;
+            created++;
+            creationEntered?.();
+            await creationGate;
+            return makeWallet(cfg) as unknown as Wallet;
+        },
+        onchainProvider,
+        reservedOutpoints: () => {
+            if (reservationReadFails) throw new Error("reservation read failed");
+            return taxiReserved;
+        },
+        // The e2e suite is not typechecked: a caller there could leave it out.
+        heldOutpoints: withoutHeld ? (undefined as never) : () => held,
+    });
     return {
         runtime,
         db,
+        config: cfg,
         events,
+        holdCreation: () => {
+            let entered!: () => void;
+            let release!: () => void;
+            const pending = new Promise<void>((resolve) => (entered = resolve));
+            creationGate = new Promise<void>((resolve) => (release = resolve));
+            creationEntered = entered;
+            return { entered: pending, release };
+        },
         get walletConfig() {
             return walletConfig;
         },
@@ -240,6 +256,58 @@ function setup({
 }
 
 describe("persistent operator runtime safety", () => {
+    it("keeps canonical tip observation independent of a retired wallet while preserving a real tip failure pause", async () => {
+        const s = setup();
+        await s.runtime.refresh();
+        const onchainProvider = s.walletConfig.onchainProvider!;
+        const getChainTip = vi.spyOn(onchainProvider, "getChainTip");
+        const terms = new PolicyRepository(s.db);
+        terms.update(policy(), "test");
+        const watcher = createSpendWatcher({
+            advances: new AdvanceRepository(s.db),
+            policy: terms,
+            indexer: s.runtime.providers.indexerProvider,
+            config: s.config,
+            now: () => 1,
+            tip: s.runtime.getChainTip,
+        });
+        const creation = s.holdCreation();
+        s.setInfo(arkInfo({ digest: "changed" }));
+        const refresh = s.runtime.refresh();
+        try {
+            await creation.entered;
+            expect(s.runtime.wallet).toBeUndefined();
+            expect(s.counts()).toEqual({ created: 2, disposed: 1 });
+            expect(s.walletConfig.onchainProvider).toBe(onchainProvider);
+            expect(s.runtime.safety().blockers).toContain("runtime_checking");
+            await watcher.catchUp();
+            expect(terms.get().paused).toBe(false);
+            expect(watcher.status().blockers).toEqual([]);
+            expect(getChainTip).toHaveBeenCalledTimes(1);
+
+            getChainTip.mockRejectedValueOnce(new Error("Esplora unavailable"));
+            await watcher.catchUp();
+            expect(watcher.status().blockers).toContainEqual({
+                code: "canonical_tip_unavailable",
+                detail: "canonical chain tip hash, height, and time are unavailable",
+            });
+            expect(terms.get().paused).toBe(true);
+            await watcher.catchUp();
+            expect(watcher.status().blockers).toEqual([]);
+            expect(terms.get().paused).toBe(true);
+            expect(s.runtime.wallet).toBeUndefined();
+            s.runtime.stop();
+            await watcher.catchUp();
+            expect(watcher.status().blockers).toEqual([]);
+            expect(terms.get().paused).toBe(true);
+        } finally {
+            creation.release();
+            await refresh;
+            await watcher.stop();
+            await s.runtime.dispose();
+        }
+    });
+
     it("records a pending runtime wait without changing parallel checks or publishing their values", async () => {
         const debug = vi.fn();
         const s = setup({ phaseLogger: { debug } });

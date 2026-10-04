@@ -13,6 +13,7 @@ export interface AdmissionWindow {
     expiresAt: number;
     maxAttempts?: number;
     now?: () => number;
+    onFailure?: (phase: "attempt" | "readiness-headers" | "readiness-json") => void;
 }
 
 export async function preEffectRequest<T>(
@@ -21,6 +22,24 @@ export async function preEffectRequest<T>(
     unchanged: () => Promise<void> = async () => {},
 ): Promise<T> {
     const now = window.now ?? Date.now;
+    const failed = (phase: Parameters<NonNullable<AdmissionWindow["onFailure"]>>[0]) => {
+        try {
+            window.onFailure?.(phase);
+        } catch {}
+    };
+    const observed = <T>(
+        phase: Parameters<NonNullable<AdmissionWindow["onFailure"]>>[0],
+        work: () => Promise<T>,
+    ): Promise<T> => {
+        try {
+            const result = work();
+            if (window.onFailure) void result.then(undefined, () => failed(phase));
+            return result;
+        } catch (error) {
+            failed(phase);
+            throw error;
+        }
+    };
     const limit = window.maxAttempts ?? 3;
     if (!Number.isInteger(limit) || limit < 1 || limit > 3)
         throw new Error("invalid pre-effect attempt limit");
@@ -42,16 +61,24 @@ export async function preEffectRequest<T>(
                     (error.code === "runtime_unsafe" &&
                         ["runtime_checking", "runtime_stale"].includes(error.message))
                 )
-            )
+            ) {
+                failed("attempt");
                 throw error;
-            if (index + 1 === limit)
+            }
+            if (index + 1 === limit) {
+                failed("attempt");
                 throw new Error("pre-effect request exhausted its attempt limit", { cause: error });
+            }
         }
         while (true) {
-            const response = await fetch(window.readyUrl, {
-                signal: AbortSignal.timeout(Math.max(1, Math.min(5000, Math.ceil(remaining())))),
-            });
-            const body = await response.json();
+            const response = await observed("readiness-headers", () =>
+                fetch(window.readyUrl, {
+                    signal: AbortSignal.timeout(
+                        Math.max(1, Math.min(5000, Math.ceil(remaining()))),
+                    ),
+                }),
+            );
+            const body = await observed("readiness-json", () => response.json());
             remaining();
             if (
                 response.status === 200 &&

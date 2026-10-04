@@ -8,7 +8,7 @@ export async function createFailureProxy(targets) {
     const record = (event) => {
         const recorded = { at: Date.now(), ...event };
         events.push(recorded);
-        if (events.length > 10000) events.shift();
+        if (events.length > 30000) events.shift();
         return recorded;
     };
     const reset = () => {

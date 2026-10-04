@@ -103,6 +103,7 @@ export function createOperatorRuntime(
         }
     };
     const providers = createProviders(config);
+    const onchainProvider = options.onchainProvider ?? new EsploraProvider(config.esploraUrl);
     const storage = createOperatorStorage(db);
     let wallet: Wallet | undefined;
     let pending: Promise<RuntimeSafety> | undefined;
@@ -295,8 +296,7 @@ export function createOperatorRuntime(
                                 },
                             }),
                             indexerProvider: providers.indexerProvider,
-                            onchainProvider:
-                                options.onchainProvider ?? new EsploraProvider(config.esploraUrl),
+                            onchainProvider,
                             storage,
                             settlementConfig: {
                                 vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
@@ -536,6 +536,7 @@ export function createOperatorRuntime(
         storage,
         safety,
         refresh,
+        getChainTip: async () => onchainProvider.getChainTip(),
         getServerUnroll() {
             if (!serverUnrollScript || safety().blockers.length)
                 throw new ServiceError(
