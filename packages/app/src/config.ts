@@ -15,6 +15,7 @@ export interface TaxiConfig {
     arkdUrl: string;
     indexerUrl: string;
     emulatorUrl: string;
+    esploraUrl?: string;
     minExpiryHeadroomBlocks: bigint;
     recoveryBroadcastBlocks: bigint;
     recoveryCriticalBlocks: bigint;
@@ -71,7 +72,7 @@ export const SHOWN_CONFIG = {
     operatorKey: null,
     operatorSignerKey: null,
     networkName: null,
-    esploraUrl: null,
+    esploraUrl: "TAXI_ESPLORA_URL",
     serverPubkey: null,
     emulatorPubkey: null,
     dust: null,
@@ -181,6 +182,7 @@ const SCHEMA = z
             .optional(),
         TAXI_ARKD_URL: url,
         TAXI_EMULATOR_URL: url,
+        TAXI_ESPLORA_URL: url.optional(),
         TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
         TAXI_RECOVERY_BROADCAST_BLOCKS: positiveSats.default("72"),
         TAXI_RECOVERY_CRITICAL_BLOCKS: positiveSats.default("12"),
@@ -265,6 +267,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         arkdUrl: v.TAXI_ARKD_URL,
         indexerUrl: v.TAXI_ARKD_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,
+        ...(v.TAXI_ESPLORA_URL ? { esploraUrl: v.TAXI_ESPLORA_URL } : {}),
         minExpiryHeadroomBlocks: v.TAXI_MIN_EXPIRY_HEADROOM_BLOCKS,
         recoveryBroadcastBlocks: v.TAXI_RECOVERY_BROADCAST_BLOCKS,
         recoveryCriticalBlocks: v.TAXI_RECOVERY_CRITICAL_BLOCKS,
@@ -316,7 +319,7 @@ export async function resolveRuntimeConfig(
     return {
         ...cfg,
         networkName,
-        esploraUrl: ESPLORA_URL[networkName],
+        esploraUrl: cfg.esploraUrl ?? ESPLORA_URL[networkName],
         serverPubkey: verified.serverPubkey,
         emulatorPubkey: verified.emulatorPubkey,
         dust: verified.info.dust,

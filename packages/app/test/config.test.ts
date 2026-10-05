@@ -282,6 +282,17 @@ describe("resolveRuntimeConfig", () => {
         expect(cfg.networkName).toBe("regtest");
         expect(cfg.indexerUrl).toBe(cfg.arkdUrl);
         expect(cfg.esploraUrl).toBe(ESPLORA_URL.regtest);
+        const configuredEsplora = await resolveRuntimeConfig(
+            loadConfig(env({ TAXI_ESPLORA_URL: "http://mempool_web:8080/api" })),
+            {
+                arkProvider: { getInfo: async () => arkInfo() },
+                emulatorProvider: { getInfo: async () => ({ signerPubkey: pinned }) },
+            },
+        );
+        expect(configuredEsplora.esploraUrl).toBe("http://mempool_web:8080/api");
+        expect(() => loadConfig(env({ TAXI_ESPLORA_URL: "relative/path" }))).toThrow(
+            /TAXI_ESPLORA_URL/,
+        );
         expect(cfg.serverPubkey).toEqual(serverKey);
         expect(cfg.dust).toBe(330n);
         expect(cfg.vtxoMinAmount).toBe(10n);

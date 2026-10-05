@@ -18,17 +18,18 @@ deliberate — it refuses to guess a price.
 
 ## Variables
 
-| Variable                     | Default    | Required | Shape                        |
-| ---------------------------- | ---------- | -------- | ---------------------------- |
-| `TAXI_DB_PATH`               | `:memory:` | no       | path                         |
-| `TAXI_HTTP_PORT`             | `8080`     | no       | 1–65535                      |
-| `TAXI_ADMIN_PORT`            | —          | no       | 1–65535                      |
-| `TAXI_ADMIN_OPERATOR`        | —          | no       | name, 1–128 characters       |
-| `TAXI_ARKD_URL`              | —          | **yes**  | absolute URL                 |
-| `TAXI_EMULATOR_URL`          | —          | **yes**  | absolute URL                 |
-| `TAXI_OPERATOR_PRIVKEY`      | —          | **yes**  | 64 hex (32-byte private key) |
-| `TAXI_LOG_LEVEL`             | `info`     | no       | `trace`…`fatal`              |
-| `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`        | no       | non-negative integer sats    |
+| Variable                     | Default             | Required | Shape                        |
+| ---------------------------- | ------------------- | -------- | ---------------------------- |
+| `TAXI_DB_PATH`               | `:memory:`          | no       | path                         |
+| `TAXI_HTTP_PORT`             | `8080`              | no       | 1–65535                      |
+| `TAXI_ADMIN_PORT`            | —                   | no       | 1–65535                      |
+| `TAXI_ADMIN_OPERATOR`        | —                   | no       | name, 1–128 characters       |
+| `TAXI_ARKD_URL`              | —                   | **yes**  | absolute URL                 |
+| `TAXI_EMULATOR_URL`          | —                   | **yes**  | absolute URL                 |
+| `TAXI_ESPLORA_URL`           | SDK network default | no       | absolute URL                 |
+| `TAXI_OPERATOR_PRIVKEY`      | —                   | **yes**  | 64 hex (32-byte private key) |
+| `TAXI_LOG_LEVEL`             | `info`              | no       | `trace`…`fatal`              |
+| `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`                 | no       | non-negative integer sats    |
 
 A missing or malformed value raises `ConfigError` at boot, listing every
 offending variable at once rather than the first one.
@@ -38,7 +39,7 @@ every value read here and every one derived from arkd at startup, read-only,
 except `TAXI_OPERATOR_PRIVKEY`. A URL is shown without credentials or query.
 Changing a value means restarting with the new environment.
 
-Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. It selects the SDK's
+Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. `TAXI_ESPLORA_URL` overrides the SDK's default Esplora endpoint for the verified network. It selects the SDK's
 Esplora endpoint from the network advertised by arkd. The same verified network
 selects the address HRP and emulator trust anchor; arkd supplies its signer,
 dust, minimum VTXO amount and unilateral exit delay through `GET /v1/info`.
