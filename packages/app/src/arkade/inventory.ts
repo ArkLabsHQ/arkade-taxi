@@ -112,13 +112,17 @@ export function selectOperatorFunding(options: {
             );
         const inputs: ExtendedVirtualCoin[] = [];
         let totalValue = 0n;
-        for (const { coin } of group) {
+        let batchExpiry: ExpiryDeadline | undefined;
+        for (const { coin, expiry } of group) {
+            const nextTotalValue = totalValue + BigInt(coin.value);
+            if (available - nextTotalValue < minReserveSats) continue;
             inputs.push(coin);
-            totalValue += BigInt(coin.value);
+            totalValue = nextTotalValue;
+            batchExpiry ??= expiry;
             if (fundable(totalValue)) break;
         }
-        if (fundable(totalValue) && available - totalValue >= minReserveSats)
-            return { inputs, totalValue, batchExpiry: group[0].expiry };
+        if (fundable(totalValue) && batchExpiry && available - totalValue >= minReserveSats)
+            return { inputs, totalValue, batchExpiry };
     }
     throw new ServiceError(
         "operator_inventory_insufficient",

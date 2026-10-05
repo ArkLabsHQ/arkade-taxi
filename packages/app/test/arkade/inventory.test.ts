@@ -59,6 +59,23 @@ describe("selectOperatorFunding", () => {
             /inventory|reserve/,
         );
     });
+    it.each([1n, 280n, 284n])(
+        "uses a later compatible input when an earlier coin would consume reserve for %s sats",
+        (requiredSats) => {
+            const reserve = fundingCoin({ value: 99000 });
+            const funding = fundingCoin({ vout: 1, value: 1000, expiresAtHeight: 900001 });
+            const selection = select({ spendable: [reserve, funding], requiredSats });
+            expect(selection.inputs).toEqual([funding]);
+            expect(selection.totalValue).toBe(1000n);
+            expect(selection.totalValue - requiredSats).toBeGreaterThanOrEqual(330n);
+            expect(selection.batchExpiry).toEqual({ kind: "height", value: 900001n });
+        },
+    );
+    it("does not fund a small topup by reserving the only large coin", () => {
+        expect(() =>
+            select({ spendable: [fundingCoin({ value: 100000 })], requiredSats: 280n }),
+        ).toThrow(/inventory|reserve/);
+    });
     it.each([{ txid: "invalid" }, { vout: -1 }, { vout: 4294967296 }])(
         "does not count malformed inventory %s toward reserve",
         (over) => {
