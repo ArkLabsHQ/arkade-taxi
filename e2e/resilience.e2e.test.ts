@@ -111,43 +111,89 @@ async function submitSame(
 
 liveScenario("restart-quoted-reservation", async () => {
     const live = await openLive();
-    const coin = await sizedSender(live);
-    const offered = await buys(live, coin);
-    const before = await rowFor(offered.quote.transferId);
-    // A later sender send can select this quote's own input, so reuse one coin.
-    const quoted = [offered];
-    let refusal: unknown;
-    while (quoted.length < 8 && refusal === undefined)
-        await buys(live, coin).then(
-            (quote) => quoted.push(quote),
-            (error) => (refusal = error),
-        );
-    expect(refusal).toMatchObject({ code: "operator_inventory_insufficient" });
-    const status = await admin("status");
-    const reserved = quoted.flatMap((quote) => quote.verified.envelope.operatorInputs);
-    const reservedValue = reserved.reduce((sum, input) => sum + BigInt(input.value), 0n);
-    const inventory = await poll(
+    const address = await live.actors.sender.wallet.getAddress();
+    const fundingTxid = await live.actors.sender.wallet.send(
+        { address, amount: 1000 },
+        { address, amount: 1000 },
+    );
+    const coins = await poll(
+        "two independent sender funding outputs",
+        async () =>
+            (await live.actors.sender.wallet.getSpendableVtxos({ withRecoverable: false }))
+                .filter(
+                    (coin) =>
+                        coin.txid === fundingTxid && coin.value === 1000 && !coin.assets?.length,
+                )
+                .sort((a, b) => a.vout - b.vout),
+        (value) => value.length === 2,
+    );
+    const quoted = [];
+    for (let i = 0; i < 3; i++) quoted.push(await buys(live, coins[0]));
+    const before = await Promise.all(quoted.map((quote) => rowFor(quote.quote.transferId)));
+    expect(before.every((row) => row.state === "quoted")).toBe(true);
+    const inputs = quoted.flatMap((quote) => quote.verified.envelope.operatorInputs);
+    const keyOf = (input: { txid: string; vout: number }) => `${input.txid}:${input.vout}`;
+    const held = new Set(inputs.map(keyOf));
+    expect(inputs.length).toBeGreaterThanOrEqual(quoted.length);
+    expect(held.size).toBe(inputs.length);
+    const reservedValue = inputs.reduce((sum, input) => sum + BigInt(input.value), 0n);
+    await poll(
         "verified reserved wallet inventory",
         async () => (await ready()).body.runtime.inventory,
         (value) =>
-            value.reservedSats === String(reservedValue) && value.reservedVtxos === reserved.length,
+            value.reservedSats === String(reservedValue) && value.reservedVtxos === inputs.length,
     );
+    const status = await admin("status");
+    expect(status.exposure.outstandingSats).toBe("0");
+    expect(status.exposure.activeCount).toBe(0);
     await restart();
     await ready();
-    const after = await rowFor(offered.quote.transferId);
-    expect(after.state).toBe("quoted");
-    expect(after.expiresAt).toBe(before.expiresAt);
+    for (let i = 0; i < quoted.length; i++) {
+        const after = await rowFor(quoted[i].quote.transferId);
+        expect(after.state).toBe("quoted");
+        expect(after.expiresAt).toBe(before[i].expiresAt);
+        expect(after.createdAt).toBe(before[i].createdAt);
+        expect(after.covenantAddress).toBe(quoted[i].quote.covenantAddress);
+        expect(after.topup).toBe(quoted[i].quote.params.topup);
+    }
     expect((await admin("status")).exposure).toEqual(status.exposure);
     const restored = (await ready()).body.runtime.inventory;
     expect(restored.reservedSats).toBe(String(reservedValue));
-    expect(restored.reservedVtxos).toBe(reserved.length);
-    expect(restored).toEqual(inventory);
-    await expect(buys(live, coin)).rejects.toMatchObject({
-        code: "operator_inventory_insufficient",
-    });
-    await purchase(live, await lock(live, offered));
-    const second = await buys(live, await sizedSender(live));
-    await purchase(live, await lock(live, second));
+    expect(restored.reservedVtxos).toBe(inputs.length);
+    const second = await buys(live, coins[1]);
+    const nextInputs = second.verified.envelope.operatorInputs;
+    expect(nextInputs.length).toBeGreaterThan(0);
+    expect(new Set(nextInputs.map(keyOf)).size).toBe(nextInputs.length);
+    expect(nextInputs.every((input) => !held.has(keyOf(input)))).toBe(true);
+    const allInputs = [...inputs, ...nextInputs];
+    const totalReserved = allInputs.reduce((sum, input) => sum + BigInt(input.value), 0n);
+    await poll(
+        "all original and new quote inputs remain reserved",
+        async () => (await ready()).body.runtime.inventory,
+        (value) =>
+            value.reservedSats === String(totalReserved) &&
+            value.reservedVtxos === allInputs.length,
+    );
+    expect((await admin("status")).exposure).toEqual(status.exposure);
+    for (const offered of [quoted[0], second]) {
+        const locked = await lock(live, offered);
+        expect(locked.lockup.txid).toBe(lockupTxid(offered));
+        await purchase(live, locked);
+    }
+    for (const offered of quoted.slice(1)) {
+        await poll(
+            `unsubmitted original quote ${offered.quote.transferId} expires`,
+            () => live.client.status(offered.quote.transferId),
+            (state) => state.state === "expired",
+            Math.max(90_000, offered.quote.expiresAt * 1000 - Date.now() + 10_000),
+        );
+    }
+    await poll(
+        "expired original quotes release every held reservation",
+        async () => (await ready()).body.runtime.inventory,
+        (value) => value.reservedSats === "0" && value.reservedVtxos === 0,
+    );
+    expect((await admin("status")).exposure).toEqual(status.exposure);
 });
 
 liveScenario("restart-submitted-reconciliation", async () => {

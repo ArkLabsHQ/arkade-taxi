@@ -198,6 +198,7 @@ export interface QuoteDeps {
     nowMs(): number;
     randomId(): string;
     phaseLogger?: { debug(fields: QuotePhaseFields, message: string): void };
+    onLockupClaimed?(id: string): void | Promise<void>;
     lockupBuilder: LockupBuilder;
     lockupSubmitter: Pick<LockupSubmitter, "validate"> & Partial<Pick<LockupSubmitter, "submit">>;
 }
@@ -923,6 +924,11 @@ export async function submitLockup(
                 { cause },
             );
         throw cause;
+    }
+    if (claim.claimed) {
+        try {
+            void Promise.resolve(deps.onLockupClaimed?.(id)).catch(() => {});
+        } catch {}
     }
     const outpoint = claim.advance.outpoint ?? validated.outpoint;
     return { txid: outpoint.txid, outpoint };

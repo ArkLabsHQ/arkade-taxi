@@ -1200,6 +1200,58 @@ describe("submitLockup", () => {
 
     const quoted = async () => (await createQuote(deps(), quoteBody())).transferId;
 
+    it("prompts only after the durable claim and admission lock release without awaiting work", async () => {
+        const id = await quoted();
+        const d = deps();
+        let admitting = false;
+        const admission = d.runtime.withAdmission;
+        d.runtime.withAdmission = async (work) => {
+            admitting = true;
+            try {
+                return await admission(work);
+            } finally {
+                admitting = false;
+            }
+        };
+        const prompt = vi.fn(async (claimedId: string) => {
+            expect(admitting).toBe(false);
+            expect(advances.get(claimedId)).toMatchObject({
+                state: "locking",
+                submissionPhase: "claimed",
+            });
+            await new Promise<void>(() => {});
+        });
+        d.onLockupClaimed = prompt;
+        await expect(submitLockup(d, id, "signed-psbt")).resolves.toBeDefined();
+        expect(prompt).toHaveBeenCalledExactlyOnceWith(id);
+        await submitLockup(d, id, "signed-psbt");
+        expect(prompt).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["throw", "reject"])(
+        "keeps a durable accepted claim when its prompt %ss",
+        async (failure) => {
+            const id = await quoted();
+            const d = deps();
+            d.onLockupClaimed = vi.fn(() => {
+                if (failure === "throw") throw new Error("wake failed");
+                return Promise.reject(new Error("wake failed"));
+            });
+            await expect(submitLockup(d, id, "signed-psbt")).resolves.toBeDefined();
+            expect(d.onLockupClaimed).toHaveBeenCalledWith(id);
+            expect(advances.get(id)?.state).toBe("locking");
+        },
+    );
+
+    it("never prompts when persisting the submission fails", async () => {
+        const id = await quoted();
+        const d = deps();
+        d.onLockupClaimed = vi.fn();
+        advances.failUpdateAt = 1;
+        await expect(submitLockup(d, id, "signed-psbt")).rejects.toThrow("db write failed");
+        expect(d.onLockupClaimed).not.toHaveBeenCalled();
+    });
+
     it("persists the exact submission intent without an inline network effect", async () => {
         const id = await quoted();
         const d = deps();

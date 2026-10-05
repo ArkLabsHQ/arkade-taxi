@@ -97,6 +97,37 @@ const indexer = (read: IndexerProvider["getVtxos"]): Pick<IndexerProvider, "getV
 });
 
 describe("locking reconciliation", () => {
+    it("coalesces fresh prompts into a new scan after a pre-existing snapshot", async () => {
+        const state = setup();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        const catchUp = vi.fn(async () => {});
+        catchUp.mockImplementationOnce(() => gate);
+        const resume = vi.fn(async (_id: string) => false);
+        const reconciler = createLockupReconciler({
+            ...state,
+            submission: { resume },
+            watcher: {
+                catchUp,
+                status: () => ({ lastScanAt: NOW, watching: 0, blockers: [], warnings: [] }),
+            },
+            indexer: indexer(async () => ({ vtxos: [] })),
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+        const oldTick = reconciler.tick();
+        await vi.waitFor(() => expect(catchUp).toHaveBeenCalledTimes(1));
+        state.advances.insert({ ...state.advances.get(state.quote.id)!, id: "new-claim" });
+        const prompts = [reconciler.tick(true), reconciler.tick(true)];
+        release();
+        await Promise.all([oldTick, ...prompts]);
+        expect(resume.mock.calls.map(([id]) => id)).toContain("new-claim");
+        expect(catchUp).toHaveBeenCalledTimes(2);
+        state.db.close();
+    });
+
     it("serializes submission resumption and canonical spend catch-up", async () => {
         const state = setup();
         const order: string[] = [];

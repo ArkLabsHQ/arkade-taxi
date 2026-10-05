@@ -24,7 +24,7 @@ export interface ReconcilerStatus {
 }
 
 export interface LockupReconciler {
-    tick(): Promise<void>;
+    tick(fresh?: boolean): Promise<void>;
     status(): ReconcilerStatus;
 }
 
@@ -174,8 +174,9 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
         }
     };
 
-    return {
-        tick() {
+    const reconciler: LockupReconciler = {
+        tick(fresh = false) {
+            if (fresh && pending) return pending.then(() => reconciler.tick());
             if (!pending)
                 pending = (async () => {
                     const rows = deps.advances.byState("locking");
@@ -236,4 +237,5 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
             };
         },
     };
+    return reconciler;
 }

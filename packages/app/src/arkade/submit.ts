@@ -812,6 +812,7 @@ export function createLockupSubmitter(deps: {
 }
 
 export interface SubmissionResumer {
+    prompt(id: string): void;
     resume(id: string): Promise<boolean>;
     stop(): void;
     drain(): Promise<void>;
@@ -848,9 +849,14 @@ export function createSubmissionResumer(deps: {
     leaseSeconds: number;
     backoffSeconds: number;
     maxBackoffSeconds?: number;
+    onPromptComplete?(): Promise<void>;
+    onPromptError?(id: string, error: unknown): void;
 }): SubmissionResumer {
     let stopped = false;
-    const active = new Set<Promise<boolean>>();
+    const active = new Map<string, Promise<boolean>>();
+    const queued = new Set<string>();
+    const prompted = new Set<string>();
+    const promptWorkers = new Set<Promise<void>>();
     const run = async (id: string): Promise<boolean> => {
         if (stopped) return false;
         const started = deps.now();
@@ -1027,18 +1033,54 @@ export function createSubmissionResumer(deps: {
             return false;
         }
     };
+    const resume = (id: string): Promise<boolean> => {
+        if (stopped) return Promise.resolve(false);
+        const existing = active.get(id);
+        if (existing) return existing;
+        const work = run(id).finally(() => active.delete(id));
+        active.set(id, work);
+        return work;
+    };
+    const startPromptWorker = (): void => {
+        if (stopped || queued.size === 0 || promptWorkers.size >= 4) return;
+        const worker = Promise.resolve()
+            .then(async () => {
+                while (!stopped && queued.size > 0) {
+                    const next = queued.values().next().value!;
+                    queued.delete(next);
+                    try {
+                        await resume(next);
+                        if (!stopped) await deps.onPromptComplete?.();
+                    } catch (error) {
+                        try {
+                            deps.onPromptError?.(next, error);
+                        } catch {}
+                    } finally {
+                        prompted.delete(next);
+                    }
+                }
+            })
+            .finally(() => {
+                promptWorkers.delete(worker);
+                startPromptWorker();
+            });
+        promptWorkers.add(worker);
+    };
     return {
-        resume(id) {
-            if (stopped) return Promise.resolve(false);
-            const work = run(id).finally(() => active.delete(work));
-            active.add(work);
-            return work;
+        resume,
+        prompt(id) {
+            if (stopped || prompted.has(id)) return;
+            prompted.add(id);
+            queued.add(id);
+            startPromptWorker();
         },
         stop() {
             stopped = true;
+            queued.clear();
+            prompted.clear();
         },
         async drain() {
-            await Promise.allSettled([...active]);
+            await Promise.allSettled([...promptWorkers, ...active.values()]);
         },
     };
 }

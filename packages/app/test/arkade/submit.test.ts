@@ -1797,3 +1797,181 @@ describe("durable submission resumption", () => {
         db.close();
     });
 });
+
+describe("prompt submission work", () => {
+    const setup = async (count = 1) => {
+        const db = openDatabase(":memory:");
+        const advances = new AdvanceRepository(db);
+        const claimed = await claimedAdvance();
+        const validated = validateLockupSubmission(
+            claimed,
+            claimed.signedLockupEnvelope!,
+            config(),
+        );
+        const ids = Array.from({ length: count }, (_, index) => `prompt-${index}`);
+        for (const id of ids) advances.insert({ ...claimed, id });
+        const submitter = {
+            validate: vi.fn(() => validated),
+            prepare: vi.fn(async () => ({ arkTx: "prepared", ownerCheckpoints: [] })),
+            submitPrepared: vi.fn(async () => ({
+                arkTxid: validated.outpoint.txid,
+                finalArkTx: "final",
+                signedCheckpointTxs: [],
+            })),
+            finalizePrepared: vi.fn(async () => {}),
+            submit: vi.fn(),
+        };
+        let now = NOW + 1;
+        const onPromptComplete = vi.fn(async () => {});
+        const onPromptError = vi.fn();
+        const resumer = createSubmissionResumer({
+            advances,
+            submitter,
+            workerId: "prompt",
+            now: () => now,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+            onPromptComplete,
+            onPromptError,
+        });
+        return {
+            db,
+            advances,
+            ids,
+            submitter,
+            resumer,
+            onPromptComplete,
+            onPromptError,
+            advanceClock: () => now++,
+        };
+    };
+
+    it("starts promptly, coalesces duplicates with a periodic resume, and drains observation", async () => {
+        const x = await setup();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        x.submitter.finalizePrepared.mockImplementation(() => gate);
+        x.resumer.prompt(x.ids[0]!);
+        x.resumer.prompt(x.ids[0]!);
+        await vi.waitFor(() => expect(x.submitter.finalizePrepared).toHaveBeenCalledTimes(1));
+        const periodic = x.resumer.resume(x.ids[0]!);
+        let drained = false;
+        const drain = x.resumer.drain().then(() => {
+            drained = true;
+        });
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        release();
+        await drain;
+        await expect(periodic).resolves.toBe(true);
+        expect(x.onPromptComplete).toHaveBeenCalledTimes(1);
+        expect(x.advances.get(x.ids[0]!)?.submissionPhase).toBe("finalized");
+        x.db.close();
+    });
+
+    it("bounds prompt concurrency and serves every distinct durable claim in FIFO order", async () => {
+        const x = await setup(9);
+        const releases: Array<() => void> = [];
+        x.submitter.finalizePrepared.mockImplementation(
+            () =>
+                new Promise<void>((resolve) => {
+                    releases.push(resolve);
+                }),
+        );
+        for (const id of x.ids) {
+            x.resumer.prompt(id);
+            x.resumer.prompt(id);
+        }
+        await vi.waitFor(() => expect(releases).toHaveLength(4));
+        for (let index = 0; index < x.ids.length; index++) {
+            expect(x.advances.get(x.ids[index]!)?.submissionPhase).toBe("responded");
+            releases[index]!();
+            await vi.waitFor(() =>
+                expect(releases).toHaveLength(Math.min(x.ids.length, 5 + index)),
+            );
+        }
+        await x.resumer.drain();
+        expect(x.submitter.submitPrepared).toHaveBeenCalledTimes(9);
+        expect(x.onPromptComplete).toHaveBeenCalledTimes(9);
+        x.db.close();
+    });
+
+    it("does not strand a claim arriving while all prompt workers finish", async () => {
+        const x = await setup(5);
+        x.onPromptComplete.mockImplementationOnce(() => {
+            queueMicrotask(() => queueMicrotask(() => x.resumer.prompt(x.ids[4]!)));
+            return Promise.resolve();
+        });
+        for (const id of x.ids.slice(0, 4)) x.resumer.prompt(id);
+        await vi.waitFor(() =>
+            expect(x.advances.get(x.ids[4]!)?.submissionPhase).toBe("finalized"),
+        );
+        await x.resumer.drain();
+        expect(x.submitter.submitPrepared).toHaveBeenCalledTimes(5);
+        x.db.close();
+    });
+
+    it("drains an observation callback already running when shutdown starts", async () => {
+        const x = await setup();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        x.onPromptComplete.mockImplementationOnce(() => gate);
+        x.resumer.prompt(x.ids[0]!);
+        await vi.waitFor(() => expect(x.onPromptComplete).toHaveBeenCalledTimes(1));
+        x.resumer.stop();
+        let drained = false;
+        const drain = x.resumer.drain().then(() => {
+            drained = true;
+        });
+        await Promise.resolve();
+        expect(drained).toBe(false);
+        release();
+        await drain;
+        expect(drained).toBe(true);
+        x.db.close();
+    });
+
+    it("retains retry backoff after provider failure and catches observation failures", async () => {
+        const x = await setup();
+        x.submitter.submitPrepared.mockRejectedValueOnce(new Error("timeout"));
+        x.onPromptComplete.mockRejectedValueOnce(new Error("indexer offline"));
+        x.resumer.prompt(x.ids[0]!);
+        await x.resumer.drain();
+        expect(x.advances.get(x.ids[0]!)?.submissionNextAttemptAt).toBe(NOW + 2);
+        x.resumer.prompt(x.ids[0]!);
+        await x.resumer.drain();
+        expect(x.submitter.submitPrepared).toHaveBeenCalledTimes(1);
+        x.advanceClock();
+        x.resumer.prompt(x.ids[0]!);
+        await x.resumer.drain();
+        expect(x.submitter.submitPrepared).toHaveBeenCalledTimes(2);
+        expect(x.advances.get(x.ids[0]!)?.submissionPhase).toBe("finalized");
+        expect(x.onPromptError).toHaveBeenCalledWith(x.ids[0], expect.any(Error));
+        x.db.close();
+    });
+
+    it("stops queued claims and drains in-flight work before database disposal", async () => {
+        const x = await setup(6);
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        x.submitter.finalizePrepared.mockImplementation(() => gate);
+        for (const id of x.ids) x.resumer.prompt(id);
+        await vi.waitFor(() => expect(x.submitter.finalizePrepared).toHaveBeenCalledTimes(4));
+        x.resumer.stop();
+        x.resumer.prompt("late");
+        const drain = x.resumer.drain();
+        release();
+        await drain;
+        expect(x.onPromptComplete).not.toHaveBeenCalled();
+        expect(x.submitter.finalizePrepared).toHaveBeenCalledTimes(4);
+        expect(x.advances.get(x.ids[4]!)?.submissionPhase).toBe("claimed");
+        expect(x.advances.get(x.ids[0]!)?.submissionPhase).toBe("responded");
+        x.db.close();
+    });
+});

@@ -112,6 +112,15 @@ async function runServe(): Promise<void> {
         now: seconds,
         leaseSeconds: Math.max(30, Math.ceil(config.reconcileIntervalMs / 1000) * 2),
         backoffSeconds: Math.max(1, Math.ceil(config.reconcileIntervalMs / 1000)),
+        onPromptComplete: () => timed("submission.reconcile", () => reconciler.tick(true)),
+        onPromptError: (id, error) =>
+            log.error(
+                {
+                    advanceId: id,
+                    error: sanitizeOperationalError(error, "submission prompt failed"),
+                },
+                "submission prompt failed",
+            ),
     });
     let reconciler: ReturnType<typeof createLockupReconciler>;
     const watcher = createSpendWatcher({
@@ -255,6 +264,7 @@ async function runServe(): Promise<void> {
         offerCodec,
         providerLimits,
         lockupSubmitter,
+        onLockupClaimed: (id) => submission.prompt(id),
         getServerUnroll: runtime.getServerUnroll,
         senderInventory: runtime.providers.indexerProvider,
         sweeper,
