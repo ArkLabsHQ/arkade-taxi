@@ -50,6 +50,7 @@ import {
     resolveTask12Tests,
     resolveE2eOptions,
     resolveWalletTimeoutMs,
+    reserveWalletPorts,
     resolveInstalledClientEntry,
     renewalFundingAmount,
     removeStaleFailureDiagnostics,
@@ -59,6 +60,31 @@ import {
 import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
 import { assertDelegateLeaf, expiryOf, stubDelegateProvider } from "../e2e-wallets.mjs";
+
+it("reserves both wallet listeners until their ports are handed to Playwright", async () => {
+    const reservation = await reserveWalletPorts();
+    const servers = [createServer(), createServer()];
+    const ports = [reservation.walletPort, reservation.delegatorPort];
+    const listen = (server: (typeof servers)[number], port: number) =>
+        new Promise<void>((resolve, reject) => {
+            server.once("error", reject);
+            server.listen(port, "127.0.0.1", resolve);
+        });
+    try {
+        expect(new Set(ports).size).toBe(2);
+        for (const [index, server] of servers.entries())
+            await expect(listen(server, ports[index])).rejects.toMatchObject({
+                code: "EADDRINUSE",
+            });
+        await reservation.release();
+        for (const [index, server] of servers.entries()) await listen(server, ports[index]);
+    } finally {
+        await reservation.release();
+        await Promise.all(
+            servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+        );
+    }
+});
 
 it("pins and verifies the zero-fee settlement fixture without raising Taxi fee authority", () => {
     expect(Object.values(ARKD_FEES)).toEqual(["0.0", "0.0", "0.0", "0.0"]);

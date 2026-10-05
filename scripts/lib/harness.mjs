@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 
@@ -8,6 +9,29 @@ const SECRET_KEY =
 
 const stableJson = (value) =>
     JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item));
+
+export async function reserveWalletPorts() {
+    const servers = [createServer(), createServer()];
+    const release = () =>
+        Promise.all(
+            servers.map((server) => new Promise((resolve) => server.close(() => resolve()))),
+        );
+    try {
+        for (const server of servers)
+            await new Promise((resolve, reject) => {
+                server.once("error", reject);
+                server.listen(0, "127.0.0.1", resolve);
+            });
+        return {
+            walletPort: servers[0].address().port,
+            delegatorPort: servers[1].address().port,
+            release,
+        };
+    } catch (error) {
+        await release();
+        throw error;
+    }
+}
 
 export function routeProviderFetch(fetcher, routes) {
     const mappings = routes

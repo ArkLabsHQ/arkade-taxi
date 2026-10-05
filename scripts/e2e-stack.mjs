@@ -49,6 +49,7 @@ import {
     resolveInstalledClientEntry,
     resolveE2eOptions,
     resolveWalletTimeoutMs,
+    reserveWalletPorts,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
 } from "./lib/harness.mjs";
@@ -1245,10 +1246,9 @@ await import("/app/dist/cli.js");
         if (wallet) {
             const walletArtifacts = join(artifacts, "wallet");
             mkdirSync(walletArtifacts, { recursive: true });
-            const reservation = createServer();
-            await new Promise((resolve) => reservation.listen(0, "127.0.0.1", resolve));
-            const walletPort = reservation.address().port;
-            await new Promise((resolve) => reservation.close(resolve));
+            const reservation = await reserveWalletPorts();
+            const { walletPort, delegatorPort } = reservation;
+            await reservation.release();
             const walletEnv = { ...testEnv };
             delete walletEnv.TAXI_OPERATOR_PRIVKEY;
             const invocation = packageManagerInvocation([
@@ -1270,6 +1270,7 @@ await import("/app/dist/cli.js");
                     VITE_TAXI_URL: walletTaxiUrl,
                     VITE_EMULATOR_PUBKEY: emulatorInfo.signerPubkey,
                     TAXI_E2E_WALLET_PORT: String(walletPort),
+                    TAXI_E2E_DELEGATOR_PORT: String(delegatorPort),
                     TAXI_E2E_WALLET_ARTIFACTS: walletArtifacts,
                 },
                 secrets: knownSecrets,
