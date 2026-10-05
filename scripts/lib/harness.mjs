@@ -645,10 +645,9 @@ async function waitForCurrentArkdAdmin(profiles) {
                 firstWave,
                 `${firstWave}\n  await refreshPublishedPorts(['base'], taxiE2eBaseServices);`,
             )
-            .replace(appWave, `${appWave}\n    await refreshPublishedPorts(waveProfiles);`)
             .replace(
                 setupArkd,
-                `if (active.has('ark')) {\n    await waitForCurrentArkdAdmin(waveProfiles);\n    await setupArkd();\n  }`,
+                `if (active.has('ark')) {\n    await waitForCurrentArkdAdmin(waveProfiles);\n    await refreshPublishedPorts(waveProfiles);\n    await setupArkd();\n  }`,
             )
             .replace(arkExec.needle, arkExec.replacement)
             .replace(bitcoinExec.needle, bitcoinExec.replacement)
