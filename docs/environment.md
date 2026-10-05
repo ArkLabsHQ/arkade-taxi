@@ -154,7 +154,7 @@ recoverable backup of the key separate from the database backup. See the
 ### `TAXI_PROCEEDS_MAX_FEE_SATS`
 
 Maximum fee authorized for one ordinary wallet settlement collecting Taxi's
-validated proceeds. Defaults to `0`. Subdust repayments and asset fares can be
+validated proceeds or preparing its plain bitcoin funding pool. Defaults to `0`. Subdust repayments and asset fares can be
 recoverable receipts rather than immediately spendable VTXOs; Taxi consolidates
 them with an unreserved ordinary operator coin while preserving every asset
 group and the configured funding reserve. It never settles covenant inputs here.

@@ -268,6 +268,7 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
             },
         },
         wallet: {
+            arkProvider: { getInfo: async () => h.providers!.arkProvider!.getInfo() },
             settle: async () => "",
             getVtxoManager: async () => ({ renewVtxos: async () => "" }),
             getAddress: async () =>

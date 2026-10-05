@@ -111,6 +111,8 @@ const reserveValue = (c: ExtendedVirtualCoin, cfg: RuntimeConfig, clock: TimeHei
 };
 
 export interface CollectionPlan extends ProceedsPlan {
+    kind?: "inventory-split";
+    outputs?: string[];
     address: string;
     amount: string;
     plainChange?: string;
@@ -122,9 +124,11 @@ export interface CollectionPlan extends ProceedsPlan {
 }
 // Keep the asset carrier at vout 0 and plain change at vout 1 for confirmation.
 const collectionOutputAmounts = (plan: CollectionPlan) =>
-    plan.plainChange === undefined
-        ? [BigInt(plan.amount)]
-        : [BigInt(plan.amount) - BigInt(plan.plainChange), BigInt(plan.plainChange)];
+    plan.kind === "inventory-split"
+        ? plan.outputs!.map(BigInt)
+        : plan.plainChange === undefined
+          ? [BigInt(plan.amount)]
+          : [BigInt(plan.amount) - BigInt(plan.plainChange), BigInt(plan.plainChange)];
 
 export function assertProceedsPlan(
     plan: CollectionPlan,
@@ -132,6 +136,63 @@ export function assertProceedsPlan(
     cfg: RuntimeConfig,
 ): void {
     try {
+        if (plan.kind !== undefined && plan.kind !== "inventory-split")
+            fail("proceeds_plan_invalid");
+        if (plan.kind === "inventory-split") {
+            const allowed = new Set([
+                "kind",
+                "outputs",
+                "inputs",
+                "address",
+                "amount",
+                "fee",
+                "maxFee",
+                "assets",
+                "coins",
+                "receipts",
+            ]);
+            if (
+                Object.keys(plan).some((name) => !allowed.has(name)) ||
+                plan.address !==
+                    new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp).encode() ||
+                coins.length !== 1 ||
+                !/^[a-f0-9]{64}$/.test(coins[0]!.txid) ||
+                !Number.isSafeInteger(coins[0]!.vout) ||
+                coins[0]!.vout < 0 ||
+                coins[0]!.vout > 0xffff_ffff ||
+                !Number.isSafeInteger(coins[0]!.value) ||
+                coins[0]!.value <= 0 ||
+                coins[0]!.script !== "5120" + hex.encode(cfg.operatorKey) ||
+                holdings(coins).length ||
+                plan.receipts.length ||
+                plan.assets.length ||
+                plan.plainChange !== undefined ||
+                !/^(0|[1-9][0-9]*)$/.test(plan.fee) ||
+                !/^(0|[1-9][0-9]*)$/.test(plan.maxFee) ||
+                !/^[1-9][0-9]*$/.test(plan.amount) ||
+                BigInt(plan.fee) > BigInt(plan.maxFee) ||
+                BigInt(plan.maxFee) > cfg.proceedsMaxFeeSats ||
+                !isDeepStrictEqual(coins.map(facts), plan.coins) ||
+                !isDeepStrictEqual(coins.map(outpoint), plan.inputs) ||
+                !Array.isArray(plan.outputs) ||
+                plan.outputs.length < 2 ||
+                plan.outputs.length > 8 ||
+                plan.outputs.some((n) => typeof n !== "string" || !/^[1-9][0-9]*$/.test(n))
+            )
+                fail("proceeds_plan_invalid");
+            const amounts = collectionOutputAmounts(plan);
+            if (
+                amounts.some((n) => n > BigInt(Number.MAX_SAFE_INTEGER)) ||
+                amounts[0]! < cfg.operatorMinReserveSats + cfg.dust ||
+                amounts[0]! < 2n * cfg.dust ||
+                amounts.slice(1).some((n) => n < 2n * cfg.dust) ||
+                amounts.reduce((sum, n) => sum + n, 0n) !== BigInt(plan.amount) ||
+                total(coins) - BigInt(plan.fee) !== BigInt(plan.amount)
+            )
+                fail("proceeds_plan_invalid");
+            return;
+        }
+        if (plan.outputs !== undefined) fail("proceeds_plan_invalid");
         const receiptKeys = new Set(plan.receipts.map(key));
         const inputs = new Set(coins.map(key));
         const sponsor = coins.find((c) => !receiptKeys.has(key(c)));
@@ -211,6 +272,72 @@ export function proceedsFee(
             0n,
         )
     );
+}
+
+export function planInventorySplit(
+    coins: ExtendedVirtualCoin[],
+    reserved: readonly Outpoint[],
+    cfg: RuntimeConfig,
+    fees: IntentFeeConfig,
+    address: string,
+    clock: TimeHeight,
+    maxAmount: bigint,
+): CollectionPlan | undefined {
+    const expected = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp);
+    if (address !== expected.encode()) fail("proceeds_ownership_invalid");
+    if (new Set(coins.map(key)).size !== coins.length) fail("proceeds_duplicate_inventory");
+    const locked = new Set(reserved.map(key));
+    const available = coins.filter(
+        (c) =>
+            canonical(c, cfg) &&
+            !locked.has(key(c)) &&
+            /^[a-f0-9]{64}$/.test(c.txid) &&
+            Number.isSafeInteger(c.vout) &&
+            c.vout >= 0 &&
+            c.vout <= 0xffff_ffff &&
+            reserveValue(c, cfg, clock) > 0n,
+    );
+    const working = available.filter((c) => BigInt(c.value) >= 2n * cfg.dust).length;
+    if (working >= 8) return;
+    const reserve =
+        cfg.operatorMinReserveSats + cfg.dust > 2n * cfg.dust
+            ? cfg.operatorMinReserveSats + cfg.dust
+            : 2n * cfg.dust;
+    const candidates = available.sort((a, b) => b.value - a.value || key(a).localeCompare(key(b)));
+    for (const coin of candidates) {
+        for (let count = Math.min(8, 9 - working); count >= 2; count--) {
+            let fee = 0n;
+            for (let attempt = 0; attempt < 8; attempt++) {
+                const amount = BigInt(coin.value) - fee;
+                const chunk = (amount - reserve) / BigInt(count - 1);
+                if (chunk < 2n * cfg.dust) break;
+                const outputs = [
+                    amount - chunk * BigInt(count - 1),
+                    ...Array<bigint>(count - 1).fill(chunk),
+                ];
+                if (outputs.some((n) => !withinOutputLimit(n, maxAmount))) break;
+                const estimated = proceedsFee([coin], fees, hex.encode(expected.pkScript), outputs);
+                if (estimated > cfg.proceedsMaxFeeSats) break;
+                if (estimated === fee) {
+                    const plan: CollectionPlan = {
+                        kind: "inventory-split",
+                        inputs: [outpoint(coin)],
+                        coins: [facts(coin)],
+                        receipts: [],
+                        address,
+                        amount: amount.toString(),
+                        outputs: outputs.map(String),
+                        assets: [],
+                        fee: fee.toString(),
+                        maxFee: cfg.proceedsMaxFeeSats.toString(),
+                    };
+                    assertProceedsPlan(plan, [coin], cfg);
+                    return plan;
+                }
+                fee = estimated;
+            }
+        }
+    }
 }
 
 export function planProceeds(
@@ -563,15 +690,31 @@ export function createProceedsCollector(deps: Deps) {
             (c) => c.commitmentTxIds?.includes(commitmentTxid) && canonical(c, config),
         );
         const amounts = collectionOutputAmounts(plan);
+        const tip =
+            plan.kind === "inventory-split"
+                ? await runtime.wallet!.onchainProvider.getChainTip()
+                : undefined;
+        const safeOutputs =
+            !tip ||
+            outputs.every(
+                (c) =>
+                    reserveValue(c, config, {
+                        height: tip.height,
+                        timestamp: new Date(tip.time * 1000),
+                    }) > 0n,
+            );
         if (
+            !safeOutputs ||
             !settled ||
             outputs.length !== amounts.length ||
-            !amounts.every((amount, index) =>
-                outputs.some(
-                    (c) =>
-                        BigInt(c.value) === amount &&
-                        isDeepStrictEqual(holdings([c]), index === 0 ? plan.assets : []),
-                ),
+            new Set(outputs.map(key)).size !== outputs.length ||
+            !isDeepStrictEqual(
+                outputs.map((c) => JSON.stringify([c.value.toString(), holdings([c])])).sort(),
+                amounts
+                    .map((amount, index) =>
+                        JSON.stringify([amount.toString(), index === 0 ? plan.assets : []]),
+                    )
+                    .sort(),
             )
         ) {
             jobs.update(id, "settling", "proceeds_output_pending", commitmentTxid);
@@ -590,10 +733,6 @@ export function createProceedsCollector(deps: Deps) {
                 wallet.getSpendableVtxos({ withRecoverable: true }),
             );
             const receipts = await timed("proceeds.discovery", () => discoverProceeds(deps, coins));
-            if (!receipts.length) {
-                blocker = null;
-                return;
-            }
             const taxiLocks = taxiLocksOf();
             const locks = [
                 ...taxiLocks,
@@ -607,9 +746,30 @@ export function createProceedsCollector(deps: Deps) {
             );
             const fees = info.fees?.intentFee ?? {};
             const address = await timed("proceeds.address", () => wallet.getAddress());
-            const plan = timed("proceeds.plan", () =>
-                planProceeds(
-                    receipts,
+            const plan = timed("proceeds.plan", () => {
+                let receiptError: Error | undefined;
+                if (receipts.length) {
+                    try {
+                        return planProceeds(
+                            receipts,
+                            coins,
+                            locks,
+                            config,
+                            fees,
+                            address,
+                            { height: tip.height, timestamp: new Date(tip.time * 1000) },
+                            info.vtxoMaxAmount,
+                        );
+                    } catch (error) {
+                        if (
+                            !(error instanceof Error) ||
+                            error.message !== "proceeds_reserve_unavailable"
+                        )
+                            throw error;
+                        receiptError = error;
+                    }
+                }
+                const split = planInventorySplit(
                     coins,
                     locks,
                     config,
@@ -617,8 +777,14 @@ export function createProceedsCollector(deps: Deps) {
                     address,
                     { height: tip.height, timestamp: new Date(tip.time * 1000) },
                     info.vtxoMaxAmount,
-                ),
-            );
+                );
+                if (!split && receiptError) throw receiptError;
+                return split;
+            });
+            if (!plan) {
+                blocker = null;
+                return;
+            }
             if (stopped) return;
             timed("proceeds.createJob", () => jobs.create(randomUUID(), plan, now(), taxiLocks));
             job = jobs.active()!;
@@ -657,6 +823,21 @@ export function createProceedsCollector(deps: Deps) {
         }
         if (stopped) return;
         const id = job.id;
+        const assertSplitReservations = () => {
+            if (plan.kind !== "inventory-split") return;
+            const own = jobs.active();
+            const locks = [
+                ...reservations.listReservedOutpoints(),
+                ...(deps.swapFills?.listReservedOutpoints() ?? []),
+                ...(deps.receiveQuotes?.listReservedOutpoints() ?? []),
+            ];
+            if (
+                own?.id !== id ||
+                !isDeepStrictEqual(own.plan, plan) ||
+                plan.inputs.some((p) => locks.filter((c) => key(c) === key(p)).length !== 1)
+            )
+                fail("proceeds_input_reserved");
+        };
         const heartbeat = setInterval(() => {
             try {
                 jobs.claim(id, owner, now(), now() + leaseMs);
@@ -736,7 +917,20 @@ export function createProceedsCollector(deps: Deps) {
                                     : 0n),
                             0n,
                         );
+                        if (plan.kind === "inventory-split") {
+                            assertProceedsPlan(plan, selected, config);
+                            if (
+                                selected.some((c) => reserveValue(c, config, clock) === 0n) ||
+                                (!submitting &&
+                                    sdkLocks.some((p) =>
+                                        plan.inputs.some((c) => key(c) === key(p)),
+                                    ))
+                            )
+                                fail("proceeds_input_unavailable");
+                            assertSplitReservations();
+                        }
                         if (
+                            plan.kind !== "inventory-split" &&
                             sponsor &&
                             (plan.plainChange !== undefined ||
                                 reserveValue(sponsor, config, clock) > 0n) &&
@@ -747,7 +941,7 @@ export function createProceedsCollector(deps: Deps) {
                             selected,
                             verified.info!.fees?.intentFee ?? {},
                             hex.encode(ArkAddress.decode(plan.address).pkScript),
-                            plan.plainChange === undefined
+                            plan.kind !== "inventory-split" && plan.plainChange === undefined
                                 ? undefined
                                 : collectionOutputAmounts(plan),
                         );
@@ -777,6 +971,7 @@ export function createProceedsCollector(deps: Deps) {
                     await guard(true);
                     return () => {
                         if (stopped) fail("proceeds_stopped");
+                        assertSplitReservations();
                         jobs.enterSubmission(id, owner, now(), digest);
                     };
                 },

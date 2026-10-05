@@ -18,6 +18,7 @@ import {
     AdvanceRepository,
     ProceedsRepository,
     ReservationRepository,
+    PolicyRepository,
     type Database,
 } from "@arkade-taxi/db";
 import {
@@ -39,6 +40,7 @@ import {
     assertProceedsPlan,
     discoverProceeds,
     planProceeds,
+    planInventorySplit,
     proceedsFee,
     reconcileProceeds,
     type CollectionPlan,
@@ -246,24 +248,25 @@ function setup(
         },
         finish() {
             coins = coins.map((c) => ({ ...c, isSpent: true, settledBy: "cc".repeat(32) }));
-            outputs = [
-                fundingCoin({
-                    value: Number(BigInt(plan.amount) - BigInt(plan.plainChange ?? "0")),
-                    txid: "dd".repeat(32),
-                    commitmentTxIds: ["cc".repeat(32)],
-                    assets: plan.assets.map((a) => ({ ...a, amount: BigInt(a.amount) })),
-                }),
-                ...(plan.plainChange === undefined
-                    ? []
+            const amounts =
+                plan.kind === "inventory-split"
+                    ? plan.outputs!
                     : [
-                          fundingCoin({
-                              value: Number(plan.plainChange),
-                              txid: "dd".repeat(32),
-                              vout: 1,
-                              commitmentTxIds: ["cc".repeat(32)],
-                          }),
-                      ]),
-            ];
+                          (BigInt(plan.amount) - BigInt(plan.plainChange ?? "0")).toString(),
+                          ...(plan.plainChange === undefined ? [] : [plan.plainChange]),
+                      ];
+            outputs = amounts.map((amount, vout) =>
+                fundingCoin({
+                    value: Number(amount),
+                    txid: "dd".repeat(32),
+                    vout,
+                    commitmentTxIds: ["cc".repeat(32)],
+                    assets:
+                        vout === 0
+                            ? plan.assets.map((a) => ({ ...a, amount: BigInt(a.amount) }))
+                            : [],
+                }),
+            );
         },
         setOutputs(value: typeof outputs) {
             outputs = value;
@@ -1002,6 +1005,7 @@ describe("durable proceeds collector", () => {
             -1n,
         );
         const s = setup(plan, [assetReceipt, spare, carrier]);
+        vi.spyOn(console, "warn").mockImplementation(() => {});
         const sdk = s.useActualSdk();
         await createProceedsCollector(s.deps).tick();
         const outputs = sdk.sign.mock.calls[0]![1] as { script: Uint8Array; amount: bigint }[];
@@ -1229,4 +1233,547 @@ describe("durable proceeds collector", () => {
         expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
         expect(s.settle).not.toHaveBeenCalled();
     });
+});
+
+describe("plain inventory bootstrap", () => {
+    it("splits the real singleton balance into a reserve and eight working coins", () => {
+        const c = fundingCoin({ value: 100000 });
+        const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+        const plan = planInventorySplit([c], [], protectedCfg, {}, address, clock, -1n)!;
+        expect(plan.kind).toBe("inventory-split");
+        expect(plan.outputs).toHaveLength(8);
+        expect(plan.outputs!.reduce((sum, n) => sum + BigInt(n), 0n)).toBe(100000n);
+        expect(BigInt(plan.outputs![0]!)).toBeGreaterThanOrEqual(10330n);
+        assertProceedsPlan(plan, [c], protectedCfg);
+        const outputs = plan.outputs!.map((value, vout) =>
+            fundingCoin({ value: Number(value), vout }),
+        );
+        for (const requiredSats of [1n, 280n, 284n]) {
+            const selected = selectOperatorFunding({
+                spendable: outputs,
+                reserved: [],
+                requiredSats,
+                safety: runtimeSafety(),
+                nowMs: runtimeSafety().checkedAt,
+                maxSnapshotAgeMs: 30000,
+                minExpiryHeadroomBlocks: 1n,
+                minExpiryHeadroomSeconds: 1n,
+                renewalThresholdSeconds: 0n,
+                minReserveSats: 10000n,
+                dustSats: 330n,
+            });
+            expect(selected.totalValue - requiredSats).toBeGreaterThanOrEqual(330n);
+        }
+    });
+    it("automatically prepares a split when receipt discovery finds nothing", async () => {
+        const c = fundingCoin({ value: 100000 });
+        const s = setup(makePlan(), [c]);
+        s.jobs.complete("job", "cc".repeat(32));
+        s.deps.config = { ...cfg, operatorMinReserveSats: 10000n };
+        s.deps.runtime.providers.indexerProvider.getVtxos = async () => ({ vtxos: [c] }) as any;
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+        expect(s.jobs.active()?.plan.kind).toBe("inventory-split");
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([
+            { txid: c.txid, vout: c.vout },
+        ]);
+    });
+});
+
+describe("inventory split safety", () => {
+    const singleton = fundingCoin({ value: 100000 });
+    const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+    const split = () => planInventorySplit([singleton], [], protectedCfg, {}, address, clock, -1n)!;
+    const splitSetup = (durable = false) => {
+        const s = setup(split(), [singleton], durable);
+        s.deps.config = protectedCfg;
+        return s;
+    };
+    it("reduces the pool size when only a reserve and one working coin fit", () => {
+        const small = fundingCoin({ value: 10990 });
+        const plan = planInventorySplit([small], [], protectedCfg, {}, address, clock, -1n)!;
+        expect(plan.outputs).toEqual(["10330", "660"]);
+        expect(
+            planInventorySplit(
+                [{ ...small, value: 10989 }],
+                [],
+                protectedCfg,
+                {},
+                address,
+                clock,
+                -1n,
+            ),
+        ).toBeUndefined();
+    });
+    it("leaves a sufficiently parallel pool alone", () => {
+        const coins = Array.from({ length: 8 }, (_, vout) => fundingCoin({ value: 20000, vout }));
+        expect(
+            planInventorySplit(coins, [], protectedCfg, {}, address, clock, -1n),
+        ).toBeUndefined();
+        const plan = planInventorySplit(
+            coins.slice(0, 7),
+            [],
+            protectedCfg,
+            {},
+            address,
+            clock,
+            -1n,
+        )!;
+        expect(plan.outputs).toHaveLength(2);
+    });
+    it.each([
+        { assets: [{ assetId: "a", amount: 1n }] },
+        { isSpent: true },
+        { isUnrolled: true },
+        { isSwept: true },
+        { expiresAtHeight: clock.height + 1 },
+        { txid: "bad" },
+        { value: NaN },
+        { vout: -1 },
+        { tapTree: senderTree.encode(), script: bytesToHex(senderTree.pkScript) },
+        { expiresAtHeight: undefined, expiresAt: new Date(Date.now() + 1000) },
+    ])("ignores unsafe or non-plain inventory case %#", (over) => {
+        expect(
+            planInventorySplit(
+                [{ ...singleton, ...over }],
+                [],
+                protectedCfg,
+                {},
+                address,
+                clock,
+                -1n,
+            ),
+        ).toBeUndefined();
+    });
+    it("excludes reservations and duplicate inventory", () => {
+        expect(
+            planInventorySplit([singleton], [singleton], protectedCfg, {}, address, clock, -1n),
+        ).toBeUndefined();
+        expect(() =>
+            planInventorySplit([singleton, singleton], [], protectedCfg, {}, address, clock, -1n),
+        ).toThrow("proceeds_duplicate_inventory");
+    });
+    it("bounds the provider maximum and solves the authorized output fee exactly", () => {
+        expect(
+            planInventorySplit([singleton], [], protectedCfg, {}, address, clock, 10000n),
+        ).toBeUndefined();
+        expect(
+            planInventorySplit(
+                [singleton],
+                [],
+                protectedCfg,
+                { offchainOutput: "1.0" },
+                address,
+                clock,
+                -1n,
+            ),
+        ).toBeUndefined();
+        const plan = planInventorySplit(
+            [singleton],
+            [],
+            { ...protectedCfg, proceedsMaxFeeSats: 8n },
+            { offchainOutput: "1.0" },
+            address,
+            clock,
+            -1n,
+        )!;
+        expect(plan.fee).toBe("8");
+        expect(plan.outputs!.reduce((sum, n) => sum + BigInt(n), 0n)).toBe(99992n);
+        expect(
+            proceedsFee(
+                [singleton],
+                { offchainOutput: "1.0" },
+                singleton.script,
+                plan.outputs!.map(BigInt),
+            ),
+        ).toBe(8n);
+    });
+    it.each([
+        { kind: "unknown" },
+        { kind: undefined },
+        { receipts: [singleton] },
+        { assets: [{ assetId: "a", amount: "1" }] },
+        { plainChange: "10000" },
+        { outputs: ["10330"] },
+        { outputs: Array(9).fill("10000") },
+        { outputs: ["10000", "90000"] },
+        { outputs: ["99999", "1"] },
+        { outputs: ["10330", "660"] },
+        { fee: "01" },
+        { fee: "1" },
+        { maxFee: "1" },
+        { address: "wrong" },
+        { extra: true },
+    ])("rejects corrupted persisted split plans before signing case %#", (change) => {
+        expect(() =>
+            assertProceedsPlan({ ...split(), ...change } as any, [singleton], protectedCfg),
+        ).toThrow("proceeds_plan_invalid");
+    });
+    it("confirms exact output multiplicity and unique outpoints before releasing a durable reservation", async () => {
+        const s = splitSetup(true);
+        const plan = split();
+        s.finish();
+        s.restartDatabase();
+        const valid = plan.outputs!.map((amount, vout) =>
+            fundingCoin({
+                value: Number(amount),
+                txid: "dd".repeat(32),
+                vout,
+                commitmentTxIds: ["cc".repeat(32)],
+            }),
+        );
+        const collector = createProceedsCollector(s.deps);
+        for (const outputs of [
+            [...valid.slice(0, -1), { ...valid.at(-1)!, value: 12811 }],
+            [...valid.slice(0, -1), valid[1]!],
+            valid.map((c, index) =>
+                index === 1 ? { ...c, assets: [{ assetId: "a", amount: 1n }] } : c,
+            ),
+        ]) {
+            s.setOutputs(outputs);
+            await collector.tick();
+            expect(s.jobs.active()?.blocker).toBe("proceeds_output_pending");
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+        }
+        s.setOutputs([...valid].reverse());
+        await collector.tick();
+        expect(s.jobs.active()).toBeUndefined();
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
+        expect(s.settle).not.toHaveBeenCalled();
+    });
+    it.each(["fee", "maximum", "expiry", "reservation", "stopped"])(
+        "revalidates %s at registration",
+        async (change) => {
+            const s = splitSetup();
+            const collector = createProceedsCollector(s.deps);
+            s.beforeSubmit(() => {
+                if (change === "fee") s.info.fees!.intentFee.offchainOutput = "1.0";
+                if (change === "maximum") s.info.vtxoMaxAmount = 10000n;
+                if (change === "expiry")
+                    s.setTip({
+                        height: singleton.expiresAtHeight! - 1,
+                        time: Math.floor(clock.timestamp.getTime() / 1000),
+                    });
+                if (change === "reservation")
+                    s.deps.receiveQuotes = { listReservedOutpoints: () => [singleton] } as any;
+                if (change === "stopped") collector.stop();
+            });
+            await collector.tick();
+            expect(s.settle).not.toHaveBeenCalled();
+            expect(s.jobs.submissionEvidence("job").state).toBe("unsubmitted");
+            expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+        },
+    );
+    it("fences a conflicting reservation at synchronous network entry", async () => {
+        const s = splitSetup();
+        s.beforeEntry(() => {
+            s.deps.receiveQuotes = { listReservedOutpoints: () => [singleton] } as any;
+        });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(collector.status().blocker).toBe("proceeds_input_reserved");
+        expect(s.jobs.submissionEvidence("job").state).toBe("unsubmitted");
+    });
+    it("retains an ambiguous entered submission through a database restart without resubmitting", async () => {
+        const s = splitSetup(true);
+        vi.spyOn(console, "error").mockImplementation(() => {});
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const sdk = s.useActualSdk({ failWrites: true });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(sdk.register).toHaveBeenCalledTimes(1);
+        expect(s.jobs.submissionEvidence("job").state).toBe("entered");
+        s.restartDatabase();
+        s.setNow(60200);
+        const recovered = createProceedsCollector(s.deps);
+        await recovered.tick();
+        expect(sdk.register).toHaveBeenCalledTimes(1);
+        expect(recovered.status().blocker).toBe("proceeds_submission_ambiguous");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+    });
+    it("uses SDK settlement with explicit same-owner plain outputs and holds the input before registration", async () => {
+        const s = splitSetup();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const sdk = s.useActualSdk();
+        await createProceedsCollector(s.deps).tick();
+        const outputs = sdk.sign.mock.calls[0]![1] as { script: Uint8Array; amount: bigint }[];
+        expect(outputs).toHaveLength(8);
+        expect(outputs.map((o) => o.amount.toString())).toEqual(split().outputs);
+        expect(outputs.every((o) => bytesToHex(o.script) === singleton.script)).toBe(true);
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+    });
+});
+
+describe("inventory split coordination", () => {
+    const singleton = fundingCoin({ value: 100000 });
+    const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+    const makeSplit = () =>
+        planInventorySplit([singleton], [], protectedCfg, {}, address, clock, -1n)!;
+    it("defers a fee estimator that cannot converge within its bounded attempts", () => {
+        let call = 0;
+        const quoted = vi
+            .spyOn(Estimator.prototype, "evalOffchainOutput")
+            .mockImplementation(() => ({ satoshis: ++call, weight: 0 }) as any);
+        expect(
+            planInventorySplit(
+                [singleton],
+                [],
+                { ...protectedCfg, proceedsMaxFeeSats: 10000n },
+                {},
+                address,
+                clock,
+                -1n,
+            ),
+        ).toBeUndefined();
+        expect(quoted.mock.calls.length).toBeLessThanOrEqual(280);
+    });
+    it("serializes concurrent ticks and competitors while reserving the singleton before submission", async () => {
+        const s = setup(makeSplit(), [singleton]);
+        s.deps.config = protectedCfg;
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        s.settle.mockImplementation(async () => {
+            await gate;
+            return "cc".repeat(32);
+        });
+        const collector = createProceedsCollector(s.deps);
+        const tick = collector.tick();
+        expect(collector.tick()).toBe(tick);
+        await vi.waitFor(() => expect(s.settle).toHaveBeenCalledTimes(1));
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([
+            { txid: singleton.txid, vout: singleton.vout },
+        ]);
+        const competitor = createProceedsCollector(s.deps);
+        await competitor.tick();
+        expect(competitor.status().blocker).toBe("proceeds_worker_active");
+        collector.stop();
+        release();
+        await collector.drain();
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+    });
+    it("never creates an automatic split after stop or while an SDK intent locks the input", async () => {
+        for (const stopped of [false, true]) {
+            const s = setup(makePlan(), [singleton]);
+            s.deps.config = protectedCfg;
+            s.jobs.complete("job", "cc".repeat(32));
+            s.deps.runtime.providers.indexerProvider.getVtxos = async () =>
+                ({ vtxos: [singleton] }) as any;
+            const collector = createProceedsCollector(s.deps);
+            if (stopped) collector.stop();
+            else s.setSdkLocks([singleton]);
+            await collector.tick();
+            expect(s.jobs.active()).toBeUndefined();
+            expect(s.settle).not.toHaveBeenCalled();
+        }
+    });
+});
+
+describe("inventory split database fencing", () => {
+    const singleton = fundingCoin({ value: 100000 });
+    const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+    const split = () => planInventorySplit([singleton], [], protectedCfg, {}, address, clock, -1n)!;
+    const reserve = (s: ReturnType<typeof setup>) => {
+        const policy = new PolicyRepository(s.db);
+        policy.update(
+            {
+                paused: false,
+                maxOutstandingSats: 1000n,
+                maxPerPaymentTopupSats: 330n,
+                maxConcurrentAdvances: 3,
+                assetRules: [
+                    {
+                        assetId: null,
+                        enabled: true,
+                        claim: "either",
+                        maxTopupSats: null,
+                        fares: [],
+                    },
+                ],
+            },
+            "test",
+        );
+        new ReservationRepository(s.db).reserveQuote({
+            advance: advance({
+                state: "quoted",
+                operatorInputs: [{ txid: singleton.txid, vout: singleton.vout }],
+                createdAt: 100,
+                expiresAt: 160,
+            }),
+            expectedPolicyRevision: policy.getSnapshot().revision,
+            recoveryExecutionBudget: { kind: "height", value: 0n },
+        });
+    };
+    it("prevents a quote from acquiring an input owned by a durable split job", () => {
+        const s = setup(split(), [singleton]);
+        expect(() => reserve(s)).toThrow("operator input already reserved");
+        expect(new AdvanceRepository(s.db).get("adv-1")).toBeUndefined();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+    });
+    it("refuses a new split job when a quote changes the reservation snapshot after planning begins", async () => {
+        const s = setup(makePlan(), [singleton]);
+        s.deps.config = protectedCfg;
+        s.jobs.complete("job", "cc".repeat(32));
+        s.deps.runtime.providers.indexerProvider.getVtxos = async () =>
+            ({ vtxos: [singleton] }) as any;
+        vi.spyOn(s.deps.runtime.wallet!.arkProvider, "getInfo").mockImplementation(async () => {
+            reserve(s);
+            return s.info;
+        });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(s.jobs.active()).toBeUndefined();
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([
+            { txid: singleton.txid, vout: singleton.vout },
+        ]);
+    });
+    it("keeps exact but unsafe newly settled outputs fenced", async () => {
+        const plan = split();
+        const s = setup(plan, [singleton]);
+        s.deps.config = protectedCfg;
+        s.finish();
+        s.setOutputs(
+            plan.outputs!.map((value, vout) =>
+                fundingCoin({
+                    value: Number(value),
+                    txid: "dd".repeat(32),
+                    vout,
+                    commitmentTxIds: ["cc".repeat(32)],
+                    expiresAtHeight: clock.height + 1,
+                }),
+            ),
+        );
+        await createProceedsCollector(s.deps).tick();
+        expect(s.jobs.active()?.blocker).toBe("proceeds_output_pending");
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+    });
+});
+
+describe("inventory split replenishment progress", () => {
+    it("counts every new output as a working coin with a zero reserve and stops at eight", () => {
+        const zero = { ...cfg, operatorMinReserveSats: 0n };
+        const singleton = fundingCoin({ value: 100000 });
+        const plan = planInventorySplit([singleton], [], zero, {}, address, clock, -1n)!;
+        expect(plan.outputs).toHaveLength(8);
+        expect(plan.outputs!.every((n) => BigInt(n) >= 660n)).toBe(true);
+        const outputs = plan.outputs!.map((n, vout) => fundingCoin({ value: Number(n), vout }));
+        expect(planInventorySplit(outputs, [], zero, {}, address, clock, -1n)).toBeUndefined();
+        const seven = outputs.slice(0, 7);
+        const refill = planInventorySplit(seven, [], zero, {}, address, clock, -1n)!;
+        expect(refill.outputs).toHaveLength(2);
+        expect(refill.outputs!.every((n) => BigInt(n) >= 660n)).toBe(true);
+    });
+    it.each([100000, 10000])(
+        "preserves receipt collection or its blocker while bootstrapping a %s-sat pool",
+        async (value) => {
+            const singleton = fundingCoin({ value });
+            const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+            const s = setup();
+            s.jobs.complete("job", "cc".repeat(32));
+            s.deps.config = protectedCfg;
+            const receiverAddress = new ArkAddress(
+                cfg.serverPubkey,
+                receiverKey,
+                cfg.addressHrp,
+            ).encode();
+            const fare = { currency: "sats" as const, units: 10n };
+            const encoded = buildSponsoredEnvelope(
+                {
+                    advanceId: "sponsored-1",
+                    senderInputs: [
+                        {
+                            txid: "ac".repeat(32),
+                            vout: 0,
+                            value: 1000n,
+                            tapTree: senderTree.encode(),
+                            spendLeaf: senderTree.scripts[0],
+                            expiry: { kind: "height", value: 900000n },
+                        },
+                    ],
+                    senderSats: 1000n,
+                    funding: {
+                        inputs: [carrier],
+                        totalValue: 2000n,
+                        batchExpiry: { kind: "height", value: 900000n },
+                    },
+                    params: {
+                        receiverKey,
+                        senderKey,
+                        operatorKey: cfg.operatorKey,
+                        dust: cfg.dust,
+                        contribution: 10n,
+                    },
+                    receiverAddress,
+                    fare,
+                    satsFarePayer: "sender",
+                },
+                cfg,
+                serverUnroll,
+            );
+            const envelope = decodeLockupEnvelope(encoded);
+            const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+            const locked = advance({
+                id: "sponsored-1",
+                kind: "sponsored",
+                operatorKey: cfg.operatorKey,
+                topup: 10n,
+                locktime: 0n,
+                batchExpiry: { kind: "height", value: 900000n },
+                operatorInputs: [{ txid: carrier.txid, vout: carrier.vout }],
+                unsignedLockupTx: encoded,
+                unsignedLockupId: envelope.unsignedTxId,
+                covenantAddress: receiverAddress,
+                fare,
+                arkTxid: tx.id,
+                outpoint: { txid: tx.id, vout: envelope.covenantOutputIndex },
+            });
+            const advances = new AdvanceRepository(s.db);
+            s.deps.advances = advances;
+            advances.insert(locked);
+            const fareCoin = fundingCoin({
+                txid: tx.id,
+                vout: 1,
+                value: Number(tx.getOutput(1).amount),
+                isSwept: true,
+            });
+            s.setOutputs([fareCoin, singleton]);
+            s.deps.runtime.providers.indexerProvider.getVtxos = async ({ outpoints }: any) => ({
+                vtxos: outpoints.map((p: Outpoint) =>
+                    p.txid === singleton.txid ? singleton : fareCoin,
+                ),
+            });
+            expect(await discoverProceeds(s.deps, [fareCoin, singleton])).toEqual([fareCoin]);
+            expect(() =>
+                planProceeds(
+                    [fareCoin],
+                    [fareCoin, singleton],
+                    [],
+                    protectedCfg,
+                    {},
+                    address,
+                    clock,
+                    -1n,
+                ),
+            ).toThrow("proceeds_reserve_unavailable");
+            const collector = createProceedsCollector(s.deps);
+            await collector.tick();
+            if (value === 10000) {
+                expect(s.settle).not.toHaveBeenCalled();
+                expect(s.jobs.active()).toBeUndefined();
+                expect(collector.status().blocker).toBe("proceeds_reserve_unavailable");
+                return;
+            }
+            expect(s.settle).toHaveBeenCalledTimes(1);
+            expect(s.jobs.active()?.plan.kind).toBe("inventory-split");
+            expect(s.jobs.active()?.plan.inputs).toEqual([
+                { txid: singleton.txid, vout: singleton.vout },
+            ]);
+            expect(s.jobs.active()?.plan.receipts).toEqual([]);
+        },
+    );
 });

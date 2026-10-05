@@ -30,6 +30,17 @@ output fits, `proceeds_output_limit_exceeded` blocks submission. A previously
 authorized job that exceeds a changed limit stays reserved; do not edit its plan
 or clear reservations to bypass the blocker.
 
+Taxi also prepares plain bitcoin inventory automatically. When there are fewer
+than eight eligible working coins, it can split one larger unreserved operator
+coin into at most eight outputs to its own address. A single sufficiently funded
+coin can bootstrap the service; separate deposits are not required. The split
+keeps a reserve output and spendable working outputs, respects provider limits
+and the same settlement fee cap, and uses the collector's durable input fences
+and submission evidence. Pending outputs are never quote inventory. Quotes wait
+for the exact spendable outputs to be verified, then use the normal reserve rule.
+Reserved, asset-bearing, renewing and short-lived coins are not split. An
+ambiguous submission retains its job and input reservations across restart.
+
 Inspect `proceeds` in `/health`, or `readiness.proceeds` in the admin port's `/admin/api/status`:
 it reports the active job,
 state, blocker, exact authorized fee and commitment. New quotes wait while a
