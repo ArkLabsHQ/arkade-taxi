@@ -690,21 +690,7 @@ export function createProceedsCollector(deps: Deps) {
             (c) => c.commitmentTxIds?.includes(commitmentTxid) && canonical(c, config),
         );
         const amounts = collectionOutputAmounts(plan);
-        const tip =
-            plan.kind === "inventory-split"
-                ? await runtime.wallet!.onchainProvider.getChainTip()
-                : undefined;
-        const safeOutputs =
-            !tip ||
-            outputs.every(
-                (c) =>
-                    reserveValue(c, config, {
-                        height: tip.height,
-                        timestamp: new Date(tip.time * 1000),
-                    }) > 0n,
-            );
         if (
-            !safeOutputs ||
             !settled ||
             outputs.length !== amounts.length ||
             new Set(outputs.map(key)).size !== outputs.length ||

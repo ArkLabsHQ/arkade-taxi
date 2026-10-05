@@ -1632,25 +1632,41 @@ describe("inventory split database fencing", () => {
             { txid: singleton.txid, vout: singleton.vout },
         ]);
     });
-    it("keeps exact but unsafe newly settled outputs fenced", async () => {
+    it("completes an exactly confirmed split after headroom crosses without making its coins lendable", async () => {
         const plan = split();
         const s = setup(plan, [singleton]);
         s.deps.config = protectedCfg;
         s.finish();
-        s.setOutputs(
-            plan.outputs!.map((value, vout) =>
-                fundingCoin({
-                    value: Number(value),
-                    txid: "dd".repeat(32),
-                    vout,
-                    commitmentTxIds: ["cc".repeat(32)],
-                    expiresAtHeight: clock.height + 1,
-                }),
-            ),
+        const outputs = plan.outputs!.map((value, vout) =>
+            fundingCoin({
+                value: Number(value),
+                txid: "dd".repeat(32),
+                vout,
+                commitmentTxIds: ["cc".repeat(32)],
+                expiresAtHeight: clock.height + 1,
+            }),
         );
+        s.setOutputs(outputs);
         await createProceedsCollector(s.deps).tick();
-        expect(s.jobs.active()?.blocker).toBe("proceeds_output_pending");
-        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
+        expect(s.jobs.active()).toBeUndefined();
+        expect(s.jobs.get("job")?.state).toBe("complete");
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(() =>
+            selectOperatorFunding({
+                spendable: outputs,
+                reserved: [],
+                requiredSats: 280n,
+                safety: runtimeSafety(),
+                nowMs: runtimeSafety().checkedAt,
+                maxSnapshotAgeMs: 30000,
+                minExpiryHeadroomBlocks: protectedCfg.minExpiryHeadroomBlocks,
+                minExpiryHeadroomSeconds: protectedCfg.minExpiryHeadroomSeconds,
+                renewalThresholdSeconds: protectedCfg.vtxoRenewalThresholdSeconds,
+                minReserveSats: protectedCfg.operatorMinReserveSats,
+                dustSats: protectedCfg.dust,
+            }),
+        ).toThrow("insufficient compatible safe inventory");
     });
 });
 
