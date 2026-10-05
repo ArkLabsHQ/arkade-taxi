@@ -908,6 +908,20 @@ describe("GET /v1/info", () => {
             maxPerPaymentTopupSats: "1000",
             paused: false,
         });
+        const publicEndpoints = createRoutes({
+            ...deps(),
+            config: {
+                ...config(),
+                publicArkdUrl: "http://localhost:7070",
+                publicEmulatorUrl: "http://localhost:7073",
+            },
+        });
+        const advertised = await (await publicEndpoints.request("/v1/info")).json();
+        expect(advertised).toEqual({
+            ...body,
+            arkdUrl: "http://localhost:7070",
+            emulatorUrl: "http://localhost:7073",
+        });
     });
 
     it("advertises no rules when the operator has stated none", async () => {

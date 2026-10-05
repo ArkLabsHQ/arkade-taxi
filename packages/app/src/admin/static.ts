@@ -3437,6 +3437,10 @@ const CONFIG_MEANINGS = {
     arkdUrl: "The Arkade server the Taxi works with.",
     indexerUrl: "Where the Taxi reads coins: the same Arkade server's indexer.",
     emulatorUrl: "The emulator that co-signs every claim, refund and recovery.",
+    publicArkdUrl:
+        "The Arkade endpoint clients connect to; defaults to the Taxi's internal endpoint.",
+    publicEmulatorUrl:
+        "The emulator endpoint clients connect to; defaults to the Taxi's internal endpoint.",
     operatorMinReserveSats: "Sats the Taxi always keeps; it lends only what is above them.",
     minExpiryHeadroomBlocks:
         "The Taxi lends only coins with at least this many blocks left before they expire.",
@@ -3460,7 +3464,7 @@ const CONFIG_MEANINGS = {
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",
     networkName: "The network the Arkade server reports.",
-    esploraUrl: "The chain explorer the Arkade SDK names for this network.",
+    esploraUrl: "The configured chain explorer, or the Arkade SDK default for this network.",
     serverPubkey: "The Arkade server's signing key, pinned at startup.",
     emulatorPubkey: "The emulator key the Arkade SDK pins for this network.",
     dust: "The network dust: the most one payment can borrow.",

@@ -16,6 +16,8 @@ export interface TaxiConfig {
     indexerUrl: string;
     emulatorUrl: string;
     esploraUrl?: string;
+    publicArkdUrl?: string;
+    publicEmulatorUrl?: string;
     minExpiryHeadroomBlocks: bigint;
     recoveryBroadcastBlocks: bigint;
     recoveryCriticalBlocks: bigint;
@@ -58,6 +60,8 @@ export const SHOWN_CONFIG = {
     arkdUrl: "TAXI_ARKD_URL",
     indexerUrl: "TAXI_ARKD_URL",
     emulatorUrl: "TAXI_EMULATOR_URL",
+    publicArkdUrl: "TAXI_PUBLIC_ARKD_URL",
+    publicEmulatorUrl: "TAXI_PUBLIC_EMULATOR_URL",
     operatorMinReserveSats: "TAXI_OPERATOR_MIN_RESERVE_SATS",
     minExpiryHeadroomBlocks: "TAXI_MIN_EXPIRY_HEADROOM_BLOCKS",
     recoveryBroadcastBlocks: "TAXI_RECOVERY_BROADCAST_BLOCKS",
@@ -183,6 +187,8 @@ const SCHEMA = z
         TAXI_ARKD_URL: url,
         TAXI_EMULATOR_URL: url,
         TAXI_ESPLORA_URL: url.optional(),
+        TAXI_PUBLIC_ARKD_URL: url.optional(),
+        TAXI_PUBLIC_EMULATOR_URL: url.optional(),
         TAXI_MIN_EXPIRY_HEADROOM_BLOCKS: positiveSats.default("144"),
         TAXI_RECOVERY_BROADCAST_BLOCKS: positiveSats.default("72"),
         TAXI_RECOVERY_CRITICAL_BLOCKS: positiveSats.default("12"),
@@ -268,6 +274,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         indexerUrl: v.TAXI_ARKD_URL,
         emulatorUrl: v.TAXI_EMULATOR_URL,
         ...(v.TAXI_ESPLORA_URL ? { esploraUrl: v.TAXI_ESPLORA_URL } : {}),
+        ...(v.TAXI_PUBLIC_ARKD_URL ? { publicArkdUrl: v.TAXI_PUBLIC_ARKD_URL } : {}),
+        ...(v.TAXI_PUBLIC_EMULATOR_URL ? { publicEmulatorUrl: v.TAXI_PUBLIC_EMULATOR_URL } : {}),
         minExpiryHeadroomBlocks: v.TAXI_MIN_EXPIRY_HEADROOM_BLOCKS,
         recoveryBroadcastBlocks: v.TAXI_RECOVERY_BROADCAST_BLOCKS,
         recoveryCriticalBlocks: v.TAXI_RECOVERY_CRITICAL_BLOCKS,

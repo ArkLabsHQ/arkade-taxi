@@ -27,6 +27,8 @@ deliberate — it refuses to guess a price.
 | `TAXI_ARKD_URL`              | —                   | **yes**  | absolute URL                 |
 | `TAXI_EMULATOR_URL`          | —                   | **yes**  | absolute URL                 |
 | `TAXI_ESPLORA_URL`           | SDK network default | no       | absolute URL                 |
+| `TAXI_PUBLIC_ARKD_URL`       | TAXI_ARKD_URL       | no       | absolute URL                 |
+| `TAXI_PUBLIC_EMULATOR_URL`   | TAXI_EMULATOR_URL   | no       | absolute URL                 |
 | `TAXI_OPERATOR_PRIVKEY`      | —                   | **yes**  | 64 hex (32-byte private key) |
 | `TAXI_LOG_LEVEL`             | `info`              | no       | `trace`…`fatal`              |
 | `TAXI_PROCEEDS_MAX_FEE_SATS` | `0`                 | no       | non-negative integer sats    |
@@ -39,8 +41,10 @@ every value read here and every one derived from arkd at startup, read-only,
 except `TAXI_OPERATOR_PRIVKEY`. A URL is shown without credentials or query.
 Changing a value means restarting with the new environment.
 
-Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. `TAXI_ESPLORA_URL` overrides the SDK's default Esplora endpoint for the verified network. It selects the SDK's
-Esplora endpoint from the network advertised by arkd. The same verified network
+Taxi uses `TAXI_ARKD_URL` for the SDK's integrated indexer. `TAXI_ESPLORA_URL`
+overrides the SDK's default Esplora endpoint for the verified network. The public
+provider URL overrides control the endpoints advertised to clients in `/v1/info`;
+Taxi still connects to its configured internal providers. The verified network
 selects the address HRP and emulator trust anchor; arkd supplies its signer,
 dust, minimum VTXO amount and unilateral exit delay through `GET /v1/info`.
 
