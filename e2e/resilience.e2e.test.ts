@@ -157,9 +157,12 @@ liveScenario("restart-quoted-reservation", async () => {
         expect(after.topup).toBe(quoted[i].quote.params.topup);
     }
     expect((await admin("status")).exposure).toEqual(status.exposure);
-    const restored = (await ready()).body.runtime.inventory;
-    expect(restored.reservedSats).toBe(String(reservedValue));
-    expect(restored.reservedVtxos).toBe(inputs.length);
+    await poll(
+        "restored quote reservations after inventory maintenance",
+        async () => (await ready()).body.runtime.inventory,
+        (value) =>
+            value.reservedSats === String(reservedValue) && value.reservedVtxos === inputs.length,
+    );
     const second = await buys(live, coins[1]);
     const nextInputs = second.verified.envelope.operatorInputs;
     expect(nextInputs.length).toBeGreaterThan(0);
