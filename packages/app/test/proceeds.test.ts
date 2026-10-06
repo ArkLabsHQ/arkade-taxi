@@ -189,6 +189,7 @@ function setup(
             }));
             const sdk: any = Object.assign(Object.create(Wallet.prototype), {
                 getAddress: wallet.getAddress,
+                onchainProvider: wallet.onchainProvider,
                 logUngatedInputs: () => {},
                 recipientAddressContext: () => ({
                     hrp: "tark",

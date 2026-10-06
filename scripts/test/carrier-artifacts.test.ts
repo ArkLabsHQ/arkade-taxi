@@ -67,7 +67,7 @@ describe("frozen carrier artifacts", () => {
         const paths = /across (\d+) units holding (\d+) installing paths/.exec(output);
         expect(paths).not.toBeNull();
         expect(Number(paths![1])).toBeGreaterThanOrEqual(6);
-        expect(Number(paths![2])).toBe(5);
+        expect(Number(paths![2])).toBe(6);
     }, 30_000);
 
     it("reads a candidate out of any dependency field a manifest can install from", () => {

@@ -98,3 +98,37 @@ jobs:
                       e2e-artifacts/isolated/boundary-diagnostics.jsonl
                       e2e-artifacts/isolated/unilateral-exit.json
                   if-no-files-found: warn
+
+    client-wallet:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v5
+              with:
+                  ref: ${{ inputs.ref || github.sha }}
+            - uses: actions/checkout@v5
+              with:
+                  repository: ArkLabsHQ/arkade-regtest
+                  ref: c364ea8af124ca5f75d62d6cabf6436481e10dcc
+                  path: arkade-regtest
+                  persist-credentials: false
+            - uses: pnpm/action-setup@v4
+            - uses: actions/setup-node@v5
+              with:
+                  node-version: 22
+                  cache: pnpm
+            - run: node scripts/carrier-artifacts/verify.mjs
+            - run: pnpm install --frozen-lockfile
+            - run: pnpm -r build
+            - run: docker build -t arkade-taxi:regtest .
+            - run: pnpm regtest:up:client
+            - run: pnpm regtest:test:client
+            - name: Capture shared-regtest logs
+              if: failure()
+              run: |
+                  for service in arkd arkd-wallet emulator taxi; do
+                    docker logs --tail 200 "$service" 2>&1 || true
+                  done
+            - name: Stop shared-regtest
+              if: always()
+              run: pnpm regtest:down:client

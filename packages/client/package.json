@@ -11,18 +11,24 @@
         ".": {
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
+        },
+        "./wallet": {
+            "types": "./dist/wallet/index.d.ts",
+            "default": "./dist/wallet/index.js"
         }
     },
     "scripts": {
-        "build": "tsc -p tsconfig.json"
+        "build": "tsc -p tsconfig.json",
+        "test:e2e": "vitest run --config vitest.e2e.config.ts"
     },
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*",
         "@arkade-taxi/protocol": "workspace:*",
-        "@arkade-os/sdk": "0.4.77",
-        "@arkade-os/swap": "0.0.23",
+        "@arkade-os/sdk": "0.4.78",
+        "@arkade-os/swap": "0.0.24",
         "@noble/hashes": "^2.0.1",
         "@scure/base": "^2.0.0",
-        "@scure/btc-signer": "2.0.1"
+        "@scure/btc-signer": "2.0.1",
+        "@arkade-os/solver-discovery": "0.2.7"
     }
 }

@@ -21,7 +21,7 @@ export const MANIFEST_PATH = `${VENDOR_DIR}/manifest.json`;
 export const WORKSPACE_FILE = "pnpm-workspace.yaml";
 
 const TS_SDK = "https://github.com/arkade-os/ts-sdk.git";
-const SDK_COMMIT = "23c6d353f7ea6616edf43da781b589a023fc693d";
+const SDK_COMMIT = "27f22047daa260e96e0055636874987a27e4743f";
 
 // Moving to a new candidate is an edit HERE, so `verify.mjs` refuses an archive
 // whose manifest names any other source.
