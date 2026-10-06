@@ -556,7 +556,7 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         selected: ExtendedVirtualCoin[];
         fareId: string;
         maxFare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
-        /** The most the Taxi may advance; for sats, exactly what the amount lacks of dust. */
+        /** The most the Taxi may advance: one whole dust unit. */
         carrierCeiling: bigint;
         payment: { assetId: AssetIdValue; assetUnits: bigint } | { paymentSats: bigint };
     }
