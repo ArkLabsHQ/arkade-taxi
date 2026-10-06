@@ -130,7 +130,7 @@ async function runServe(): Promise<void> {
         config,
         now: seconds,
         tip: runtime.getChainTip,
-        arkProvider: runtime.providers.arkProvider,
+        wallet: () => runtime.wallet,
         onPrompt: () => timed("watcher.reconcile", () => reconciler.tick()),
     });
 

@@ -103,7 +103,7 @@ vi.mock("../src/watcher.js", async (original) => {
     return {
         ...actual,
         createSpendWatcher: (deps: Parameters<typeof actual.createSpendWatcher>[0]) =>
-            actual.createSpendWatcher({ ...deps, arkProvider: undefined }),
+            actual.createSpendWatcher({ ...deps, wallet: undefined }),
     };
 });
 vi.mock("../src/lifecycle.js", async (original) => {

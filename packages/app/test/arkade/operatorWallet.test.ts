@@ -760,9 +760,11 @@ describe("persistent operator runtime safety", () => {
         });
     });
     it("starts closed, opens only after fresh provider/wallet/tip checks, and preserves DB ownership", async () => {
-        const { runtime, db } = setup();
+        const s = setup({ reconcileIntervalMs: 1234 });
+        const { runtime, db } = s;
         expect(runtime.safety().blockers).toContain("runtime_unchecked");
         expect((await runtime.refresh()).blockers).toEqual([]);
+        expect(s.walletConfig.watcherConfig).toEqual({ failsafePollIntervalMs: 1234 });
         await expect(runtime.assertAdmission()).resolves.toBeUndefined();
         await runtime.dispose();
         expect(db.open).toBe(true);

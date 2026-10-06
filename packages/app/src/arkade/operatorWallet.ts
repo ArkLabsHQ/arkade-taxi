@@ -298,6 +298,7 @@ export function createOperatorRuntime(
                             indexerProvider: providers.indexerProvider,
                             onchainProvider,
                             storage,
+                            watcherConfig: { failsafePollIntervalMs: config.reconcileIntervalMs },
                             settlementConfig: {
                                 vtxoThreshold: Number(config.vtxoRenewalThresholdSeconds),
                                 deprecatedSignerMigration: false,

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     ArkAddress,
+    ContractManager,
+    InMemoryContractRepository,
+    InMemoryWalletRepository,
     EmulatorPacket,
     Extension,
     MultisigTapscript,
@@ -17,6 +20,7 @@ import {
     buildOffchainTx,
     verifyTapscriptSignatures,
     type IndexerProvider,
+    type SubscriptionResponse,
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { arkade } from "@arkade-os/sdk";
@@ -471,6 +475,64 @@ async function setup(
         finalArk,
         watcher,
         setTip: (next: typeof tip) => (tip = next),
+    };
+}
+
+async function watcherWallet(state: Awaited<ReturnType<typeof setup>>) {
+    let reportSpendable = true;
+    let next: ((update: SubscriptionResponse | undefined) => void) | undefined;
+    const indexer = {
+        ...state.indexer,
+        getVtxos: vi.fn(async (options: Parameters<IndexerProvider["getVtxos"]>[0]) => {
+            if (!options || !("scripts" in options)) return state.indexer.getVtxos(options);
+            return {
+                vtxos: reportSpendable
+                    ? [...state.coins.values()].filter(
+                          (coin) => options.scripts?.includes(coin.script) && !coin.isSpent,
+                      )
+                    : [],
+            };
+        }),
+        subscribeForScripts: vi.fn(async () => "taxi-test-subscription"),
+        unsubscribeForScripts: vi.fn(async () => {}),
+        getSubscription: (_id: string, signal: AbortSignal) =>
+            (async function* () {
+                while (!signal.aborted) {
+                    const update = await new Promise<SubscriptionResponse | undefined>(
+                        (resolve) => {
+                            next = resolve;
+                            signal.addEventListener("abort", () => resolve(undefined), {
+                                once: true,
+                            });
+                        },
+                    );
+                    next = undefined;
+                    if (update) yield update;
+                }
+            })(),
+    } satisfies Pick<
+        IndexerProvider,
+        | "getVtxos"
+        | "getVirtualTxs"
+        | "subscribeForScripts"
+        | "unsubscribeForScripts"
+        | "getSubscription"
+    >;
+    const manager = await ContractManager.create({
+        indexerProvider: indexer as unknown as IndexerProvider,
+        contractRepository: new InMemoryContractRepository(),
+        walletRepository: new InMemoryWalletRepository(),
+        watcherConfig: { failsafePollIntervalMs: 20 },
+    });
+    return {
+        manager,
+        indexer,
+        wallet: { getContractManager: async () => manager },
+        setSpendableView: (enabled: boolean) => (reportSpendable = enabled),
+        emit: async (update: SubscriptionResponse) => {
+            await vi.waitFor(() => expect(next).toBeDefined());
+            next!(update);
+        },
     };
 }
 
@@ -1743,10 +1805,9 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    it("scans initially and after restart without rescanning an already running stream", async () => {
+    it("scans once per start and leaves the wallet's watcher running after stop", async () => {
         const state = await setup("purchased");
-        let connections = 0;
-        let aborted = 0;
+        const sdk = await watcherWallet(state);
         const onPrompt = vi.fn(async () => watcher.catchUp());
         const watcher = createSpendWatcher({
             advances: state.advances,
@@ -1755,47 +1816,38 @@ describe("canonical covenant observation", () => {
             config: config(),
             now: () => NOW + 30,
             tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
-            arkProvider: {
-                getTransactionsStream(signal) {
-                    connections++;
-                    return (async function* () {
-                        try {
-                            await new Promise<void>((resolve) =>
-                                signal.addEventListener("abort", () => resolve(), { once: true }),
-                            );
-                        } finally {
-                            if (signal.aborted) aborted++;
-                        }
-                    })();
-                },
-            },
+            wallet: () => sdk.wallet,
             onPrompt,
         });
         try {
-            await watcher.start();
+            await Promise.all([watcher.start(), watcher.start()]);
             expect(onPrompt).toHaveBeenCalledOnce();
             expect(state.advances.get(state.advance.id)).toMatchObject({ state: "purchased" });
+            expect(await sdk.manager.getWatchedScripts()).toEqual([]);
             await watcher.start();
             expect(onPrompt).toHaveBeenCalledOnce();
-            expect(connections).toBe(1);
-            await watcher.stop();
-            expect(aborted).toBe(1);
-            await watcher.start();
-            expect(onPrompt).toHaveBeenCalledTimes(2);
-            expect(connections).toBe(2);
+            await Promise.all([watcher.stop(), watcher.stop()]);
+            expect(await sdk.manager.isWatching()).toBe(true);
             await watcher.start();
             expect(onPrompt).toHaveBeenCalledTimes(2);
         } finally {
             await watcher.stop();
+            sdk.manager.dispose();
             state.db.close();
         }
-        expect(aborted).toBe(2);
     });
 
-    it("uses duplicate stream events only as polling prompts and aborts cleanly", async () => {
-        const state = await setup("purchased");
-        let streamAborted = false;
-        let events = 0;
+    it("syncs live covenant registrations and rebinds without removing foreign watches", async () => {
+        const state = await setup();
+        const other = await setup(undefined, ":memory:", false, true, undefined, 700011n);
+        const first = await watcherWallet(state);
+        const second = await watcherWallet(state);
+        const initialScript = state.coins.get(`${state.outpoint.txid}:0`)!.script;
+        const addedScript = other.coins.get(`${other.outpoint.txid}:0`)!.script;
+        const foreignScript = hex.encode(operatorTree.pkScript);
+        await first.manager.watchScript(initialScript, { label: "existing-owner" });
+        await second.manager.watchScript(foreignScript, { label: "wallet-owner" });
+        let wallet = first.wallet;
         const watcher = createSpendWatcher({
             advances: state.advances,
             policy: state.policy,
@@ -1803,86 +1855,208 @@ describe("canonical covenant observation", () => {
             config: config(),
             now: () => NOW + 30,
             tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
-            arkProvider: {
-                getTransactionsStream(signal) {
-                    return (async function* () {
-                        try {
-                            yield {};
-                            yield {};
-                            await new Promise<void>((resolve) =>
-                                signal.addEventListener("abort", () => resolve(), { once: true }),
-                            );
-                        } finally {
-                            streamAborted = signal.aborted;
-                        }
-                    })();
-                },
-            },
-            onPrompt: async () => {
-                events++;
-                await watcher.catchUp();
-            },
-            sleep: async () => {},
+            wallet: () => wallet,
         });
-        await watcher.start();
-        await vi.waitFor(() => expect(events).toBeGreaterThanOrEqual(3));
-        expect(state.advances.get(state.advance.id)).toMatchObject({ state: "purchased" });
-        await watcher.stop();
-        expect(streamAborted).toBe(true);
-        expect(watcher.status().blockers).not.toContainEqual(
-            expect.objectContaining({ code: "transaction_stream_disconnected" }),
-        );
-        state.db.close();
+        try {
+            await watcher.start();
+            const added = { ...other.advances.get(other.advance.id)!, id: "added-covenant" };
+            state.advances.insert(added);
+            for (const [key, coin] of other.coins) state.coins.set(key, coin);
+            for (const [key, tx] of other.txs) state.txs.set(key, tx);
+            await watcher.catchUp();
+            await vi.waitFor(async () =>
+                expect(await first.manager.getWatchedScripts()).toEqual([
+                    { script: initialScript, label: "existing-owner" },
+                    { script: addedScript, label: "taxi-covenant" },
+                ]),
+            );
+            state.advances.update({ ...added, state: "expired" });
+            await watcher.catchUp();
+            await vi.waitFor(async () =>
+                expect(await first.manager.getWatchedScripts()).toEqual([
+                    { script: initialScript, label: "existing-owner" },
+                ]),
+            );
+            state.advances.update({ ...added, covenantAddress: "invalid-address" });
+            await watcher.catchUp();
+            expect(state.advances.get(added.id)?.failureCode).toBe("covenant_spend_unknown");
+            await vi.waitFor(async () =>
+                expect(await first.manager.getWatchedScripts()).toHaveLength(1),
+            );
+            state.advances.update(added);
+            await watcher.catchUp();
+            wallet = second.wallet;
+            await watcher.catchUp();
+            await vi.waitFor(async () =>
+                expect(await first.manager.getWatchedScripts()).toEqual([
+                    { script: initialScript, label: "existing-owner" },
+                ]),
+            );
+            await vi.waitFor(async () =>
+                expect(await second.manager.getWatchedScripts()).toHaveLength(3),
+            );
+            await second.manager.watchScript(addedScript, { label: "later-owner" });
+            await watcher.stop();
+            expect(await second.manager.getWatchedScripts()).toEqual([
+                { script: foreignScript, label: "wallet-owner" },
+                { script: addedScript, label: "later-owner" },
+            ]);
+            expect(await first.manager.isWatching()).toBe(true);
+        } finally {
+            await watcher.stop();
+            first.manager.dispose();
+            second.manager.dispose();
+            state.db.close();
+            other.db.close();
+        }
     });
 
-    it("reconnects a gracefully completed stream and preserves health beside scan blockers", async () => {
+    it("keeps canonical scans and stop independent of a pending wallet manager", async () => {
         const state = await setup();
-        let connections = 0;
-        let tipOffline = false;
-        const sleeps: number[] = [];
+        const sdk = await watcherWallet(state);
+        let release!: (manager: ContractManager) => void;
+        const held = new Promise<ContractManager>((resolve) => (release = resolve));
+        const getManager = vi.spyOn(sdk.wallet, "getContractManager").mockReturnValueOnce(held);
         const watcher = createSpendWatcher({
             advances: state.advances,
             policy: state.policy,
             indexer: state.indexer,
             config: config(),
             now: () => NOW + 30,
-            tip: async () => {
-                if (tipOffline) throw new Error("offline");
-                return { hash: "4c".repeat(32), height: 700002, time: NOW + 2 };
-            },
-            arkProvider: {
-                getTransactionsStream(signal) {
-                    connections++;
-                    if (connections === 1)
-                        return (async function* () {
-                            return;
-                        })();
-                    return (async function* () {
-                        await new Promise<void>((resolve) =>
-                            signal.addEventListener("abort", () => resolve(), { once: true }),
-                        );
-                    })();
+            tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
+            wallet: () => sdk.wallet,
+        });
+        try {
+            await watcher.start();
+            await vi.waitFor(() => expect(getManager).toHaveBeenCalledOnce());
+            await watcher.catchUp();
+            expect(watcher.status().lastScanAt).toBe(NOW + 30);
+            await watcher.stop();
+            release(sdk.manager);
+            await held;
+            expect(await sdk.manager.getWatchedScripts()).toEqual([]);
+            await watcher.start();
+            await vi.waitFor(async () =>
+                expect(await sdk.manager.getWatchedScripts()).toHaveLength(1),
+            );
+        } finally {
+            release(sdk.manager);
+            await watcher.stop();
+            sdk.manager.dispose();
+            state.db.close();
+        }
+    });
+
+    it("removes owned scripts even when an in-flight canonical scan rejects", async () => {
+        const state = await setup();
+        const sdk = await watcherWallet(state);
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 30,
+            tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
+            wallet: () => sdk.wallet,
+        });
+        try {
+            await watcher.start();
+            await vi.waitFor(async () =>
+                expect(await sdk.manager.getWatchedScripts()).toHaveLength(1),
+            );
+            await watcher.catchUp();
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            vi.spyOn(state.advances, "byState").mockImplementation(() => {
+                throw new Error("database unavailable");
+            });
+            const results = await Promise.allSettled([watcher.catchUp(), watcher.stop()]);
+            expect(results).toEqual([
+                {
+                    status: "rejected",
+                    reason: expect.objectContaining({ message: "database unavailable" }),
                 },
-            },
-            sleep: async (milliseconds) => {
-                sleeps.push(milliseconds);
-            },
+                {
+                    status: "rejected",
+                    reason: expect.objectContaining({ message: "database unavailable" }),
+                },
+            ]);
+            expect(await sdk.manager.getWatchedScripts()).toEqual([]);
+            expect(await sdk.manager.isWatching()).toBe(true);
+        } finally {
+            await watcher.stop();
+            sdk.manager.dispose();
+            state.db.close();
+        }
+    });
+
+    it("uses SDK stream and failsafe deltas only to prompt canonical spend verification", async () => {
+        const state = await setup();
+        const spent = await setup("purchased");
+        const sdk = await watcherWallet(state);
+        const events = vi.fn();
+        const unsubscribe = sdk.manager.onContractEvent(events);
+        const onPrompt = vi.fn(async () => watcher.catchUp());
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 30,
+            tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
+            wallet: () => sdk.wallet,
+            onPrompt,
         });
-        await watcher.start();
-        await vi.waitFor(() => expect(connections).toBe(2));
-        expect(sleeps).toEqual([250]);
-        expect(watcher.status().blockers).toContainEqual({
-            code: "transaction_stream_disconnected",
-            detail: "Arkade transaction stream disconnected; polling remains authoritative",
-        });
-        tipOffline = true;
-        await watcher.catchUp();
-        expect(watcher.status().blockers.map(({ code }) => code)).toEqual([
-            "canonical_tip_unavailable",
-            "transaction_stream_disconnected",
-        ]);
-        await watcher.stop();
-        state.db.close();
+        try {
+            await watcher.start();
+            const cached = state.coins.get(`${state.outpoint.txid}:0`)!;
+            await sdk.emit({
+                scripts: [cached.script],
+                newVtxos: [],
+                spentVtxos: [cached],
+                sweptVtxos: [],
+            });
+            await vi.waitFor(() =>
+                expect(events).toHaveBeenCalledWith(
+                    expect.objectContaining({ type: "vtxo_spent" }),
+                ),
+            );
+            await watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "locked",
+            });
+            expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+            events.mockClear();
+            sdk.setSpendableView(false);
+            await vi.waitFor(() =>
+                expect(events).toHaveBeenCalledWith(
+                    expect.objectContaining({ type: "vtxo_spent" }),
+                ),
+            );
+            await watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: "locked",
+            });
+            expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+            sdk.setSpendableView(true);
+            await vi.waitFor(() =>
+                expect(events).toHaveBeenCalledWith(
+                    expect.objectContaining({ type: "vtxo_received" }),
+                ),
+            );
+            for (const [key, coin] of spent.coins) state.coins.set(key, coin);
+            for (const [key, tx] of spent.txs) state.txs.set(key, tx);
+            await vi.waitFor(() =>
+                expect(state.advances.get(state.advance.id)?.state).toBe("purchased"),
+            );
+            expect(onPrompt.mock.calls.length).toBeGreaterThan(3);
+            await vi.waitFor(async () => expect(await sdk.manager.getWatchedScripts()).toEqual([]));
+        } finally {
+            await watcher.stop();
+            unsubscribe();
+            sdk.manager.dispose();
+            state.db.close();
+            spent.db.close();
+        }
     });
 });
 
