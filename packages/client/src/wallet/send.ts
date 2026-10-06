@@ -7,6 +7,7 @@ import {
 } from "@arkade-os/sdk";
 import {
     QuoteVerificationError,
+    TaxiError,
     VerificationErrorCode,
     signLockup,
     signSponsoredPayment,
@@ -387,9 +388,14 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                         clearPending(record);
                     },
                 );
+            if (status.state !== "quoted") submit = undefined;
             if (status.state === "quoted" && submit) {
-                await submit();
-                submit = undefined;
+                try {
+                    await submit();
+                    submit = undefined;
+                } catch (cause) {
+                    if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
+                }
             } else if (!["quoted", "locking", "recovering"].includes(status.state)) {
                 throw new Error(`Taxi transfer is ${status.state}; its outcome is not confirmed`);
             }
@@ -812,7 +818,12 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                 throw new Error("Taxi returned a different payment transaction");
         };
         try {
-            await submit();
+            try {
+                await submit();
+            } catch (cause) {
+                if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
+                return await waitForSettlement(record, client, submit);
+            }
             return await waitForSettlement(record, client);
         } catch (cause) {
             if (cause instanceof ReturnedDirectTaxi || cause instanceof FailedDirectTaxi)

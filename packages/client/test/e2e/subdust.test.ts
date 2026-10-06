@@ -98,7 +98,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
         ]);
     }, 120_000);
 
-    it("sends 50 sats from one coin, then recycles the verified delivery into one spendable coin", async () => {
+    it("retries a refused lockup unchanged, sends 50 sats, and recycles into one spendable coin", async () => {
         const senderCoins = await sender.getSpendableVtxos();
         const receiverCoins = await receiver.getSpendableVtxos();
         expect(senderCoins.map((coin) => coin.value)).toEqual([seedSats]);
@@ -106,6 +106,9 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
 
         let activity: TaxiActivity | undefined;
         const storage = new Map<string, string>();
+        const lockups: { url: string; body: string }[] = [];
+        let quotes = 0;
+        let authorizations = 0;
         const send = createTaxiSender({
             storage: {
                 getItem: (key) => storage.get(key) ?? null,
@@ -116,6 +119,24 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
             getContext,
             serverUnrollScript: sender.serverUnrollScript.script,
             unreservedCoins: (target) => target.getSpendableVtxos(),
+            client: (url, fetchImpl = fetch) =>
+                taxiClient(url, async (input, init) => {
+                    const request = new Request(input, init);
+                    const path = new URL(request.url).pathname;
+                    if (request.method === "POST" && path === "/v1/transfers") quotes += 1;
+                    if (
+                        request.method === "POST" &&
+                        /^\/v1\/transfers\/[^/]+\/lockup$/.test(path)
+                    ) {
+                        lockups.push({ url: request.url, body: await request.text() });
+                        if (lockups.length <= 2)
+                            return Response.json(
+                                { error: "proceeds_collecting", code: "not_ready" },
+                                { status: 503 },
+                            );
+                    }
+                    return fetchImpl(input, init);
+                }),
             recordActivity: (record) => {
                 activity = record;
             },
@@ -165,6 +186,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
                 amount: paymentSats,
                 mode: "recycle",
                 confirmPayment: async (terms) => {
+                    authorizations += 1;
                     expect(terms.assetAmount).toBe(paymentSats);
                     expect(terms.fareUnits).toBe(0n);
                     expect(terms.carrierSats).toBe(context.dust - paymentSats);
@@ -173,6 +195,12 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
             });
             expect(txid).toBe(activity?.lockupTxid);
             expect(activity?.units).toBe("50");
+            expect(quotes).toBe(1);
+            expect(authorizations).toBe(1);
+            expect(lockups.length).toBeGreaterThanOrEqual(3);
+            for (const lockup of lockups) expect(lockup).toEqual(lockups[0]);
+            expect(lockups[0].url).toBe(`${TAXI_URL}/v1/transfers/${activity!.transferId}/lockup`);
+            expect(storage.size).toBe(0);
 
             await vi.waitFor(
                 () => {
