@@ -259,40 +259,39 @@ describe("createQuote", () => {
         expect(stored.covenantAddress).toBe(res.covenantAddress);
     });
 
-    it("charges the sender only the shortfall when it brings sats", async () => {
+    it("locks the sender's sats beside a whole-dust advance", async () => {
         const res = await createQuote(deps(), quoteBody({ senderSats: "100" }));
-        expect(res.params.topup).toBe("230");
+        expect(res.params.topup).toBe("330");
+        expect(res.params.paymentSats).toBe("100");
     });
 
-    // Pins the derivation paymentSats opts out of: a spendable coin is already
-    // at least dust, so this quote delivers dust - vtxoMinAmount, not 1000.
-    it("derives the advance from the sender's whole coin without paymentSats", async () => {
-        const res = await createQuote(deps(), quoteBody({ senderSats: "1000" }));
-        expect(res.params.topup).toBe("10");
-        expect(advances.get(res.transferId)!.topup).toBe(VTXO_MIN);
+    it("refuses a sender whose coin already holds a whole dust unit", async () => {
+        const error = await caught(() => createQuote(deps(), quoteBody({ senderSats: "1000" })));
+        expect(error.code).toBe("invalid_request");
+        expect(error.status).toBe(400);
     });
 
-    it("lends the rest of the dust unit for an exact paymentSats", async () => {
+    it("locks an exact paymentSats beside a whole-dust advance", async () => {
         const res = await createQuote(
             deps(),
             quoteBody({ senderSats: "1000", paymentSats: "100" }),
         );
-        expect(res.params.topup).toBe("230");
-        expect(advances.get(res.transferId)!.topup).toBe(230n);
+        expect(res.params.topup).toBe("330");
+        expect(advances.get(res.transferId)!.paymentSats).toBe(100n);
         const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 900n, 19_770n]);
+        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([430n, 900n, 19_670n]);
     });
 
     it("leaves no sender change when paymentSats takes the whole coin", async () => {
         const res = await createQuote(deps(), quoteBody({ senderSats: "320", paymentSats: "320" }));
-        expect(res.params.topup).toBe("10");
+        expect(res.params.topup).toBe("330");
         const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        expect([0, 1].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 19_990n]);
+        expect([0, 1].map((i) => tx.getOutput(i).amount)).toEqual([650n, 19_670n]);
     });
 
-    it.each(["321", "9", "0"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
+    it.each(["330", "9", "0"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
         const d = deps();
         const error = await caught(() =>
             createQuote(d, quoteBody({ senderSats: "1000", paymentSats })),

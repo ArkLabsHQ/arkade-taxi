@@ -1,7 +1,13 @@
 import { arkade } from "@arkade-os/sdk";
 import { appendAssetLookup } from "./asset.js";
 import { pinOutput } from "./pin.js";
-import { recycleFare, refundTopup, validateParams, type DustCovenantParams } from "./params.js";
+import {
+    lockupSats,
+    recycleFare,
+    refundTopup,
+    validateParams,
+    type DustCovenantParams,
+} from "./params.js";
 
 const finish = (out: arkade.ArkadeScriptType, hasAsset: boolean): Uint8Array => {
     if (!hasAsset) out.push(1);
@@ -114,8 +120,8 @@ export function buildRefund(p: DustCovenantParams, vtxoMinAmount: bigint): Uint8
         "EQUALVERIFY",
     ];
     pinOutput(out, 0, p.operatorKey, topup, p.dust);
-    out.push(1, "INSPECTOUTPUTVALUE", p.dust - topup, "EQUALVERIFY");
-    pinOutput(out, 1, p.senderKey, p.dust - topup, p.dust);
+    out.push(1, "INSPECTOUTPUTVALUE", lockupSats(p) - topup, "EQUALVERIFY");
+    pinOutput(out, 1, p.senderKey, lockupSats(p) - topup, p.dust);
     if (p.assetId) {
         appendAssetLookup(out, 1, p.assetId, true, true);
         appendAssetLookup(out, 0, p.assetId, false, true);
@@ -136,8 +142,8 @@ export function buildReclaim(p: DustCovenantParams, vtxoMinAmount: bigint): Uint
         "EQUALVERIFY",
     ];
     pinOutput(out, 0, p.operatorKey, topup, p.dust);
-    out.push(1, "INSPECTOUTPUTVALUE", p.dust - topup, "EQUALVERIFY");
-    pinOutput(out, 1, p.receiverKey, p.dust - topup, p.dust);
+    out.push(1, "INSPECTOUTPUTVALUE", lockupSats(p) - topup, "EQUALVERIFY");
+    pinOutput(out, 1, p.receiverKey, lockupSats(p) - topup, p.dust);
     if (p.assetId) {
         appendAssetLookup(out, 1, p.assetId, true, true);
         appendAssetLookup(out, 0, p.assetId, false, true);

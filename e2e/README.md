@@ -145,13 +145,13 @@ Both flows check the indexed transaction graph and exact wallet balances.
 
 An asset transfer's sats are only a carrier, so Taxi advances the whole 330-sat
 dust unit and the sender keeps its own carrier, less any sats fare it is billed.
-A sub-dust bitcoin transfer instead nets the advance against the sats the sender
-already brings, leaving a 1-sat advance; a positive sats fare is refused there,
+A sub-dust bitcoin transfer gets the same whole-dust advance, with the payment
+locked beside it in the covenant; a positive sats fare is refused there,
 because a bitcoin transfer has no amount to take one from that is not the
 payment. Repayment and fare outputs target the canonical Arkade wallet output
 key, independently of its funding signing key.
-The live Bitcoin case spends an exact 329-sat input to pay 329 sats. A 50-sat
-payment from a larger wallet coin needs a separate change-output capability.
+The live Bitcoin cases pay 329 sats, and exactly 100 sats via `paymentSats`,
+from a 1,000-sat coin whose remainder returns to the sender as change.
 
 Taxi's production proceeds collector consolidates canonical subdust receipts
 with an ordinary operator coin using the standard SDK wallet settlement path.

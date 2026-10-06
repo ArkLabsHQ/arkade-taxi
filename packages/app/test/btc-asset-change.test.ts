@@ -26,7 +26,7 @@ describe("bitcoin lockups funded by asset-bearing coins", () => {
             const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
             const p = {
                 ...params(),
-                topup: 320n,
+                paymentSats: 10n,
                 claimMode: "recycle" as const,
                 recoveryRecipient: "sender" as const,
             };
@@ -42,14 +42,14 @@ describe("bitcoin lockups funded by asset-bearing coins", () => {
                 expect: {
                     ...args().expect,
                     paymentSats: 10n,
-                    maxTopupSats: 320n,
+                    maxTopupSats: 330n,
                     maxFare: { currency: "sats" as const, units: 0n },
                 },
             };
             const verified = verifyQuote(authorization);
             const tx = Transaction.fromPSBT(base64.decode(verified.envelope.arkTx));
             expect(tx.getOutput(0)).toMatchObject({
-                amount: 330n,
+                amount: 340n,
                 script: verified.script.pkScript,
             });
             expect(tx.getOutput(1)).toMatchObject({

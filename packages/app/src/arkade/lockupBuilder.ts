@@ -12,7 +12,7 @@ import {
     type ExtendedVirtualCoin,
     type Transaction,
 } from "@arkade-os/sdk";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { DustCovenantScript, lockupSats } from "@arkade-taxi/covenant";
 import { fundingInputToWire, type FundingInputValue } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "../config.js";
@@ -169,7 +169,7 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
         ...jointPlan(req, config, {
             inputs,
             operatorInputs,
-            first: { role: "covenant", script: covenant.pkScript, amount: req.params.dust },
+            first: { role: "covenant", script: covenant.pkScript, amount: lockupSats(req.params) },
             contribution: req.params.topup,
             carrier: "dust carrier",
             kind: "lockup",
@@ -220,7 +220,7 @@ export function jointPlan(
         });
     const senderFare = senderPaysFare ? fareHosting : 0n;
     const operatorFare = fareHosting - senderFare;
-    const senderChange = req.senderSats + graph.contribution - req.params.dust - senderFare;
+    const senderChange = req.senderSats + graph.contribution - graph.first.amount - senderFare;
     const operatorChange = req.funding.totalValue - graph.contribution - operatorFare;
     if (senderChange < 0n)
         throw new LockupShapeError(`sender funding does not cover the ${graph.carrier} and fare`);

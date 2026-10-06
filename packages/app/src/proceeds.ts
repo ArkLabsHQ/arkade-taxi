@@ -772,7 +772,16 @@ export function createProceedsCollector(deps: Deps) {
                 return;
             }
             if (stopped) return;
-            timed("proceeds.createJob", () => jobs.create(randomUUID(), plan, now(), taxiLocks));
+            try {
+                timed("proceeds.createJob", () =>
+                    jobs.create(randomUUID(), plan, now(), taxiLocks),
+                );
+            } catch (error) {
+                if (!(error instanceof Error) || error.message !== "proceeds_reservation_changed")
+                    throw error;
+                blocker = null;
+                return;
+            }
             job = jobs.active()!;
         }
         if (!jobs.claim(job.id, owner, now(), now() + leaseMs)) {

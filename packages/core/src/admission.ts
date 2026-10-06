@@ -8,35 +8,6 @@ import {
     type FareSpec,
 } from "./fares.js";
 
-/** A bitcoin transfer nets the sender's sats against the shortfall; an asset
- * transfer fronts the whole unit, since there the sats are only the carrier. */
-function requiredTopup(
-    senderSats: bigint,
-    dust: bigint,
-    vtxoMinAmount: bigint,
-    isBitcoinTransfer: boolean,
-): bigint {
-    const shortfall = isBitcoinTransfer ? dust - senderSats : dust;
-    const capped = shortfall > dust ? dust : shortfall;
-    return capped < vtxoMinAmount ? vtxoMinAmount : capped;
-}
-
-/** The advance that leaves the receiver exactly `paymentSats`, or undefined when
- * no covenant can carry that amount. Both sides of the dust unit must clear
- * vtxoMinAmount, since the claim pays the operator and the receiver separately. */
-function exactTopup(
-    paymentSats: bigint,
-    req: QuoteRequest,
-    dust: bigint,
-    vtxoMinAmount: bigint,
-    isBitcoinTransfer: boolean,
-): bigint | undefined {
-    if (!isBitcoinTransfer) return undefined;
-    if (paymentSats < vtxoMinAmount || paymentSats > dust - vtxoMinAmount) return undefined;
-    if (paymentSats > req.senderSats) return undefined;
-    return dust - paymentSats;
-}
-
 export function admit(
     req: QuoteRequest,
     policy: Policy,
@@ -54,14 +25,17 @@ export function admit(
     if (!rule.enabled) return { ok: false, reason: "asset_disabled" };
 
     const isBitcoinTransfer = req.assetId === undefined;
-    let topup: bigint;
-    if (req.paymentSats === undefined) {
-        topup = requiredTopup(req.senderSats, dust, vtxoMinAmount, isBitcoinTransfer);
-    } else {
-        const exact = exactTopup(req.paymentSats, req, dust, vtxoMinAmount, isBitcoinTransfer);
-        if (exact === undefined) return { ok: false, reason: "invalid_payment_sats" };
-        topup = exact;
-    }
+    if (!isBitcoinTransfer && req.paymentSats !== undefined)
+        return { ok: false, reason: "invalid_payment_sats" };
+    // Every advance is one whole dust unit, so a repayment always comes back as a
+    // spendable coin; a bitcoin payment rides beside it in the covenant.
+    const topup = dust;
+    const paymentSats = isBitcoinTransfer ? (req.paymentSats ?? req.senderSats) : 0n;
+    if (
+        (paymentSats !== 0n || req.paymentSats !== undefined) &&
+        (paymentSats < vtxoMinAmount || paymentSats >= dust || paymentSats > req.senderSats)
+    )
+        return { ok: false, reason: "invalid_payment_sats" };
 
     const perPaymentCap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (topup > perPaymentCap) {
@@ -94,5 +68,5 @@ export function admit(
     const claim = resolveClaimMode(rule.claim, req.claimMode);
     if (typeof claim !== "string") return { ok: false, reason: claim.reason };
 
-    return { ok: true, topup, fare, claim };
+    return { ok: true, topup, ...(paymentSats > 0n ? { paymentSats } : {}), fare, claim };
 }

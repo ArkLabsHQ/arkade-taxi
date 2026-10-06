@@ -6,6 +6,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     refundTopup,
 } from "@arkade-taxi/covenant";
@@ -365,9 +366,10 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     if (source.id !== outpoint.txid || source.outputsLength <= outpoint.vout)
         fail(`advance ${advance.id}: covenant outpoint differs from the lockup graph`);
     const script = covenantScript(advance, config);
+    const lockup = lockupSats(script.options.params);
     const sourceOutput = source.getOutput(outpoint.vout);
     if (
-        sourceOutput.amount !== advance.dust ||
+        sourceOutput.amount !== lockup ||
         !sourceOutput.script ||
         !sameBytes(sourceOutput.script, script.pkScript) ||
         script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress
@@ -466,7 +468,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         script,
         Leaf.Recovery,
         outpoint,
-        advance.dust,
+        lockup,
         sourceAssets?.serialize(),
     );
     const topup = refundTopup(script.options.params, config.vtxoMinAmount);
@@ -478,8 +480,8 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
             script: payoutPkScript(advance.operatorKey, topup, advance.dust),
         },
         {
-            amount: advance.dust - topup,
-            script: payoutPkScript(recoveryKey, advance.dust - topup, advance.dust),
+            amount: lockup - topup,
+            script: payoutPkScript(recoveryKey, lockup - topup, advance.dust),
         },
         Extension.create([
             ...(transferAssets ? [transferAssets] : []),

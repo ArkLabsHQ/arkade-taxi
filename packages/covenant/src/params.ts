@@ -21,6 +21,9 @@ export interface DustCovenantParams {
     exitDelay: RelativeTimelock;
     dust: bigint;
     topup: bigint;
+    /** Sats the payer locks beside a whole-dust bitcoin advance. Absent keeps the
+     * dust-unit covenant byte-identical, so already-funded covenants still rebuild. */
+    paymentSats?: bigint;
     assetId?: AssetIdRef;
     locktime: bigint;
     recoveryRecipient?: "sender" | "receiver";
@@ -62,6 +65,14 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     }
     if (p.topup < vtxoMinAmount || p.topup > p.dust) {
         throw new Error(`covenant: topup ${p.topup} outside [${vtxoMinAmount}, ${p.dust}]`);
+    }
+    if (p.paymentSats !== undefined) {
+        if (p.assetId !== undefined || p.topup !== p.dust)
+            throw new Error("covenant: paymentSats requires a whole-dust bitcoin advance");
+        if (p.paymentSats < vtxoMinAmount || p.paymentSats >= p.dust)
+            throw new Error(
+                `covenant: paymentSats ${p.paymentSats} outside [${vtxoMinAmount}, ${p.dust})`,
+            );
     }
     if (
         equalKeys(p.receiverKey, p.operatorKey) ||
@@ -118,13 +129,16 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     }
 }
 
+/** The covenant output's value: the dust unit, plus any payment locked beside it. */
+export const lockupSats = (p: DustCovenantParams): bigint => p.dust + (p.paymentSats ?? 0n);
+
 /**
- * Falls below topup only when the operator funded the whole dust unit, where one
+ * Falls below topup only when the operator funded the whole lockup, where one
  * vtxoMinAmount must stay behind to host the recovery owner's returned asset: an asset
  * cannot occupy an output on its own.
  */
 export function refundTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigint {
-    const capped = p.dust - vtxoMinAmount;
+    const capped = lockupSats(p) - vtxoMinAmount;
     return p.topup > capped ? capped : p.topup;
 }
 

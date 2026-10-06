@@ -1,6 +1,7 @@
 export {
     exitDelayEncodable,
     exitTimelock,
+    lockupSats,
     recycleFare,
     refundTopup,
     unrecoveredTopup,

@@ -16,6 +16,7 @@ const COLUMNS = [
     "exit_delay_value",
     "dust",
     "topup",
+    "payment_sats",
     "asset_txid",
     "asset_group_index",
     "asset_units",
@@ -97,6 +98,7 @@ interface AdvanceRow {
     exit_delay_value: bigint | null;
     dust: bigint;
     topup: bigint;
+    payment_sats: bigint | null;
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
     asset_units: bigint | null;
@@ -216,6 +218,7 @@ function toParams(a: Advance): AdvanceParams {
         exit_delay_value: a.exitDelay.value,
         dust: a.dust,
         topup: a.topup,
+        payment_sats: a.paymentSats ?? null,
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
         asset_units: a.assetUnits ?? null,
@@ -343,6 +346,7 @@ function fromRow(r: AdvanceRow): Advance {
         exitDelay: { value: r.exit_delay_value, type: r.exit_delay_type },
         dust: r.dust,
         topup: r.topup,
+        ...(r.payment_sats !== null ? { paymentSats: r.payment_sats } : {}),
         locktime: r.locktime,
         covenantAddress: r.covenant_address,
         fare:

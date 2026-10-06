@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
     test: {
         include: ["packages/*/test/**/*.test.ts", "scripts/test/**/*.test.ts"],
+        exclude: ["packages/client/test/e2e/**"],
         // The fill planner calls into @arkade-os/swap, which imports the SDK
         // itself. Left external, that import bypasses vi.mock and the builder
         // tests reach the network.

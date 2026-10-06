@@ -217,6 +217,11 @@ describe.each([
         expect(() => decode(params)).toThrow(/params.exitDelay has unexpected x/);
     });
 
+    it("accepts paymentSats and rejects a malformed one", () => {
+        expect(() => decode({ ...paramsWire(), paymentSats: "100" })).not.toThrow();
+        expect(() => decode({ ...paramsWire(), paymentSats: "-1" })).toThrow(/paymentSats/);
+    });
+
     it.each([
         ["a negative value", { value: "-1", type: "seconds" }],
         ["an unknown domain", { value: "512", type: "fortnights" }],

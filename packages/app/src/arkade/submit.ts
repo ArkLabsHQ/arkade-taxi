@@ -326,6 +326,7 @@ function sponsoredRequest(advance: Advance, request: LockupBuildRequest): Sponso
             operatorKey: advance.operatorKey,
             dust: advance.dust,
             contribution: advance.topup,
+            ...(advance.paymentSats !== undefined ? { paymentSats: advance.paymentSats } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
         },
         receiverAddress: advance.covenantAddress,

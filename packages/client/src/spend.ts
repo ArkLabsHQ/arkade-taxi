@@ -3,6 +3,7 @@ import {
     DustCovenantScript,
     copyByteView,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     recycleFare,
     refundTopup,
@@ -491,8 +492,8 @@ const strictCoin = (
     state: CoinExpectation,
 ): { expiry: CapabilityState["expiry"]; holdings: Holding[] } => {
     exactOutpoint(coin, state.outpoint, "observed locked outpoint");
-    if (!Number.isSafeInteger(coin.value) || BigInt(coin.value) !== state.params.dust)
-        reject("locked outpoint value is not exact covenant dust");
+    if (!Number.isSafeInteger(coin.value) || BigInt(coin.value) !== lockupSats(state.params))
+        reject("locked outpoint value is not the exact covenant lockup");
     const script = new DustCovenantScript({
         serverKey: state.serverKey,
         emulatorKey: state.emulatorKey,
@@ -961,7 +962,7 @@ async function verifyObservedClaim(
         {
             transferId: retained.transferId,
             outpoint: retained.outpoint,
-            value: retained.params.dust,
+            value: lockupSats(retained.params),
             expiry: retained.expiry,
         },
         "covenant transfer view",
@@ -1477,19 +1478,19 @@ export async function purchase(
 ): Promise<string> {
     const state = activeState(transfer, Leaf.Purchase);
     const output = exactDestination(destination, state);
-    if (state.params.dust < state.vtxoMinAmount)
-        reject("purchase output is below the Ark operator minimum");
+    const lockup = lockupSats(state.params);
+    if (lockup < state.vtxoMinAmount) reject("purchase output is below the Ark operator minimum");
     const input = covenantSpendInput(
         state.script,
         Leaf.Purchase,
         state.outpoint,
-        state.params.dust,
+        lockup,
         holdingsPacket(state.holdings, state.outpoint.vout),
     );
     return execute(state, {
         leaf: Leaf.Purchase,
         inputs: [input],
-        outputs: [{ script: output, amount: state.params.dust }],
+        outputs: [{ script: output, amount: lockup }],
         assetPacket: packetForSpend([state.holdings], 0),
     });
 }
@@ -1504,14 +1505,15 @@ export async function recycle(
     const output = exactDestination(destination, state);
     const funding = await exactFundingInput(receiverWalletInput, state);
     const { operatorSats, assetFare } = recycleFare(state.params);
-    const merged = state.params.dust + receiverWalletInput.input.value - operatorSats;
+    const lockup = lockupSats(state.params);
+    const merged = lockup + receiverWalletInput.input.value - operatorSats;
     if (merged < state.params.dust || merged < state.vtxoMinAmount)
         reject("recycle receiver output is below dust or the Ark operator minimum");
     const covenant = covenantSpendInput(
         state.script,
         Leaf.Recycle,
         state.outpoint,
-        state.params.dust,
+        lockup,
         holdingsPacket(state.holdings, state.outpoint.vout),
     );
     return execute(
@@ -1550,7 +1552,8 @@ export async function refund(
     const state = activeState(transfer, Leaf.RefundSender);
     const sender = await identityKey(senderIdentity, state.params.senderKey, "sender");
     const topup = refundTopup(state.params, state.vtxoMinAmount);
-    const returned = state.params.dust - topup;
+    const lockup = lockupSats(state.params);
+    const returned = lockup - topup;
     const recoveryKey =
         state.params.recoveryRecipient === "receiver"
             ? state.params.receiverKey
@@ -1559,7 +1562,7 @@ export async function refund(
         state.script,
         Leaf.RefundSender,
         state.outpoint,
-        state.params.dust,
+        lockup,
         holdingsPacket(state.holdings, state.outpoint.vout),
     );
     return execute(state, {

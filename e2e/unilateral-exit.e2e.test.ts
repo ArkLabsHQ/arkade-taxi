@@ -9,7 +9,12 @@ import {
     timelockToSequence,
 } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { DustCovenantScript, Leaf, covenantSpendInput } from "../packages/covenant/src/index.js";
+import {
+    DustCovenantScript,
+    Leaf,
+    covenantSpendInput,
+    lockupSats,
+} from "../packages/covenant/src/index.js";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { setOwnedServices } from "../scripts/lib/cltv-evidence.mjs";
 import { liveScenario } from "./scenarios.js";
@@ -58,7 +63,7 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         const outpoint = locked.lockup.outpoint;
         const { params } = locked.verified;
         expect(params.exitDelay.type).toBe("seconds");
-        const dust = BigInt(live.info.dust);
+        const value = lockupSats(params);
         const serverKey = hex.decode(live.info.serverKey);
         const covenant = new DustCovenantScript({
             serverKey,
@@ -66,7 +71,7 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
             vtxoMinAmount: BigInt(live.info.vtxoMinAmount),
             params,
         });
-        const exitLeaf = covenantSpendInput(covenant, Leaf.Exit, outpoint, dust).tapLeafScript;
+        const exitLeaf = covenantSpendInput(covenant, Leaf.Exit, outpoint, value).tapLeafScript;
         const sequence = timelockToSequence(params.exitDelay);
         Object.assign(evidence, { outpoint, exitDelay: params.exitDelay.value });
 
@@ -175,7 +180,7 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
             txid: outpoint.txid,
             index: outpoint.vout,
             sequence,
-            witnessUtxo: { script: covenant.pkScript, amount: dust },
+            witnessUtxo: { script: covenant.pkScript, amount: value },
             tapLeafScript: [exitLeaf],
         });
         exit.addInput({
@@ -186,7 +191,7 @@ liveScenario("covenant-unilateral-exit-with-arkd-down", async () => {
         });
         exit.addOutput({
             script: onchain.onchainP2TR.script,
-            amount: dust + BigInt(fee!.value) - 1_000n,
+            amount: value + BigInt(fee!.value) - 1_000n,
         });
         const signed = await operator.identity.sign(await live.actors.sender.identity.sign(exit));
         signed.finalize();

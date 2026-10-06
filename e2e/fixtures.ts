@@ -419,10 +419,9 @@ export async function quoteFor(
     paymentSats?: bigint,
 ) {
     const preparedAt = Math.floor(Date.now() / 1000);
-    // An asset transfer's sats are only a carrier, so Taxi fronts the whole dust
-    // unit; a bitcoin one nets the advance against what the sender brings — unless
-    // paymentSats names the amount, where the advance is the rest of the unit.
-    const topup = paymentSats !== undefined ? 330n - paymentSats : withAsset ? 330n : 1n;
+    // Taxi always fronts one whole dust unit; a bitcoin payment rides beside it.
+    const topup = 330n;
+    if (!withAsset) paymentSats ??= 329n;
     const fareUnits = withAsset ? 1n : 0n;
     const senderInputs = [fundingOf(coin)];
     const receiver = live.actors[receiverName];

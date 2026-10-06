@@ -228,10 +228,9 @@ async function createReservedSponsoredQuote(
     );
     if (!decision.ok) throw admissionError(decision.reason);
     const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
-    // The receiver is paid the whole dust carrier whatever the sender brings, so
-    // the fare can only come out of sender change — never out of the payment,
+    // The fare can only come out of sender change — never out of the payment,
     // and never out of the sponsorship the operator is giving away.
-    if (senderPaysFare && req.senderSats + decision.topup - config.dust < decision.fare.units)
+    if (senderPaysFare && req.senderSats - (decision.paymentSats ?? 0n) < decision.fare.units)
         throw new ServiceError(
             "fare_unavailable",
             409,
@@ -285,6 +284,7 @@ async function createReservedSponsoredQuote(
         operatorKey: config.operatorKey,
         dust: config.dust,
         contribution: decision.topup,
+        ...(decision.paymentSats !== undefined ? { paymentSats: decision.paymentSats } : {}),
         ...(req.assetId ? { assetId: req.assetId } : {}),
         ...(req.extraPacket ? { extraPacket: req.extraPacket } : {}),
     };
@@ -356,6 +356,7 @@ async function createReservedSponsoredQuote(
         exitDelay: config.exitDelay,
         dust: params.dust,
         topup: params.contribution,
+        ...(params.paymentSats !== undefined ? { paymentSats: params.paymentSats } : {}),
         locktime,
         ...funding,
         batchExpiry: expiry,
@@ -450,6 +451,7 @@ async function createReservedSponsoredQuote(
             operatorKey: params.operatorKey,
             dust: params.dust,
             contribution: params.contribution,
+            ...(params.paymentSats !== undefined ? { paymentSats: params.paymentSats } : {}),
             ...(params.assetId ? { assetId: params.assetId } : {}),
             ...(params.extraPacket ? { extraPacket: params.extraPacket } : {}),
         }),

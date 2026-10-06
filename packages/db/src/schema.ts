@@ -344,6 +344,12 @@ export const MIGRATIONS: readonly Migration[] = [
              ALTER TABLE advances ADD COLUMN exit_delay_value INTEGER
                 CHECK (exit_delay_value IS NULL OR exit_delay_value > 0)`,
     },
+    {
+        id: 12,
+        // NULL is a dust-unit covenant, whose address must keep rebuilding unchanged.
+        up: `ALTER TABLE advances ADD COLUMN payment_sats INTEGER
+                CHECK (payment_sats IS NULL OR payment_sats > 0)`,
+    },
 ];
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
@@ -466,6 +472,13 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
                 "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'exit_signer_key' AND type = 'BLOB'",
             )
             .get();
+    const hasPaymentSats =
+        hasExitParams &&
+        !!db
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'payment_sats' AND type = 'INTEGER'",
+            )
+            .get();
     if (
         migrations === MIGRATIONS &&
         current > 0 &&
@@ -480,7 +493,8 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
             (current === 8 && !hasReceiveQuoteLink) ||
             (current === 9 && !hasSwapFillDeadline) ||
             (current === 10 && !hasReceiverPaid) ||
-            (current === 11 && !hasExitParams))
+            (current === 11 && !hasExitParams) ||
+            (current === 12 && !hasPaymentSats))
     )
         throw new Error(
             "Incompatible development schema: recreate the database before starting this service",

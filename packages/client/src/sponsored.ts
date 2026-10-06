@@ -210,8 +210,9 @@ export function validateSponsoredPayment(
     for (const owned of holdings)
         for (const [id, amount] of owned) totals.set(id, (totals.get(id) ?? 0n) + amount);
 
+    const payment = context.params.dust + (context.params.paymentSats ?? 0n);
     const outputs: { amount: bigint; script: Uint8Array }[] = [
-        { amount: context.params.dust, script: receiverScript(context) },
+        { amount: payment, script: receiverScript(context) },
     ];
     const fareHosting =
         context.fare.units === 0n
@@ -239,8 +240,7 @@ export function validateSponsoredPayment(
     // caller authorised this fare either way, so both layouts are within it.
     const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
     const operatorFare = fareHosting - senderFare;
-    const senderChange =
-        context.senderSats + context.params.contribution - context.params.dust - senderFare;
+    const senderChange = context.senderSats + context.params.contribution - payment - senderFare;
     const operatorTotal = operatorInputs.reduce((sum, input) => sum + input.value, 0n);
     const operatorChange = operatorTotal - context.params.contribution - operatorFare;
     if (senderChange < 0n || operatorChange < 0n)
@@ -455,11 +455,11 @@ export function verifySponsoredQuote(args: VerifySponsoredQuoteArgs): VerifiedSp
     }
     if (
         expect.paymentSats !== undefined &&
-        params.contribution !== params.dust - expect.paymentSats
+        (params.contribution !== params.dust || params.paymentSats !== expect.paymentSats)
     ) {
         reject(
             VerificationErrorCode.PaymentSats,
-            `contribution ${params.contribution} leaves you paying ${params.dust - params.contribution}, you asked to pay ${expect.paymentSats}`,
+            `quote pays ${params.paymentSats ?? 0n} sats beside a ${params.contribution}-sat contribution, you asked to pay ${expect.paymentSats} beside ${params.dust}`,
         );
     }
     if (quote.fare.currency !== expect.maxFare.currency) {

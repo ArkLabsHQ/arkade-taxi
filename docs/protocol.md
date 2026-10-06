@@ -48,22 +48,21 @@ resolved quantity, which the client independently verifies before signing.
 
 ### Exact bitcoin amounts
 
-Without `paymentSats` the advance is `clamp(dust - senderSats, vtxoMinAmount, dust)`,
-and a spendable coin is already at least `dust`, so a bitcoin transfer always
-delivers `dust - vtxoMinAmount`. `paymentSats` names what the receiver must end
-up with instead: the advance becomes `dust - paymentSats`, the sender
+Every advance is exactly one `dust` unit, so a repayment always comes back as a
+spendable coin. `paymentSats` names what the receiver must end up with; it is
+locked beside the advance (the covenant holds `dust + paymentSats`), the sender
 contributes exactly `paymentSats` and the rest of its coins return as change.
+Without it the payment is all of `senderSats`, which must then be below `dust`.
 It is bitcoin only — an asset transfer's sats are the carrier — must sit within
-`[vtxoMinAmount, dust - vtxoMinAmount]` so both claim outputs clear the
-minimum, and must not exceed `senderSats`. Violations are `400 invalid_request`;
-the resulting advance still faces the ordinary topup caps.
+`[vtxoMinAmount, dust)`, and must not exceed `senderSats`. Violations are
+`400 invalid_request`; the advance still faces the ordinary topup caps.
 
-No response field reports it, and an operator predating the field ignores it and
-quotes its own derivation. **A client MUST bind it into verification** —
-`topup == dust - paymentSats`, and `contribution == dust - paymentSats` on a
-sponsored payment — rather than reading capability off the response.
-`paymentSats` is reconstructible from a stored advance as `dust - topup`, so it
-needs no separate record.
+The quote echoes it as `params.paymentSats`, and it is part of the covenant
+address. An operator predating whole-dust advances quotes a partial one, so
+**a client MUST bind it into verification** — `topup == dust` and
+`params.paymentSats == paymentSats`, and the same with `contribution` on a
+sponsored payment. A covenant without `paymentSats` is the earlier dust-unit
+shape (lockup `dust`), which still rebuilds byte-for-byte.
 
 ## `POST /v1/transfers/:id/lockup`
 
@@ -94,13 +93,12 @@ Transfer status can include `submissionPhase`, `failureCode`, and
 
 `POST /v1/sponsored-transfers` quotes a joint payment without a covenant.
 The request carries the sender funding evidence plus Bob's full `receiverAddress`;
-the response carries `params` with the operator's `contribution` (the dust
-shortfall it fronts, playing the role of `topup`), the fare, `expiresAt`, an
-`unsignedSponsoredTx` envelope with the same shape as a lockup envelope but
+the response carries `params` with the operator's `contribution` (the whole
+`dust` unit it gives away, playing the role of `topup`), the fare, `expiresAt`,
+an `unsignedSponsoredTx` envelope with the same shape as a lockup envelope but
 graphed under `arkade-taxi-sponsored-v1`, and a `commitment` whose output
 index 0 is the direct payment to the receiver. It accepts the same optional
-`paymentSats`, which fixes `contribution` at `dust - paymentSats`; the receiver
-still takes the whole carrier, so here the field pins what the SENDER puts in.
+`paymentSats`; the receiver takes `dust + paymentSats`.
 
 `POST /v1/sponsored-transfers/:id/lockup` takes the envelope signed at the
 sender's inputs, verified and persisted exactly like a lockup; the same leased

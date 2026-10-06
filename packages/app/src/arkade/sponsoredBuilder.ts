@@ -18,6 +18,8 @@ export interface SponsoredParams {
     operatorKey: Uint8Array;
     dust: bigint;
     contribution: bigint;
+    /** Sats the sender pays beside the whole-dust contribution, bitcoin only. */
+    paymentSats?: bigint;
     assetId?: AssetIdRef;
     /** Sender-declared extra extension packet; see SponsoredQuoteParams. */
     extraPacket?: { type: number; payload: Uint8Array };
@@ -89,7 +91,7 @@ export function sponsoredPlan(req: SponsoredBuildRequest, config: RuntimeConfig)
             first: {
                 role: "payment",
                 script: Uint8Array.from(receiver.pkScript),
-                amount: req.params.dust,
+                amount: req.params.dust + (req.params.paymentSats ?? 0n),
             },
             contribution: req.params.contribution,
             carrier: "payment",

@@ -104,8 +104,8 @@ export async function sendUsdt(wallet: IWallet, policy: AlicePolicy) {
 
 `requestVerifiedQuote` derives the exact total sats from Alice's selected inputs;
 it is funding evidence, not an amount she can choose independently. Taxi advances
-the shortfall below dust, with a minimum advance of `vtxoMinAmount`. Sender change
-is `input total + top-up − dust`; asset change needs at least the minimum hosting
+one whole dust unit and the payment rides beside it. Sender change is
+`input total − paymentSats`; asset change needs at least the minimum hosting
 sats. The complete graph is verified before signing and submission in one call.
 Alice's application must reserve its selected inputs until the outcome is known.
 

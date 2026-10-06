@@ -1,4 +1,4 @@
-import { asset, type ExtendedVirtualCoin, type IWallet } from "@arkade-os/sdk";
+import { type ExtendedVirtualCoin, type IWallet } from "@arkade-os/sdk";
 import { type FillFunding } from "@arkade-os/swap";
 import {
     bytesToHex,
@@ -19,6 +19,8 @@ import {
 } from "./jointGraphDerivation.js";
 import {
     buildOfferFillPlan,
+    sdkAssetId,
+    taxiAssetId,
     type BuildOfferFillPlanOpts,
     type FillSponsor,
     type JointGraph,
@@ -88,18 +90,13 @@ const script = (value: unknown, label: string): Uint8Array => {
     return value;
 };
 
-// Taxi refs carry the genesis txid in internal byte order while the SDK
-// AssetId string form uses display order, so both directions reverse.
 export function taxiAssetIdToSwapId(id: AssetIdValue): string {
     if (!(id.txid instanceof Uint8Array) || id.txid.length !== 32)
         throw new SwapFillBuilderError("sponsor.fare.assetId.txid must be 32 bytes");
     if (!Number.isSafeInteger(id.groupIndex) || id.groupIndex < 0)
         throw new SwapFillBuilderError("sponsor.fare.assetId.groupIndex must be non-negative");
     try {
-        return asset.AssetId.create(
-            hex.encode(Uint8Array.from(id.txid).reverse()),
-            id.groupIndex,
-        ).toString();
+        return sdkAssetId(id);
     } catch (cause) {
         throw new SwapFillBuilderError(
             `invalid sponsor fare asset id: ${(cause as Error).message}`,
@@ -108,13 +105,11 @@ export function taxiAssetIdToSwapId(id: AssetIdValue): string {
 }
 
 export function swapIdToTaxiAssetId(id: string): AssetIdValue {
-    let parsed: ReturnType<typeof asset.AssetId.fromString>;
     try {
-        parsed = asset.AssetId.fromString(id);
+        return taxiAssetId(id);
     } catch {
         throw new SwapFillBuilderError("swap asset id is not a valid asset id string");
     }
-    return { txid: Uint8Array.from(parsed.txid).reverse(), groupIndex: parsed.groupIndex };
 }
 
 const mapSponsorFund = (coins: readonly ExtendedVirtualCoin[]): FillFunding[] => {

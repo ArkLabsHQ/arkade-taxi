@@ -18,10 +18,15 @@
         "format:check": "prettier --check .",
         "vectors": "node scripts/gen-vectors.mjs",
         "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs",
-        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs"
+        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs",
+        "test:integration:client": "node scripts/client-regtest.mjs cycle",
+        "regtest:up:client": "node scripts/client-regtest.mjs up",
+        "regtest:down:client": "node scripts/client-regtest.mjs down",
+        "regtest:reset:client": "node scripts/client-regtest.mjs reset",
+        "regtest:test:client": "node scripts/client-regtest.mjs test"
     },
     "devDependencies": {
-        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.77-23c6d353.tgz",
+        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-27f22047.tgz",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
@@ -35,8 +40,8 @@
             "esbuild"
         ],
         "overrides": {
-            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.77-23c6d353.tgz",
-            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.23-23c6d353.tgz"
+            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-27f22047.tgz",
+            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.24-27f22047.tgz"
         }
     }
 }

@@ -250,19 +250,21 @@ describe("caps", () => {
 
 describe("topup", () => {
     it("funds the whole dust unit when the sender brings no sats", () => {
-        expect(okOf(admit(request(), policy(), exposure(), DUST, MIN)).topup).toBe(DUST);
+        const d = okOf(admit(request(), policy(), exposure(), DUST, MIN));
+        expect(d.topup).toBe(DUST);
+        expect(d.paymentSats).toBeUndefined();
     });
 
-    it("funds only the shortfall when the sender brings sats", () => {
-        expect(
-            okOf(admit(request({ senderSats: 300n }), policy(), exposure(), DUST, MIN)).topup,
-        ).toBe(30n);
+    it("lends the whole dust unit beside the sats the sender brings", () => {
+        const d = okOf(admit(request({ senderSats: 300n }), policy(), exposure(), DUST, MIN));
+        expect(d.topup).toBe(DUST);
+        expect(d.paymentSats).toBe(300n);
     });
 
-    it("never drops below vtxoMinAmount", () => {
+    it("refuses a sender who already holds a whole dust unit", () => {
         expect(
-            okOf(admit(request({ senderSats: DUST }), policy(), exposure(), DUST, MIN)).topup,
-        ).toBe(MIN);
+            reasonOf(admit(request({ senderSats: DUST }), policy(), exposure(), DUST, MIN)),
+        ).toBe("invalid_payment_sats");
     });
 });
 
@@ -270,44 +272,38 @@ describe("paymentSats", () => {
     const ask = (paymentSats: bigint, over: Partial<QuoteRequest> = {}, p = policy(), min = MIN) =>
         admit(request({ senderSats: 10_000n, paymentSats, ...over }), p, exposure(), DUST, min);
 
-    it("lends exactly the rest of the dust unit", () => {
-        expect(okOf(ask(100n)).topup).toBe(DUST - 100n);
+    it("lends the whole dust unit and carries the payment beside it", () => {
+        const d = okOf(ask(100n));
+        expect(d.topup).toBe(DUST);
+        expect(d.paymentSats).toBe(100n);
     });
 
-    // Spendable coins are at least dust, so deriving the advance from them
-    // delivers dust - vtxoMinAmount whatever the payer asked to send.
     it.each([100n, 330n, 10_000n])("ignores the %s sats the sender's coins hold", (senderSats) => {
-        expect(okOf(ask(100n, { senderSats })).topup).toBe(DUST - 100n);
+        expect(okOf(ask(100n, { senderSats })).paymentSats).toBe(100n);
     });
 
-    it.each([
-        [MIN, DUST - MIN],
-        [DUST - MIN, MIN],
-    ])("admits the boundary payment %s", (paymentSats, topup) => {
-        expect(okOf(ask(paymentSats)).topup).toBe(topup);
+    it.each([MIN, DUST - MIN])("admits the boundary payment %s", (paymentSats) => {
+        expect(okOf(ask(paymentSats)).topup).toBe(DUST);
     });
 
-    it.each([
-        [10n, DUST - 10n],
-        [DUST - 10n, 10n],
-    ])("admits the boundary payment %s under a larger minimum", (paymentSats, topup) => {
-        expect(okOf(ask(paymentSats, {}, policy(), 10n)).topup).toBe(topup);
-    });
+    it.each([10n, DUST - 1n])(
+        "admits the boundary payment %s under a larger minimum",
+        (paymentSats) => {
+            expect(okOf(ask(paymentSats, {}, policy(), 10n)).paymentSats).toBe(paymentSats);
+        },
+    );
 
     it.each([0n, DUST, DUST + 1n])("refuses the unsendable amount %s", (paymentSats) => {
         expect(reasonOf(ask(paymentSats))).toBe("invalid_payment_sats");
     });
 
-    it.each([9n, DUST - 9n])(
-        "refuses %s, which leaves one side under a larger minimum",
-        (paymentSats) => {
-            expect(reasonOf(ask(paymentSats, {}, policy(), 10n))).toBe("invalid_payment_sats");
-        },
-    );
+    it("refuses a payment under a larger minimum", () => {
+        expect(reasonOf(ask(9n, {}, policy(), 10n))).toBe("invalid_payment_sats");
+    });
 
     it("refuses a payment the sender's own coins cannot cover", () => {
         expect(reasonOf(ask(100n, { senderSats: 99n }))).toBe("invalid_payment_sats");
-        expect(okOf(ask(100n, { senderSats: 100n })).topup).toBe(DUST - 100n);
+        expect(okOf(ask(100n, { senderSats: 100n })).paymentSats).toBe(100n);
     });
 
     it("refuses an exact amount on an asset transfer", () => {
@@ -317,11 +313,11 @@ describe("paymentSats", () => {
     });
 
     it("still applies the per-payment cap to the resulting advance", () => {
-        expect(reasonOf(ask(100n, {}, policy({ maxPerPaymentTopupSats: DUST - 101n })))).toBe(
+        expect(reasonOf(ask(100n, {}, policy({ maxPerPaymentTopupSats: DUST - 1n })))).toBe(
             "topup_exceeds_max_per_payment",
         );
         expect(
-            reasonOf(ask(100n, {}, policy({ assetRules: [rule({ maxTopupSats: DUST - 101n })] }))),
+            reasonOf(ask(100n, {}, policy({ assetRules: [rule({ maxTopupSats: DUST - 1n })] }))),
         ).toBe("topup_exceeds_max_per_payment");
     });
 });
@@ -349,15 +345,10 @@ describe("asset leg preserves sender sats", () => {
         },
     );
 
-    // A bitcoin transfer is the one case where sender sats reduce the advance.
-    it.each([
-        [1n, 329n],
-        [330n, MIN],
-        [10_000n, MIN],
-    ])("still nets the advance against a bitcoin sender's %s sats", (senderSats, topup) => {
-        expect(okOf(admit(request({ senderSats }), policy(), exposure(), DUST, MIN)).topup).toBe(
-            topup,
-        );
+    it("never nets the advance against a bitcoin sender's sats", () => {
+        expect(
+            okOf(admit(request({ senderSats: 1n }), policy(), exposure(), DUST, MIN)).topup,
+        ).toBe(DUST);
     });
 });
 

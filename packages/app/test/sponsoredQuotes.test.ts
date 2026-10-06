@@ -264,19 +264,18 @@ describe("createSponsoredQuote", () => {
         expect(advances.get("adv-1")?.fare).toEqual({ currency: "sats", units: 10n });
     });
 
-    // A sponsored bitcoin fill pays the receiver the whole carrier whatever the
-    // sender brings, so unlike a covenant one it has change to charge against.
+    // A sponsored bitcoin fill has no covenant, so the sender's change can pay a fare.
     it("charges a sats fare on a bitcoin fill that has change to pay it from", async () => {
-        const quote = await createSponsoredQuote(
-            deps({ policy: bitcoinSatsFarePolicy(10n) }),
-            bitcoinBody("1000"),
-        );
+        const quote = await createSponsoredQuote(deps({ policy: bitcoinSatsFarePolicy(10n) }), {
+            ...bitcoinBody("1000"),
+            paymentSats: "100",
+        });
         expect(quote.fare).toEqual({ currency: "sats", units: "10" });
-        expect(quote.params.contribution).toBe("10");
+        expect(quote.params.contribution).toBe("330");
         const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
         expect(envelope.satsFarePayer).toBe("sender");
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 10n, 670n, 19_990n]);
+        expect([0, 1, 2, 3].map((i) => tx.getOutput(i).amount)).toEqual([430n, 10n, 890n, 19_670n]);
         expect(advances.get(quote.transferId)?.fare).toEqual({ currency: "sats", units: 10n });
     });
 
@@ -288,25 +287,26 @@ describe("createSponsoredQuote", () => {
         expect(advances.rows.size).toBe(0);
     });
 
-    it("sponsors the rest of the carrier for an exact paymentSats", async () => {
+    it("sponsors a whole-dust carrier beside an exact paymentSats", async () => {
         const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
         const quote = await createSponsoredQuote(d, {
             ...bitcoinBody("1000"),
             paymentSats: "100",
         });
-        expect(quote.params.contribution).toBe("230");
+        expect(quote.params).toMatchObject({ contribution: "330", paymentSats: "100" });
+        expect(advances.get(quote.transferId)?.paymentSats).toBe(100n);
         const envelope = decodeLockupEnvelope(quote.unsignedSponsoredTx);
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([DUST, 900n, 19_770n]);
+        expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([430n, 900n, 19_670n]);
     });
 
-    it("leaves a sponsored bitcoin fill unchanged without paymentSats", async () => {
+    it("refuses a bitcoin fill whose coin already holds a whole dust unit", async () => {
         const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
-        const quote = await createSponsoredQuote(d, bitcoinBody("1000"));
-        expect(quote.params.contribution).toBe("10");
+        const bad = await caught(() => createSponsoredQuote(d, bitcoinBody("1000")));
+        expect(bad.code).toBe("invalid_request");
     });
 
-    it.each(["321", "9"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
+    it.each(["330", "9"])("refuses the unsendable paymentSats %s", async (paymentSats) => {
         const d = deps({ policy: bitcoinSatsFarePolicy(0n) });
         const bad = await caught(() =>
             createSponsoredQuote(d, { ...bitcoinBody("1000"), paymentSats }),

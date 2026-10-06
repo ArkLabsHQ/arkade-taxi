@@ -1,5 +1,6 @@
 export {
     TaxiClient,
+    requestQuoteWhenReady,
     type ClaimSubscription,
     type EventSourceLike,
     type QuoteRequest,
@@ -34,7 +35,13 @@ export {
     type VerifiedReceiveQuote,
     type VerifyReceiveQuoteArgs,
 } from "./receiveQuote.js";
-export { signLockup, type LockupEnvelope, type SignLockupArgs } from "./lockup.js";
+export {
+    assetId as sdkAssetId,
+    signLockup,
+    taxiAssetId,
+    type LockupEnvelope,
+    type SignLockupArgs,
+} from "./lockup.js";
 export {
     assertSignedSponsoredPayment,
     signSponsoredPayment,

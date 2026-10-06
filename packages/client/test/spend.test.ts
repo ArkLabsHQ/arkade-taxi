@@ -27,6 +27,7 @@ import { activeQuoteStateFor } from "../src/lockup.js";
 import {
     Leaf,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     refundTopup,
     type DustCovenantParams,
@@ -181,7 +182,7 @@ const setup = async (
     };
     const coin = {
         ...outpoint,
-        value: 330,
+        value: Number(lockupSats(uniqueParams)),
         script: "", // Set after quote verification derives the covenant.
         status: { confirmed: false },
         createdAt: new Date(NOW * 1000),
@@ -1230,8 +1231,8 @@ describe("covenant transfer capability", () => {
     });
 });
 
-/** A covenant shaped by `paymentSats`: dust 330 less a 230 advance, so the
- * receiver nets 100 and the claim amounts differ from the full-dust default. */
+/** A whole-dust covenant carrying a 100-sat payment: it locks 430, so the
+ * claim amounts differ from the dust-unit default. */
 const exactArgs = (receiverOverride?: Uint8Array) => {
     const senderInputs = args().senderInputs.map((input) => ({ ...input, value: 1_000n }));
     const a = args();
@@ -1242,7 +1243,7 @@ const exactArgs = (receiverOverride?: Uint8Array) => {
     a.quote = quote(
         {
             ...params(),
-            topup: 230n,
+            paymentSats: 100n,
             ...(receiverOverride ? { receiverKey: receiverOverride } : {}),
         },
         { senderInputs, senderSats: 1_000n },
@@ -1298,13 +1299,11 @@ describe("purchase", () => {
         expect(emulator.submitTx).not.toHaveBeenCalled();
     });
 
-    // The purchase leaf pays the whole carrier out whatever the advance was, so
-    // a paymentSats covenant must still hand over the full dust.
-    it("pays the whole carrier out of a partly advanced covenant", async () => {
+    it("pays the whole lockup out of a covenant carrying its payment", async () => {
         const { transfer, submitted } = await setup(exactArgs());
         const destination = new Uint8Array([0x51, 0x20, ...receiverKey]);
         await purchase(transfer, destination);
-        expect(submitted()!.getOutput(0)).toMatchObject({ amount: 330n, script: destination });
+        expect(submitted()!.getOutput(0)).toMatchObject({ amount: 430n, script: destination });
     });
 
     // The tree keeps a parseable slot for the forbidden leaf, so the refusal has
@@ -1760,15 +1759,15 @@ describe("recycle", () => {
         expect(tx.getOutput(1)).toMatchObject({ amount: 500n, script: destination });
     });
 
-    it("repays only the advance and merges the exact paymentSats into the receiver", async () => {
+    it("repays the whole advance as a spendable coin and merges the payment", async () => {
         const funding = await receiverFunding();
         const { transfer, submitted } = await setup(exactArgs(funding.receiverKey), [], [funding]);
         const destination = new Uint8Array([0x51, 0x20, ...funding.receiverKey]);
         await recycle(transfer, funding.walletInput, destination);
         const tx = submitted()!;
         expect(tx.getOutput(0)).toMatchObject({
-            amount: 230n,
-            script: payoutPkScript(operatorKey, 230n, 330n),
+            amount: 330n,
+            script: payoutPkScript(operatorKey, 330n, 330n),
         });
         expect(tx.getOutput(1)).toMatchObject({ amount: 600n, script: destination });
     });

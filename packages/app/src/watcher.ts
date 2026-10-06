@@ -2,6 +2,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     recycleFare,
     refundTopup,
@@ -24,10 +25,11 @@ import {
     getArkPsbtFields,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
-    type ArkProvider,
+    type IContractManager,
     type IndexerProvider,
     type TapLeafScript,
     type VirtualCoin,
+    type Wallet,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { createHash } from "node:crypto";
@@ -89,9 +91,8 @@ export interface SpendWatcherDeps {
     config: RuntimeConfig;
     now(): number;
     tip(): Promise<{ hash: string; height: number; time: number }>;
-    arkProvider?: Pick<ArkProvider, "getTransactionsStream">;
+    wallet?: () => Pick<Wallet, "getContractManager"> | undefined;
     onPrompt?: () => Promise<void>;
-    sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 }
 
 class EvidenceError extends Error {}
@@ -364,7 +365,8 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     );
     if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
         fail("persisted covenant outpoint does not belong to the lockup graph");
-    exactOutput(lockup, outpoint.vout, advance.dust, script.pkScript, "lockup covenant");
+    const value = lockupSats(script.options.params);
+    exactOutput(lockup, outpoint.vout, value, script.pkScript, "lockup covenant");
     if (script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress)
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);
@@ -381,6 +383,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         fail("persisted covenant asset facts mismatch");
     return {
         script,
+        value,
         unroll: CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)),
         expectedHoldings: expectedAsset ? [{ id: expectedAsset, amount: units! }] : [],
     };
@@ -472,7 +475,7 @@ async function classifySpend(
         const outpoint = advance.outpoint!;
         const facts = covenantFacts(advance, deps.config);
         if (
-            coin.value !== Number(advance.dust) ||
+            coin.value !== Number(facts.value) ||
             coin.script !== hex.encode(facts.script.pkScript) ||
             !coin.isSpent ||
             !/^[0-9a-f]{64}$/.test(coin.spentBy ?? "") ||
@@ -512,7 +515,7 @@ async function classifySpend(
             facts.script,
             leaf,
             outpoint,
-            advance.dust,
+            facts.value,
         ).tapLeafScript;
         const covenantProgram =
             facts.script.covenant[
@@ -526,7 +529,7 @@ async function classifySpend(
         const checkpointTree = directCheckpoint(
             checkpoint,
             outpoint,
-            advance.dust,
+            facts.value,
             facts.script,
             expectedLeaf,
             facts.unroll,
@@ -538,7 +541,7 @@ async function classifySpend(
             arkTx,
             0,
             checkpoint,
-            advance.dust,
+            facts.value,
             checkpointTree,
             facts.script.scripts[leaf],
             covenantSigners,
@@ -552,11 +555,11 @@ async function classifySpend(
             exactOutput(
                 arkTx,
                 0,
-                advance.dust,
+                facts.value,
                 new Uint8Array([0x51, 0x20, ...advance.receiverKey]),
                 "purchase receiver output",
             );
-            if (advance.dust < deps.config.vtxoMinAmount)
+            if (facts.value < deps.config.vtxoMinAmount)
                 fail("purchase receiver output is below the provider minimum");
             exactExtension(arkTx, 1, covenantProgram, [covenantHoldings], 0);
             exactAnchor(arkTx, 2);
@@ -656,7 +659,7 @@ async function classifySpend(
                 verify,
             );
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
-            const merged = advance.dust + BigInt(exactReceiverCoin.value) - operatorSats;
+            const merged = facts.value + BigInt(exactReceiverCoin.value) - operatorSats;
             if (merged < advance.dust || merged < deps.config.vtxoMinAmount)
                 fail("recycle receiver output is below dust or provider minimum");
             exactOutput(
@@ -699,10 +702,10 @@ async function classifySpend(
         exactOutput(
             arkTx,
             1,
-            advance.dust - topup,
+            facts.value - topup,
             payoutPkScript(
                 advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
-                advance.dust - topup,
+                facts.value - topup,
                 advance.dust,
             ),
             "refund recovery output",
@@ -755,10 +758,24 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     let lastScanAt: number | null = null;
     let watching = 0;
     let scanBlockers: WatcherBlocker[] = [];
-    let streamBlockers: WatcherBlocker[] = [];
+    let subscriptionBlockers: WatcherBlocker[] = [];
     let pending: Promise<void> | undefined;
-    let controller: AbortController | undefined;
-    let streamTask: Promise<void> | undefined;
+    let started = false;
+    let starting: Promise<void> | undefined;
+    let stopping: Promise<void> | undefined;
+    let syncing: Promise<void> | undefined;
+    let resync = false;
+    let generation = 0;
+    let binding:
+        | {
+              wallet: Pick<Wallet, "getContractManager">;
+              manager: IContractManager;
+              scripts: Set<string>;
+              owned: Set<string>;
+              unsubscribe: () => void;
+          }
+        | undefined;
+    const label = "taxi-covenant";
     const recoverable = new Set<string>();
     const signatureChecks = new Set<string>();
     const verify: SignatureCheck = (tx, index, signers) => {
@@ -938,7 +955,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                             coin.spentBy ||
                             coin.isSwept !== false ||
                             coin.isUnrolled !== false ||
-                            coin.value !== Number(advance.dust) ||
+                            coin.value !== Number(facts.value) ||
                             coin.script !== hex.encode(facts.script.pkScript) ||
                             holdingsDiffer(assets, facts.expectedHoldings)
                         )
@@ -1017,81 +1034,168 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         lastScanAt = deps.now();
     };
 
+    const removeOwned = async (current: NonNullable<typeof binding>, scripts: string[]) => {
+        if (!scripts.length) return;
+        const registered = await current.manager.getWatchedScripts!();
+        const removable = registered
+            .filter((entry) => scripts.includes(entry.script) && entry.label === label)
+            .map((entry) => entry.script);
+        if (removable.length) await current.manager.unwatchScript!(removable);
+        for (const script of scripts) current.owned.delete(script);
+    };
+    const detach = async () => {
+        const previous = binding;
+        binding = undefined;
+        if (!previous) return;
+        previous.unsubscribe();
+        await removeOwned(previous, [...previous.owned]);
+    };
+    const syncSubscriptions = async () => {
+        if (!started || !deps.wallet) return;
+        const epoch = generation;
+        try {
+            const wallet = deps.wallet();
+            if (wallet !== binding?.wallet) await detach();
+            if (!wallet || !started || epoch !== generation) return;
+            if (!binding) {
+                const manager = await wallet.getContractManager();
+                if (!started || epoch !== generation || deps.wallet() !== wallet) return;
+                if (!manager.watchScript || !manager.unwatchScript || !manager.getWatchedScripts)
+                    throw new Error("contract manager cannot watch scripts");
+                const current = {
+                    wallet,
+                    manager,
+                    scripts: new Set<string>(),
+                    owned: new Set<string>(),
+                    unsubscribe: () => {},
+                };
+                binding = current;
+                current.unsubscribe = manager.onContractEvent((event) => {
+                    if (
+                        !started ||
+                        binding !== current ||
+                        ("contractScript" in event && !current.scripts.has(event.contractScript))
+                    )
+                        return;
+                    void Promise.resolve()
+                        .then(prompt)
+                        .catch(() => {
+                            if (!started || binding !== current) return;
+                            subscriptionBlockers = [
+                                {
+                                    code: "transaction_stream_disconnected",
+                                    detail: "contract event reconciliation failed; operational polling remains authoritative",
+                                },
+                            ];
+                        });
+                });
+            }
+            const scripts = new Set(
+                activeStates
+                    .flatMap((state) => deps.advances.byState(state))
+                    .filter((advance) => advanceKind(advance) === "covenant")
+                    .flatMap((advance) => {
+                        try {
+                            return [
+                                hex.encode(
+                                    covenantFacts(
+                                        {
+                                            ...advance,
+                                            outpoint: advance.outpoint ?? lockingOutpoint(advance),
+                                        },
+                                        deps.config,
+                                    ).script.pkScript,
+                                ),
+                            ];
+                        } catch {
+                            return [];
+                        }
+                    }),
+            );
+            const current = binding;
+            const registered = await current.manager.getWatchedScripts!();
+            if (!started || epoch !== generation || binding !== current || deps.wallet() !== wallet)
+                return;
+            const additions = [...scripts].filter(
+                (script) => !registered.some((entry) => entry.script === script),
+            );
+            current.scripts = scripts;
+            for (const script of additions) current.owned.add(script);
+            if (additions.length) await current.manager.watchScript!(additions, { label });
+            if (!started || epoch !== generation || binding !== current || deps.wallet() !== wallet)
+                return;
+            await removeOwned(
+                current,
+                [...current.owned].filter((script) => !scripts.has(script)),
+            );
+            if (started && epoch === generation) subscriptionBlockers = [];
+        } catch {
+            if (!started || epoch !== generation) return;
+            subscriptionBlockers = [
+                {
+                    code: "transaction_stream_disconnected",
+                    detail: "covenant subscription unavailable; operational polling remains authoritative",
+                },
+            ];
+        }
+    };
+    const requestSync = () => {
+        if (!started) return;
+        if (syncing) {
+            resync = true;
+            return;
+        }
+        resync = false;
+        syncing = syncSubscriptions().finally(() => {
+            syncing = undefined;
+            if (resync) requestSync();
+        });
+    };
     const catchUp = () => {
         if (!pending)
             pending = scan().finally(() => {
                 pending = undefined;
+                requestSync();
             });
         return pending;
     };
-    const sleep =
-        deps.sleep ??
-        ((milliseconds: number, signal: AbortSignal) =>
-            new Promise<void>((resolve) => {
-                if (signal.aborted) return resolve();
-                const timer = setTimeout(resolve, milliseconds);
-                signal.addEventListener(
-                    "abort",
-                    () => {
-                        clearTimeout(timer);
-                        resolve();
-                    },
-                    { once: true },
-                );
-            }));
     const prompt = deps.onPrompt ?? catchUp;
 
     return {
         catchUp,
         isRecoverable: (id) => recoverable.has(id),
         async start() {
-            if (streamTask) return;
-            await prompt();
-            if (!deps.arkProvider || streamTask) return;
-            controller = new AbortController();
-            const signal = controller.signal;
-            streamTask = (async () => {
-                let backoff = 250;
-                while (!signal.aborted) {
-                    try {
-                        for await (const _event of deps.arkProvider!.getTransactionsStream(
-                            signal,
-                        )) {
-                            if (signal.aborted) break;
-                            streamBlockers = [];
-                            await prompt();
-                            backoff = 250;
-                        }
-                        if (!signal.aborted)
-                            streamBlockers = [
-                                {
-                                    code: "transaction_stream_disconnected",
-                                    detail: "Arkade transaction stream disconnected; polling remains authoritative",
-                                },
-                            ];
-                    } catch {
-                        if (signal.aborted) break;
-                        streamBlockers = [
-                            {
-                                code: "transaction_stream_disconnected",
-                                detail: "Arkade transaction stream disconnected; polling remains authoritative",
-                            },
-                        ];
-                    }
-                    if (!signal.aborted) {
-                        await sleep(backoff, signal);
-                        backoff = Math.min(backoff * 2, 30_000);
-                    }
-                }
-            })().finally(() => {
-                streamTask = undefined;
-                controller = undefined;
+            if (stopping) await stopping;
+            // Without a wallet, repeated starts preserve the polling-only prompt.
+            if (starting || (started && deps.wallet)) return starting;
+            started = true;
+            generation++;
+            starting = prompt().finally(() => {
+                starting = undefined;
+                requestSync();
             });
+            return starting;
         },
-        async stop() {
-            controller?.abort();
-            await streamTask;
-            signatureChecks.clear();
+        stop() {
+            if (stopping) return stopping;
+            started = false;
+            generation++;
+            stopping = (async () => {
+                const results = await Promise.allSettled([
+                    starting,
+                    pending,
+                    binding ? syncing : undefined,
+                ]);
+                const [cleanup] = await Promise.allSettled([detach()]);
+                signatureChecks.clear();
+                const failure = [...results, cleanup].find(
+                    (result) => result.status === "rejected",
+                );
+                if (failure?.status === "rejected") throw failure.reason;
+            })().finally(() => {
+                stopping = undefined;
+            });
+            return stopping;
         },
         status: () => {
             const current = rows();
@@ -1100,7 +1204,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 watching,
                 blockers: [
                     ...scanBlockers,
-                    ...streamBlockers,
+                    ...subscriptionBlockers,
                     ...persisted(current, [
                         "covenant_spend_unknown",
                         "covenant_observation_disagreement",

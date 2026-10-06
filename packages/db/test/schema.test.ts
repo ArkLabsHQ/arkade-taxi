@@ -117,7 +117,7 @@ function insertRawReceiveQuote(db: Database, overrides: Record<string, unknown> 
 }
 
 describe("migrations", () => {
-    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])(
+    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
         "rejects development schema v%s without modifying its schema or data",
         (version) => {
             const db = fresh();
@@ -153,7 +153,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(11);
+            expect(userVersion(reopened)).toBe(12);
             expect(
                 reopened
                     .prepare(
@@ -176,10 +176,10 @@ describe("migrations", () => {
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "operator_input_reservations",
@@ -216,7 +216,7 @@ describe("migrations", () => {
             recovery_response_checkpoints_json recovery_lease_owner recovery_lease_token recovery_lease_until
             recovery_attempts recovery_last_attempt_at recovery_next_attempt_at
             receiver_fare_currency receiver_fare_units
-            exit_signer_key exit_delay_type exit_delay_value
+            exit_signer_key exit_delay_type exit_delay_value payment_sats
         `
                 .trim()
                 .split(/\s+/)
@@ -248,7 +248,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -282,7 +282,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
@@ -296,7 +296,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
@@ -313,7 +313,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -332,7 +332,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -350,7 +350,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(8);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
@@ -384,7 +384,7 @@ describe("migrations", () => {
         });
         insertRawReceiveQuote(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         expect(
             db
                 .prepare<
@@ -492,7 +492,7 @@ describe("migrations", () => {
     it("adds the exit params at migration 11", () => {
         const db = migrated();
         try {
-            expect(userVersion(db)).toBe(11);
+            expect(userVersion(db)).toBe(12);
             for (const column of ["exit_signer_key", "exit_delay_type", "exit_delay_value"])
                 expect(
                     db
@@ -537,7 +537,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(11);
+        expect(userVersion(db)).toBe(12);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {

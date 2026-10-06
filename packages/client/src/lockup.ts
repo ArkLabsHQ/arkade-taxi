@@ -1,4 +1,4 @@
-import { copyByteView, type DustCovenantParams } from "@arkade-taxi/covenant";
+import { copyByteView, lockupSats, type DustCovenantParams } from "@arkade-taxi/covenant";
 import {
     fundingInputFromWire,
     fundingInputToWire,
@@ -651,6 +651,12 @@ export const ownerScript = (
 export const assetId = (id: { txid: Uint8Array; groupIndex: number }): string =>
     AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
 
+/** The Taxi's genesis txid is in internal byte order; the SDK's `AssetId` holds display order. */
+export const taxiAssetId = (id: string) => {
+    const parsed = AssetId.fromString(id);
+    return { txid: Uint8Array.from(parsed.txid).reverse(), groupIndex: parsed.groupIndex };
+};
+
 export const unsignedCopy = (tx: Transaction): Transaction => {
     const copy = Transaction.fromPSBT(tx.toPSBT());
     for (let index = 0; index < copy.inputsLength; index++)
@@ -719,8 +725,9 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     for (const owned of holdings)
         for (const [id, amount] of owned) totals.set(id, (totals.get(id) ?? 0n) + amount);
 
+    const lockup = lockupSats(context.params);
     const outputs: { amount: bigint; script: Uint8Array }[] = [
-        { amount: context.params.dust, script: context.covenantScript },
+        { amount: lockup, script: context.covenantScript },
     ];
     const fareHosting =
         context.fare.units === 0n
@@ -748,8 +755,7 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     // caller authorised this fare either way, so both layouts are within it.
     const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
     const operatorFare = fareHosting - senderFare;
-    const senderChange =
-        context.senderSats + context.params.topup - context.params.dust - senderFare;
+    const senderChange = context.senderSats + context.params.topup - lockup - senderFare;
     const operatorTotal = operatorInputs.reduce((sum, input) => sum + input.value, 0n);
     const operatorChange = operatorTotal - context.params.topup - operatorFare;
     if (senderChange < 0n || operatorChange < 0n) reject("lockup funding is insufficient");
