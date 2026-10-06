@@ -147,6 +147,20 @@ describe("buildRefund", () => {
         expect(decoded).toContainEqual(num(329n));
     });
 
+    it("repays a whole-dust advance in full and returns the payment to the sender", () => {
+        const decoded = asm(buildRefund({ ...base(), paymentSats: 100n }, 1n));
+        expect(decoded).toContainEqual(num(330n));
+        expect(decoded).toContainEqual(num(100n));
+        expect(decoded).toContainEqual(pinHash(key(2)));
+        expect(decoded).not.toContainEqual(num(329n));
+    });
+
+    it("keeps a bitcoin covenant without paymentSats byte-identical", () => {
+        expect(buildRefund({ ...base(), topup: 230n }, 1n)).toEqual(
+            buildRefund({ ...base(), topup: 230n, paymentSats: undefined }, 1n),
+        );
+    });
+
     it("repays a precharged 329-sat advance in full while retaining a one-sat receipt", () => {
         const params = {
             ...base(),

@@ -225,7 +225,7 @@ const quoteParams = (value: unknown, label: string): QuoteParams => {
             "locktime",
             "exitDelay",
         ],
-        ["assetId", "claimMode", "recoveryRecipient", "receiverFare"],
+        ["assetId", "claimMode", "recoveryRecipient", "receiverFare", "paymentSats"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);
@@ -282,7 +282,7 @@ const sponsoredParams = (value: unknown, label: string): SponsoredQuoteParams =>
     const wire = exactRecord(
         value,
         ["receiverKey", "senderKey", "operatorKey", "dust", "contribution"],
-        ["assetId", "extraPacket"],
+        ["assetId", "extraPacket", "paymentSats"],
         label,
     );
     bytes32(wire.receiverKey, `${label}.receiverKey`);

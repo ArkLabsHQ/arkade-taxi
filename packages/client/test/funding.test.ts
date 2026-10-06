@@ -240,12 +240,12 @@ describe("requestVerifiedQuote", () => {
         });
     });
 
-    const exactRequest = (topup: bigint) => {
+    const exactRequest = (p: { topup?: bigint; paymentSats?: bigint }) => {
         const selected = { ...coin(), value: 1_000 };
         const senderInputs = client.fundingInputsFromVtxos([selected]);
         const a = {
             ...args(),
-            quote: quote({ ...params(), topup }, { senderInputs, senderSats: 1_000n }),
+            quote: quote({ ...params(), ...p }, { senderInputs, senderSats: 1_000n }),
         };
         return { a, ask: { ...request(a), selectedVtxos: [selected], paymentSats: 100n } };
     };
@@ -253,15 +253,15 @@ describe("requestVerifiedQuote", () => {
     // Declared once at the top level, so the field sent and the field checked
     // cannot diverge.
     it("sends paymentSats and binds the quote to it", async () => {
-        const { a, ask } = exactRequest(230n);
+        const { a, ask } = exactRequest({ paymentSats: 100n });
         const { taxi, fetch } = transport(a);
         const { verified } = await taxi.requestVerifiedQuote(ask);
         expect(JSON.parse(String(fetch.calls[1].init.body)).paymentSats).toBe("100");
-        expect(verified.params.dust - verified.params.topup).toBe(100n);
+        expect(verified.params).toMatchObject({ topup: 330n, paymentSats: 100n });
     });
 
-    it("rejects a quote that ignored paymentSats", async () => {
-        const { a, ask } = exactRequest(10n);
+    it("rejects a quote from an operator that still lends a partial advance", async () => {
+        const { a, ask } = exactRequest({ topup: 10n });
         const { taxi } = transport(a);
         await expect(taxi.requestVerifiedQuote(ask)).rejects.toMatchObject({
             code: "PAYMENT_SATS_MISMATCH",

@@ -222,6 +222,7 @@ describe("covenantParamsOf", () => {
         exitDelay: true,
         dust: true,
         topup: true,
+        paymentSats: true,
         locktime: true,
         claimMode: true,
         recoveryRecipient: true,
@@ -231,6 +232,7 @@ describe("covenantParamsOf", () => {
 
     it("maps every covenant field of the advance", () => {
         const full = advance({
+            paymentSats: 100n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
             assetId: { txid: key(9), groupIndex: 1 },

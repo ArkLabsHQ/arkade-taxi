@@ -45,6 +45,9 @@ export const receiverFareOf = (
 const receiverScript = (claim: ReceiverClaim): Uint8Array =>
     new Uint8Array([0x51, 0x20, ...hex.decode(claim.claim!.params.receiverKey)]);
 
+const lockupOf = (params: { dust: string; paymentSats?: string }): bigint =>
+    BigInt(params.dust) + BigInt(params.paymentSats ?? 0);
+
 /** The wallet's display id for the delivered asset; the wire carries the genesis txid in internal byte order. */
 export const deliveredAssetId = (claim: ReceiverClaim): string | undefined => {
     const id = claim.claim?.params.assetId;
@@ -61,15 +64,16 @@ export const planReceiverClaim = <C extends PlanCoin>(
     const fare = receiverFareOf(claim);
     if (!claim.claim) throw new Error(`Taxi transfer ${claim.transferId} has no claim`);
     const dust = BigInt(claim.claim.params.dust);
+    const lockup = lockupOf(claim.claim.params);
     const topup = BigInt(claim.claim.params.topup);
     const mode = claim.claim.params.claimMode;
-    if (!fare && mode === "purchase") return { kind: "purchase", receivedSats: dust };
+    if (!fare && mode === "purchase") return { kind: "purchase", receivedSats: lockup };
     const delivered = BigInt(claim.claim.assetUnits ?? 0);
     if (fare?.currency === "asset" && fare.units >= delivered)
         return { kind: "wait-for-reclaim", reason: "fare-exceeds-delivery" };
     // Recycle repays the topup and any receiver fare, retaining at least dust.
     const feeSats = fare?.currency === "sats" ? fare.units : 0n;
-    const neededSats = topup + feeSats;
+    const neededSats = dust + topup + feeSats - lockup;
     const script = hex.encode(receiverScript(claim));
     const coin = coins
         .filter((candidate) => candidate.script === script && BigInt(candidate.value) >= neededSats)
@@ -80,9 +84,9 @@ export const planReceiverClaim = <C extends PlanCoin>(
         );
     if (!coin)
         return !fare && mode === undefined
-            ? { kind: "purchase", receivedSats: dust }
+            ? { kind: "purchase", receivedSats: lockup }
             : { kind: "wait-for-reclaim", reason: "no-coin-covers-the-fare", neededSats };
-    const mergedSats = dust + BigInt(coin.value) - topup - feeSats;
+    const mergedSats = lockup + BigInt(coin.value) - topup - feeSats;
     return fare?.currency === "asset"
         ? {
               kind: "recycle",
@@ -183,9 +187,7 @@ export const taxiActivityFromOffer = ({
         transferId: claim.transferId,
         ...(params.claimMode ? { mode: params.claimMode } : {}),
         ...(assetId ? { assetId } : {}),
-        units: assetId
-            ? (assetUnits ?? "0")
-            : (BigInt(params.dust) - BigInt(params.topup)).toString(),
+        units: assetId ? (assetUnits ?? "0") : (lockupOf(params) - BigInt(params.topup)).toString(),
         carrierSats: params.topup,
         ...(fare ? { fare: { currency: fare.currency, units: fare.units.toString() } } : {}),
         returnsTo: params.recoveryRecipient ?? "sender",

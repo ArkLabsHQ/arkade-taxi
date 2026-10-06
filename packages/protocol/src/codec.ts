@@ -99,6 +99,7 @@ export interface CovenantParamsValue {
     operatorSignerKey: Uint8Array;
     dust: bigint;
     topup: bigint;
+    paymentSats?: bigint;
     assetId?: AssetIdValue;
     locktime: bigint;
     exitDelay: { value: bigint; type: "blocks" | "seconds" };
@@ -311,6 +312,8 @@ export function quoteParamsFromWire(p: QuoteParams, label = "params"): CovenantP
         locktime: satsFromWire(p.locktime, `${label}.locktime`),
         exitDelay: exitDelayFromWire(p.exitDelay, `${label}.exitDelay`),
     };
+    if (p.paymentSats !== undefined)
+        out.paymentSats = satsFromWire(p.paymentSats, `${label}.paymentSats`);
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
     if (p.recoveryRecipient !== undefined) {
         if (p.recoveryRecipient !== "sender" && p.recoveryRecipient !== "receiver")
@@ -346,6 +349,7 @@ export function quoteParamsToWire(p: CovenantParamsValue): QuoteParams {
         locktime: satsToWire(p.locktime),
         exitDelay: { value: satsToWire(p.exitDelay.value), type: p.exitDelay.type },
     };
+    if (p.paymentSats !== undefined) out.paymentSats = satsToWire(p.paymentSats);
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     if (p.recoveryRecipient !== undefined) out.recoveryRecipient = p.recoveryRecipient;
     if (p.claimMode !== undefined) out.claimMode = p.claimMode;
@@ -365,6 +369,7 @@ export interface SponsoredParamsValue {
     operatorKey: Uint8Array;
     dust: bigint;
     contribution: bigint;
+    paymentSats?: bigint;
     assetId?: AssetIdValue;
     extraPacket?: { type: number; payload: Uint8Array };
 }
@@ -381,6 +386,8 @@ export function sponsoredParamsFromWire(
         dust: satsFromWire(p.dust, `${label}.dust`),
         contribution: satsFromWire(p.contribution, `${label}.contribution`),
     };
+    if (p.paymentSats !== undefined)
+        out.paymentSats = satsFromWire(p.paymentSats, `${label}.paymentSats`);
     if (p.assetId !== undefined) out.assetId = assetIdFromWire(p.assetId, `${label}.assetId`);
     if (p.extraPacket !== undefined) {
         const e = p.extraPacket;
@@ -403,6 +410,7 @@ export function sponsoredParamsToWire(p: SponsoredParamsValue): SponsoredQuotePa
         dust: satsToWire(p.dust),
         contribution: satsToWire(p.contribution),
     };
+    if (p.paymentSats !== undefined) out.paymentSats = satsToWire(p.paymentSats);
     if (p.assetId !== undefined) out.assetId = assetIdToWire(p.assetId);
     if (p.extraPacket !== undefined)
         out.extraPacket = { type: p.extraPacket.type, payload: bytesToHex(p.extraPacket.payload) };

@@ -2,6 +2,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     recycleFare,
     refundTopup,
@@ -364,7 +365,8 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     );
     if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
         fail("persisted covenant outpoint does not belong to the lockup graph");
-    exactOutput(lockup, outpoint.vout, advance.dust, script.pkScript, "lockup covenant");
+    const value = lockupSats(script.options.params);
+    exactOutput(lockup, outpoint.vout, value, script.pkScript, "lockup covenant");
     if (script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress)
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);
@@ -381,6 +383,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         fail("persisted covenant asset facts mismatch");
     return {
         script,
+        value,
         unroll: CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)),
         expectedHoldings: expectedAsset ? [{ id: expectedAsset, amount: units! }] : [],
     };
@@ -472,7 +475,7 @@ async function classifySpend(
         const outpoint = advance.outpoint!;
         const facts = covenantFacts(advance, deps.config);
         if (
-            coin.value !== Number(advance.dust) ||
+            coin.value !== Number(facts.value) ||
             coin.script !== hex.encode(facts.script.pkScript) ||
             !coin.isSpent ||
             !/^[0-9a-f]{64}$/.test(coin.spentBy ?? "") ||
@@ -512,7 +515,7 @@ async function classifySpend(
             facts.script,
             leaf,
             outpoint,
-            advance.dust,
+            facts.value,
         ).tapLeafScript;
         const covenantProgram =
             facts.script.covenant[
@@ -526,7 +529,7 @@ async function classifySpend(
         const checkpointTree = directCheckpoint(
             checkpoint,
             outpoint,
-            advance.dust,
+            facts.value,
             facts.script,
             expectedLeaf,
             facts.unroll,
@@ -538,7 +541,7 @@ async function classifySpend(
             arkTx,
             0,
             checkpoint,
-            advance.dust,
+            facts.value,
             checkpointTree,
             facts.script.scripts[leaf],
             covenantSigners,
@@ -552,11 +555,11 @@ async function classifySpend(
             exactOutput(
                 arkTx,
                 0,
-                advance.dust,
+                facts.value,
                 new Uint8Array([0x51, 0x20, ...advance.receiverKey]),
                 "purchase receiver output",
             );
-            if (advance.dust < deps.config.vtxoMinAmount)
+            if (facts.value < deps.config.vtxoMinAmount)
                 fail("purchase receiver output is below the provider minimum");
             exactExtension(arkTx, 1, covenantProgram, [covenantHoldings], 0);
             exactAnchor(arkTx, 2);
@@ -656,7 +659,7 @@ async function classifySpend(
                 verify,
             );
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
-            const merged = advance.dust + BigInt(exactReceiverCoin.value) - operatorSats;
+            const merged = facts.value + BigInt(exactReceiverCoin.value) - operatorSats;
             if (merged < advance.dust || merged < deps.config.vtxoMinAmount)
                 fail("recycle receiver output is below dust or provider minimum");
             exactOutput(
@@ -699,10 +702,10 @@ async function classifySpend(
         exactOutput(
             arkTx,
             1,
-            advance.dust - topup,
+            facts.value - topup,
             payoutPkScript(
                 advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
-                advance.dust - topup,
+                facts.value - topup,
                 advance.dust,
             ),
             "refund recovery output",
@@ -952,7 +955,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                             coin.spentBy ||
                             coin.isSwept !== false ||
                             coin.isUnrolled !== false ||
-                            coin.value !== Number(advance.dust) ||
+                            coin.value !== Number(facts.value) ||
                             coin.script !== hex.encode(facts.script.pkScript) ||
                             holdingsDiffer(assets, facts.expectedHoldings)
                         )

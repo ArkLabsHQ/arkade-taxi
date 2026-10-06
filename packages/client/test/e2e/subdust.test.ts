@@ -200,7 +200,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
                     authorizations += 1;
                     expect(terms.assetAmount).toBe(paymentSats);
                     expect(terms.fareUnits).toBe(0n);
-                    expect(terms.carrierSats).toBe(context.dust - paymentSats);
+                    expect(terms.carrierSats).toBe(context.dust);
                     return true;
                 },
             });

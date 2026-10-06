@@ -1,7 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { arkade } from "@arkade-os/sdk";
 import { subDustScript } from "./pin.js";
-import { refundTopup, validateParams, type DustCovenantParams } from "./params.js";
+import { lockupSats, refundTopup, validateParams, type DustCovenantParams } from "./params.js";
 
 /**
  * The SDK declarations emit `Program`, `AsmToken`, `InputDef` and friends into the
@@ -151,7 +151,7 @@ function refundAsm(p: DustCovenantParams, vtxoMinAmount: bigint): Asm {
     ];
     pinAsm(out, 0, "operatorKey", "operatorPinHash", topup, p.dust);
     out.push(1, "INSPECTOUTPUTVALUE", "$refundRemainder", "EQUALVERIFY");
-    pinAsm(out, 1, "senderKey", "senderPinHash", p.dust - topup, p.dust);
+    pinAsm(out, 1, "senderKey", "senderPinHash", lockupSats(p) - topup, p.dust);
     if (p.assetId) {
         assetAsm(out, 1, true, true);
         assetAsm(out, 0, false, true);
@@ -213,7 +213,7 @@ export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): Arka
 
 /**
  * `resolveAsm` is pure substitution, so the two values an artifact cannot
- * express — `dust - topup` and `sha256(subDustScript(key))` — are derived here.
+ * express — the refund remainder and `sha256(subDustScript(key))` — are derived here.
  */
 export function artifactArgs(
     p: DustCovenantParams,
@@ -231,7 +231,7 @@ export function artifactArgs(
         senderPinHash: sha256(subDustScript(p.senderKey)),
         topup: p.topup,
         refundTopup: topup,
-        refundRemainder: p.dust - topup,
+        refundRemainder: lockupSats(p) - topup,
         locktime: p.locktime,
         operatorSignerKey: p.operatorSignerKey,
         exitDelay: p.exitDelay.value,

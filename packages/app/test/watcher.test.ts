@@ -30,6 +30,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    lockupSats,
     payoutPkScript,
     recycleFare,
     refundTopup,
@@ -151,6 +152,7 @@ async function setup(
     receiverFare?: ReceiverFare,
     cfg = config(),
     receiverExtraLeaves: Uint8Array[] = [],
+    paymentSats?: bigint,
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
@@ -193,6 +195,11 @@ async function setup(
         ]).serialize();
     }
     if (kind === "recycled") request.params.receiverKey = receiverTree.tweakedPublicKey;
+    if (paymentSats !== undefined) {
+        request.params.topup = request.params.dust;
+        request.params.paymentSats = paymentSats;
+    }
+    const lockupValue = lockupSats(request.params);
     const covenant = new DustCovenantScript({
         params: request.params,
         serverKey: cfg.serverPubkey,
@@ -279,15 +286,13 @@ async function setup(
                   ),
               ]).serialize()
             : undefined;
-        const inputs = [
-            covenantSpendInput(covenant, leaf, outpoint, request.params.dust, covenantPacket),
-        ];
+        const inputs = [covenantSpendInput(covenant, leaf, outpoint, lockupValue, covenantPacket)];
         const destination = new Uint8Array([0x51, 0x20, ...request.params.receiverKey]);
         const { operatorSats, assetFare } = recycleFare(request.params);
         let outputs: { script: Uint8Array; amount: bigint }[];
         let receiverSource: Transaction | undefined;
         if (kind === "purchased") {
-            outputs = [{ script: destination, amount: request.params.dust }];
+            outputs = [{ script: destination, amount: lockupValue }];
         } else if (kind === "recycled") {
             receiverSource = source(receiverTree.pkScript, 500n, 0x31);
             inputs.push({
@@ -308,7 +313,7 @@ async function setup(
                 },
                 {
                     script: destination,
-                    amount: request.params.dust + 500n - operatorSats,
+                    amount: lockupValue + 500n - operatorSats,
                 },
             ];
         } else {
@@ -323,12 +328,8 @@ async function setup(
                     amount: topup,
                 },
                 {
-                    script: payoutPkScript(
-                        recoveryKey,
-                        request.params.dust - topup,
-                        request.params.dust,
-                    ),
-                    amount: request.params.dust - topup,
+                    script: payoutPkScript(recoveryKey, lockupValue - topup, request.params.dust),
+                    amount: lockupValue - topup,
                 },
             ];
         }
@@ -397,7 +398,7 @@ async function setup(
             `${outpoint.txid}:${outpoint.vout}`,
             fundingCoin({
                 ...outpoint,
-                value: Number(request.params.dust),
+                value: Number(lockupValue),
                 script: hex.encode(covenant.pkScript),
                 isSpent: true,
                 spentBy: checkpoints[0].id,
@@ -428,7 +429,7 @@ async function setup(
             `${outpoint.txid}:${outpoint.vout}`,
             fundingCoin({
                 ...outpoint,
-                value: Number(request.params.dust),
+                value: Number(lockupValue),
                 script: hex.encode(covenant.pkScript),
                 assets: [],
             }),
@@ -802,6 +803,35 @@ describe("canonical covenant observation", () => {
         expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         state.db.close();
     });
+
+    it.each(["recycled", "refunded", "purchased"] as const)(
+        "classifies a %s whole-dust bitcoin covenant carrying its payment",
+        async (kind) => {
+            const state = await setup(
+                kind,
+                ":memory:",
+                false,
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                config(),
+                [],
+                100n,
+            );
+            expect(state.advance).toMatchObject({ topup: 330n, paymentSats: 100n });
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: kind,
+                spentTxid: state.finalArk!.id,
+            });
+            state.db.close();
+        },
+    );
 
     it("accepts a three-leaf receiver funding tree in arkd's depth encoding", async () => {
         const receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6));

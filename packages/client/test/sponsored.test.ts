@@ -136,13 +136,13 @@ describe("verifySponsoredQuote", () => {
         ).toThrow(expect.objectContaining({ code: VerificationErrorCode.Topup }));
     });
 
-    const exactSponsored = (contribution: bigint) => {
+    const exactSponsored = (p: { contribution?: bigint; paymentSats?: bigint }) => {
         const base = sponsoredArgs();
         const senderInputs = base.senderInputs.map((input) => ({ ...input, value: 1_000n }));
         return {
             ...base,
             quote: sponsoredQuote(
-                { ...sponsoredParams(), contribution },
+                { ...sponsoredParams(), ...p },
                 { senderInputs, senderSats: 1_000n },
             ),
             senderInputs,
@@ -150,25 +150,27 @@ describe("verifySponsoredQuote", () => {
         };
     };
 
-    it("accepts a contribution that leaves the sender paying exactly paymentSats", () => {
-        const a = exactSponsored(230n);
+    it("accepts a whole-dust contribution carrying exactly paymentSats", () => {
+        const a = exactSponsored({ paymentSats: 100n });
         const verified = verifySponsoredQuote({
             ...a,
             expect: { ...a.expect, paymentSats: 100n },
         });
-        expect(verified.params.dust - verified.params.contribution).toBe(100n);
+        expect(verified.params).toMatchObject({ contribution: 330n, paymentSats: 100n });
     });
 
-    // Both clear maxContributionSats; 10 is what an old operator quotes.
-    it.each([220n, 10n])("rejects a %s contribution that misses paymentSats", (contribution) => {
-        const a = exactSponsored(contribution);
+    it.each([
+        ["a partial contribution", { contribution: 230n }],
+        ["a different payment", { paymentSats: 99n }],
+    ])("rejects %s", (_name, p) => {
+        const a = exactSponsored(p);
         expect(() =>
             verifySponsoredQuote({ ...a, expect: { ...a.expect, paymentSats: 100n } }),
         ).toThrow(expect.objectContaining({ code: VerificationErrorCode.PaymentSats }));
     });
 
-    it("leaves a sponsored quote without paymentSats on the operator's own derivation", () => {
-        expect(() => verifySponsoredQuote(exactSponsored(230n))).not.toThrow();
+    it("accepts the operator's own payment when none was asked", () => {
+        expect(() => verifySponsoredQuote(exactSponsored({ paymentSats: 100n }))).not.toThrow();
     });
 
     it("rejects a fare above the authorized maximum", () => {

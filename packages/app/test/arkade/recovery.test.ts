@@ -70,7 +70,15 @@ const sourceAdvance = (
     kind: "height" | "time" = "height",
     withAsset = false,
     terms: Partial<
-        Pick<DustCovenantParams, "recoveryRecipient" | "claimMode" | "receiverFare" | "exitDelay">
+        Pick<
+            DustCovenantParams,
+            | "recoveryRecipient"
+            | "claimMode"
+            | "receiverFare"
+            | "exitDelay"
+            | "topup"
+            | "paymentSats"
+        >
     > = {},
 ) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
@@ -353,6 +361,19 @@ describe("recovery graph", () => {
         expect(getArkPsbtFields(arkTx, 0, PrevArkTxField)).toHaveLength(1);
         expect(intent.expectedTxid).toBe(arkTx.id);
         expect(intent.digest).toBe(digest(intent));
+    });
+
+    it("recovers a whole-dust advance in full and returns the payment to the sender", () => {
+        const row = sourceAdvance("height", false, { topup: 330n, paymentSats: 20n });
+        const arkTx = Transaction.fromPSBT(base64.decode(buildRecoveryIntent(row, config()).arkTx));
+        expect(arkTx.getOutput(0)).toEqual({
+            amount: 330n,
+            script: payoutPkScript(row.operatorKey, 330n, row.dust),
+        });
+        expect(arkTx.getOutput(1)).toEqual({
+            amount: 20n,
+            script: payoutPkScript(row.senderKey, 20n, row.dust),
+        });
     });
 
     it("moves the exact persisted asset units to the sender receipt", () => {

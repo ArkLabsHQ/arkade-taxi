@@ -125,11 +125,10 @@ const assetUnits: Schema = {
 const paymentSats: Schema = {
     ...decimal,
     description:
-        "Exact sats the receiver must end up with, bitcoin only. Must be within " +
-        "[vtxoMinAmount, dust - vtxoMinAmount] and covered by senderSats; the advance " +
-        "becomes dust - paymentSats. Omitted derives the advance from senderSats, which " +
-        "can only deliver dust - vtxoMinAmount. No response field reports it: verify it " +
-        "as topup == dust - paymentSats.",
+        "Exact sats the receiver must end up with, bitcoin only, locked beside a " +
+        "whole-dust advance. Must be within [vtxoMinAmount, dust) and covered by " +
+        "senderSats. Omitted sends all of senderSats, which must then be below dust. " +
+        "Verify topup == dust and params.paymentSats == paymentSats.",
 };
 
 const schemas: Record<string, Schema> = {
@@ -275,6 +274,11 @@ const schemas: Record<string, Schema> = {
             },
             {
                 assetId: ref("AssetId"),
+                paymentSats: {
+                    ...decimal,
+                    description:
+                        "Sats locked beside a whole-dust bitcoin advance; absent on a dust-unit covenant.",
+                },
                 recoveryRecipient: oneOfStrings("sender", "receiver"),
                 claimMode: {
                     ...oneOfStrings("recycle", "purchase"),
@@ -414,9 +418,8 @@ const schemas: Record<string, Schema> = {
             paymentSats: {
                 ...paymentSats,
                 description:
-                    "Exact sats the sender contributes to the carrier, bitcoin only. Same " +
-                    "range and verification as on QuoteRequest, against " +
-                    "contribution == dust - paymentSats.",
+                    "Exact sats the receiver gets beside the carrier, bitcoin only. Same " +
+                    "range and verification as on QuoteRequest, against contribution == dust.",
             },
         },
     ),
@@ -428,10 +431,14 @@ const schemas: Record<string, Schema> = {
             dust: decimal,
             contribution: {
                 ...decimal,
-                description: "Sats of the receiver's dust carrier the operator fronts.",
+                description: "The whole dust unit the operator gives the receiver.",
             },
         },
-        { assetId: ref("AssetId"), extraPacket: ref("ExtraPacket") },
+        {
+            paymentSats: { ...decimal, description: "Sats the sender pays beside the carrier." },
+            assetId: ref("AssetId"),
+            extraPacket: ref("ExtraPacket"),
+        },
     ),
     SponsoredCommitment: object({
         paymentOutputIndex: count,

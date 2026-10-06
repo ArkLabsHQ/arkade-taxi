@@ -189,6 +189,13 @@ describe("quoteParamsFromWire", () => {
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
     });
 
+    it("round-trips paymentSats and omits it when absent", () => {
+        const w = { ...wire(), paymentSats: "100" };
+        expect(quoteParamsFromWire(w).paymentSats).toBe(100n);
+        expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
+        expect(quoteParamsToWire(quoteParamsFromWire(wire()))).not.toHaveProperty("paymentSats");
+    });
+
     it("round-trips the asset variant", () => {
         const w = { ...wire(), assetId: { txid: hex32("11"), groupIndex: 7 } };
         expect(quoteParamsToWire(quoteParamsFromWire(w))).toEqual(w);
@@ -296,6 +303,12 @@ describe("sponsoredParamsFromWire", () => {
             contribution: "9007199254740993",
             assetId: { txid: hex32("11"), groupIndex: 7 },
         };
+        expect(sponsoredParamsToWire(sponsoredParamsFromWire(w))).toEqual(w);
+    });
+
+    it("round-trips paymentSats", () => {
+        const w = { ...wire(), paymentSats: "100" };
+        expect(sponsoredParamsFromWire(w).paymentSats).toBe(100n);
         expect(sponsoredParamsToWire(sponsoredParamsFromWire(w))).toEqual(w);
     });
 

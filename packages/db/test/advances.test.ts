@@ -81,6 +81,13 @@ describe("round-trip fidelity", () => {
         expect(repo.get("no-fare")?.receiverFare).toBeUndefined();
     });
 
+    it("round-trips paymentSats and leaves it absent on a dust-unit row", () => {
+        repo.insert(advance({ id: "paid", topup: 330n, paymentSats: 100n }));
+        repo.insert(advance({ id: "unit" }));
+        expect(repo.get("paid")?.paymentSats).toBe(100n);
+        expect(repo.get("unit")?.paymentSats).toBeUndefined();
+    });
+
     it("round-trips the exit params", () => {
         const a = advance({
             operatorSignerKey: new Uint8Array(32).fill(7),

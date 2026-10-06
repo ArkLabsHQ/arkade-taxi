@@ -71,7 +71,7 @@ async function smallBitcoinPayment() {
         );
         const { tx } = await terminal(live, locked, "recycled", txid);
         expect(tx.inputsLength).toBe(2);
-        expectReceipt(tx, 0, 1n, live.info.operatorKey);
+        expectReceipt(tx, 0, 330n, live.info.operatorKey);
         expect(
             await poll(
                 "Bob receives the 329-sat payment",
@@ -85,7 +85,7 @@ async function smallBitcoinPayment() {
         });
         expect(
             await poll(
-                "Taxi's one-sat loan is repaid",
+                "Taxi's whole-dust loan is repaid",
                 () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
                 (balance) => balance.sats === taxiBefore.sats && balance.units === taxiBefore.units,
             ),
@@ -128,7 +128,7 @@ async function exactBitcoinPayment() {
             "recycle",
             100n,
         );
-        expect(offered.quote.params.topup).toBe("230");
+        expect(offered.quote.params).toMatchObject({ topup: "330", paymentSats: "100" });
         const locked = await lock(live, offered);
         const txid = await live.client.recycle(
             locked.transfer,
@@ -147,7 +147,7 @@ async function exactBitcoinPayment() {
         );
         const { tx } = await terminal(live, locked, "recycled", txid);
         expect(tx.inputsLength).toBe(2);
-        expectReceipt(tx, 0, 230n, live.info.operatorKey);
+        expectReceipt(tx, 0, 330n, live.info.operatorKey);
         expect(
             await poll(
                 "Bob receives exactly the 100 sats Alice named",
@@ -161,7 +161,7 @@ async function exactBitcoinPayment() {
         });
         expect(
             await poll(
-                "Taxi's 230-sat loan is repaid",
+                "Taxi's whole-dust loan is repaid",
                 () => walletBalance(live.actors.operator, live.fixture.asset.assetId),
                 (balance) => balance.sats === taxiBefore.sats && balance.units === taxiBefore.units,
             ),

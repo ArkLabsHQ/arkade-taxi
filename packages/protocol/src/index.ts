@@ -130,14 +130,10 @@ export interface QuoteRequestBody {
     claimMode?: "recycle" | "purchase";
     senderSats: string;
     /**
-     * Exact sats the receiver must end up with, bitcoin only. Omitted derives
-     * the advance from `senderSats`, which can only ever deliver
-     * `dust - vtxoMinAmount` because a spendable coin is already at least dust.
-     *
-     * No response field reports it, and an operator predating the field ignores
-     * it and quotes the derived advance. A client MUST therefore bind it into
-     * verification — `topup === dust - paymentSats` — rather than read
-     * capability off the response.
+     * Exact sats the receiver must end up with, bitcoin only, locked beside a
+     * whole-dust advance. Omitted sends all of `senderSats`. A client MUST bind
+     * it into verification — `topup === dust` and `params.paymentSats` equal to
+     * it — since an operator predating whole-dust advances quotes a partial one.
      */
     paymentSats?: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
@@ -164,6 +160,8 @@ export interface QuoteParams {
     /** Absent enables both claim leaves; present pins which claim leaf the
      * covenant actually commits to. */
     claimMode?: "recycle" | "purchase";
+    /** Sats locked beside a whole-dust bitcoin advance; absent on a dust-unit covenant. */
+    paymentSats?: string;
     /** Present only on a receiver-paid recycle leaf; the fared asset is
      * `assetId` above, not restated here. */
     receiverFare?: { currency: "sats" | "asset"; units: string };
@@ -252,6 +250,8 @@ export interface SponsoredQuoteParams {
     operatorKey: string;
     dust: string;
     contribution: string;
+    /** Sats the sender pays beside the operator's whole-dust contribution. */
+    paymentSats?: string;
     assetId?: AssetIdWire;
     /**
      * An extra extension packet the payment must carry, declared by the SENDER.
@@ -271,9 +271,8 @@ export interface SponsoredQuoteRequestBody {
     senderKey: string;
     assetId?: AssetIdWire;
     senderSats: string;
-    /** Exact sats the sender contributes to the carrier, bitcoin only; the same
-     * field as `QuoteRequestBody.paymentSats` and bound the same way, against
-     * `contribution === dust - paymentSats`. */
+    /** Exact sats the receiver gets beside the carrier, bitcoin only; the same
+     * field as `QuoteRequestBody.paymentSats`, bound against `contribution === dust`. */
     paymentSats?: string;
     /** Units of the asset being moved; a proportional fare prices against it. */
     assetUnits?: string;

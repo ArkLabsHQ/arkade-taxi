@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     exitDelayEncodable,
     exitTimelock,
+    lockupSats,
     refundTopup,
     unrecoveredTopup,
     validateParams,
@@ -156,6 +157,38 @@ describe("receiverFare", () => {
                 1n,
             ),
         ).toThrow(/signed 64-bit/);
+    });
+});
+
+describe("lockupSats", () => {
+    it("locks exactly dust without a payment", () => {
+        expect(lockupSats({ ...base(), topup: 230n })).toBe(330n);
+    });
+
+    it("locks the payment beside a whole-dust advance", () => {
+        expect(lockupSats({ ...base(), paymentSats: 100n })).toBe(430n);
+    });
+});
+
+describe("paymentSats", () => {
+    it("accepts a sub-dust payment beside a whole-dust advance", () => {
+        expect(() => validateParams({ ...base(), paymentSats: 100n }, MIN)).not.toThrow();
+    });
+
+    it.each([
+        ["below vtxoMinAmount", { paymentSats: 0n }],
+        ["a whole dust unit", { paymentSats: 330n }],
+        ["a partial advance", { paymentSats: 100n, topup: 230n }],
+        ["an asset covenant", { paymentSats: 100n, assetId }],
+    ])("rejects %s", (_name, over) => {
+        expect(() => validateParams({ ...base(), ...over } as DustCovenantParams, MIN)).toThrow(
+            /paymentSats/,
+        );
+    });
+
+    it("refunds the whole advance to the operator", () => {
+        expect(refundTopup({ ...base(), paymentSats: 100n }, MIN)).toBe(330n);
+        expect(unrecoveredTopup({ ...base(), paymentSats: 100n }, MIN)).toBe(0n);
     });
 });
 

@@ -17,6 +17,7 @@ export function covenantParamsOf(a: Pick<Advance, keyof DustCovenantParams>): Du
         exitDelay: a.exitDelay,
         dust: a.dust,
         topup: a.topup,
+        ...(a.paymentSats !== undefined ? { paymentSats: a.paymentSats } : {}),
         locktime: a.locktime,
         ...(a.claimMode ? { claimMode: a.claimMode } : {}),
         ...(a.recoveryRecipient ? { recoveryRecipient: a.recoveryRecipient } : {}),

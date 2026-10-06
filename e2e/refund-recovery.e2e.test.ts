@@ -56,9 +56,9 @@ liveScenario("sender-refund-before-locktime", async () => {
                     ),
             ).toBe(true);
         const { tx, checkpoint } = await terminal(live, locked, "refunded", txid);
-        // Sub-dust bitcoin advances 1 sat and the sender funds the rest, so a
-        // sender-owned timeout returns it that way round; an asset one is 329/1.
-        expectReceipt(tx, 0, 1n, live.info.operatorKey);
+        // The whole-dust advance goes back to Taxi and the sender's payment to the
+        // sender; an asset one is 329/1.
+        expectReceipt(tx, 0, 330n, live.info.operatorKey);
         expectReceipt(tx, 1, 329n, locked.quote.params.senderKey);
         expect(
             checkpoint
@@ -183,7 +183,7 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         const { tx, row } = await terminal(live, locked, "recovered", intent.expectedTxid);
         expect(row.recoveryTxid).toBe(intent.expectedTxid);
         expect(row.recoveryPhase).toBe("submitted");
-        expectReceipt(tx, 0, 1n, live.info.operatorKey);
+        expectReceipt(tx, 0, 330n, live.info.operatorKey);
         expectReceipt(tx, 1, 329n, locked.quote.params.senderKey);
         const health = await fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then((r) => r.json());
         expect(BigInt(health.runtime.chainTime)).toBeGreaterThanOrEqual(BigInt(deadline));

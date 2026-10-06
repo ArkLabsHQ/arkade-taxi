@@ -105,6 +105,8 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     exitDelay: RelativeTimelock;
     dust: bigint;
     topup: bigint;
+    /** Sats locked beside a whole-dust bitcoin advance; absent on a dust-unit covenant. */
+    paymentSats?: bigint;
     assetId?: AssetIdRef;
     assetUnits?: bigint;
     recoveryRecipient?: "sender" | "receiver";
@@ -183,12 +185,10 @@ export interface QuoteRequest {
     assetId?: AssetIdRef;
     /** Leaf the sender authorises; omitted resolves against the rule. */
     claimMode?: Exclude<ClaimMode, "either">;
-    /** Sats the sender contributes toward the dust unit; 0 for a pure-asset
-     * payment, where the operator funds the whole thing. */
+    /** Value of the sender's funding inputs. */
     senderSats: bigint;
-    /** Exact sats the receiver must end up with. Absent derives the advance
-     * from `senderSats`, which can only ever deliver `dust - vtxoMinAmount`
-     * because a spendable coin is already at least dust. Bitcoin only. */
+    /** Exact sats the receiver must end up with, locked beside the whole-dust
+     * advance. Absent sends all of `senderSats`. Bitcoin only. */
     paymentSats?: bigint;
     /** Units of the asset being moved; priced against by a proportional fare. */
     assetUnits?: bigint;
@@ -197,5 +197,11 @@ export interface QuoteRequest {
 }
 
 export type AdmissionDecision =
-    | { ok: true; topup: bigint; fare: FareSpec; claim: ResolvedClaimMode }
+    | {
+          ok: true;
+          topup: bigint;
+          paymentSats?: bigint;
+          fare: FareSpec;
+          claim: ResolvedClaimMode;
+      }
     | { ok: false; reason: string };

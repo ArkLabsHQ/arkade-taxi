@@ -5,6 +5,7 @@ import {
     quoteParamsFromWire,
     quoteParamsToWire,
     type AssetIdValue,
+    type CovenantParamsValue,
 } from "@arkade-taxi/protocol";
 import { QuoteVerificationError, TaxiError } from "../src/errors.js";
 import { exitTimelock } from "../src/index.js";
@@ -281,30 +282,32 @@ describe("verifyQuote — pays who the caller asked to pay", () => {
 });
 
 describe("verifyQuote — exact paymentSats", () => {
-    const exactQuote = (topup: bigint) => {
+    const exactQuote = (p: Partial<CovenantParamsValue>) => {
         const senderInputs = fundingInputs().map((input) => ({ ...input, value: 1_000n }));
         return {
             ...args(),
-            quote: quote({ ...params(), topup }, { senderInputs, senderSats: 1_000n }),
+            quote: quote({ ...params(), ...p }, { senderInputs, senderSats: 1_000n }),
             senderInputs,
             senderSats: 1_000n,
         };
     };
-    const expecting = (topup: bigint, paymentSats: bigint) => {
-        const a = exactQuote(topup);
+    const expecting = (p: Partial<CovenantParamsValue>, paymentSats: bigint) => {
+        const a = exactQuote(p);
         return { ...a, expect: { ...a.expect, paymentSats } };
     };
 
-    it("accepts a topup that leaves the receiver exactly paymentSats", () => {
-        const v = verifyQuote(expecting(230n, 100n));
-        expect(v.params.dust - v.params.topup).toBe(100n);
+    it("accepts a whole-dust advance carrying exactly paymentSats", () => {
+        const v = verifyQuote(expecting({ paymentSats: 100n }, 100n));
+        expect(v.params).toMatchObject({ topup: 330n, paymentSats: 100n });
     });
 
-    // Each of these sits under maxTopupSats, so the pre-existing ceiling admits
-    // all three; only the equality separates them. 10 is what an operator that
-    // ignores the field quotes.
-    it.each([240n, 220n, VTXO_MIN])("rejects a %s topup that misses paymentSats", (topup) => {
-        rejects(expecting(topup, 100n), "PAYMENT_SATS_MISMATCH");
+    // An operator predating whole-dust advances quotes the partial one.
+    it.each([
+        ["a partial advance", { topup: 230n }],
+        ["a different payment", { paymentSats: 99n }],
+        ["no payment", {}],
+    ])("rejects %s", (_name, p) => {
+        rejects(expecting(p, 100n), "PAYMENT_SATS_MISMATCH");
     });
 
     it("rejects an exact amount asked of an asset quote", () => {
@@ -312,8 +315,8 @@ describe("verifyQuote — exact paymentSats", () => {
         rejects({ ...a, expect: { ...a.expect, paymentSats: 100n } }, "PAYMENT_SATS_MISMATCH");
     });
 
-    it("leaves a quote without paymentSats on the operator's own derivation", () => {
-        expect(() => verifyQuote(exactQuote(230n))).not.toThrow();
+    it("accepts the operator's own payment when none was asked", () => {
+        expect(() => verifyQuote(exactQuote({ paymentSats: 100n }))).not.toThrow();
     });
 });
 

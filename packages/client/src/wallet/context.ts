@@ -262,7 +262,7 @@ export type BitcoinTaxiOffer =
       }
     | { ok: false; reason: ProbeRefusal };
 
-/** Whether this Taxi can turn `amount` sats, below dust, into a full dust coin for the receiver. */
+/** Whether this Taxi will carry `amount` sats, below dust, beside a whole-dust advance. */
 export const vetBitcoinTaxi = (
     info: TaxiInfo,
     ctx: BitcoinTaxiContext,
@@ -279,8 +279,8 @@ export const vetBitcoinTaxi = (
     if (info.paused) return refuse("paused");
     const rule = bitcoinRule(info);
     if (rule?.enabled !== true) return refuse("bitcoin-not-served");
-    const topup = ctx.dust - ask.amount;
-    if (ask.amount < ctx.vtxoMinAmount || topup < ctx.vtxoMinAmount)
+    const topup = ctx.dust;
+    if (ask.amount < ctx.vtxoMinAmount || ask.amount >= ctx.dust)
         return refuse("amount-outside-carrier");
     const cap =
         rule.maxTopupSats === null

@@ -180,10 +180,10 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
                 "an exact sats amount is only defined for a bitcoin transfer",
             );
         }
-        if (params.topup !== params.dust - expect.paymentSats) {
+        if (params.topup !== params.dust || params.paymentSats !== expect.paymentSats) {
             reject(
                 VerificationErrorCode.PaymentSats,
-                `topup ${params.topup} leaves the receiver ${params.dust - params.topup}, you asked to send ${expect.paymentSats}`,
+                `quote locks ${params.paymentSats ?? 0n} sats beside a ${params.topup}-sat advance, you asked to send ${expect.paymentSats} beside ${params.dust}`,
             );
         }
     }
