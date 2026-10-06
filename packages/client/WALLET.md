@@ -10,11 +10,11 @@ Import wallet orchestration from `@arkade-taxi/client/wallet`. The root client e
 
 Wallet adapters must supply all reservations, a transaction lock shared by sends and claims, active authorization and wallet reload. `FailedDirectTaxi.forget()` overrides the local journal only. The operator may still finish that submission, so retrying can pay twice.
 
-The shared-regtest test uses two real SDK wallets to send exactly 50 sats, recycle the verified delivery into one spendable receiver coin, and prove the Taxi float is repaid. It runs the Taxi profile of `ArkLabsHQ/arkade-regtest` at `c364ea8af124ca5f75d62d6cabf6436481e10dcc`.
+The shared-regtest test uses two real SDK wallets to send exactly 50 sats, recycle the verified delivery into one spendable receiver coin, and prove the Taxi float is repaid. It runs the Taxi profile of `ArkLabsHQ/arkade-regtest` at `78d0b7a9677077ca64bf09b4e825520ba462446b`.
 
 ```sh
 git clone https://github.com/ArkLabsHQ/arkade-regtest.git arkade-regtest
-git -C arkade-regtest checkout c364ea8af124ca5f75d62d6cabf6436481e10dcc
+git -C arkade-regtest checkout 78d0b7a9677077ca64bf09b4e825520ba462446b
 pnpm -r build
 docker build -t arkade-taxi:regtest .
 pnpm regtest:up:client
