@@ -1,3 +1,5 @@
+import { isHttpUrl } from "./wire.js";
+
 export interface Bip21Taxi {
     url: string;
     operatorKey?: string;
@@ -20,21 +22,19 @@ export const decodeTaxiParams = (params: URLSearchParams): Bip21Taxi | undefined
     const taxiUrl = getParam("taxi");
     const taxiKey = getParam("taxikey");
     let taxi: Bip21Taxi | undefined;
-    if (taxiUrl != null && (taxiKey === null || /^[0-9a-f]{64}$/.test(taxiKey))) {
-        try {
-            const parsed = new URL(taxiUrl);
-            if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-                const fareId = getParam("taxifare");
-                taxi = {
-                    url: taxiUrl,
-                    ...(taxiKey ? { operatorKey: taxiKey } : {}),
-                    ...(fareId ? { fareId } : {}),
-                    ...(payer ? { payer } : {}),
-                };
-            }
-        } catch {
-            // Legacy malformed optional hints are ignored; a repayment preference is never weakened.
-        }
+    // Legacy malformed optional hints are ignored; a repayment preference is never weakened.
+    if (
+        taxiUrl != null &&
+        (taxiKey === null || /^[0-9a-f]{64}$/.test(taxiKey)) &&
+        isHttpUrl(taxiUrl)
+    ) {
+        const fareId = getParam("taxifare");
+        taxi = {
+            url: taxiUrl,
+            ...(taxiKey ? { operatorKey: taxiKey } : {}),
+            ...(fareId ? { fareId } : {}),
+            ...(payer ? { payer } : {}),
+        };
     }
     if (payer !== undefined && !taxi) throw new Error("Invalid Taxi repayment preference");
     return taxi;

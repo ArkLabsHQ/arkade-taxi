@@ -1,5 +1,6 @@
 import { TaxiClient, TaxiError } from "../index.js";
 import { boundedFetch } from "./context.js";
+import { DECIMAL, isCanonicalTxid, isHttpUrl, isTransferId } from "./wire.js";
 
 export interface RememberedTaxi {
     network: string;
@@ -49,7 +50,6 @@ const MAX_TEXT = 512;
 const MAX_UNITS = 2n ** 64n - 1n;
 // A larger Unix timestamp cannot be rendered as a JavaScript Date.
 const MAX_TIME = 8_640_000_000_000;
-const DECIMAL = /^(0|[1-9][0-9]*)$/;
 const RANK = new Map([
     ["quoted", 0],
     ["locking", 1],
@@ -69,15 +69,6 @@ const isTime = (value: unknown): value is number =>
     Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_TIME;
 const optional = (value: unknown, check: (value: unknown) => boolean): boolean =>
     value === undefined || check(value);
-const isTxid = (value: unknown): value is string =>
-    typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-const isHttpUrl = (value: unknown): boolean => {
-    try {
-        return typeof value === "string" && ["http:", "https:"].includes(new URL(value).protocol);
-    } catch {
-        return false;
-    }
-};
 
 export const isTaxiActivity = (value: unknown): value is TaxiActivity => {
     const r = value as Partial<TaxiActivity> | null;
@@ -87,9 +78,7 @@ export const isTaxiActivity = (value: unknown): value is TaxiActivity => {
         (r.role === "sender" || r.role === "receiver") &&
         typeof r.network === "string" &&
         isHttpUrl(r.taxiUrl) &&
-        typeof r.transferId === "string" &&
-        r.transferId.length <= 128 &&
-        /^[A-Za-z0-9._:-]+$/.test(r.transferId) &&
+        isTransferId(r.transferId) &&
         optional(
             r.mode,
             (mode) => mode === "recycle" || mode === "purchase" || mode === "sponsored",
@@ -103,7 +92,7 @@ export const isTaxiActivity = (value: unknown): value is TaxiActivity => {
         }) &&
         optional(r.destination, isText) &&
         optional(r.returnsTo, (to) => to === "sender" || to === "receiver") &&
-        [r.lockupTxid, r.claimTxid, r.spentTxid].every((txid) => optional(txid, isTxid)) &&
+        [r.lockupTxid, r.claimTxid, r.spentTxid].every((txid) => optional(txid, isCanonicalTxid)) &&
         (r.state === "gone" || RANK.has(r.state as string)) &&
         [r.submissionPhase, r.failureCode, r.failureDetail].every((text) =>
             optional(text, isText),
@@ -159,7 +148,7 @@ const withinCap = (records: TaxiActivity[]): TaxiActivity[] => {
 
 export const taxiActivityTxids = (r: TaxiActivity): string[] => {
     const locked = (RANK.get(r.state) ?? 0) >= 2 && r.state !== "expired";
-    return [locked ? r.lockupTxid : undefined, r.claimTxid, r.spentTxid].filter(isTxid);
+    return [locked ? r.lockupTxid : undefined, r.claimTxid, r.spentTxid].filter(isCanonicalTxid);
 };
 
 export class TaxiActivityStore {

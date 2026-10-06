@@ -1,7 +1,5 @@
-const MAX_SATS = 2_100_000_000_000_000n;
-
-const CANONICAL_DECIMAL = /^(0|[1-9][0-9]*)$/;
-const TRANSFER_ID = /^[A-Za-z0-9._:-]+$/;
+import { DECIMAL, MAX_SATS, asRecord, isCanonicalTxid, isTransferId } from "./wire.js";
+export { isCanonicalTxid, isTransferId } from "./wire.js";
 
 export type CarrierMode = "recycle" | "purchase";
 
@@ -40,11 +38,6 @@ export class CarrierMetadataError extends Error {
     }
 }
 
-const asRecord = (value: unknown): Record<string, unknown> | undefined =>
-    typeof value === "object" && value !== null && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
-
 const CARRIER_FIELDS = new Set([
     "version",
     "mode",
@@ -64,16 +57,13 @@ const exactFields = (raw: Record<string, unknown>, allowed: Set<string>, path: s
 };
 
 const decimalSats = (value: unknown, field: string): bigint => {
-    if (typeof value !== "string" || !CANONICAL_DECIMAL.test(value)) {
+    if (typeof value !== "string" || !DECIMAL.test(value)) {
         throw new CarrierMetadataError(field);
     }
     const sats = BigInt(value);
     if (sats > MAX_SATS) throw new CarrierMetadataError(field);
     return sats;
 };
-
-export const isTransferId = (value: unknown): value is string =>
-    typeof value === "string" && TRANSFER_ID.test(value) && value.length <= 128;
 
 const enumField = <T extends string>(
     value: unknown,
@@ -84,11 +74,6 @@ const enumField = <T extends string>(
         throw new CarrierMetadataError(field);
     return value as T;
 };
-
-const TXID = /^[0-9a-f]{64}$/;
-
-export const isCanonicalTxid = (value: unknown): value is string =>
-    typeof value === "string" && TXID.test(value);
 
 const txidList = (value: unknown): string[] => {
     if (!Array.isArray(value)) throw new CarrierMetadataError("txids");

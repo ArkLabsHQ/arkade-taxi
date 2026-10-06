@@ -1,7 +1,8 @@
-import { VtxoScript, asset, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
+import { VtxoScript, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
 import {
     ClientErrorCode,
     fundingInputsFromVtxos,
+    sdkAssetId,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type IncomingClaimExpectation,
@@ -51,10 +52,7 @@ const lockupOf = (params: { dust: string; paymentSats?: string }): bigint =>
 /** The wallet's display id for the delivered asset; the wire carries the genesis txid in internal byte order. */
 export const deliveredAssetId = (claim: ReceiverClaim): string | undefined => {
     const id = claim.claim?.params.assetId;
-    return (
-        id &&
-        asset.AssetId.create(hex.encode(hex.decode(id.txid).reverse()), id.groupIndex).toString()
-    );
+    return id && sdkAssetId({ txid: hex.decode(id.txid), groupIndex: id.groupIndex });
 };
 
 export const planReceiverClaim = <C extends PlanCoin>(

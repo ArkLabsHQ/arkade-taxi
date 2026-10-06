@@ -1,16 +1,17 @@
 import {
     ArkAddress,
-    asset,
     getNetwork,
     toXOnlySignerHex,
     type ArkInfo,
     type NetworkName,
 } from "@arkade-os/sdk";
 import type { ArkadeCarrierChoice } from "./receiveCarrier.js";
-import { TaxiClient, verifyReceiveQuote } from "../index.js";
+import { TaxiClient, taxiAssetId, verifyReceiveQuote } from "../index.js";
 import { hex } from "@scure/base";
 import type { Bip21Taxi } from "./requests.js";
 import type { DirectTaxiMode } from "./send.js";
+import { priceFare, wireUnits } from "./wire.js";
+export { taxiAssetId } from "../index.js";
 
 export type TaxiInfo = Awaited<ReturnType<TaxiClient["info"]>>;
 export type TaxiFare = TaxiInfo["assetRules"][number]["fares"][number];
@@ -105,12 +106,6 @@ export const boundedFetch: typeof fetch = (input, init) => {
     });
 };
 
-/** The Taxi's genesis txid is in internal byte order; the SDK's `AssetId` holds display order. */
-export const taxiAssetId = (id: string) => {
-    const parsed = asset.AssetId.fromString(id);
-    return { txid: Uint8Array.from(parsed.txid).reverse(), groupIndex: parsed.groupIndex };
-};
-
 const hrpOf = (address: string): string | undefined => {
     try {
         return ArkAddress.decode(address).hrp;
@@ -150,6 +145,9 @@ export const isMixedContent = (url: string, pageProtocol: string): boolean => {
 /** The rule for sub-dust bitcoin; "*" never covers it. */
 const bitcoinRule = (info: TaxiInfo) => info.assetRules.find((rule) => rule?.assetId === null);
 
+const capOf = (info: TaxiInfo, rule: TaxiInfo["assetRules"][number]) =>
+    wireUnits(rule.maxTopupSats === null ? info.maxPerPaymentTopupSats : rule.maxTopupSats);
+
 const fetchInfo = async (
     url: string,
     ctx: Pick<TaxiProbeContext, "fetch" | "pageProtocol">,
@@ -163,9 +161,6 @@ const fetchInfo = async (
     }
 };
 
-const wireUnits = (value: unknown): bigint | undefined =>
-    typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) ? BigInt(value) : undefined;
-
 /**
  * What a fare charges the receiver, as the Taxi and the verifier price it; undefined for one the Taxi refuses
  * on a receiver-paid quote: a token fare, or a same-asset proportion, which has no delivery to scale with.
@@ -178,15 +173,7 @@ export const receiverFareUnits = (fare: TaxiFare | undefined, loan: bigint): big
             ? wireUnits(pricing.units)
             : undefined;
     if (pricing?.kind !== "proportional" || fare!.currency !== "sats") return undefined;
-    const [min, max] = [
-        wireUnits(pricing.minUnits),
-        pricing.maxUnits === null ? null : wireUnits(pricing.maxUnits),
-    ];
-    if (!Number.isInteger(pricing.bps) || pricing.bps < 0 || pricing.bps > 10_000) return undefined;
-    if (min === undefined || max === undefined) return undefined;
-    const raw = (loan * BigInt(pricing.bps)) / 10_000n;
-    const floored = raw < min ? min : raw;
-    return max !== null && floored > max ? max : floored;
+    return priceFare(pricing, loan);
 };
 
 const vetInfo = (
@@ -209,10 +196,7 @@ const vetInfo = (
     // What serving the asset takes on a receiver-paid quote, read from the same fields the verifier reads.
     if (receiverPaid && rule.claim !== "recycle" && rule.claim !== "either")
         return refuse("recycle-not-allowed");
-    const cap =
-        rule.maxTopupSats === null
-            ? wireUnits(info.maxPerPaymentTopupSats)
-            : wireUnits(rule.maxTopupSats);
+    const cap = capOf(info, rule);
     if (cap === undefined || cap < ctx.dust) return refuse("loan-cap-below-dust");
     return { ok: true, info };
 };
@@ -282,10 +266,7 @@ export const vetBitcoinTaxi = (
     const topup = ctx.dust;
     if (ask.amount < ctx.vtxoMinAmount || ask.amount >= ctx.dust)
         return refuse("amount-outside-carrier");
-    const cap =
-        rule.maxTopupSats === null
-            ? wireUnits(info.maxPerPaymentTopupSats)
-            : wireUnits(rule.maxTopupSats);
+    const cap = capOf(info, rule);
     if (cap === undefined || cap < topup) return refuse("loan-cap-below-shortfall");
     const fares = (Array.isArray(rule.fares) ? rule.fares : []).flatMap((fare) => {
         const units = fare?.currency === "sats" ? receiverFareUnits(fare, topup) : undefined;

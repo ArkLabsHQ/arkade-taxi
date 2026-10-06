@@ -651,6 +651,12 @@ export const ownerScript = (
 export const assetId = (id: { txid: Uint8Array; groupIndex: number }): string =>
     AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
 
+/** The Taxi's genesis txid is in internal byte order; the SDK's `AssetId` holds display order. */
+export const taxiAssetId = (id: string) => {
+    const parsed = AssetId.fromString(id);
+    return { txid: Uint8Array.from(parsed.txid).reverse(), groupIndex: parsed.groupIndex };
+};
+
 export const unsignedCopy = (tx: Transaction): Transaction => {
     const copy = Transaction.fromPSBT(tx.toPSBT());
     for (let index = 0; index < copy.inputsLength; index++)

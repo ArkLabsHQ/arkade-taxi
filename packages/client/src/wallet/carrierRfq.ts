@@ -8,18 +8,15 @@ import {
 import {
     assertCarrierRequestAllowed,
     assertReceiverPaidEchoMatchesExpected,
-    assertRecycleEchoMatchesExpected,
     carrierNow,
     encodeCarrierRequest,
     normalizeXonlyHex,
     parseCarrierEcho,
     parseTopLevelCarrierSats,
     validateReceiverPaidQuoteShape,
-    validateRecycleQuoteShape,
     type ArkadeCarrierChoice,
     type ArkadeCarrierRequest,
     type ReceiverPaidCarrierQuote,
-    type RecycleCarrierQuote,
     type TaxiIdentity,
     type VerifiedCarrierTerms,
 } from "./receiveCarrier.js";
@@ -39,7 +36,6 @@ export async function requestTaxiArkadeSwap(
     const requestedReceiveAddress = genericParams.receiveAddress;
     const requestedNow = genericParams.now;
     let carrierRequest: ArkadeCarrierRequest | undefined;
-    let expectedRecycle: RecycleCarrierQuote | undefined;
     let expectedReceiverPaid: ReceiverPaidCarrierQuote | undefined;
     let expectedCarrierQuote:
         { receiveAddress: string; makerPublicKey: string; assetId: string } | undefined;
@@ -47,25 +43,6 @@ export async function requestTaxiArkadeSwap(
         const mode: unknown = (choice as { mode?: unknown }).mode;
         if (mode === "purchase") {
             carrierRequest = { mode: "purchase" };
-        } else if (mode === "recycle") {
-            const quote = (choice as { quote?: RecycleCarrierQuote }).quote;
-            if (!quote || typeof quote !== "object") {
-                throw new Error("carrier recycle quote is required");
-            }
-            expectedRecycle = {
-                quoteId: quote.quoteId,
-                receiveAddress: quote.receiveAddress,
-                makerPublicKey: quote.makerPublicKey,
-                assetId: quote.assetId,
-                physicalSats: quote.physicalSats,
-                loanSats: quote.loanSats,
-                receiptSats: quote.receiptSats,
-                serviceFareSats: quote.serviceFareSats,
-                expiresAt: quote.expiresAt,
-            };
-            validateRecycleQuoteShape(expectedRecycle);
-            carrierRequest = { mode: "recycle", quoteId: expectedRecycle.quoteId };
-            expectedCarrierQuote = expectedRecycle;
         } else if (mode === "recycleReceiver") {
             const quote = (choice as { quote?: ReceiverPaidCarrierQuote }).quote;
             const taxi = (choice as { taxi?: TaxiIdentity }).taxi;
@@ -93,7 +70,7 @@ export async function requestTaxiArkadeSwap(
             };
             expectedCarrierQuote = expectedReceiverPaid;
         } else {
-            throw new Error("carrier request mode must be purchase, recycle or recycleReceiver");
+            throw new Error("carrier request mode must be purchase or recycleReceiver");
         }
     }
     assertCarrierRequestAllowed(carrierRequest, {
@@ -148,13 +125,6 @@ export async function requestTaxiArkadeSwap(
                     quote,
                     ...(requestedNow === undefined ? {} : { now: requestedNow }),
                 });
-            }
-            const assertCarrierLive = (expiresAt: number, lapse: string): void => {
-                const now = carrierNow(requestedNow);
-                if (now >= quote.valid_until || now >= expiresAt)
-                    throw Object.assign(new Error(lapse), { reason: "quote_expired" });
-            };
-            if (carrierRequest !== undefined) {
                 const echoRaw = (quote.profile as Record<string, unknown> | undefined)?.carrier;
                 if (echoRaw === undefined) {
                     throw new Error(
@@ -163,9 +133,6 @@ export async function requestTaxiArkadeSwap(
                 }
                 const echo = parseCarrierEcho(echoRaw, {
                     mode: carrierRequest.mode,
-                    ...(carrierRequest.mode === "recycle"
-                        ? { quoteId: carrierRequest.quoteId }
-                        : {}),
                     ...(carrierRequest.mode === "recycle_receiver"
                         ? {
                               quoteId: carrierRequest.quoteId,
@@ -178,12 +145,6 @@ export async function requestTaxiArkadeSwap(
                     if (quote.carrier_sats !== undefined) {
                         throw new Error("receiver-paid quote must publish no carrier_sats");
                     }
-                    const dustInfo = await new RestArkProvider(arkServerUrl).getInfo();
-                    if (echo.physicalSats !== dustInfo.dust) {
-                        throw new Error(
-                            "carrier receiver-paid physical differs from the server dust",
-                        );
-                    }
                 } else {
                     const topCarrier = parseTopLevelCarrierSats(quote.carrier_sats);
                     if (topCarrier !== echo.physicalSats) {
@@ -195,28 +156,24 @@ export async function requestTaxiArkadeSwap(
                 if (quote.valid_until > echo.expiresAt) {
                     throw new Error("carrier echo expires before the quote valid_until");
                 }
-                assertCarrierLive(echo.expiresAt, "carrier terms lapsed before funding");
-                if (echo.mode === "purchase") {
-                    const info = await new RestArkProvider(arkServerUrl).getInfo();
-                    if (echo.physicalSats !== info.dust) {
-                        throw new Error("carrier purchase physical differs from the server dust");
-                    }
-                } else if (echo.mode === "recycle_receiver") {
+                const { dust } = await new RestArkProvider(arkServerUrl).getInfo();
+                if (echo.physicalSats !== dust) {
+                    const terms = echo.mode === "purchase" ? "purchase" : "receiver-paid";
+                    throw new Error(`carrier ${terms} physical differs from the server dust`);
+                }
+                if (echo.mode === "recycle_receiver") {
                     if (expectedReceiverPaid === undefined) {
                         throw new Error(
                             "carrier receiver-paid request is missing its expected descriptor",
                         );
                     }
                     assertReceiverPaidEchoMatchesExpected(echo, expectedReceiverPaid);
-                } else {
-                    if (expectedRecycle === undefined) {
-                        throw new Error(
-                            "carrier recycle request is missing its expected descriptor",
-                        );
-                    }
-                    assertRecycleEchoMatchesExpected(echo, expectedRecycle);
                 }
-                assertCarrierLive(echo.expiresAt, "carrier terms lapsed before funding");
+                const now = carrierNow(requestedNow);
+                if (now >= quote.valid_until || now >= echo.expiresAt)
+                    throw Object.assign(new Error("carrier terms lapsed before funding"), {
+                        reason: "quote_expired",
+                    });
                 verifiedCarrier = echo;
             }
             carrierQuote = quote;

@@ -35,10 +35,10 @@ import {
     vetBitcoinTaxi,
     type ArkadeContext,
     type ProbeRefusal,
-    type TaxiFare,
     type TaxiInfo,
 } from "./context.js";
 import type { TaxiActivity } from "./activity.js";
+import { isCanonicalTxid, isHttpUrl, priceFare } from "./wire.js";
 
 export type DirectTaxiMode = "recycle" | "purchase" | "sponsored";
 
@@ -289,13 +289,12 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                 record.network !== network ||
                 record.senderKey !== senderKey ||
                 !["recycle", "purchase", "sponsored"].includes(record.mode) ||
-                typeof record.taxiUrl !== "string" ||
-                !["http:", "https:"].includes(new URL(record.taxiUrl).protocol) ||
+                !isHttpUrl(record.taxiUrl) ||
                 typeof record.operatorKey !== "string" ||
                 !/^[0-9a-f]{64}$/.test(record.operatorKey) ||
                 typeof record.transferId !== "string" ||
                 !record.transferId ||
-                !/^[0-9a-f]{64}$/.test(record.expectedTxid) ||
+                !isCanonicalTxid(record.expectedTxid) ||
                 !Number.isSafeInteger(record.expectedVout) ||
                 record.expectedVout < 0 ||
                 typeof record.receiverAddress !== "string" ||
@@ -541,19 +540,6 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         });
     };
 
-    const priceFare = (fare: TaxiFare, base: bigint): bigint => {
-        const pricing = fare.pricing;
-        if (pricing.kind === "flat") return BigInt(pricing.units);
-        if (!Number.isInteger(pricing.bps) || pricing.bps < 0 || pricing.bps > 10_000)
-            throw new Error("Taxi fare has an invalid rate");
-        const raw = (base * BigInt(pricing.bps)) / 10_000n;
-        const min = BigInt(pricing.minUnits);
-        const floored = raw < min ? min : raw;
-        return pricing.maxUnits !== null && floored > BigInt(pricing.maxUnits)
-            ? BigInt(pricing.maxUnits)
-            : floored;
-    };
-
     const sendDirectTaxi = async (args: DirectTaxiSendArgs): Promise<string> => {
         if (args.taxi.payer === "sender" && (!args.assetId || args.mode === "recycle"))
             throw new Error(
@@ -591,8 +577,8 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             ? offered.find((candidate) => candidate.id === taxi.fareId)
             : offered[0];
         if (!fare) throw new Error(`Taxi offers no ${mode === "recycle" ? "sats" : "asset"} fare`);
-        const fareUnits = priceFare(fare, currency === "sats" ? ctx.dust : amount);
-        if (fareUnits < 0n) throw new Error("Taxi fare cannot be negative");
+        const fareUnits = priceFare(fare.pricing, currency === "sats" ? ctx.dust : amount);
+        if (fareUnits === undefined) throw new Error("Taxi fare has an invalid rate");
         const available = await deps.unreservedCoins(wallet);
         const requiredUnits = amount + (currency === "sameAsset" ? fareUnits : 0n);
         const { selected, totalAssetAmount } = selectCoinsWithAsset(
