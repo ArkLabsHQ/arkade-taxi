@@ -98,7 +98,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
         ]);
     }, 120_000);
 
-    it("retries a refused lockup unchanged, sends 50 sats, and recycles into one spendable coin", async () => {
+    it("retries refused quotes and lockups unchanged, sends 50 sats, and recycles into one spendable coin", async () => {
         const senderCoins = await sender.getSpendableVtxos();
         const receiverCoins = await receiver.getSpendableVtxos();
         expect(senderCoins.map((coin) => coin.value)).toEqual([seedSats]);
@@ -107,7 +107,8 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
         let activity: TaxiActivity | undefined;
         const storage = new Map<string, string>();
         const lockups: { url: string; body: string }[] = [];
-        let quotes = 0;
+        const quotes: string[] = [];
+        let acceptedQuotes = 0;
         let authorizations = 0;
         const send = createTaxiSender({
             storage: {
@@ -123,7 +124,17 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
                 taxiClient(url, async (input, init) => {
                     const request = new Request(input, init);
                     const path = new URL(request.url).pathname;
-                    if (request.method === "POST" && path === "/v1/transfers") quotes += 1;
+                    if (request.method === "POST" && path === "/v1/transfers") {
+                        quotes.push(await request.text());
+                        if (quotes.length <= 2)
+                            return Response.json(
+                                { error: "proceeds_collecting", code: "not_ready" },
+                                { status: 503 },
+                            );
+                        const response = await fetchImpl(input, init);
+                        if (response.ok) acceptedQuotes += 1;
+                        return response;
+                    }
                     if (
                         request.method === "POST" &&
                         /^\/v1\/transfers\/[^/]+\/lockup$/.test(path)
@@ -195,7 +206,9 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
             });
             expect(txid).toBe(activity?.lockupTxid);
             expect(activity?.units).toBe("50");
-            expect(quotes).toBe(1);
+            expect(quotes.length).toBeGreaterThanOrEqual(3);
+            for (const quote of quotes) expect(quote).toBe(quotes[0]);
+            expect(acceptedQuotes).toBe(1);
             expect(authorizations).toBe(1);
             expect(lockups.length).toBeGreaterThanOrEqual(3);
             for (const lockup of lockups) expect(lockup).toEqual(lockups[0]);
