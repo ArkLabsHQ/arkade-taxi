@@ -1163,6 +1163,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         isRecoverable: (id) => recoverable.has(id),
         async start() {
             if (stopping) await stopping;
+            // Without a wallet, repeated starts preserve the polling-only prompt.
             if (starting || (started && deps.wallet)) return starting;
             started = true;
             generation++;
@@ -1177,9 +1178,16 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             started = false;
             generation++;
             stopping = (async () => {
-                const results = await Promise.allSettled([starting, pending, detach()]);
+                const results = await Promise.allSettled([
+                    starting,
+                    pending,
+                    binding ? syncing : undefined,
+                ]);
+                const [cleanup] = await Promise.allSettled([detach()]);
                 signatureChecks.clear();
-                const failure = results.find((result) => result.status === "rejected");
+                const failure = [...results, cleanup].find(
+                    (result) => result.status === "rejected",
+                );
                 if (failure?.status === "rejected") throw failure.reason;
             })().finally(() => {
                 stopping = undefined;

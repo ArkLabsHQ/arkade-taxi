@@ -1947,6 +1947,61 @@ describe("canonical covenant observation", () => {
         }
     });
 
+    it("drains an in-flight SDK subscription before removing owned scripts", async () => {
+        const state = await setup();
+        const sdk = await watcherWallet(state);
+        const covenantScript = state.coins.get(`${state.outpoint.txid}:0`)!.script;
+        const foreignScript = hex.encode(operatorTree.pkScript);
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (release = resolve));
+        let remoteScripts: string[] = [];
+        const subscribe = vi
+            .spyOn(sdk.indexer as unknown as IndexerProvider, "subscribeForScripts")
+            .mockImplementation(async (scripts) => {
+                if (scripts.includes(covenantScript)) await held;
+                remoteScripts = [...scripts];
+                return "taxi-test-subscription";
+            });
+        await sdk.manager.watchScript(foreignScript, { label: "wallet-owner" });
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 30,
+            tip: async () => ({ hash: "44".repeat(32), height: 700002, time: NOW + 2 }),
+            wallet: () => sdk.wallet,
+        });
+        let stopped = false;
+        let stopping: Promise<void> | undefined;
+        try {
+            await watcher.start();
+            await vi.waitFor(() =>
+                expect(subscribe).toHaveBeenCalledWith(
+                    expect.arrayContaining([covenantScript]),
+                    "taxi-test-subscription",
+                ),
+            );
+            stopping = watcher.stop().then(() => {
+                stopped = true;
+            });
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(stopped).toBe(false);
+            release();
+            await stopping;
+            expect(await sdk.manager.getWatchedScripts()).toEqual([
+                { script: foreignScript, label: "wallet-owner" },
+            ]);
+            expect(remoteScripts).toEqual([foreignScript]);
+            expect(await sdk.manager.isWatching()).toBe(true);
+        } finally {
+            release();
+            await stopping;
+            await watcher.stop();
+            sdk.manager.dispose();
+            state.db.close();
+        }
+    });
     it("removes owned scripts even when an in-flight canonical scan rejects", async () => {
         const state = await setup();
         const sdk = await watcherWallet(state);
