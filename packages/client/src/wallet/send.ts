@@ -9,6 +9,7 @@ import {
     QuoteVerificationError,
     TaxiError,
     VerificationErrorCode,
+    requestQuoteWhenReady,
     signLockup,
     signSponsoredPayment,
     verifyQuote,
@@ -661,28 +662,15 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
     };
 
     /** A Taxi predating paymentSats quotes its own advance; no response field says so, only the client's binding. */
-    const exactly = async <T>(quote: () => Promise<T>): Promise<T> => {
-        const deadline = Date.now() + 30_000;
-        let delay = 1_000;
-        for (;;) {
-            try {
-                return await quote();
-            } catch (cause) {
-                if (
-                    cause instanceof QuoteVerificationError &&
-                    cause.code === VerificationErrorCode.PaymentSats
-                )
-                    throw new Error("This Taxi can't carry an exact sub-dust amount", { cause });
-                if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
-                if (Date.now() >= deadline) throw cause;
-                await new Promise<void>((resolve) =>
-                    setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))),
-                );
-                if (Date.now() >= deadline) throw cause;
-                delay = Math.min(delay * 2, 4_000);
-            }
-        }
-    };
+    const exactly = <T>(quote: () => Promise<T>): Promise<T> =>
+        requestQuoteWhenReady(quote).catch((cause: unknown) => {
+            if (
+                cause instanceof QuoteVerificationError &&
+                cause.code === VerificationErrorCode.PaymentSats
+            )
+                throw new Error("This Taxi can't carry an exact sub-dust amount", { cause });
+            throw cause;
+        });
 
     const sendDirectTaxiLocked = async (
         args: DirectTaxiSendArgs,

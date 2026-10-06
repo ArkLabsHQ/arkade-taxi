@@ -1578,7 +1578,7 @@ describe("inventory split database fencing", () => {
     const singleton = fundingCoin({ value: 100000 });
     const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
     const split = () => planInventorySplit([singleton], [], protectedCfg, {}, address, clock, -1n)!;
-    const reserve = (s: ReturnType<typeof setup>) => {
+    const reserve = (s: ReturnType<typeof setup>, coin = singleton) => {
         const policy = new PolicyRepository(s.db);
         policy.update(
             {
@@ -1601,7 +1601,7 @@ describe("inventory split database fencing", () => {
         new ReservationRepository(s.db).reserveQuote({
             advance: advance({
                 state: "quoted",
-                operatorInputs: [{ txid: singleton.txid, vout: singleton.vout }],
+                operatorInputs: [{ txid: coin.txid, vout: coin.vout }],
                 createdAt: 100,
                 expiresAt: 160,
             }),
@@ -1615,14 +1615,25 @@ describe("inventory split database fencing", () => {
         expect(new AdvanceRepository(s.db).get("adv-1")).toBeUndefined();
         expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(1);
     });
-    it("refuses a new split job when a quote changes the reservation snapshot after planning begins", async () => {
-        const s = setup(makePlan(), [singleton]);
+    it("replans after a quote wins the reservation race without blocking new quotes", async () => {
+        const reserved = singleton;
+        const free = fundingCoin({ value: 90000, txid: "cd".repeat(32) });
+        const s = setup(makePlan(), [reserved, free]);
         s.deps.config = protectedCfg;
         s.jobs.complete("job", "cc".repeat(32));
-        s.deps.runtime.providers.indexerProvider.getVtxos = async () =>
-            ({ vtxos: [singleton] }) as any;
-        vi.spyOn(s.deps.runtime.wallet!.arkProvider, "getInfo").mockImplementation(async () => {
-            reserve(s);
+        s.deps.runtime.providers.indexerProvider.getVtxos = async ({ outpoints }: any = {}) =>
+            ({
+                vtxos: [reserved, free].filter(
+                    (coin) =>
+                        !outpoints ||
+                        outpoints.some(
+                            (outpoint: Outpoint) =>
+                                outpoint.txid === coin.txid && outpoint.vout === coin.vout,
+                        ),
+                ),
+            }) as any;
+        vi.spyOn(s.deps.runtime.wallet!.arkProvider, "getInfo").mockImplementationOnce(async () => {
+            reserve(s, reserved);
             return s.info;
         });
         const collector = createProceedsCollector(s.deps);
@@ -1630,8 +1641,22 @@ describe("inventory split database fencing", () => {
         expect(s.jobs.active()).toBeUndefined();
         expect(s.settle).not.toHaveBeenCalled();
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([
-            { txid: singleton.txid, vout: singleton.vout },
+            { txid: reserved.txid, vout: reserved.vout },
         ]);
+        expect(collector.status().blocker).toBeNull();
+
+        await collector.tick();
+        expect(s.settle).toHaveBeenCalledTimes(1);
+        const settledInputs = (s.settle.mock.calls[0][0] as { inputs: Outpoint[] }).inputs;
+        expect(settledInputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([
+            { txid: free.txid, vout: free.vout },
+        ]);
+        expect(s.deps.reservations.listReservedOutpoints()).toEqual(
+            expect.arrayContaining([
+                { txid: reserved.txid, vout: reserved.vout },
+                { txid: free.txid, vout: free.vout },
+            ]),
+        );
     });
     it("completes an exactly confirmed split after headroom crosses without making its coins lendable", async () => {
         const plan = split();

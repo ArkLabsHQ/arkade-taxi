@@ -1,5 +1,6 @@
 export {
     TaxiClient,
+    requestQuoteWhenReady,
     type ClaimSubscription,
     type EventSourceLike,
     type QuoteRequest,

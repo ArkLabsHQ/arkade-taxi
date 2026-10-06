@@ -210,6 +210,23 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     >;
 }
 
+export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promise<T> => {
+    const deadline = Date.now() + 30_000;
+    let delay = 1_000;
+    for (;;) {
+        try {
+            return await request();
+        } catch (cause) {
+            if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
+            if (Date.now() >= deadline) throw cause;
+            await new Promise<void>((resolve) =>
+                setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))),
+            );
+            if (Date.now() >= deadline) throw cause;
+            delay = Math.min(delay * 2, 4_000);
+        }
+    }
+};
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
     try {
         const body = JSON.parse(text) as ErrorResponse;
