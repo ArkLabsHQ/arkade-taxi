@@ -10,10 +10,13 @@ export const SCENARIOS = [
         id: "onchain-boarding-topup",
         title: "the SDK boards a mined on-chain deposit by itself into usable inventory",
     },
-    { id: "329-sat-bitcoin-recycle", title: "Alice sends Bob 329 sats with Taxi's one-sat loan" },
+    {
+        id: "329-sat-bitcoin-recycle",
+        title: "Alice sends Bob 329 sats with Taxi's whole-dust loan",
+    },
     {
         id: "exact-sat-bitcoin-recycle",
-        title: "Alice sends Bob exactly 100 sats with Taxi's 230-sat loan",
+        title: "Alice sends Bob exactly 100 sats with Taxi's whole-dust loan",
     },
     {
         id: "receiver-sse-recycle",

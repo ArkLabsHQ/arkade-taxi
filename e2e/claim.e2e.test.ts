@@ -574,10 +574,10 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             "second-address proceeds are collected before releasing the fixture",
             () => walletBalance(live.actors.operator, minted.assetId),
             (balance) =>
-                balance.sats === operatorAfter.sats - 1n && balance.units === operatorAfter.units,
+                balance.sats === operatorAfter.sats - 330n && balance.units === operatorAfter.units,
         );
         expect(secondOperatorAfter).toEqual({
-            sats: operatorAfter.sats - 1n,
+            sats: operatorAfter.sats - 330n,
             units: operatorAfter.units,
         });
         await poll(
