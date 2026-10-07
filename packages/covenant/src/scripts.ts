@@ -2,6 +2,7 @@ import { arkade } from "@arkade-os/sdk";
 import { appendAssetLookup } from "./asset.js";
 import { pinOutput } from "./pin.js";
 import {
+    loanSats,
     lockupSats,
     recycleFare,
     refundTopup,
@@ -152,17 +153,72 @@ export function buildReclaim(p: DustCovenantParams, vtxoMinAmount: bigint): Uint
     return finish(out, p.assetId !== undefined);
 }
 
+/**
+ * v2 leaf 2. in[0] covenant, in[1] the refunder's own coin, and out[1] goes back
+ * to in[1]'s script. senderKey cannot stand in for receiverKey here: it is the
+ * signing identity on this leaf, not a wallet address.
+ */
+export function buildRepayRefund(p: DustCovenantParams): Uint8Array {
+    const loan = loanSats(p);
+    const out: arkade.ArkadeScriptType = [
+        "PUSHCURRENTINPUTINDEX",
+        0,
+        "EQUALVERIFY",
+        "INSPECTNUMINPUTS",
+        2,
+        "EQUALVERIFY",
+        1,
+        "INSPECTINPUTSCRIPTPUBKEY",
+        1,
+        "EQUALVERIFY",
+        1,
+        "INSPECTOUTPUTSCRIPTPUBKEY",
+        1,
+        "EQUALVERIFY",
+        "EQUALVERIFY",
+        0,
+        "INSPECTOUTPUTVALUE",
+        loan,
+        "EQUALVERIFY",
+    ];
+    pinOutput(out, 0, p.operatorKey, loan, p.dust);
+    out.push(
+        1,
+        "INSPECTOUTPUTVALUE",
+        0,
+        "INSPECTINPUTVALUE",
+        1,
+        "INSPECTINPUTVALUE",
+        "ADD",
+        loan,
+        "SUB",
+        "EQUALVERIFY",
+    );
+    if (p.assetId) {
+        appendAssetLookup(out, 1, p.assetId, true, true);
+        appendAssetLookup(out, 0, p.assetId, false, true);
+        appendAssetLookup(out, 1, p.assetId, false, false);
+        out.push("ADD", "EQUAL");
+    }
+    return finish(out, p.assetId !== undefined);
+}
+
+/** v2 leaf 3: purchase with the operator as payee, so a stranger's broadcast only pays the Taxi. */
+export const buildReclaimWhole = (p: DustCovenantParams): Uint8Array =>
+    buildPurchase({ ...p, receiverKey: p.operatorKey });
+
 export type CovenantScripts = {
     recycle: Uint8Array;
     purchase: Uint8Array;
     refund: Uint8Array;
+    /** v2 only; absent, the recovery leaf reuses refund. */
+    reclaim?: Uint8Array;
 };
 
 export function buildScripts(p: DustCovenantParams, vtxoMinAmount: bigint): CovenantScripts {
     validateParams(p, vtxoMinAmount);
-    return {
-        recycle: buildRecycle(p),
-        purchase: buildPurchase(p),
-        refund: buildRefund(p, vtxoMinAmount),
-    };
+    const scripts = { recycle: buildRecycle(p), purchase: buildPurchase(p) };
+    if (p.covenantVersion === 2)
+        return { ...scripts, refund: buildRepayRefund(p), reclaim: buildReclaimWhole(p) };
+    return { ...scripts, refund: buildRefund(p, vtxoMinAmount) };
 }

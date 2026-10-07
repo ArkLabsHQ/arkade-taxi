@@ -1,6 +1,7 @@
 export {
     exitDelayEncodable,
     exitTimelock,
+    loanSats,
     lockupSats,
     recycleFare,
     refundTopup,
@@ -18,8 +19,10 @@ export { artifactArgs, emitArtifact } from "./artifact.js";
 export {
     buildPurchase,
     buildReclaim,
+    buildReclaimWhole,
     buildRecycle,
     buildRefund,
+    buildRepayRefund,
     buildScripts,
     type CovenantScripts,
 } from "./scripts.js";

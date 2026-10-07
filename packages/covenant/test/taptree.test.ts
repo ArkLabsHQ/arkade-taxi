@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CSVMultisigTapscript, MultisigTapscript, VtxoScript, arkade } from "@arkade-os/sdk";
+import {
+    CLTVMultisigTapscript,
+    CSVMultisigTapscript,
+    MultisigTapscript,
+    VtxoScript,
+    arkade,
+} from "@arkade-os/sdk";
 import { p2tr, TAPROOT_UNSPENDABLE_KEY, taprootListToTree } from "@scure/btc-signer";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
@@ -140,6 +146,37 @@ describe("claim mode is committed to by the tree", () => {
             MultisigTapscript.decode(recycleOnly.scripts[Leaf.Purchase]).params.pubkeys[1],
         ).toEqual(falseKey);
         expect(recycleOnly.scripts[Leaf.Purchase]).toEqual(purchaseOnly.scripts[Leaf.Recycle]);
+    });
+});
+
+describe("covenant v2", () => {
+    const legacy = new DustCovenantScript(opts());
+    const v2 = new DustCovenantScript(opts({ ...params(), covenantVersion: 2 }));
+    const pathLengths = (s: DustCovenantScript) =>
+        s.scripts.map((leaf) => s.findLeaf(hex.encode(leaf))[0].merklePath.length);
+    const tweak = (script: Uint8Array) => arkade.computeArkadeScriptPublicKey(key(5), script);
+
+    it("keeps the tree height and every merkle-path length, at a new address", () => {
+        expect(pathLengths(v2)).toEqual(pathLengths(legacy));
+        expect(v2.pkScript).not.toEqual(legacy.pkScript);
+    });
+
+    it("changes only leaves 2 and 3", () => {
+        expect(
+            v2.scripts.map((leaf, i) => hex.encode(leaf) !== hex.encode(legacy.scripts[i])),
+        ).toEqual([false, false, true, true, false]);
+    });
+
+    it("commits leaf 2 to the v2 refund and leaf 3 to the reclaim", () => {
+        expect(MultisigTapscript.decode(v2.scripts[Leaf.RefundSender]).params.pubkeys).toEqual([
+            key(4),
+            key(2),
+            tweak(v2.covenant.refund),
+        ]);
+        expect(CLTVMultisigTapscript.decode(v2.scripts[Leaf.Recovery]).params.pubkeys).toEqual([
+            key(4),
+            tweak(v2.covenant.reclaim!),
+        ]);
     });
 });
 

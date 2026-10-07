@@ -23,6 +23,7 @@ export function covenantParamsOf(a: Pick<Advance, keyof DustCovenantParams>): Du
         ...(a.recoveryRecipient ? { recoveryRecipient: a.recoveryRecipient } : {}),
         ...(a.assetId ? { assetId: a.assetId } : {}),
         ...(a.receiverFare ? { receiverFare: a.receiverFare } : {}),
+        ...(a.covenantVersion !== undefined ? { covenantVersion: a.covenantVersion } : {}),
     };
 }
 

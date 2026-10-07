@@ -66,7 +66,7 @@ export class DustCovenantScript extends VtxoScript {
             }).script,
             CLTVMultisigTapscript.encode({
                 absoluteTimelock: params.locktime,
-                pubkeys: [serverKey, tweak(covenant.refund)],
+                pubkeys: [serverKey, tweak(covenant.reclaim ?? covenant.refund)],
             }).script,
             // Index 4 on the Go mirror is the unused optional LeafReclaim, so the
             // two numberings disagree there.

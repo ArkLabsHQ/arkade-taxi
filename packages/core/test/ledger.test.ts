@@ -228,6 +228,7 @@ describe("covenantParamsOf", () => {
         recoveryRecipient: true,
         assetId: true,
         receiverFare: true,
+        covenantVersion: true,
     };
 
     it("maps every covenant field of the advance", () => {
@@ -237,6 +238,7 @@ describe("covenantParamsOf", () => {
             recoveryRecipient: "receiver",
             assetId: { txid: key(9), groupIndex: 1 },
             receiverFare: { currency: "asset", units: 9n },
+            covenantVersion: 2,
         });
         const params = covenantParamsOf(full);
         expect(Object.keys(params).sort()).toEqual(Object.keys(FIELDS).sort());

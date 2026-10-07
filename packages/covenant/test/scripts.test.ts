@@ -5,8 +5,10 @@ import { subDustScript } from "../src/pin.js";
 import {
     buildPurchase,
     buildReclaim,
+    buildReclaimWhole,
     buildRecycle,
     buildRefund,
+    buildRepayRefund,
     buildScripts,
 } from "../src/scripts.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
@@ -175,7 +177,127 @@ describe("buildRefund", () => {
     });
 });
 
+const v2 = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => ({
+    ...base(),
+    covenantVersion: 2,
+    ...over,
+});
+
+describe("buildRepayRefund", () => {
+    it("repays exactly the loan and merges both inputs back into input 1's own script", () => {
+        expect(asm(buildRepayRefund(v2()))).toEqual([
+            "PUSHCURRENTINPUTINDEX",
+            0,
+            "EQUALVERIFY",
+            "INSPECTNUMINPUTS",
+            2,
+            "EQUALVERIFY",
+            1,
+            "INSPECTINPUTSCRIPTPUBKEY",
+            1,
+            "EQUALVERIFY",
+            1,
+            "INSPECTOUTPUTSCRIPTPUBKEY",
+            1,
+            "EQUALVERIFY",
+            "EQUALVERIFY",
+            0,
+            "INSPECTOUTPUTVALUE",
+            num(330n),
+            "EQUALVERIFY",
+            0,
+            "INSPECTOUTPUTSCRIPTPUBKEY",
+            1,
+            "EQUALVERIFY",
+            key(3),
+            "EQUALVERIFY",
+            1,
+            "INSPECTOUTPUTVALUE",
+            0,
+            "INSPECTINPUTVALUE",
+            1,
+            "INSPECTINPUTVALUE",
+            "ADD",
+            num(330n),
+            "SUB",
+            "EQUALVERIFY",
+            1,
+        ]);
+    });
+
+    it("moves the whole holding to out[1] by recycle's asset rule", () => {
+        const tail = (script: Uint8Array) => asm(script).slice(-17);
+        expect(tail(buildRepayRefund(v2({ assetId })))).toEqual(
+            tail(buildRecycle({ ...base(), assetId })),
+        );
+    });
+
+    it("ignores the receiver fare", () => {
+        expect(buildRepayRefund(receiverPaid({ covenantVersion: 2 }))).toEqual(
+            buildRepayRefund(receiverPaid({ covenantVersion: 2, receiverFare: undefined })),
+        );
+    });
+});
+
+describe("buildReclaimWhole", () => {
+    it("pays in[0]'s whole value to the operator's taproot key", () => {
+        expect(asm(buildReclaimWhole(v2({ paymentSats: 100n })))).toEqual([
+            "PUSHCURRENTINPUTINDEX",
+            0,
+            "EQUALVERIFY",
+            0,
+            "INSPECTOUTPUTSCRIPTPUBKEY",
+            1,
+            "EQUALVERIFY",
+            key(3),
+            "EQUALVERIFY",
+            0,
+            "INSPECTOUTPUTVALUE",
+            0,
+            "INSPECTINPUTVALUE",
+            "EQUALVERIFY",
+            1,
+        ]);
+    });
+
+    it("moves in[0]'s whole holding to out[0]", () => {
+        const decoded = asm(buildReclaimWhole(v2({ assetId })));
+        expect(decoded.at(-1)).toBe("EQUAL");
+        expect(decoded.filter((o) => o === "INSPECTOUTASSETLOOKUP")).toHaveLength(1);
+        expect(decoded.filter((o) => o === "INSPECTINASSETLOOKUP")).toHaveLength(1);
+        expect(decoded.filter((o) => o === "VERIFY")).toHaveLength(2);
+    });
+});
+
 describe("buildScripts", () => {
+    it("adds a distinct v2 reclaim and swaps in the v2 refund", () => {
+        const s = buildScripts(v2(), 330n);
+        expect(Object.keys(s).sort()).toEqual(["purchase", "reclaim", "recycle", "refund"]);
+        expect(s.refund).toEqual(buildRepayRefund(v2()));
+        expect(s.reclaim).toEqual(buildReclaimWhole(v2()));
+    });
+
+    it("leaves recycle and purchase byte-identical to legacy", () => {
+        const legacy = buildScripts(base(), 1n);
+        expect(buildScripts(v2(), 1n)).toMatchObject({
+            recycle: legacy.recycle,
+            purchase: legacy.purchase,
+        });
+    });
+
+    it.each([
+        ["bitcoin", v2()],
+        ["bitcoin with a payment", v2({ paymentSats: 100n })],
+        ["sender-paid asset", v2({ assetId })],
+        ["receiver-paid sats fare", receiverPaid({ covenantVersion: 2 })],
+        [
+            "receiver-paid asset fare",
+            receiverPaid({ covenantVersion: 2, receiverFare: { currency: "asset", units: 9n } }),
+        ],
+    ])("builds %s at dust = vtxoMinAmount, independent of vtxoMinAmount", (_name, p) => {
+        expect(buildScripts(p, 330n)).toEqual(buildScripts(p, 1n));
+    });
+
     it("rejects invalid params before building", () => {
         expect(() => buildScripts({ ...base(), locktime: 0n }, 10n)).toThrow(/locktime/);
     });

@@ -211,6 +211,39 @@ describe("refundTopup", () => {
     });
 });
 
+describe("covenantVersion 2", () => {
+    const v2 = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => ({
+        ...base(),
+        covenantVersion: 2,
+        ...over,
+    });
+
+    it.each([1, 3])("refuses version %s", (covenantVersion) => {
+        const params = { ...base(), covenantVersion } as unknown as DustCovenantParams;
+        expect(() => validateParams(params, MIN)).toThrow(/unknown covenantVersion/);
+    });
+
+    it("lends exactly one dust unit", () => {
+        expect(() => validateParams(v2({ topup: 329n }), MIN)).toThrow(/one dust unit/);
+    });
+
+    it("accepts a one-sat payment at dust = vtxoMinAmount", () => {
+        expect(() => validateParams(v2({ paymentSats: 1n }), 330n)).not.toThrow();
+    });
+
+    it.each([
+        ["a zero payment", { paymentSats: 0n }],
+        ["an asset covenant", { paymentSats: 1n, assetId }],
+    ])("still refuses paymentSats on %s", (_name, over) => {
+        expect(() => validateParams(v2(over), 330n)).toThrow(/paymentSats/);
+    });
+
+    it("accepts receiver-owned recovery at dust = vtxoMinAmount, which legacy refuses", () => {
+        expect(() => validateParams(receiverPaid({ covenantVersion: 2 }), 330n)).not.toThrow();
+        expect(() => validateParams(receiverPaid(), 330n)).toThrow(/host its receipt/);
+    });
+});
+
 describe("exitTimelock", () => {
     it("types the delay the way DefaultVtxo does, at the 512 boundary", () => {
         expect(exitTimelock(511n)).toEqual({ value: 511n, type: "blocks" });

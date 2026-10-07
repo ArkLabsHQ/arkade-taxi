@@ -32,6 +32,8 @@ export interface DustCovenantParams {
      * tree height and every control proof are unchanged. */
     claimMode?: "recycle" | "purchase";
     receiverFare?: ReceiverFare;
+    /** Absent is legacy and must stay byte-identical: funded covenants rebuild from it. */
+    covenantVersion?: 2;
 }
 
 const equalKeys = (a: Uint8Array, b: Uint8Array) =>
@@ -63,13 +65,22 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     if (vtxoMinAmount <= 0n) {
         throw new Error(`covenant: vtxoMinAmount must be positive, got ${vtxoMinAmount}`);
     }
+    if (p.covenantVersion !== undefined && p.covenantVersion !== 2) {
+        throw new Error(`covenant: unknown covenantVersion ${String(p.covenantVersion)}`);
+    }
+    const v2 = p.covenantVersion === 2;
     if (p.topup < vtxoMinAmount || p.topup > p.dust) {
         throw new Error(`covenant: topup ${p.topup} outside [${vtxoMinAmount}, ${p.dust}]`);
+    }
+    if (v2 && p.topup !== p.dust) {
+        throw new Error(`covenant: a v2 covenant lends exactly one dust unit, got ${p.topup}`);
     }
     if (p.paymentSats !== undefined) {
         if (p.assetId !== undefined || p.topup !== p.dust)
             throw new Error("covenant: paymentSats requires a whole-dust bitcoin advance");
-        if (p.paymentSats < vtxoMinAmount || p.paymentSats >= p.dust)
+        if (v2 && p.paymentSats <= 0n)
+            throw new Error(`covenant: paymentSats ${p.paymentSats} must be positive`);
+        if (!v2 && (p.paymentSats < vtxoMinAmount || p.paymentSats >= p.dust))
             throw new Error(
                 `covenant: paymentSats ${p.paymentSats} outside [${vtxoMinAmount}, ${p.dust})`,
             );
@@ -122,7 +133,11 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     if (p.recoveryRecipient === "receiver" && p.assetId === undefined) {
         throw new Error("covenant: receiver recovery requires an asset id");
     }
-    if (p.recoveryRecipient === "receiver" && refundTopup(p, vtxoMinAmount) < vtxoMinAmount) {
+    if (
+        !v2 &&
+        p.recoveryRecipient === "receiver" &&
+        refundTopup(p, vtxoMinAmount) < vtxoMinAmount
+    ) {
         throw new Error(
             `covenant: receiver recovery needs at least ${vtxoMinAmount} sats to host its receipt`,
         );
@@ -145,6 +160,9 @@ export function refundTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigin
 export function unrecoveredTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigint {
     return p.topup - refundTopup(p, vtxoMinAmount);
 }
+
+/** What a v2 refund repays; v2 has no refundTopup cap because no receipt stays behind. */
+export const loanSats = (p: DustCovenantParams): bigint => p.topup;
 
 export type RecycleFare = { operatorSats: bigint; assetFare: bigint };
 
