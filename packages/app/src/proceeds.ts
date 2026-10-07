@@ -1002,7 +1002,7 @@ export function createProceedsCollector(deps: Deps) {
                 running: !!pending,
                 jobId: job?.id ?? null,
                 state: job?.state ?? "idle",
-                blocker,
+                blocker: blocker ?? job?.blocker ?? null,
                 maxFeeSats: config.proceedsMaxFeeSats.toString(),
                 authorizedFeeSats: job ? String(job.plan.fee) : null,
                 commitmentTxid: job?.commitmentTxid ?? null,

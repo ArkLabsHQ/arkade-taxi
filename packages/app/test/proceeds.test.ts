@@ -755,6 +755,19 @@ describe("durable proceeds collector", () => {
         expect(collector.status().blocker).toBe("proceeds_submission_ambiguous");
         expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
     });
+    it("reports a persisted quarantine before the first tick after a restart", async () => {
+        const s = setup(makePlan(), [receipt, spare, carrier], true);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        s.setIntents([{ state: "cancelled", validUntil: 99 }]);
+        await collector.tick();
+        collector.stop();
+        s.restartDatabase();
+        expect(createProceedsCollector(s.deps).status()).toMatchObject({
+            state: "quarantined",
+            blocker: "proceeds_submission_ambiguous",
+        });
+    });
     it("does not retry a cancelled record with an unrecognized proof after a known local refusal", async () => {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         const s = setup();
