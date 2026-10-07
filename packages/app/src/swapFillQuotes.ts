@@ -415,8 +415,7 @@ async function createAdmittedSwapFillQuote(
         );
     if (offer.wantAmount <= 0n)
         throw new ServiceError("swap_fill_offer_invalid", 400, "swap offer want must be positive");
-    // Independent of the deposit read; every deposit check below still runs
-    // before this is awaited, so a bad deposit keeps reporting its own code.
+    // Awaited after every deposit check, so a bad deposit keeps its own code.
     const solver = enrichSolverFund(deps, req, offer);
     void solver.catch(() => {});
     const deposit = await observedCoin(
