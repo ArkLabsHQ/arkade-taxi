@@ -952,36 +952,34 @@ describe("GET /v1/info", () => {
     });
 });
 
-describe("receive quote routes", () => {
-    const receivePolicy = {
-        assetRules: [
-            {
-                assetId: ASSET,
-                enabled: true,
-                fares: [
-                    {
-                        id: "receive",
-                        currency: { kind: "sats" as const },
-                        pricing: { kind: "flat" as const, units: 3n },
-                    },
-                ],
-                claim: "either" as const,
-                maxTopupSats: null,
-            },
-        ],
-    };
+const receivePolicy = {
+    assetRules: [
+        {
+            assetId: ASSET,
+            enabled: true,
+            fares: [
+                {
+                    id: "receive",
+                    currency: { kind: "sats" as const },
+                    pricing: { kind: "flat" as const, units: 3n },
+                },
+            ],
+            claim: "either" as const,
+            maxTopupSats: null,
+        },
+    ],
+};
 
+const receiveQuoteBody = () => ({
+    receiverAddress,
+    makerPublicKey: bytesToHex(senderKey),
+    assetId: assetIdToWire(ASSET),
+    fundingExpiry: { kind: "height", value: "850000" },
+});
+
+describe("receive quote routes", () => {
     it("POSTs a reserved quote and GET returns its saved state without renewing TTL", async () => {
-        const response = await post(
-            "/v1/receive-quotes",
-            {
-                receiverAddress,
-                makerPublicKey: bytesToHex(senderKey),
-                assetId: assetIdToWire(ASSET),
-                fundingExpiry: { kind: "height", value: "850000" },
-            },
-            receivePolicy,
-        );
+        const response = await post("/v1/receive-quotes", receiveQuoteBody(), receivePolicy);
         expect(response.status).toBe(200);
         const created = (await response.json()) as ReceiveQuoteResponse;
         expect(created).toMatchObject({
@@ -1185,39 +1183,39 @@ describe("GET /v1/transfers/:id", () => {
     });
 });
 
-describe("sponsored direct-send routes", () => {
-    const sponsoredBody = (over: Record<string, unknown> = {}) => {
-        const txid = "ab".repeat(32);
-        const vout = 2;
-        registerSenderCoin(
+const sponsoredBody = (over: Record<string, unknown> = {}) => {
+    const txid = "ab".repeat(32);
+    const vout = 2;
+    registerSenderCoin(
+        txid,
+        vout,
+        fundingCoin({
             txid,
             vout,
-            fundingCoin({
+            value: 0,
+            script: bytesToHex(senderTree.pkScript),
+            expiresAtHeight: 910000,
+        }),
+    );
+    return {
+        receiverAddress,
+        senderKey: bytesToHex(senderKey),
+        senderSats: "0",
+        senderInputs: [
+            {
                 txid,
                 vout,
-                value: 0,
-                script: bytesToHex(senderTree.pkScript),
-                expiresAtHeight: 910000,
-            }),
-        );
-        return {
-            receiverAddress,
-            senderKey: bytesToHex(senderKey),
-            senderSats: "0",
-            senderInputs: [
-                {
-                    txid,
-                    vout,
-                    value: "0",
-                    tapTree: bytesToHex(senderTree.encode()),
-                    spendLeaf: bytesToHex(senderTree.scripts[0]),
-                    expiry: { kind: "height", value: "910000" },
-                },
-            ],
-            ...over,
-        };
+                value: "0",
+                tapTree: bytesToHex(senderTree.encode()),
+                spendLeaf: bytesToHex(senderTree.scripts[0]),
+                expiry: { kind: "height", value: "910000" },
+            },
+        ],
+        ...over,
     };
+};
 
+describe("sponsored direct-send routes", () => {
     it("quotes a direct payment on POST /v1/sponsored-transfers", async () => {
         const res = await post("/v1/sponsored-transfers", sponsoredBody());
         expect(res.status).toBe(200);
@@ -1269,69 +1267,70 @@ describe("sponsored direct-send routes", () => {
     });
 });
 
-describe("swap-fill routes", () => {
-    const USDT_DISPLAY = "1234".repeat(16);
-    const USDT_INTERNAL = Buffer.from(USDT_DISPLAY, "hex").reverse().toString("hex");
-    const swapBody = (over: Record<string, unknown> = {}) => {
-        registerSenderCoin(
-            "dd".repeat(32),
-            3,
-            asIndexed(
-                fundingCoin({
-                    txid: "dd".repeat(32),
-                    vout: 3,
-                    value: 10000,
-                    script: FAKE_COVENANT_SCRIPT,
-                }),
-            ),
-        );
-        registerSenderCoin(
-            "ee".repeat(32),
-            1,
-            asIndexed(
-                solverCoin({
-                    txid: "ee".repeat(32),
-                    vout: 1,
-                    value: 6000,
-                    assets: [
-                        {
-                            assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
-                            amount: 100n,
-                        },
-                    ],
-                }),
-            ),
-        );
-        return {
-            operationId: "op-1",
-            offerHex: "ab12",
-            solverInputs: [
-                {
-                    txid: "ee".repeat(32),
-                    vout: 1,
-                    value: "6000",
-                    ...solverTaproot(),
-                    assets: [
-                        {
-                            assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
-                            amount: "100",
-                        },
-                    ],
-                },
-            ],
-            solverProceedsScript: "51",
-            solverKeys: ["ab".repeat(32)],
-            contributionSats: "330",
-            maxFare: {
-                currency: "asset",
-                assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
-                units: "5",
+const USDT_DISPLAY = "1234".repeat(16);
+const USDT_INTERNAL = Buffer.from(USDT_DISPLAY, "hex").reverse().toString("hex");
+const swapBody = (over: Record<string, unknown> = {}) => {
+    registerSenderCoin(
+        "dd".repeat(32),
+        3,
+        asIndexed(
+            fundingCoin({
+                txid: "dd".repeat(32),
+                vout: 3,
+                value: 10000,
+                script: FAKE_COVENANT_SCRIPT,
+            }),
+        ),
+    );
+    registerSenderCoin(
+        "ee".repeat(32),
+        1,
+        asIndexed(
+            solverCoin({
+                txid: "ee".repeat(32),
+                vout: 1,
+                value: 6000,
+                assets: [
+                    {
+                        assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
+                        amount: 100n,
+                    },
+                ],
+            }),
+        ),
+    );
+    return {
+        operationId: "op-1",
+        offerHex: "ab12",
+        solverInputs: [
+            {
+                txid: "ee".repeat(32),
+                vout: 1,
+                value: "6000",
+                ...solverTaproot(),
+                assets: [
+                    {
+                        assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+                        amount: "100",
+                    },
+                ],
             },
-            fundingTxid: "dd".repeat(32),
-            fundingVout: 3,
-            ...over,
-        };
+        ],
+        solverProceedsScript: "51",
+        solverKeys: ["ab".repeat(32)],
+        contributionSats: "330",
+        maxFare: {
+            currency: "asset",
+            assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
+            units: "5",
+        },
+        fundingTxid: "dd".repeat(32),
+        fundingVout: 3,
+        ...over,
     };
+};
+
+describe("swap-fill routes", () => {
     const legacySwapApp = () => createRoutes({ ...deps(), receiveQuotes: undefined as never });
     const legacySwapPost = (path: string, body: unknown) =>
         legacySwapApp().request(path, {
@@ -1426,6 +1425,151 @@ describe("swap-fill routes", () => {
         expect(((await rejected.json()) as ErrorResponse).code).toBe("swap_fill_graph_conflict");
         const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
         expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
+    });
+});
+
+type ProviderCall = { name: string; outpoints?: number };
+
+/** Counts every provider read a request makes and how many sequential waves
+ * they cost: a read started while another is in flight shares its latency. */
+const counting = (base: RouteDeps) => {
+    const calls: ProviderCall[] = [];
+    let inFlight = 0;
+    let waves = 0;
+    const observe = async <R>(entry: ProviderCall, read: () => Promise<R>): Promise<R> => {
+        calls.push(entry);
+        if (inFlight === 0) waves++;
+        inFlight++;
+        try {
+            await new Promise((resolve) => setImmediate(resolve));
+            return await read();
+        } finally {
+            inFlight--;
+        }
+    };
+    return {
+        names: () => calls.map(({ name }) => name).sort(),
+        outpoints: () => calls.flatMap((c) => (c.outpoints === undefined ? [] : [c.outpoints])),
+        waves: () => waves,
+        deps: {
+            ...base,
+            senderInventory: {
+                getVtxos: (filter?: Parameters<RouteDeps["senderInventory"]["getVtxos"]>[0]) =>
+                    observe(
+                        { name: "indexer.getVtxos", outpoints: filter?.outpoints?.length ?? 0 },
+                        () => base.senderInventory.getVtxos(filter),
+                    ),
+            },
+            inventory: {
+                getSpendableVtxos: () =>
+                    observe({ name: "wallet.getSpendableVtxos" }, () =>
+                        base.inventory.getSpendableVtxos(),
+                    ),
+                getLockedVtxoOutpoints: () =>
+                    observe({ name: "storage.lockedOutpoints" }, () =>
+                        base.inventory.getLockedVtxoOutpoints(),
+                    ),
+            },
+            providerLimits: () =>
+                observe({ name: "arkd.getInfo" }, async () => ({ vtxoMaxAmount: 10_000_000n })),
+        },
+    };
+};
+
+describe("provider read budget", () => {
+    const run = async (
+        path: string,
+        body: unknown,
+        policyOver: Partial<Policy> = {},
+        depsOver: Partial<RouteDeps> = {},
+    ) => {
+        const counter = counting({ ...deps(policyOver), ...depsOver });
+        const response = await createRoutes(counter.deps).request(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        return { counter, response };
+    };
+
+    it("spends six waves of six reads on POST /v1/transfers", async () => {
+        const { counter, response } = await run("/v1/transfers", quoteBody());
+        expect(response.status).toBe(200);
+        expect(counter.names()).toEqual([
+            "indexer.getVtxos",
+            "indexer.getVtxos",
+            "storage.lockedOutpoints",
+            "storage.lockedOutpoints",
+            "wallet.getSpendableVtxos",
+            "wallet.getSpendableVtxos",
+        ]);
+        expect(counter.outpoints()).toEqual([1, 1]);
+        expect(counter.waves()).toBe(6);
+    });
+
+    it("reads no provider on a lockup submission", async () => {
+        const quoted = await run("/v1/transfers", quoteBody());
+        const id = ((await quoted.response.json()) as QuoteResponse).transferId;
+        const { counter, response } = await run(`/v1/transfers/${id}/lockup`, {
+            signedLockupTx: "signed",
+        });
+        expect(response.status).toBe(202);
+        expect(counter.names()).toEqual([]);
+        expect(counter.waves()).toBe(0);
+    });
+
+    it("spends two waves of four reads on POST /v1/receive-quotes", async () => {
+        const { counter, response } = await run(
+            "/v1/receive-quotes",
+            receiveQuoteBody(),
+            receivePolicy,
+        );
+        expect(response.status).toBe(200);
+        expect(counter.names()).toEqual([
+            "storage.lockedOutpoints",
+            "storage.lockedOutpoints",
+            "wallet.getSpendableVtxos",
+            "wallet.getSpendableVtxos",
+        ]);
+        expect(counter.waves()).toBe(2);
+    });
+
+    it("spends six waves of six reads on POST /v1/sponsored-transfers", async () => {
+        const { counter, response } = await run("/v1/sponsored-transfers", sponsoredBody());
+        expect(response.status).toBe(200);
+        expect(counter.names()).toEqual([
+            "indexer.getVtxos",
+            "indexer.getVtxos",
+            "storage.lockedOutpoints",
+            "storage.lockedOutpoints",
+            "wallet.getSpendableVtxos",
+            "wallet.getSpendableVtxos",
+        ]);
+        expect(counter.outpoints()).toEqual([1, 1]);
+        expect(counter.waves()).toBe(6);
+    });
+
+    it("spends nine waves of nine reads on POST /v1/swap-fills", async () => {
+        const { counter, response } = await run(
+            "/v1/swap-fills",
+            swapBody(),
+            {},
+            { receiveQuotes: undefined as never },
+        );
+        expect(response.status).toBe(200);
+        expect(counter.names()).toEqual([
+            "arkd.getInfo",
+            "indexer.getVtxos",
+            "indexer.getVtxos",
+            "indexer.getVtxos",
+            "indexer.getVtxos",
+            "storage.lockedOutpoints",
+            "storage.lockedOutpoints",
+            "wallet.getSpendableVtxos",
+            "wallet.getSpendableVtxos",
+        ]);
+        expect(counter.outpoints()).toEqual([1, 1, 1, 1]);
+        expect(counter.waves()).toBe(9);
     });
 });
 
