@@ -95,6 +95,7 @@ export interface TaxiClientOptions {
 
 type ClaimEventName = "claims-snapshot" | "claims-changed";
 const MAX_RECEIVER_BATCH = 64;
+const INFO_TTL_MS = 30_000;
 
 export interface EventSourceLike {
     addEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
@@ -243,6 +244,7 @@ export class TaxiClient {
     private readonly baseUrl: string;
     private readonly fetchImpl: typeof fetch;
     private readonly eventSourceFactory: ((url: string) => EventSourceLike) | undefined;
+    private cachedInfo: { at: number; read: Promise<InfoResponse> } | undefined;
 
     constructor(opts: TaxiClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -254,10 +256,31 @@ export class TaxiClient {
                 : (url) => new globalThis.EventSource(url) as unknown as EventSourceLike);
     }
 
+    /** One read serves this client for 30 s; a failed read is never kept. */
     async info(): Promise<InfoResponse> {
-        const body = (await this.request("GET", "/v1/info")) as InfoResponse;
-        decodeInfo(body);
-        return body;
+        let entry = this.cachedInfo;
+        if (entry === undefined || Date.now() - entry.at >= INFO_TTL_MS) {
+            const read = this.request("GET", "/v1/info").then((body) => {
+                decodeInfo(body as InfoResponse);
+                return body as InfoResponse;
+            });
+            const fresh = (entry = { at: Date.now(), read });
+            this.cachedInfo = fresh;
+            read.catch(() => {
+                if (this.cachedInfo === fresh) this.cachedInfo = undefined;
+            });
+        }
+        return JSON.parse(JSON.stringify(await entry.read)) as InfoResponse;
+    }
+
+    /** A quote failing verification may be failing against a stale read, so the next one is fresh. */
+    private againstInfo<A, T>(verify: (args: A) => T, args: A): T {
+        try {
+            return verify(args);
+        } catch (error) {
+            this.cachedInfo = undefined;
+            throw error;
+        }
     }
 
     async requestQuote(req: QuoteRequest): Promise<QuoteResponse> {
@@ -309,10 +332,10 @@ export class TaxiClient {
         const request = immutablePlainCopy(raw, "verified receive quote request");
         await preflightReceiveRequest(request);
         const info = await this.info();
-        assertProtocolVersion(info.protocolVersion);
+        this.againstInfo(assertProtocolVersion, info.protocolVersion);
         const quote = await this.requestReceiveQuote(request);
         return {
-            verified: verifyReceiveQuote({
+            verified: this.againstInfo(verifyReceiveQuote, {
                 quote,
                 info,
                 trustedServerKey: request.trustedServerKey,
@@ -364,7 +387,7 @@ export class TaxiClient {
         const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
         const receiverKey = receiver.vtxoTaprootKey;
         const info = await this.info();
-        assertProtocolVersion(info.protocolVersion);
+        this.againstInfo(assertProtocolVersion, info.protocolVersion);
         const quote = await this.requestQuote({
             ...request,
             receiverKey,
@@ -372,7 +395,7 @@ export class TaxiClient {
             senderInputs,
             senderSats,
         });
-        const verified = verifyQuote({
+        const verified = this.againstInfo(verifyQuote, {
             ...request,
             quote,
             info,
@@ -453,7 +476,7 @@ export class TaxiClient {
             senderInputs,
             senderSats,
         });
-        const verified = verifySponsoredQuote({
+        const verified = this.againstInfo(verifySponsoredQuote, {
             ...request,
             quote,
             info,

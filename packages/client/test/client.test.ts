@@ -74,6 +74,36 @@ describe("info", () => {
         await expect(taxi.info()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     });
 
+    it("serves concurrent and repeated reads from one request until it is 30 s old", async () => {
+        vi.useFakeTimers({ now: 0, toFake: ["Date"] });
+        try {
+            const { taxi, fetch } = client(ok(info()));
+            await Promise.all([taxi.info(), taxi.info()]);
+            vi.setSystemTime(29_999);
+            await taxi.info();
+            expect(fetch.calls).toHaveLength(1);
+            vi.setSystemTime(30_000);
+            await taxi.info();
+            expect(fetch.calls).toHaveLength(2);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("re-reads after a failed read and hands each caller its own copy", async () => {
+        let up = false;
+        const { taxi, fetch } = client(() =>
+            up
+                ? jsonResponse(200, info())
+                : jsonResponse(503, { error: "down", code: "not_ready" }),
+        );
+        await expect(taxi.info()).rejects.toMatchObject({ code: "not_ready" });
+        up = true;
+        (await taxi.info()).paused = true;
+        expect((await taxi.info()).paused).toBe(false);
+        expect(fetch.calls).toHaveLength(2);
+    });
+
     it("throws NETWORK_ERROR when fetch itself rejects", async () => {
         const boom = new Error("socket hang up");
         const taxi = new TaxiClient({

@@ -40,7 +40,8 @@ import {
     unroll,
 } from "../fixtures.js";
 
-const TAXI = "https://taxi.example";
+let taxiUrl = "";
+let taxis = 0;
 const receiverAddress = new ArkAddress(serverKey, receiverKey, HRP).encode();
 const ASSET = asset.AssetId.create("12".repeat(32), 7).toString();
 const FARE_UNITS = 1_000_000n;
@@ -201,7 +202,7 @@ const send = (mode: "recycle" | "sponsored") =>
     sender().sendDirectTaxi({
         wallet,
         network: "regtest",
-        taxi: { url: TAXI },
+        taxi: { url: taxiUrl },
         receiverAddress,
         ...(mode === "sponsored" ? { assetId: ASSET, amount: 200_000_000n } : { amount: 50n }),
         mode,
@@ -209,6 +210,7 @@ const send = (mode: "recycle" | "sponsored") =>
     });
 
 beforeEach(() => {
+    taxiUrl = `https://taxi-${++taxis}.example`;
     vi.useFakeTimers({
         now: NOW * 1000,
         toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
@@ -227,12 +229,12 @@ describe("sender round trips", () => {
         current = coin(1_000);
         const probe = { ...ctx, fetch: boundedFetch, pageProtocol: "https:" };
         for (const amount of [40n, 50n])
-            expect((await probeBitcoinTaxi({ url: TAXI }, probe, receiverAddress, amount)).ok).toBe(
-                true,
-            );
+            expect(
+                (await probeBitcoinTaxi({ url: taxiUrl }, probe, receiverAddress, amount)).ok,
+            ).toBe(true);
         await expect(drive(send("recycle"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
-            "GET /v1/info": 6,
+            "GET /v1/info": 1,
             "POST /v1/transfers": 3,
             "POST /v1/transfers/tr_01/lockup": 1,
             "GET /v1/transfers/tr_01": 3,
@@ -248,7 +250,7 @@ describe("sender round trips", () => {
         current = coin(700, [{ assetId: ASSET, amount: 200_000_000n + FARE_UNITS }]);
         await expect(drive(send("sponsored"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
-            "GET /v1/info": 4,
+            "GET /v1/info": 1,
             "POST /v1/sponsored-transfers": 3,
             "POST /v1/sponsored-transfers/tr_01/lockup": 1,
             "GET /v1/sponsored-transfers/tr_01": 3,
