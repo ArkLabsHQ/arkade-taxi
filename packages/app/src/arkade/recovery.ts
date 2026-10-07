@@ -381,7 +381,9 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
             ? 0n
             : advance.fare.currency === "sats"
               ? advance.fare.units
-              : config.vtxoMinAmount;
+              : advance.covenantVersion === 2
+                ? config.dust
+                : config.vtxoMinAmount;
     if (advance.fare.units < 0n) fail(`advance ${advance.id}: persisted fare is negative`);
     if (tagged.kind === "legacy" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;

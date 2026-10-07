@@ -182,7 +182,10 @@ type JointRequest = Pick<
     LockupBuildRequest,
     "senderInputs" | "senderSats" | "funding" | "fare" | "satsFarePayer" | "assetUnits"
 > & {
-    params: Pick<LockupBuildRequest["params"], "operatorKey" | "senderKey" | "dust" | "assetId">;
+    params: Pick<
+        LockupBuildRequest["params"],
+        "operatorKey" | "senderKey" | "dust" | "assetId" | "covenantVersion"
+    >;
 };
 
 export function jointPlan(
@@ -203,13 +206,16 @@ export function jointPlan(
     const totals = new Map<string, bigint>();
     for (const holdings of assets)
         for (const [id, amount] of holdings) totals.set(id, (totals.get(id) ?? 0n) + amount);
+    const v2 = req.params.covenantVersion === 2;
     const outputs: JointPlan["valueOutputs"] = [graph.first];
     const fareHosting =
         req.fare.units === 0n
             ? 0n
             : req.fare.currency === "sats"
               ? req.fare.units
-              : config.vtxoMinAmount;
+              : v2
+                ? config.dust
+                : config.vtxoMinAmount;
     if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
     const senderPaysFare = senderPaysSatsFare(req);
     if (fareHosting > 0n)
@@ -276,11 +282,13 @@ export function jointPlan(
                 config,
             ),
         });
+    // v2 commits to dust-or-above everywhere, so no payout of its can land on
+    // payoutPkScript's sub-dust RETURN branch and need collecting in a batch.
+    const floor = v2 ? config.dust : config.vtxoMinAmount;
+    const floorName = v2 ? "covenant v2 dust floor" : "Arkade Service minimum";
     for (const output of outputs) {
-        if (output.amount < config.vtxoMinAmount)
-            throw new LockupShapeError(
-                `${output.role} output is below the Arkade Service minimum ${config.vtxoMinAmount}`,
-            );
+        if (output.amount < floor)
+            throw new LockupShapeError(`${output.role} output is below the ${floorName} ${floor}`);
     }
     assertDistinctScripts(outputs);
     if (

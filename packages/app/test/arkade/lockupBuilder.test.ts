@@ -373,6 +373,72 @@ describe("joint funded graph", () => {
     });
 });
 
+describe("covenant v2 outputs", () => {
+    const cfg = config();
+    const fareAsset = asset.AssetId.create("12".repeat(32), 0);
+
+    const request = (over: { v2?: true; senderSats?: bigint; fare?: bigint }) => {
+        const req = buildRequest();
+        if (over.v2) req.params.covenantVersion = 2;
+        req.params.topup = req.params.dust;
+        req.senderSats = req.senderInputs[0].value = over.senderSats ?? 330n;
+        req.fare.units = over.fare ?? 0n;
+        req.covenantAddress = new DustCovenantScript({
+            params: req.params,
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        return req;
+    };
+
+    const withAssetFare = (req: LockupBuildRequest) => {
+        req.params.assetId = { txid: fareAsset.txid, groupIndex: 0 };
+        req.senderInputs[0].assetPacket = asset.Packet.create([
+            asset.AssetGroup.create(fareAsset, null, [], [asset.AssetOutput.create(2, 100n)], []),
+        ]).serialize();
+        req.assetUnits = 95n;
+        req.fare = { currency: "asset", units: 5n, assetId: req.params.assetId };
+        req.covenantAddress = new DustCovenantScript({
+            params: req.params,
+            serverKey: cfg.serverPubkey,
+            emulatorKey: cfg.emulatorPubkey,
+            vtxoMinAmount: cfg.vtxoMinAmount,
+        })
+            .address(cfg.addressHrp, cfg.serverPubkey)
+            .encode();
+        return req;
+    };
+
+    it("hosts an asset fare at dust, where the legacy minimum needs a third OP_RETURN", () => {
+        expect(() =>
+            buildLockupEnvelope(withAssetFare(request({ senderSats: 300n })), cfg, unroll),
+        ).toThrow(/OP_RETURN/);
+        const req = withAssetFare(request({ v2: true }));
+        expect(lockupPlan(req, cfg).valueOutputs).toMatchObject([
+            { role: "covenant", amount: 330n },
+            { role: "operator-fare", amount: cfg.dust },
+            { role: "sender-change", amount: 330n },
+            { role: "operator-change", amount: 340n },
+        ]);
+        expect(() => buildLockupEnvelope(req, cfg, unroll)).not.toThrow();
+    });
+
+    it.each([329n, 330n])("admits sender change %s only when it reaches dust", (change) => {
+        const req = request({ v2: true, senderSats: change });
+        if (change < cfg.dust)
+            expect(() => buildLockupEnvelope(req, cfg, unroll)).toThrow(/sender-change/);
+        else expect(lockupPlan(req, cfg).valueOutputs[1]).toMatchObject({ amount: change });
+    });
+
+    it("refuses a sub-dust sats fare rather than paying it to a RETURN script", () => {
+        expect(() => lockupPlan(request({ v2: true, fare: 10n }), cfg)).toThrow(/operator-fare/);
+        expect(() => lockupPlan(request({ fare: 10n }), cfg)).not.toThrow();
+    });
+});
+
 describe("sender-paid sats fare", () => {
     const cfg = config({ vtxoMinAmount: 1n });
     const paymentAsset = asset.AssetId.create("12".repeat(32), 0);
