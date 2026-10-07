@@ -85,6 +85,9 @@ describe("info", () => {
             vi.setSystemTime(30_000);
             await taxi.info();
             expect(fetch.calls).toHaveLength(2);
+            vi.setSystemTime(-30_000);
+            await taxi.info();
+            expect(fetch.calls).toHaveLength(3);
         } finally {
             vi.useRealTimers();
         }

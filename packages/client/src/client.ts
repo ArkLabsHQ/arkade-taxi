@@ -265,7 +265,7 @@ export class TaxiClient {
     /** One read serves this client for 30 s; a failed read is never kept. */
     async info(): Promise<InfoResponse> {
         let entry = this.cachedInfo;
-        if (entry === undefined || Date.now() - entry.at >= INFO_TTL_MS) {
+        if (entry === undefined || Math.abs(Date.now() - entry.at) >= INFO_TTL_MS) {
             const read = this.request("GET", "/v1/info").then((body) => {
                 decodeInfo(body as InfoResponse);
                 return body as InfoResponse;
