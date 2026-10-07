@@ -538,6 +538,9 @@ async function createReservedQuote(
     const req = decodeBody(body);
     const { policy, revision } = deps.policy.getSnapshot();
     const { config } = deps;
+    trace?.observe("quote.inventory.first", "start");
+    trace?.observe("quote.locks.first", "start");
+    const firstFunding = readFunding(deps.inventory);
     trace?.observe("quote.sender.first", "start");
     await verifySenderFunding(
         req.senderInputs,
@@ -586,11 +589,8 @@ async function createReservedQuote(
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
     try {
-        trace?.observe("quote.inventory.first", "start");
-        spendable = await deps.inventory.getSpendableVtxos();
+        ({ spendable, intentLocks } = await firstFunding);
         trace?.observe("quote.inventory.first", "ok");
-        trace?.observe("quote.locks.first", "start");
-        intentLocks = await deps.inventory.getLockedVtxoOutpoints();
         trace?.observe("quote.locks.first", "ok");
     } catch (cause) {
         throw new ServiceError(
@@ -849,6 +849,24 @@ async function createReservedQuote(
     };
 }
 
+/**
+ * The first operator funding read, started before the sender barrier so one
+ * round trip covers both. Only the candidate selection reads it: the
+ * authoritative re-selection still runs on a live read taken after that
+ * barrier, where `rereadInventory` leaves it.
+ */
+export function readFunding(
+    inventory: QuoteDeps["inventory"],
+): Promise<{ spendable: ExtendedVirtualCoin[]; intentLocks: Outpoint[] }> {
+    const reads = Promise.all([
+        inventory.getSpendableVtxos(),
+        inventory.getLockedVtxoOutpoints(),
+    ]).then(([spendable, intentLocks]) => ({ spendable, intentLocks }));
+    // Unawaited while the sender barrier runs, whose error must still win.
+    void reads.catch(() => {});
+    return reads;
+}
+
 export async function rereadInventory(
     inventory: QuoteDeps["inventory"],
     intentLocks: Outpoint[],
@@ -861,10 +879,12 @@ export async function rereadInventory(
     };
     try {
         mark("quote.inventory.second", "start");
-        const spendable = await inventory.getSpendableVtxos();
-        mark("quote.inventory.second", "ok");
         mark("quote.locks.second", "start");
-        const locks = await inventory.getLockedVtxoOutpoints();
+        const [spendable, locks] = await Promise.all([
+            inventory.getSpendableVtxos(),
+            inventory.getLockedVtxoOutpoints(),
+        ]);
+        mark("quote.inventory.second", "ok");
         mark("quote.locks.second", "ok");
         const before = new Set(intentLocks.map(({ txid, vout }) => `${txid}:${vout}`));
         if (

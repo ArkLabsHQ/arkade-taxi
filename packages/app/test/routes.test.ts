@@ -1492,7 +1492,7 @@ describe("provider read budget", () => {
         return { counter, response };
     };
 
-    it("spends six waves of six reads on POST /v1/transfers", async () => {
+    it("spends three waves of six reads on POST /v1/transfers", async () => {
         const { counter, response } = await run("/v1/transfers", quoteBody());
         expect(response.status).toBe(200);
         expect(counter.names()).toEqual([
@@ -1504,7 +1504,7 @@ describe("provider read budget", () => {
             "wallet.getSpendableVtxos",
         ]);
         expect(counter.outpoints()).toEqual([1, 1]);
-        expect(counter.waves()).toBe(6);
+        expect(counter.waves()).toBe(3);
     });
 
     it("reads no provider on a lockup submission", async () => {
@@ -1534,7 +1534,7 @@ describe("provider read budget", () => {
         expect(counter.waves()).toBe(2);
     });
 
-    it("spends six waves of six reads on POST /v1/sponsored-transfers", async () => {
+    it("spends three waves of six reads on POST /v1/sponsored-transfers", async () => {
         const { counter, response } = await run("/v1/sponsored-transfers", sponsoredBody());
         expect(response.status).toBe(200);
         expect(counter.names()).toEqual([
@@ -1546,10 +1546,10 @@ describe("provider read budget", () => {
             "wallet.getSpendableVtxos",
         ]);
         expect(counter.outpoints()).toEqual([1, 1]);
-        expect(counter.waves()).toBe(6);
+        expect(counter.waves()).toBe(3);
     });
 
-    it("spends nine waves of nine reads on POST /v1/swap-fills", async () => {
+    it("spends eight waves of nine reads on POST /v1/swap-fills", async () => {
         const { counter, response } = await run(
             "/v1/swap-fills",
             swapBody(),
@@ -1569,7 +1569,7 @@ describe("provider read budget", () => {
             "wallet.getSpendableVtxos",
         ]);
         expect(counter.outpoints()).toEqual([1, 1, 1, 1]);
-        expect(counter.waves()).toBe(9);
+        expect(counter.waves()).toBe(8);
     });
 });
 
