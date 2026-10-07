@@ -269,6 +269,37 @@ describe("steady-state freshness under a slow watcher scan", () => {
         }
     }, 30_000);
 
+    // The freshness loop checks unconditionally, which is what bounds snapshot
+    // age below one interval; skipping a fresh-looking snapshot would put the
+    // flicker back. The price is one provider read per interval: measured at 20
+    // over 10 intervals before this split and 30 after. While a scan is slow it
+    // is 10, plus the one check the reconcile chain makes on its way into the
+    // scan it never returns from -- fewer reads than before, not more.
+    it.each([
+        { label: "fast", slow: false, checks: 30 },
+        { label: "slow", slow: true, checks: 11 },
+    ])(
+        "reads the provider $checks times over ten intervals while the scan is $label",
+        async (scenario) => {
+            const h = await boot();
+            let release: (() => void) | undefined;
+            if (scenario.slow) h.scanGate = new Promise<void>((resolve) => (release = resolve));
+            let checks = 0;
+            const getInfo = h.providers!.arkProvider!.getInfo;
+            h.providers!.arkProvider!.getInfo = async () => {
+                checks += 1;
+                return getInfo();
+            };
+            try {
+                await vi.advanceTimersByTimeAsync(10 * INTERVAL);
+                expect(checks).toBe(scenario.checks);
+            } finally {
+                release?.();
+            }
+        },
+        30_000,
+    );
+
     it("drains an in-flight freshness pass on stop", async () => {
         const h = await boot();
         const sweeper = sweeperOf(h);
