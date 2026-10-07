@@ -1549,7 +1549,7 @@ describe("provider read budget", () => {
         expect(counter.waves()).toBe(3);
     });
 
-    it("spends eight waves of nine reads on POST /v1/swap-fills", async () => {
+    it("spends six waves of eight reads on POST /v1/swap-fills", async () => {
         const { counter, response } = await run(
             "/v1/swap-fills",
             swapBody(),
@@ -1562,14 +1562,14 @@ describe("provider read budget", () => {
             "indexer.getVtxos",
             "indexer.getVtxos",
             "indexer.getVtxos",
-            "indexer.getVtxos",
             "storage.lockedOutpoints",
             "storage.lockedOutpoints",
             "wallet.getSpendableVtxos",
             "wallet.getSpendableVtxos",
         ]);
-        expect(counter.outpoints()).toEqual([1, 1, 1, 1]);
-        expect(counter.waves()).toBe(8);
+        // The deposit and every solver input share the closing re-read.
+        expect(counter.outpoints()).toEqual([1, 1, 2]);
+        expect(counter.waves()).toBe(6);
     });
 });
 
