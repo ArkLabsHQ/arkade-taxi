@@ -59,6 +59,10 @@ export interface ReceiveQuote {
      * instead of the sender. These two appear together, never one alone. */
     payer?: "receiver";
     receiverFare?: FareSpec;
+    /** Absent is the legacy covenant. Kept out of `params` on purpose: that JSON
+     * has a strict decoder, so a v2 quote inside it would be undecodable by a
+     * build rolled back onto this schema. */
+    covenantVersion?: 2;
     batchExpiry: ExpiryDeadline;
     inputExpiryFloor: ExpiryDeadline;
     recoveryLocktime: ExpiryDeadline;
@@ -102,6 +106,7 @@ type Row = {
     fare_json: string;
     payer: string | null;
     receiver_fare_json: string | null;
+    covenant_version: bigint | null;
     batch_expiry_kind: string;
     batch_expiry_value: bigint;
     input_expiry_floor_kind: string;
@@ -375,6 +380,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
         (receiverFare === undefined) !== (params.receiverFare === undefined)
     )
         fail("payer");
+    if (row.covenant_version !== null && row.covenant_version !== 2n) fail("covenant version");
     const batchExpiry = deadline(row.batch_expiry_kind, row.batch_expiry_value, "batch expiry");
     const inputExpiryFloor = deadline(
         row.input_expiry_floor_kind,
@@ -420,6 +426,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
         fare,
         ...(row.payer === null ? {} : { payer: "receiver" as const }),
         ...(receiverFare === undefined ? {} : { receiverFare }),
+        ...(row.covenant_version === null ? {} : { covenantVersion: 2 as const }),
         batchExpiry,
         inputExpiryFloor,
         recoveryLocktime,
@@ -455,6 +462,10 @@ export class ReceiveQuoteRepository {
                 request.quote.receiverFare === undefined
                     ? null
                     : encodeReceiverFare(request.quote.receiverFare),
+            covenant_version:
+                request.quote.covenantVersion === undefined
+                    ? null
+                    : BigInt(request.quote.covenantVersion),
             batch_expiry_kind: request.quote.batchExpiry.kind,
             batch_expiry_value: request.quote.batchExpiry.value,
             input_expiry_floor_kind: request.quote.inputExpiryFloor.kind,
@@ -527,11 +538,11 @@ export class ReceiveQuoteRepository {
                         `INSERT INTO receive_quotes (
                             id, state, receiver_address, maker_public_key, params_json,
                             covenant_address, fare_json, payer, receiver_fare_json,
-                            batch_expiry_kind, batch_expiry_value,
+                            covenant_version, batch_expiry_kind, batch_expiry_value,
                             input_expiry_floor_kind, input_expiry_floor_value,
                             recovery_locktime_kind, recovery_locktime_value, loan_sats, created_at,
                             expires_at, policy_revision, operator_inputs_json, bound_fill_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     )
                     .run(
                         q.id,
@@ -543,6 +554,7 @@ export class ReceiveQuoteRepository {
                         encodeFare(q.fare),
                         q.payer ?? null,
                         q.receiverFare === undefined ? null : encodeReceiverFare(q.receiverFare),
+                        q.covenantVersion === undefined ? null : BigInt(q.covenantVersion),
                         q.batchExpiry.kind,
                         q.batchExpiry.value,
                         q.inputExpiryFloor.kind,

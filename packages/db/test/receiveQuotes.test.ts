@@ -221,6 +221,45 @@ describe("receive quote repository", () => {
         db.close();
     });
 
+    // The version rides in its own column, never in params_json: that decoder is
+    // strict, so a v2 row inside it would be undecodable by a rolled-back build.
+    it("round-trips the covenant version beside an untouched params_json", () => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        const fare = { currency: "asset" as const, units: 9n };
+        const v2 = quote({
+            params: { ...quote().params, topup: 330n, receiverFare: fare },
+            payer: "receiver",
+            receiverFare: { ...fare, assetId: ASSET },
+            loanSats: 330n,
+            covenantVersion: 2,
+        });
+        insert(repo, policy, v2);
+        expect(repo.get("receive-1")).toEqual({
+            ...v2,
+            policyRevision: policy.getSnapshot().revision,
+        });
+        expect(
+            JSON.parse(
+                db
+                    .prepare<[], { params_json: string }>("SELECT params_json FROM receive_quotes")
+                    .get()!.params_json,
+            ),
+        ).not.toHaveProperty("covenantVersion");
+
+        insert(
+            repo,
+            policy,
+            quote({
+                id: "legacy",
+                operatorInputs: [{ ...quote().operatorInputs[0]!, vout: 2 }],
+            }),
+        );
+        expect(repo.get("legacy")?.covenantVersion).toBeUndefined();
+        db.close();
+    });
+
     it("refuses a stored params object missing the exit params", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);

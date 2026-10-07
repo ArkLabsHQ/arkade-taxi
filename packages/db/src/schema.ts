@@ -368,6 +368,17 @@ export const MIGRATIONS: readonly Migration[] = [
         up: `ALTER TABLE advances ADD COLUMN payment_sats INTEGER
                 CHECK (payment_sats IS NULL OR payment_sats > 0)`,
     },
+    {
+        id: 13,
+        compat: "additive",
+        // Additive and nullable on both tables: NULL is the legacy covenant, whose
+        // address must keep rebuilding unchanged. The CHECK admits only the version
+        // that exists, so an unknown one cannot be persisted and then read as legacy.
+        up: `ALTER TABLE advances ADD COLUMN covenant_version INTEGER
+                CHECK (covenant_version IS NULL OR covenant_version = 2);
+             ALTER TABLE receive_quotes ADD COLUMN covenant_version INTEGER
+                CHECK (covenant_version IS NULL OR covenant_version = 2)`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */
@@ -390,6 +401,8 @@ const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; 
     { since: 10, table: "advances", column: "receiver_fare_currency", type: "TEXT" },
     { since: 11, table: "advances", column: "exit_signer_key", type: "BLOB" },
     { since: 12, table: "advances", column: "payment_sats", type: "INTEGER" },
+    { since: 13, table: "advances", column: "covenant_version", type: "INTEGER" },
+    { since: 13, table: "receive_quotes", column: "covenant_version", type: "INTEGER" },
 ];
 
 function missingSchema(db: Database, upto: number): string[] {

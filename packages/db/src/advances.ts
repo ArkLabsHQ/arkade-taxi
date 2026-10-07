@@ -30,6 +30,7 @@ const COLUMNS = [
     "fare_asset_group_index",
     "receiver_fare_currency",
     "receiver_fare_units",
+    "covenant_version",
     "outpoint_txid",
     "outpoint_vout",
     "spent_txid",
@@ -112,6 +113,7 @@ interface AdvanceRow {
     fare_asset_group_index: bigint | null;
     receiver_fare_currency: string | null;
     receiver_fare_units: string | null;
+    covenant_version: bigint | null;
     outpoint_txid: string | null;
     outpoint_vout: bigint | null;
     spent_txid: string | null;
@@ -233,6 +235,7 @@ function toParams(a: Advance): AdvanceParams {
         receiver_fare_currency: a.receiverFare?.currency ?? null,
         receiver_fare_units:
             a.receiverFare === undefined ? null : a.receiverFare.units.toString(10),
+        covenant_version: a.covenantVersion ?? null,
         outpoint_txid: a.outpoint?.txid ?? null,
         outpoint_vout: a.outpoint?.vout ?? null,
         spent_txid: a.spentTxid ?? null,
@@ -382,6 +385,12 @@ function fromRow(r: AdvanceRow): Advance {
         else if (r.receiver_fare_currency === "asset")
             a.receiverFare = { currency: "asset", units };
         else throw new Error(`advance ${r.id}: unknown receiver fare currency`);
+    }
+    // Refused rather than narrowed: a newer build that widens the CHECK must not
+    // have its rows read back here as version 2 and rebuilt at the wrong address.
+    if (r.covenant_version !== null) {
+        if (r.covenant_version !== 2n) throw new Error(`advance ${r.id}: unknown covenant version`);
+        a.covenantVersion = 2;
     }
     if (r.claim_mode !== null) a.claimMode = r.claim_mode;
     if (r.recovery_recipient !== null) a.recoveryRecipient = r.recovery_recipient;

@@ -64,6 +64,22 @@ describe("round-trip fidelity", () => {
         expect(repo.get("receiver")?.recoveryRecipient).toBe("receiver");
     });
 
+    it("round-trips the covenant version, leaving a legacy advance without one", () => {
+        repo.insert(advance({ id: "legacy" }));
+        repo.insert(advance({ id: "v2", covenantVersion: 2 }));
+
+        expect(repo.get("legacy")?.covenantVersion).toBeUndefined();
+        expect(repo.get("v2")?.covenantVersion).toBe(2);
+        expect(
+            db
+                .prepare<[], { covenant_version: bigint | null }>(
+                    "SELECT covenant_version FROM advances WHERE id = 'v2'",
+                )
+                .safeIntegers(true)
+                .get(),
+        ).toEqual({ covenant_version: 2n });
+    });
+
     it("round-trips a receiver fare through the advance row", () => {
         repo.insert(
             advance({
@@ -560,8 +576,8 @@ describe("round-trip fidelity", () => {
         repo.insert(advance({ id: "ahead", state: "locked" }));
         const before = repo.get("ahead");
 
-        db.exec("ALTER TABLE advances ADD COLUMN covenant_version INTEGER");
-        db.prepare("UPDATE advances SET covenant_version = 2 WHERE id = 'ahead'").run();
+        db.exec("ALTER TABLE advances ADD COLUMN covenant_type TEXT");
+        db.prepare("UPDATE advances SET covenant_type = 'htlc' WHERE id = 'ahead'").run();
 
         const rolledBack = new AdvanceRepository(db);
         expect(rolledBack.get("ahead")).toEqual(before);
