@@ -34,6 +34,9 @@ export interface TaxiConfig {
     operatorPrivkey: Uint8Array;
     /** Covenant version new quotes are built at. Only 1 starts; see SCHEMA. */
     covenantVersion: 1 | 2;
+    /** The guarantee advertised beside `unclaimedMode: "custody"`, not an expiry:
+     * past it a release is still honoured while the funds remain (spec §5.6). */
+    custodyWindowSeconds: bigint;
     logLevel: LogLevel;
 }
 
@@ -75,6 +78,7 @@ export const SHOWN_CONFIG = {
     reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
     covenantVersion: "TAXI_COVENANT_VERSION",
+    custodyWindowSeconds: "TAXI_CUSTODY_WINDOW_SECONDS",
     logLevel: "TAXI_LOG_LEVEL",
     operatorKey: null,
     operatorSignerKey: null,
@@ -215,6 +219,9 @@ const SCHEMA = z
             .enum(["1", "2"])
             .default("1")
             .transform((s) => Number(s) as 1 | 2),
+        // 100 days (decision 7). Baked into every custody row at reclaim, so a
+        // later change never moves a window a payer was already quoted.
+        TAXI_CUSTODY_WINDOW_SECONDS: positiveSats.default("8640000"),
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
@@ -310,6 +317,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
         covenantVersion: v.TAXI_COVENANT_VERSION,
+        custodyWindowSeconds: v.TAXI_CUSTODY_WINDOW_SECONDS,
         logLevel: v.TAXI_LOG_LEVEL,
     };
 }

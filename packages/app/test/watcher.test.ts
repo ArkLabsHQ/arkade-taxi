@@ -243,7 +243,11 @@ async function setup(
         expiresAt: NOW + 60,
     };
     const db = openDatabase(path);
-    const advances = new AdvanceRepository(db);
+    // A v2 reclaim opens its custody row in the same transaction, and refuses
+    // without a window, so the watcher fixture wires one as cli.ts does.
+    const advances = new AdvanceRepository(db, {
+        custodyWindowSeconds: Number(config().custodyWindowSeconds),
+    });
     const policy = new PolicyRepository(db);
     const configuredPolicy = basePolicy();
     if (request.params.assetId) {

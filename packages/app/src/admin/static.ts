@@ -1960,6 +1960,32 @@ const BLOCKER_GROUPS = [
         "transaction_stream_disconnected",
     ],
     [
+        "An unclaimed delivery the Taxi owes a receiver is near the end of its guaranteed window. The receiver can still claim it afterwards, while the funds remain.",
+        "custody_window_ending",
+    ],
+    [
+        "The Taxi has lent out more than it owes the receivers whose deliveries it holds. They can still claim; repayments are expected to cover it.",
+        "custody_funds_lent",
+    ],
+    [
+        "The Taxi has lent money it will never get back while it still owes receivers for deliveries it holds." +
+            ATTENTION,
+        "custody_funds_lent_unrecoverable",
+    ],
+    [
+        "The Taxi owes receivers more than it holds plus what is owed back to it. New payments are refused; claims are still served." +
+            ATTENTION,
+        "custody_shortfall",
+    ],
+    [
+        "A receiver is claiming a delivery and the Taxi has too few spendable coins this moment. It keeps the claim and retries.",
+        "custody_release_awaiting_liquidity",
+    ],
+    [
+        "The check over the deliveries the Taxi owes receivers failed to run." + ATTENTION,
+        "custody_reconcile_failed",
+    ],
+    [
         "A payment's coin was spent in a way the Taxi does not recognise." + ATTENTION,
         "covenant_spend_unknown",
     ],
@@ -3463,6 +3489,8 @@ const CONFIG_MEANINGS = {
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
     covenantVersion:
         "Which covenant new payments are built at. Only 1 starts: version 2 has no recovery path yet, so the Taxi refuses to run on it.",
+    custodyWindowSeconds:
+        "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

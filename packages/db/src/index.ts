@@ -2,7 +2,22 @@ import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import { applyMigrations } from "./schema.js";
 
-export { AdvanceRepository, type PreparedRecoveryRecord } from "./advances.js";
+export {
+    AdvanceRepository,
+    type AdvanceRepositoryOptions,
+    type PreparedRecoveryRecord,
+} from "./advances.js";
+export {
+    CustodyError,
+    CustodyReleaseInputConflictError,
+    CustodyRepository,
+    CustodySweptError,
+    openCustodyRow,
+    type CustodyCode,
+    type CustodyLiabilities,
+    type CustodyRecord,
+    type CustodyState,
+} from "./custody.js";
 export { DEFAULT_POLICY, PolicyRepository, type AuditRow, type PolicySnapshot } from "./policy.js";
 export {
     ReservationRepository,

@@ -198,6 +198,19 @@ describe("aggregated validation", () => {
             );
     });
 
+    // Read from loadConfig, not a literal: the shipped default is the guarantee
+    // a payer is quoted, and it is baked into every custody row at reclaim.
+    it("defaults the custody window to 100 days", () => {
+        expect(loadConfig(env()).custodyWindowSeconds).toBe(8_640_000n);
+        expect(
+            loadConfig(env({ TAXI_CUSTODY_WINDOW_SECONDS: "604800" })).custodyWindowSeconds,
+        ).toBe(604_800n);
+        for (const value of ["0", "-1", "", "100.5"])
+            expect(() => loadConfig(env({ TAXI_CUSTODY_WINDOW_SECONDS: value }))).toThrow(
+                /TAXI_CUSTODY_WINDOW_SECONDS/,
+            );
+    });
+
     // cli.ts prints a startup failure through sanitizeOperationalError, which keeps
     // only the first line: a refusal whose variable is on line two is invisible.
     it("names the offending variables on the line a startup failure prints", () => {

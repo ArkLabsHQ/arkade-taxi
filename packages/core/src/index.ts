@@ -12,6 +12,13 @@ export {
 export { computeExposure, sweepable } from "./exposure.js";
 export { admit } from "./admission.js";
 export {
+    assessSolvency,
+    computeReceivables,
+    type AssetAmount,
+    type CustodyOwed,
+    type CustodySolvency,
+} from "./solvency.js";
+export {
     assetIdKey,
     fareBase,
     fareNeedsSenderSats,

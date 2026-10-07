@@ -152,7 +152,7 @@ describe("migration 13", () => {
     it("records no breaking migration, so a reader that stops at 12 is not locked out", () => {
         const db = migrated();
         try {
-            expect(userVersion(db)).toBe(13);
+            expect(userVersion(db)).toBe(14);
             expect(MIGRATIONS.find((m) => m.id === 13)?.compat).toBe("additive");
             expect(
                 db
@@ -172,7 +172,7 @@ describe("migration 13", () => {
         const twelve = at(12);
         const before = shape(twelve);
         twelve.close();
-        const thirteen = migrated();
+        const thirteen = at(13);
         const after = shape(thirteen);
         thirteen.close();
 
@@ -194,7 +194,7 @@ describe("migration 13", () => {
             insertRaw(db);
             insertRawReceiveQuote(db);
             applyMigrations(db);
-            expect(userVersion(db)).toBe(13);
+            expect(userVersion(db)).toBe(14);
             expect(db.prepare("SELECT id, topup, covenant_version FROM advances").all()).toEqual([
                 { id: "a1", topup: 300n, covenant_version: null },
             ]);
@@ -226,8 +226,109 @@ describe("migration 13", () => {
     });
 });
 
+describe("migration 14", () => {
+    it("records no breaking migration, so a reader that stops at 13 is not locked out", () => {
+        const db = migrated();
+        try {
+            expect(userVersion(db)).toBe(14);
+            expect(MIGRATIONS.find((m) => m.id === 14)?.compat).toBe("additive");
+            expect(
+                db
+                    .prepare<[], { v: bigint }>(
+                        "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+                    )
+                    .get(),
+            ).toEqual({ v: 0n });
+        } finally {
+            db.close();
+        }
+    });
+
+    // Stronger than the five custody sentinels: every v13 column, not a sample.
+    it("adds two inert tables and leaves every v13 column's shape untouched", () => {
+        const thirteen = at(13);
+        const before = shape(thirteen);
+        thirteen.close();
+        const fourteen = migrated();
+        const after = shape(fourteen);
+        fourteen.close();
+
+        for (const [table, columns] of Object.entries(before))
+            for (const [column, declared] of Object.entries(columns))
+                expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+        expect(
+            Object.keys(after)
+                .filter((table) => !(table in before))
+                .sort(),
+        ).toEqual(["custody", "custody_release_inputs"]);
+    });
+
+    it("migrates a v13 database forward preserving its rows and adding no custody row", () => {
+        const db = at(13);
+        try {
+            insertRaw(db, { covenant_version: 2n });
+            applyMigrations(db);
+            expect(userVersion(db)).toBe(14);
+            expect(db.prepare("SELECT id, covenant_version FROM advances").all()).toEqual([
+                { id: "a1", covenant_version: 2n },
+            ]);
+            expect(db.prepare("SELECT count(*) AS n FROM custody").get()).toEqual({ n: 0n });
+        } finally {
+            db.close();
+        }
+    });
+
+    it("admits only the four custody states", () => {
+        const db = migrated();
+        insertRaw(db);
+        const row = (state: string, extra: Record<string, unknown> = {}) => ({
+            advance_id: "a1",
+            owner_key: new Uint8Array(32).fill(1),
+            owed_sats: 1_000n,
+            loan_sats: 330n,
+            state,
+            held_at: 1n,
+            expires_at: 2n,
+            ...extra,
+        });
+        // One row at a time: advance_id is the key and the outpoint is unique.
+        const insert = (values: Record<string, unknown>) => {
+            db.prepare("DELETE FROM custody").run();
+            const cols = Object.keys(values);
+            db.prepare(
+                `INSERT INTO custody (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`,
+            ).run(values);
+        };
+        try {
+            expect(() => insert(row("held"))).not.toThrow();
+            for (const state of ["pending", "swept", "HELD", ""])
+                expect(() => insert(row(state))).toThrow(/CHECK constraint failed/);
+            expect(() => insert(row("forfeit"))).toThrow(/CHECK constraint failed/);
+            expect(() =>
+                insert(row("forfeit", { swept_actor: "operator", swept_at: 9n })),
+            ).not.toThrow();
+            expect(() => insert(row("released"))).toThrow(/CHECK constraint failed/);
+            expect(() =>
+                insert(row("released", { release_txid: hex32(0xab), released_at: 9n })),
+            ).not.toThrow();
+            expect(() =>
+                insert(
+                    row("released", {
+                        release_txid: hex32(0xab),
+                        released_at: 9n,
+                        swept_actor: "operator",
+                        swept_at: 9n,
+                    }),
+                ),
+            ).toThrow(/CHECK constraint failed/);
+        } finally {
+            db.close();
+        }
+    });
+});
+
 describe("migrations", () => {
-    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13])(
+    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14])(
         "rejects development schema v%s without modifying its schema or data",
         (version) => {
             const db = fresh();
@@ -263,7 +364,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(13);
+            expect(userVersion(reopened)).toBe(14);
             expect(
                 reopened
                     .prepare(
@@ -286,12 +387,16 @@ describe("migrations", () => {
     });
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+        ]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(tableNames(db).sort()).toEqual([
             "advances",
+            "custody",
+            "custody_release_inputs",
             "operator_input_reservations",
             "policy",
             "policy_audit",
@@ -359,7 +464,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -393,7 +498,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
@@ -407,7 +512,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
@@ -424,7 +529,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -443,7 +548,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -461,7 +566,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(8);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
@@ -495,7 +600,7 @@ describe("migrations", () => {
         });
         insertRawReceiveQuote(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         expect(
             db
                 .prepare<
@@ -603,7 +708,7 @@ describe("migrations", () => {
     it("adds the exit params at migration 11", () => {
         const db = migrated();
         try {
-            expect(userVersion(db)).toBe(13);
+            expect(userVersion(db)).toBe(14);
             for (const column of ["exit_signer_key", "exit_delay_type", "exit_delay_value"])
                 expect(
                     db
@@ -648,7 +753,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(13);
+        expect(userVersion(db)).toBe(14);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {
@@ -730,8 +835,8 @@ describe("rollback onto a newer schema", () => {
     // build that migrates, the default MIGRATIONS is the one rolled back onto it.
     const ahead = (compat: Migration["compat"], up: string): Database => {
         const db = fresh();
-        applyMigrations(db, [...MIGRATIONS, { id: 14, compat, up }]);
-        expect(userVersion(db)).toBe(14);
+        applyMigrations(db, [...MIGRATIONS, { id: 15, compat, up }]);
+        expect(userVersion(db)).toBe(15);
         return db;
     };
     const ADD_COLUMN = "ALTER TABLE advances ADD COLUMN covenant_type TEXT";
@@ -740,7 +845,7 @@ describe("rollback onto a newer schema", () => {
         const db = ahead("additive", ADD_COLUMN);
         try {
             expect(() => applyMigrations(db)).not.toThrow();
-            expect(userVersion(db)).toBe(14);
+            expect(userVersion(db)).toBe(15);
         } finally {
             db.close();
         }
@@ -751,7 +856,7 @@ describe("rollback onto a newer schema", () => {
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 14, this build knows 13;[\s\S]*covenant_version/,
+                /database is at schema 15, this build knows 14;[\s\S]*covenant_version/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -764,7 +869,7 @@ describe("rollback onto a newer schema", () => {
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 14, this build knows 13;[\s\S]*migration 14/,
+                /database is at schema 15, this build knows 14;[\s\S]*migration 15/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -775,11 +880,36 @@ describe("rollback onto a newer schema", () => {
     it("refuses a newer schema that records no compatibility marker", () => {
         const db = migrated();
         db.exec(`${ADD_COLUMN}; DROP TABLE schema_compat`);
-        db.pragma("user_version = 14");
+        db.pragma("user_version = 15");
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 14, this build knows 13;[\s\S]*no forward-compatibility marker/,
+                /database is at schema 15, this build knows 14;[\s\S]*no forward-compatibility marker/,
             );
+        } finally {
+            db.close();
+        }
+    });
+
+    // Both inputs a 13-era guard reads before admitting a newer database. The
+    // cross-build run against origin/main's built package is the real proof;
+    // this pins the preconditions that run depends on.
+    it("leaves a 13-era reader everything its guard checks", () => {
+        const db = migrated();
+        const thirteen = at(13);
+        const before = shape(thirteen);
+        thirteen.close();
+        try {
+            expect(
+                db
+                    .prepare<[], { v: bigint }>(
+                        "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+                    )
+                    .get(),
+            ).toEqual({ v: 0n });
+            const after = shape(db);
+            for (const [table, columns] of Object.entries(before))
+                for (const [column, declared] of Object.entries(columns))
+                    expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         } finally {
             db.close();
         }

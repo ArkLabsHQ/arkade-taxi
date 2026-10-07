@@ -379,6 +379,64 @@ export const MIGRATIONS: readonly Migration[] = [
              ALTER TABLE receive_quotes ADD COLUMN covenant_version INTEGER
                 CHECK (covenant_version IS NULL OR covenant_version = 2)`,
     },
+    {
+        id: 14,
+        compat: "additive",
+        // Two new tables an older build never reads. A custody row is a
+        // liability, not a coin: the reclaimed coin is ordinary inventory the
+        // VtxoManager renews with everything else, which it can only do by
+        // merging it (SDK renewVtxos settles every expiring coin into one
+        // output, net of fees). So the row records what is owed and binds
+        // outpoints only while a release graph is in flight.
+        // A sweep is a ledger write-off, not a transaction: `forfeit` requires
+        // the actor who wrote it off, so the clock alone cannot reach it, and a
+        // released row may not also be written off.
+        up: `CREATE TABLE custody (
+            advance_id TEXT PRIMARY KEY REFERENCES advances(id),
+            owner_key BLOB NOT NULL,
+            asset_txid BLOB,
+            asset_group_index INTEGER,
+            asset_units INTEGER CHECK (asset_units IS NULL OR asset_units > 0),
+            owed_sats INTEGER NOT NULL CHECK (owed_sats >= 0),
+            loan_sats INTEGER NOT NULL CHECK (loan_sats >= 0),
+            fare_currency TEXT CHECK (fare_currency IS NULL OR fare_currency IN ('sats', 'asset')),
+            fare_units INTEGER,
+            state TEXT NOT NULL CHECK (state IN ('held', 'releasing', 'released', 'forfeit')),
+            held_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            release_lease_owner TEXT,
+            release_lease_token TEXT,
+            release_lease_until INTEGER,
+            release_expected_txid TEXT,
+            release_txid TEXT,
+            released_at INTEGER,
+            swept_at INTEGER,
+            swept_actor TEXT,
+            CHECK ((asset_txid IS NULL) = (asset_group_index IS NULL)),
+            CHECK ((asset_txid IS NULL) = (asset_units IS NULL)),
+            CHECK ((fare_currency IS NULL) = (fare_units IS NULL)),
+            CHECK ((swept_at IS NULL) = (swept_actor IS NULL)),
+            CHECK ((release_txid IS NULL) = (released_at IS NULL)),
+            CHECK (state != 'forfeit' OR swept_at IS NOT NULL),
+            CHECK (state != 'released' OR (release_txid IS NOT NULL AND swept_at IS NULL)),
+            CHECK (state != 'releasing' OR release_expected_txid IS NOT NULL),
+            CHECK (expires_at > held_at)
+        );
+        CREATE INDEX custody_owner ON custody (owner_key, held_at);
+        CREATE INDEX custody_state_expiry ON custody (state, expires_at);
+        CREATE INDEX custody_asset ON custody (asset_txid, asset_group_index)
+            WHERE asset_txid IS NOT NULL;
+        CREATE TABLE custody_release_inputs (
+            outpoint_txid TEXT NOT NULL CHECK (
+                length(outpoint_txid) = 64 AND outpoint_txid NOT GLOB '*[^0-9a-f]*'
+            ),
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            advance_id TEXT NOT NULL REFERENCES custody(advance_id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX custody_release_inputs_advance ON custody_release_inputs (advance_id);`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */
@@ -403,6 +461,11 @@ const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; 
     { since: 12, table: "advances", column: "payment_sats", type: "INTEGER" },
     { since: 13, table: "advances", column: "covenant_version", type: "INTEGER" },
     { since: 13, table: "receive_quotes", column: "covenant_version", type: "INTEGER" },
+    { since: 14, table: "custody", column: "advance_id", type: "TEXT" },
+    { since: 14, table: "custody", column: "state", type: "TEXT" },
+    { since: 14, table: "custody", column: "owed_sats", type: "INTEGER" },
+    { since: 14, table: "custody", column: "swept_actor", type: "TEXT" },
+    { since: 14, table: "custody_release_inputs", column: "advance_id", type: "TEXT" },
 ];
 
 function missingSchema(db: Database, upto: number): string[] {

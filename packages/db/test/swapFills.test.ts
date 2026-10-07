@@ -86,10 +86,12 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
 
 describe("swap-fill migration", () => {
     it("adds swap-fill storage as a new migration without touching prior ones", () => {
-        expect(MIGRATIONS.map(({ id }) => id)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+        expect(MIGRATIONS.map(({ id }) => id)).toEqual([
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+        ]);
         const db = fresh();
         applyMigrations(db);
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(13);
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(14);
         expect(
             db
                 .prepare("SELECT name FROM pragma_table_info('swap_fills') WHERE name = ?")

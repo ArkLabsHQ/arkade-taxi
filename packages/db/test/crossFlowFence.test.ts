@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Advance } from "@arkade-taxi/core";
 import {
     AdvanceRepository,
+    CustodyRepository,
     openDatabase,
     PolicyRepository,
     ProceedsRepository,
@@ -210,6 +211,24 @@ describe("cross-flow reservation fence", () => {
         expect(() =>
             new ProceedsRepository(db).create("job", { inputs: [{ ...COIN }] }, 1),
         ).toThrow(/reserved/);
+    });
+
+    // Custody is a liability, not a coin: a reclaimed coin is ordinary inventory
+    // and every other flow may lend it. Only an in-flight release binds coins,
+    // and it binds them away from background settlement, not from quoting.
+    it("fences nothing while a custody row is merely held", () => {
+        const custodian = new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 });
+        custodian.insert(
+            quote({ id: "reclaimed", state: "locked", covenantVersion: 2, paymentSats: 1_000n }),
+        );
+        custodian.recordSpendObservation("reclaimed", "locked", "recovered", COIN.txid, NOW, {
+            hash: "34".repeat(32),
+            height: 700_000,
+        });
+        const custody = new CustodyRepository(db);
+        expect(custody.liabilities().owedSats).toBe(1_000n);
+        expect(custody.listHeldOutpoints()).toEqual([]);
+        expect(() => reserve(quote({ id: "advance-2" }))).not.toThrow();
     });
 
     it.each(["advance", "swap", "proceeds"] as const)(

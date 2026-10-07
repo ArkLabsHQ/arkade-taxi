@@ -2,6 +2,7 @@ import type { Database, Statement } from "better-sqlite3";
 import type { Advance, AdvanceState, Outpoint } from "@arkade-taxi/core";
 import { validateFundingSnapshot } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
+import { openCustodyRow } from "./custody.js";
 import { PolicyRepository } from "./policy.js";
 
 const COLUMNS = [
@@ -454,8 +455,16 @@ function fromRow(r: AdvanceRow): Advance {
     return a;
 }
 
+export interface AdvanceRepositoryOptions {
+    /** The advertised custody window. A v2 reclaim opens its ledger row in the
+     * same transaction as `recovered`, so without this the reclaim is refused
+     * rather than leaving the receiver's asset in the wallet with no row. */
+    custodyWindowSeconds?: number;
+}
+
 export class AdvanceRepository {
     readonly #db: Database;
+    readonly #custodyWindowSeconds: number | undefined;
     readonly #missingFunding: Statement<[], { id: string }>;
     readonly #missingExitParams: Statement<[], { total: bigint }>;
     readonly #insert: Statement<[AdvanceParams]>;
@@ -474,9 +483,10 @@ export class AdvanceRepository {
     readonly #recoverySubmission: Statement<[string, number, string]>;
     readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
 
-    constructor(db: Database) {
+    constructor(db: Database, options: AdvanceRepositoryOptions = {}) {
         assertNativeAccess(db);
         this.#db = db;
+        this.#custodyWindowSeconds = options.custodyWindowSeconds;
         // Per statement, not per connection: a caller's Database default must not
         // decide whether a sats value survives above 2^53.
         const read = <B extends unknown[], R>(sql: string): Statement<B, R> =>
@@ -1113,6 +1123,11 @@ export class AdvanceRepository {
                     ).changes;
                 if (changed !== 1)
                     throw new Error(`advance ${id}: observation compare-and-set lost`);
+                // The reclaim moved the whole lockup into the operator's own
+                // inventory, so what remains is a liability — recorded here so
+                // it can never be observed without one.
+                if (terminalState === "recovered" && current.covenantVersion === 2)
+                    openCustodyRow(this.#db, current, at, this.#custodyWindowSeconds);
                 this.#db
                     .prepare("DELETE FROM operator_input_reservations WHERE advance_id = ?")
                     .run(id);
