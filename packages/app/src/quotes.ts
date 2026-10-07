@@ -849,9 +849,8 @@ async function createReservedQuote(
     };
 }
 
-/** The first operator funding read, started before the sender barrier so one
- * round trip covers both. Only candidate selection reads it; the authoritative
- * re-selection still runs on the live read `rereadInventory` takes after it. */
+/** The first operator funding read, started beside the sender barrier. Only
+ * candidate selection reads it; `rereadInventory` re-reads live after it. */
 export function readFunding(
     inventory: QuoteDeps["inventory"],
 ): Promise<{ spendable: ExtendedVirtualCoin[]; intentLocks: Outpoint[] }> {
