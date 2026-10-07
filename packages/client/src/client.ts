@@ -212,9 +212,13 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     >;
 }
 
+// Cheap to repeat: a not_ready refusal is the Taxi's admission check, made before any quote
+// work, and a status read is one row.
+export const retryDelay = (since: number): number => (Date.now() - since < 2_000 ? 500 : 1_000);
+
 export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promise<T> => {
-    const deadline = Date.now() + 30_000;
-    let delay = 1_000;
+    const start = Date.now();
+    const deadline = start + 30_000;
     for (;;) {
         try {
             return await request();
@@ -222,10 +226,12 @@ export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promi
             if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
             if (Date.now() >= deadline) throw cause;
             await new Promise<void>((resolve) =>
-                setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))),
+                setTimeout(
+                    resolve,
+                    Math.min(retryDelay(start), Math.max(0, deadline - Date.now())),
+                ),
             );
             if (Date.now() >= deadline) throw cause;
-            delay = Math.min(delay * 2, 4_000);
         }
     }
 };
