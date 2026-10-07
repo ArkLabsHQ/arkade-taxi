@@ -1007,9 +1007,9 @@ describe("canonical covenant observation", () => {
 
         await state.watcher.catchUp();
         const row = state.advances.get(state.advance.id)!;
-        expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
-        expect(row.failureCode).toBeUndefined();
         expect(state.policy.get().paused).toBe(false);
+        expect(row.failureCode).toBeUndefined();
+        expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
         state.db.close();
     });
 
