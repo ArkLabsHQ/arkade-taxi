@@ -116,6 +116,41 @@ describe("artifact JSON round-trip", () => {
     });
 });
 
+// Receiver-fare cases are left out: recycleAsm has never modelled the fare.
+describe("artifact reproduces the v2 builders", () => {
+    const v2 = JSON.parse(readFileSync(new URL("./v2-vectors.json", import.meta.url), "utf8")) as {
+        cases: (Vector & {
+            params: { paymentSats?: number; receiverFareCurrency?: string };
+            reclaim: string;
+        })[];
+    };
+    const fareless = v2.cases.filter((c) => c.params.receiverFareCurrency === undefined);
+
+    it.each(fareless.map((c) => [c.name, c] as const))("%s", (_name, v) => {
+        const p: DustCovenantParams = {
+            ...toParams(v),
+            paymentSats:
+                v.params.paymentSats === undefined ? undefined : BigInt(v.params.paymentSats),
+            covenantVersion: 2,
+        };
+        const min = BigInt(v.vtxoMinAmount);
+        const program = emitArtifact(p, min);
+        const compiled = compile(program, p, min);
+
+        expect(arkadeHex(compiled, "recycle")).toBe(v.recycle);
+        expect(arkadeHex(compiled, "purchase")).toBe(v.purchase);
+        expect(arkadeHex(compiled, "refundSender")).toBe(v.refund);
+        expect(arkadeHex(compiled, "recovery")).toBe(v.reclaim);
+        expect(compiled.pkScript).toEqual(builder(p, min).pkScript);
+        expect(() =>
+            arkade.validateProgram(program, artifactArgs(p, min, serverKey)),
+        ).not.toThrow();
+        expect(arkade.parseArtifact(JSON.parse(arkade.stringifyArtifact(program)))).toEqual(
+            program,
+        );
+    });
+});
+
 describe("declared params", () => {
     it("declares every $ref it uses and binds every param it declares", () => {
         for (const v of cases) {

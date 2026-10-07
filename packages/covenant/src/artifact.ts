@@ -1,7 +1,13 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { arkade } from "@arkade-os/sdk";
 import { subDustScript } from "./pin.js";
-import { lockupSats, refundTopup, validateParams, type DustCovenantParams } from "./params.js";
+import {
+    loanSats,
+    lockupSats,
+    refundTopup,
+    validateParams,
+    type DustCovenantParams,
+} from "./params.js";
 
 /**
  * The SDK declarations emit `Program`, `AsmToken`, `InputDef` and friends into the
@@ -27,6 +33,7 @@ const PARAM_TYPES = {
     assetTxid: "bytes",
     assetGroupIndex: "int",
     topup: "int",
+    loan: "int",
     refundTopup: "int",
     refundRemainder: "int",
     locktime: "int",
@@ -113,7 +120,7 @@ function recycleAsm(p: DustCovenantParams): Asm {
     return finishAsm(out, p.assetId !== undefined);
 }
 
-function purchaseAsm(p: DustCovenantParams): Asm {
+function purchaseAsm(p: DustCovenantParams, payee = "receiverKey"): Asm {
     const out: Asm = [
         "PUSHCURRENTINPUTINDEX",
         0,
@@ -122,7 +129,7 @@ function purchaseAsm(p: DustCovenantParams): Asm {
         "INSPECTOUTPUTSCRIPTPUBKEY",
         1,
         "EQUALVERIFY",
-        "$receiverKey",
+        `$${payee}`,
         "EQUALVERIFY",
         0,
         "INSPECTOUTPUTVALUE",
@@ -160,6 +167,50 @@ function refundAsm(p: DustCovenantParams, vtxoMinAmount: bigint): Asm {
     return finishAsm(out, p.assetId !== undefined);
 }
 
+function repayRefundAsm(p: DustCovenantParams): Asm {
+    const out: Asm = [
+        "PUSHCURRENTINPUTINDEX",
+        0,
+        "EQUALVERIFY",
+        "INSPECTNUMINPUTS",
+        2,
+        "EQUALVERIFY",
+        1,
+        "INSPECTINPUTSCRIPTPUBKEY",
+        1,
+        "EQUALVERIFY",
+        1,
+        "INSPECTOUTPUTSCRIPTPUBKEY",
+        1,
+        "EQUALVERIFY",
+        "EQUALVERIFY",
+        0,
+        "INSPECTOUTPUTVALUE",
+        "$loan",
+        "EQUALVERIFY",
+    ];
+    pinAsm(out, 0, "operatorKey", "operatorPinHash", loanSats(p), p.dust);
+    out.push(
+        1,
+        "INSPECTOUTPUTVALUE",
+        0,
+        "INSPECTINPUTVALUE",
+        1,
+        "INSPECTINPUTVALUE",
+        "ADD",
+        "$loan",
+        "SUB",
+        "EQUALVERIFY",
+    );
+    if (p.assetId) {
+        assetAsm(out, 1, true, true);
+        assetAsm(out, 0, false, true);
+        assetAsm(out, 1, false, false);
+        out.push("ADD", "EQUAL");
+    }
+    return finishAsm(out, p.assetId !== undefined);
+}
+
 function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
     const refs = new Set<string>();
     const collect = (tokens: readonly unknown[] = []) => {
@@ -184,7 +235,9 @@ function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
  */
 export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): ArkadeProgram {
     validateParams(p, vtxoMinAmount);
-    const refund = { asm: refundAsm(p, vtxoMinAmount) };
+    const v2 = p.covenantVersion === 2;
+    const refund = { asm: v2 ? repayRefundAsm(p) : refundAsm(p, vtxoMinAmount) };
+    const recovery = v2 ? { asm: purchaseAsm(p, "operatorKey") } : refund;
     const functions: Record<string, ArkadeFunction> = {
         recycle: { tapscript: { signers: ["$serverKey"] }, arkadeScript: { asm: recycleAsm(p) } },
         purchase: { tapscript: { signers: ["$serverKey"] }, arkadeScript: { asm: purchaseAsm(p) } },
@@ -194,7 +247,7 @@ export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): Arka
         },
         recovery: {
             tapscript: { signers: ["$serverKey"], cltv: "$locktime" },
-            arkadeScript: refund,
+            arkadeScript: recovery,
         },
         exit: {
             tapscript: {
@@ -230,6 +283,7 @@ export function artifactArgs(
         operatorPinHash: sha256(subDustScript(p.operatorKey)),
         senderPinHash: sha256(subDustScript(p.senderKey)),
         topup: p.topup,
+        loan: loanSats(p),
         refundTopup: topup,
         refundRemainder: lockupSats(p) - topup,
         locktime: p.locktime,
