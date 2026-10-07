@@ -183,6 +183,21 @@ describe("aggregated validation", () => {
         expect(() => loadConfig(env({ TAXI_LOG_LEVEL: "chatty" }))).toThrow(/TAXI_LOG_LEVEL/);
     });
 
+    // The refusal is the safety property, not the default: recovery still pins
+    // the emulator packet to the refund leaf, so a v2 advance quoted today could
+    // never be recovered. Phase 2b deletes this arm.
+    it("defaults the covenant version to legacy and refuses to start on 2", () => {
+        expect(loadConfig(env()).covenantVersion).toBe(1);
+        expect(loadConfig(env({ TAXI_COVENANT_VERSION: "1" })).covenantVersion).toBe(1);
+        expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: "2" }))).toThrow(
+            /TAXI_COVENANT_VERSION[\s\S]*recover/i,
+        );
+        for (const value of ["0", "3", "", "two"])
+            expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: value }))).toThrow(
+                /TAXI_COVENANT_VERSION/,
+            );
+    });
+
     it("reports missing required vars together", () => {
         const err = (() => {
             try {

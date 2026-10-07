@@ -1644,6 +1644,8 @@ const CONFIG_MEANINGS = {
         "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
     proceedsMaxFeeSats:
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
+    covenantVersion:
+        "Which covenant new payments are built at. Only 1 starts: version 2 has no recovery path yet, so the Taxi refuses to run on it.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

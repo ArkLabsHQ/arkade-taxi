@@ -221,6 +221,7 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     operatorMinReserveSats: 10000n,
     proceedsMaxFeeSats: 0n,
     operatorPrivkey,
+    covenantVersion: 1,
     operatorKey,
     networkName: "regtest",
     serverPubkey: serverKey,

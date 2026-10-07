@@ -32,6 +32,8 @@ export interface TaxiConfig {
      * covenant's emergency exit (leaf 4). Keep it until every advance quoted
      * under it is terminal, or those exits become unspendable. */
     operatorPrivkey: Uint8Array;
+    /** Covenant version new quotes are built at. Only 1 starts; see SCHEMA. */
+    covenantVersion: 1 | 2;
     logLevel: LogLevel;
 }
 
@@ -72,6 +74,7 @@ export const SHOWN_CONFIG = {
     vtxoRenewalThresholdSeconds: "TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS",
     reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
+    covenantVersion: "TAXI_COVENANT_VERSION",
     logLevel: "TAXI_LOG_LEVEL",
     operatorKey: null,
     operatorSignerKey: null,
@@ -205,9 +208,25 @@ const SCHEMA = z
             .transform(BigInt)
             .default("0"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
+        TAXI_COVENANT_VERSION: z
+            .enum(["1", "2"])
+            .default("1")
+            .transform((s) => Number(s) as 1 | 2),
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
+        // Refuses to start rather than quoting something unrecoverable: the
+        // emulator claim packet is pinned to the refund leaf (arkade/recovery.ts),
+        // so a v2 advance has no reclaim path. Lift this with that support, not
+        // before — the flip is one-way for as long as a v2 advance is live.
+        if (v.TAXI_COVENANT_VERSION === 2) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["TAXI_COVENANT_VERSION"],
+                message:
+                    "must be 1: covenant v2 recovery and watcher support is not built, so a v2 advance could not be recovered",
+            });
+        }
         if (v.TAXI_ADMIN_PORT === v.TAXI_HTTP_PORT) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -287,6 +306,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
+        covenantVersion: v.TAXI_COVENANT_VERSION,
         logLevel: v.TAXI_LOG_LEVEL,
     };
 }
