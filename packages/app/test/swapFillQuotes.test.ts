@@ -558,6 +558,18 @@ describe("createSwapFillQuote", () => {
         expect(unknown.code).toBe("swap_fill_deposit_unknown");
     });
 
+    it("reports the deposit when the concurrent solver read fails too", async () => {
+        const d = deps();
+        d.senderInventory.getVtxos = (opts) =>
+            opts?.outpoints?.some((o) => key(o) === key(DEP))
+                ? Promise.resolve({ vtxos: [] })
+                : Promise.reject(new Error("indexer offline"));
+        const failure = await caught(() => createSwapFillQuote(d, body()));
+        expect(failure.code).toBe("swap_fill_deposit_unknown");
+        // Flushes the macrotask an unhandled solver rejection would surface in.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
     it("rejects a deposit whose script differs from the offer covenant", async () => {
         indexerCoins.set(
             key(DEP),
