@@ -280,8 +280,7 @@ const exactExtension = (
 const exactAnchor = (tx: Transaction, index: number): void =>
     exactOutput(tx, index, P2A.amount, P2A.script, "P2A anchor");
 
-/** Where a permissionless leaf's own outputs sit when a stranger's are interleaved:
- * by content, since only out[0..1] are pinned and the rest are not ours. */
+/** A leaf's own output by content: only out[0..1] are pinned, the rest is the spender's. */
 const soleOutput = (
     tx: Transaction,
     matches: (output: ReturnType<Transaction["getOutput"]>) => boolean,
@@ -754,8 +753,8 @@ async function classifySpend(
             exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 0);
             exactAnchor(arkTx, anchorIndex(arkTx));
         } else if (params.covenantVersion === 2) {
-            if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
-                fail("refund input or output count mismatch");
+            // The leaf pins INSPECTNUMINPUTS 2 and no output count, so neither do we.
+            if (arkTx.inputsLength !== 2) fail("refund input count mismatch");
             const refunderCoin = await secondInput(arkTx, facts.unroll, deps, verify, "refunder");
             const loan = loanSats(params);
             exactOutput(
@@ -775,18 +774,15 @@ async function classifySpend(
             );
             exactExtension(
                 arkTx,
-                2,
+                extensionIndex(arkTx),
                 covenantProgram,
                 [covenantHoldings, holdings(refunderCoin, "refunder funding outpoint")],
                 1,
             );
-            exactAnchor(arkTx, 3);
+            exactAnchor(arkTx, anchorIndex(arkTx));
         } else {
-            // v1 leaf 3 is arkade-only and buildRefund pins no input count, so a
-            // stranger may add their own input and change; leaf 2 carries senderKey.
-            const permissionless = leaf === Leaf.Recovery;
-            if (!permissionless && (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4))
-                fail("refund input or output count mismatch");
+            // buildRefund pins no input count on either v1 leaf, so a spender who
+            // brings their own coin is script-valid; out[0] and out[1] stay pinned.
             const topup = refundTopup(params, deps.config.vtxoMinAmount);
             exactOutput(
                 arkTx,
@@ -808,14 +804,8 @@ async function classifySpend(
                 ),
                 "refund recovery output",
             );
-            exactExtension(
-                arkTx,
-                permissionless ? extensionIndex(arkTx) : 2,
-                covenantProgram,
-                [covenantHoldings],
-                1,
-            );
-            exactAnchor(arkTx, permissionless ? anchorIndex(arkTx) : 3);
+            exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 1);
+            exactAnchor(arkTx, anchorIndex(arkTx));
         }
         if (leaf === Leaf.Recovery) {
             if (
