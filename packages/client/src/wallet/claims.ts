@@ -492,16 +492,15 @@ export const createClaimWatch = (args: {
             hrp: ctx.hrp,
         },
         spendConfig: async (client) => {
-            const [{ emulatorUrl }, height] = await Promise.all([
-                client.info(),
-                ctx.locktimeDomain === "height" ? ctx.clock() : undefined,
-            ]);
+            const { emulatorUrl } = await client.info();
             return {
                 arkdUrl,
                 emulatorUrl,
                 network,
                 serverUnrollScript,
-                ...(height === undefined ? {} : { chainHeight: Number(height) }),
+                ...(ctx.locktimeDomain === "height"
+                    ? { chainHeight: Number(await ctx.clock()) }
+                    : {}),
             };
         },
     };

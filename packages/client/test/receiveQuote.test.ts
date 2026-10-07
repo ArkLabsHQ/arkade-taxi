@@ -443,35 +443,6 @@ describe("TaxiClient receive quotes", () => {
         });
     });
 
-    it("reads /v1/info once for consecutive verified receive quotes", async () => {
-        vi.useFakeTimers({ now: 1_000_000_001_000, toFake: ["Date"] });
-        try {
-            const fetch = recordingFetch((_url, init) =>
-                jsonResponse(200, init.method === "GET" ? info() : quote()),
-            );
-            const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
-            const { expect: expected, quote: _, info: __, now: ___, ...trust } = args();
-            const ask = {
-                ...trust,
-                receiverAddress,
-                makerPublicKey: senderKey,
-                assetId: ASSET,
-                fareId: "receive",
-                fundingExpiry: expected.fundingExpiry,
-                expect: {
-                    maxServiceFareSats: expected.maxServiceFareSats,
-                    minRecoveryLocktime: expected.minRecoveryLocktime,
-                    minInputExpiryFloor: expected.minInputExpiryFloor,
-                },
-            };
-            await taxi.requestVerifiedReceiveQuote(ask);
-            await taxi.requestVerifiedReceiveQuote(ask);
-            expect(fetch.calls.map((call) => call.init.method)).toEqual(["GET", "POST", "POST"]);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
     it("refuses an invalid maker before any HTTP request", async () => {
         const fetch = vi.fn();
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });

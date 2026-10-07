@@ -25,7 +25,6 @@ import {
     type FundingInputWire,
 } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
-import { retryDelay } from "../client.js";
 import type { Bip21Taxi } from "./requests.js";
 import {
     boundedFetch,
@@ -332,9 +331,11 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         client: TaxiClient,
         submit?: () => Promise<void>,
     ) => {
-        const start = Date.now();
-        const deadline = start + 30_000;
+        const deadline = Date.now() + 30_000;
+        let delay = 1_000;
+        let reads = 0;
         while (Date.now() < deadline) {
+            reads += 1;
             const status =
                 record.mode === "sponsored"
                     ? await client.sponsoredStatus(record.transferId)
@@ -399,11 +400,9 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                 throw new Error(`Taxi transfer is ${status.state}; its outcome is not confirmed`);
             }
             await new Promise<void>((resolve) =>
-                setTimeout(
-                    resolve,
-                    Math.min(retryDelay(start), Math.max(0, deadline - Date.now())),
-                ),
+                setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))),
             );
+            if (reads > 1) delay = Math.min(delay * 2, 4_000);
         }
         throw new Error("Taxi payment outcome is not confirmed");
     };

@@ -7,7 +7,6 @@ import {
     assetArgs,
     info,
     jsonResponse,
-    operatorKey,
     otherKey,
     params,
     quote,
@@ -286,32 +285,6 @@ describe("requestVerifiedQuote", () => {
             code: "PROTOCOL_VERSION_MISMATCH",
         });
         expect(fetch.calls).toHaveLength(1);
-    });
-
-    it("re-reads /v1/info after a quote fails verification against it, and only then", async () => {
-        let operator = otherKey;
-        const fetch = recordingFetch((url) =>
-            jsonResponse(
-                200,
-                url.endsWith("/info")
-                    ? { ...info(), operatorKey: bytesToHex(operator) }
-                    : args().quote,
-            ),
-        );
-        const taxi = new client.TaxiClient({ baseUrl: "https://taxi.example", fetch });
-        await expect(taxi.requestVerifiedQuote(request())).rejects.toMatchObject({
-            code: "OPERATOR_KEY_MISMATCH",
-        });
-        operator = operatorKey;
-        await taxi.requestVerifiedQuote(request());
-        await taxi.requestVerifiedQuote(request());
-        expect(fetch.calls.map((c) => new URL(c.url).pathname)).toEqual([
-            "/v1/info",
-            "/v1/transfers",
-            "/v1/info",
-            "/v1/transfers",
-            "/v1/transfers",
-        ]);
     });
 
     it.each(["canonical", "network", "server"])(

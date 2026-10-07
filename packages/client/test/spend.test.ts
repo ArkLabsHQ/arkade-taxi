@@ -17,7 +17,6 @@ import {
     arkade,
     buildOffchainTx,
     type ArkInfo,
-    type ExtendedVirtualCoin,
     type Identity,
     type VirtualCoin,
 } from "@arkade-os/sdk";
@@ -56,18 +55,9 @@ import {
     type VerifyIncomingClaimArgs,
 } from "../src/spend.js";
 import {
-    claimVerified,
-    createClaimWatch,
-    planReceiverClaim,
-    watchReceiverClaims,
-    type RecyclePlan,
-    type VerifiedClaim,
-} from "../src/wallet/index.js";
-import {
     NOW,
     args,
     assetArgs,
-    drive,
     emulatorKey,
     info,
     operatorKey,
@@ -2164,125 +2154,5 @@ describe("refund", () => {
             refund(transfer, SingleKey.fromPrivateKey(new Uint8Array(32).fill(6))),
         ).rejects.toThrow(/sender identity/i);
         expect(emulator.submitTx).not.toHaveBeenCalled();
-    });
-});
-
-describe("claim round trips", () => {
-    const RTT = 100;
-
-    it("discovers, verifies and recycles a pushed claim in sequential stages", async () => {
-        const funding = await receiverFunding();
-        const a = args();
-        a.expect.receiverKey = funding.receiverKey;
-        a.quote = quote({ ...params(), receiverKey: funding.receiverKey });
-        const base = await setup(a, [], [funding]);
-        const { authorization, context } = activeQuoteStateFor(base.verified);
-        const receiverAddress = new ArkAddress(serverKey, funding.receiverKey, "ark").encode();
-        const claim: ReceiverClaimWire = {
-            transferId: base.status.transferId,
-            receiverAddress,
-            state: "locked",
-            claimable: true,
-            updatedAt: NOW,
-            claim: {
-                params: structuredClone(authorization.quote.params),
-                covenantAddress: authorization.quote.covenantAddress,
-                outpoint: { ...base.status.outpoint },
-                fare: structuredClone(authorization.quote.fare),
-                batchExpiry: { kind: "height", value: "900000" },
-                recoveryLocktime: { kind: "height", value: context.params.locktime.toString() },
-            },
-        };
-        const coin = {
-            ...funding.coin,
-            tapTree: funding.walletInput.input.tapTree,
-            forfeitTapLeafScript: funding.walletInput.input.tapLeafScript,
-            intentTapLeafScript: funding.walletInput.input.tapLeafScript,
-        } as unknown as ExtendedVirtualCoin;
-        const listeners = new Map<string, (event: { data: string }) => void>();
-        vi.stubGlobal(
-            "EventSource",
-            class {
-                addEventListener(type: string, listener: (event: { data: string }) => void) {
-                    listeners.set(type, listener);
-                }
-                removeEventListener() {}
-                close() {}
-            },
-        );
-        vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
-        const stages = new Map<number, string[]>();
-        const trip = async (route: string) => {
-            const at = Date.now();
-            stages.set(at, [...(stages.get(at) ?? []), route].sort());
-            await new Promise((resolve) => setTimeout(resolve, RTT));
-        };
-        const slow =
-            (reply: (input: string | URL | Request, init?: RequestInit) => Promise<Response>) =>
-            async (input: string | URL | Request, init?: RequestInit) => {
-                const url = new URL(String(input));
-                await trip(`${url.host.split(".")[0]} ${url.pathname.split("/")[2]}`);
-                return reply(input, init);
-            };
-        vi.stubGlobal("fetch", slow(base.fetcher));
-        let stop = () => {};
-        try {
-            const offer = new Promise<VerifiedClaim>((onOffer, onError) => {
-                stop = watchReceiverClaims(
-                    createClaimWatch({
-                        context: {
-                            serverKey,
-                            emulatorKey,
-                            hrp: "ark",
-                            dust: 330n,
-                            vtxoMinAmount: VTXO_MIN,
-                            locktimeDomain: "height",
-                            clock: () => trip("chain tip").then(() => 800_000n),
-                        },
-                        network: "regtest",
-                        arkdUrl: "https://arkd.example",
-                        serverUnrollScript: hex.encode(unroll.script),
-                        fetch: slow(async (input) =>
-                            json(String(input).endsWith("/v1/info") ? info() : base.status),
-                        ),
-                        taxis: [
-                            {
-                                network: "regtest",
-                                url: "https://taxi.example",
-                                operatorKey: hex.encode(operatorKey),
-                            },
-                        ],
-                        receiverAddress,
-                        onOffer,
-                        onGone: () => {},
-                        onError,
-                    }),
-                );
-            });
-            listeners.get("claims-snapshot")!({ data: JSON.stringify({ claims: [claim] }) });
-            const txid = await drive(
-                offer.then((verified) =>
-                    claimVerified(
-                        verified,
-                        planReceiverClaim(verified.claim, [coin]) as RecyclePlan,
-                        funding.walletInput.identity,
-                    ),
-                ),
-            );
-            expect(txid).toBe(base.submitted()!.id);
-            expect([...stages.values()]).toEqual([
-                ["chain tip", "taxi info"],
-                ["arkd info", "emulator info"],
-                ["arkd indexer"],
-                ["taxi transfers"],
-                ["arkd indexer", "arkd info", "emulator info"],
-                ["arkd indexer", "arkd info", "emulator info"],
-                ["arkd info", "emulator info"],
-                ["emulator tx"],
-            ]);
-        } finally {
-            stop();
-            vi.useRealTimers();
-        }
     });
 });

@@ -95,20 +95,8 @@ export const arkadeContextOf = (
     };
 };
 
-// ponytail: one client per Taxi URL and fetch for the session; evict if a wallet ever meets many Taxis.
-const clients = new WeakMap<typeof fetch, Map<string, TaxiClient>>();
-
-/** Shared per URL and fetch, so a probe's /v1/info read also serves the send and the claim watch. */
-export const taxiClient = (url: string, fetchImpl: typeof fetch = boundedFetch): TaxiClient => {
-    const byUrl = clients.get(fetchImpl) ?? new Map<string, TaxiClient>();
-    clients.set(fetchImpl, byUrl);
-    let client = byUrl.get(url);
-    if (client === undefined) {
-        client = new TaxiClient({ baseUrl: url, fetch: (input, init) => fetchImpl(input, init) });
-        byUrl.set(url, client);
-    }
-    return client;
-};
+export const taxiClient = (url: string, fetchImpl: typeof fetch = boundedFetch) =>
+    new TaxiClient({ baseUrl: url, fetch: (input, init) => fetchImpl(input, init) });
 
 export const boundedFetch: typeof fetch = (input, init) => {
     const timeout = AbortSignal.timeout(10_000);

@@ -95,7 +95,6 @@ export interface TaxiClientOptions {
 
 type ClaimEventName = "claims-snapshot" | "claims-changed";
 const MAX_RECEIVER_BATCH = 64;
-const INFO_TTL_MS = 30_000;
 
 export interface EventSourceLike {
     addEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
@@ -211,13 +210,9 @@ export interface RequestVerifiedSponsoredQuoteArgs extends Omit<
     >;
 }
 
-// Cheap to repeat: a not_ready refusal is the Taxi's admission check, made before any quote
-// work, and a status read is one row.
-export const retryDelay = (since: number): number => (Date.now() - since < 2_000 ? 500 : 1_000);
-
 export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promise<T> => {
-    const start = Date.now();
-    const deadline = start + 30_000;
+    const deadline = Date.now() + 30_000;
+    let delay = 1_000;
     for (;;) {
         try {
             return await request();
@@ -225,12 +220,10 @@ export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promi
             if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
             if (Date.now() >= deadline) throw cause;
             await new Promise<void>((resolve) =>
-                setTimeout(
-                    resolve,
-                    Math.min(retryDelay(start), Math.max(0, deadline - Date.now())),
-                ),
+                setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))),
             );
             if (Date.now() >= deadline) throw cause;
+            delay = Math.min(delay * 2, 4_000);
         }
     }
 };
@@ -250,7 +243,6 @@ export class TaxiClient {
     private readonly baseUrl: string;
     private readonly fetchImpl: typeof fetch;
     private readonly eventSourceFactory: ((url: string) => EventSourceLike) | undefined;
-    private cachedInfo: { at: number; read: Promise<InfoResponse> } | undefined;
 
     constructor(opts: TaxiClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -262,31 +254,10 @@ export class TaxiClient {
                 : (url) => new globalThis.EventSource(url) as unknown as EventSourceLike);
     }
 
-    /** One read serves this client for 30 s; a failed read is never kept. */
     async info(): Promise<InfoResponse> {
-        let entry = this.cachedInfo;
-        if (entry === undefined || Math.abs(Date.now() - entry.at) >= INFO_TTL_MS) {
-            const read = this.request("GET", "/v1/info").then((body) => {
-                decodeInfo(body as InfoResponse);
-                return body as InfoResponse;
-            });
-            const fresh = (entry = { at: Date.now(), read });
-            this.cachedInfo = fresh;
-            read.catch(() => {
-                if (this.cachedInfo === fresh) this.cachedInfo = undefined;
-            });
-        }
-        return JSON.parse(JSON.stringify(await entry.read)) as InfoResponse;
-    }
-
-    /** A quote failing verification may be failing against a stale read, so the next one is fresh. */
-    private againstInfo<A, T>(verify: (args: A) => T, args: A): T {
-        try {
-            return verify(args);
-        } catch (error) {
-            this.cachedInfo = undefined;
-            throw error;
-        }
+        const body = (await this.request("GET", "/v1/info")) as InfoResponse;
+        decodeInfo(body);
+        return body;
     }
 
     async requestQuote(req: QuoteRequest): Promise<QuoteResponse> {
@@ -338,10 +309,10 @@ export class TaxiClient {
         const request = immutablePlainCopy(raw, "verified receive quote request");
         await preflightReceiveRequest(request);
         const info = await this.info();
-        this.againstInfo(assertProtocolVersion, info.protocolVersion);
+        assertProtocolVersion(info.protocolVersion);
         const quote = await this.requestReceiveQuote(request);
         return {
-            verified: this.againstInfo(verifyReceiveQuote, {
+            verified: verifyReceiveQuote({
                 quote,
                 info,
                 trustedServerKey: request.trustedServerKey,
@@ -393,7 +364,7 @@ export class TaxiClient {
         const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
         const receiverKey = receiver.vtxoTaprootKey;
         const info = await this.info();
-        this.againstInfo(assertProtocolVersion, info.protocolVersion);
+        assertProtocolVersion(info.protocolVersion);
         const quote = await this.requestQuote({
             ...request,
             receiverKey,
@@ -401,7 +372,7 @@ export class TaxiClient {
             senderInputs,
             senderSats,
         });
-        const verified = this.againstInfo(verifyQuote, {
+        const verified = verifyQuote({
             ...request,
             quote,
             info,
@@ -482,7 +453,7 @@ export class TaxiClient {
             senderInputs,
             senderSats,
         });
-        const verified = this.againstInfo(verifySponsoredQuote, {
+        const verified = verifySponsoredQuote({
             ...request,
             quote,
             info,
