@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createServiceLifecycle, type LifecycleDeps } from "../src/lifecycle.js";
+import {
+    createBackgroundLoops,
+    createServiceLifecycle,
+    type LifecycleDeps,
+} from "../src/lifecycle.js";
 
 function harness(over: Partial<LifecycleDeps> = {}) {
     const calls: string[] = [];
@@ -276,5 +280,154 @@ describe("service lifecycle", () => {
         await expect(h.lifecycle.stop()).resolves.toEqual({ ok: false, code: "shutdown_failed" });
         expect(h.calls).toContain("force-shutdown_failed");
         expect(h.calls).not.toContain("close-database");
+    });
+});
+
+describe("steady-state background loops", () => {
+    afterEach(() => void vi.useRealTimers());
+    const INTERVAL = 100;
+    const fakeInterval = () =>
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout"] });
+    const flush = async (times = 3) => {
+        for (let i = 0; i < times; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+
+    it("refreshes freshness every interval while one reconcile pass stays in flight", async () => {
+        fakeInterval();
+        const calls: string[] = [];
+        let reconciles = 0;
+        const never = new Promise<void>(() => {});
+        const loops = createBackgroundLoops({
+            intervalMs: INTERVAL,
+            reconcile: () => {
+                reconciles += 1;
+                return never;
+            },
+            verifyRecovery: async () => {
+                calls.push("verify");
+                return { chainHeight: 7n, chainTime: 9n };
+            },
+            sweep: async (chainHeight, chainTime) => {
+                calls.push(`sweep:${chainHeight}:${chainTime}`);
+            },
+            lendingGate: async () => void calls.push("lending"),
+            onError: (_loop, error) => {
+                throw error;
+            },
+        });
+        loops.start();
+        loops.start();
+        try {
+            await vi.advanceTimersByTimeAsync(5 * INTERVAL);
+        } finally {
+            loops.stop();
+        }
+
+        expect(reconciles).toBe(1);
+        expect(calls.slice(0, 3)).toEqual(["verify", "sweep:7:9", "lending"]);
+        for (const call of ["verify", "sweep:7:9", "lending"])
+            expect(calls.filter((entry) => entry === call)).toHaveLength(5);
+    });
+
+    it("never overlaps two passes of the same loop", async () => {
+        fakeInterval();
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (release = resolve));
+        let concurrent = 0;
+        let peak = 0;
+        let entries = 0;
+        const loops = createBackgroundLoops({
+            intervalMs: INTERVAL,
+            reconcile: async () => {},
+            verifyRecovery: async () => {
+                entries += 1;
+                peak = Math.max(peak, ++concurrent);
+                await held;
+                concurrent -= 1;
+                return { chainHeight: null, chainTime: null };
+            },
+            sweep: async () => {},
+            lendingGate: async () => {},
+            onError: (_loop, error) => {
+                throw error;
+            },
+        });
+        loops.start();
+        await vi.advanceTimersByTimeAsync(5 * INTERVAL);
+
+        expect({ entries, peak }).toEqual({ entries: 1, peak: 1 });
+        release();
+        loops.stop();
+        await loops.drain();
+    });
+
+    it("refreshes the lending gate and reports the loop when the runtime check throws", async () => {
+        fakeInterval();
+        const errors: { loop: string; message: string }[] = [];
+        let gates = 0;
+        let sweeps = 0;
+        const loops = createBackgroundLoops({
+            intervalMs: INTERVAL,
+            reconcile: async () => {},
+            verifyRecovery: async () => {
+                throw new Error("runtime_unsafe");
+            },
+            sweep: async () => void (sweeps += 1),
+            lendingGate: async () => void (gates += 1),
+            onError: (loop, error) => void errors.push({ loop, message: (error as Error).message }),
+        });
+        loops.start();
+        try {
+            await vi.advanceTimersByTimeAsync(2 * INTERVAL);
+        } finally {
+            loops.stop();
+        }
+
+        expect({ gates, sweeps }).toEqual({ gates: 2, sweeps: 0 });
+        expect(errors).toEqual([
+            { loop: "freshness", message: "runtime_unsafe" },
+            { loop: "freshness", message: "runtime_unsafe" },
+        ]);
+    });
+
+    it("drains both loops on stop and runs no further tick", async () => {
+        fakeInterval();
+        let releaseFreshness!: () => void;
+        let releaseReconcile!: () => void;
+        const freshnessHeld = new Promise<void>((resolve) => (releaseFreshness = resolve));
+        const reconcileHeld = new Promise<void>((resolve) => (releaseReconcile = resolve));
+        const done: string[] = [];
+        let starts = 0;
+        const loops = createBackgroundLoops({
+            intervalMs: INTERVAL,
+            reconcile: async () => {
+                starts += 1;
+                await reconcileHeld;
+                done.push("reconcile");
+            },
+            verifyRecovery: async () => {
+                starts += 1;
+                await freshnessHeld;
+                return { chainHeight: null, chainTime: null };
+            },
+            sweep: async () => {},
+            lendingGate: async () => void done.push("freshness"),
+            onError: (_loop, error) => {
+                throw error;
+            },
+        });
+        loops.start();
+        await vi.advanceTimersByTimeAsync(INTERVAL);
+        loops.stop();
+        const drained = loops.drain();
+        await vi.advanceTimersByTimeAsync(10 * INTERVAL);
+
+        expect({ starts, done }).toEqual({ starts: 2, done: [] });
+        releaseFreshness();
+        releaseReconcile();
+        await drained;
+        await flush();
+        expect([...done].sort()).toEqual(["freshness", "reconcile"]);
+        expect(starts).toBe(2);
     });
 });

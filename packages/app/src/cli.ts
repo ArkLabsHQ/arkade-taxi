@@ -33,7 +33,11 @@ import { custodySolvencyView } from "./custody.js";
 import { createSwapFillReconciler } from "./swapFillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
-import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
+import {
+    createBackgroundLoops,
+    createServiceLifecycle,
+    shutdownFatalDiagnostic,
+} from "./lifecycle.js";
 import { createProceedsCollector } from "./proceeds.js";
 import { createBoarding } from "./boarding.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
@@ -222,7 +226,7 @@ async function runServe(): Promise<void> {
 
     let lifecycle: ReturnType<typeof createServiceLifecycle>;
     let running = false;
-    let timer: ReturnType<typeof setInterval> | undefined;
+    let loops: ReturnType<typeof createBackgroundLoops> | undefined;
     let watcherStop: Promise<void> | undefined;
     let closeServer: Promise<void> | undefined;
     const servers: ReturnType<typeof serve>[] = [];
@@ -395,22 +399,29 @@ async function runServe(): Promise<void> {
         startStreams: () => timed("lifecycle.streams", () => watcher.start()),
         startBackground(prompt) {
             running = true;
-            timer = setInterval(
-                () =>
-                    void timed("lifecycle.refresh", prompt).catch((error) =>
-                        log.error(
-                            { error: sanitizeOperationalError(error, "operational tick failed") },
-                            "operational tick failed",
-                        ),
+            loops = createBackgroundLoops({
+                intervalMs: config.reconcileIntervalMs,
+                reconcile: () => timed("lifecycle.refresh", prompt),
+                verifyRecovery: () =>
+                    timed("lifecycle.freshnessRuntime", () => runtime.assertRecovery()),
+                sweep: async (chainHeight, chainTime) => {
+                    await timed("lifecycle.freshnessSweep", () =>
+                        sweeper.tick(chainHeight, chainTime),
+                    );
+                },
+                lendingGate: () => timed("lifecycle.freshnessCustody", () => reconciler.custody()),
+                onError: (loop, error) =>
+                    log.error(
+                        { loop, error: sanitizeOperationalError(error, "operational tick failed") },
+                        "operational tick failed",
                     ),
-                config.reconcileIntervalMs,
-            );
+            });
+            loops.start();
         },
         stopBackground() {
             shutdown.abort();
             running = false;
-            if (timer) clearInterval(timer);
-            timer = undefined;
+            loops?.stop();
         },
         stopRuntime: () => runtime.stop(),
         abort() {
@@ -420,7 +431,7 @@ async function runServe(): Promise<void> {
             watcherStop ??= watcher.stop();
         },
         async drain() {
-            await Promise.all([watcherStop, submission.drain(), proceeds.drain()]);
+            await Promise.all([loops?.drain(), watcherStop, submission.drain(), proceeds.drain()]);
         },
         disposeProviders: () => timed("lifecycle.dispose", () => runtime.dispose()),
         closeDatabase: () => db.close(),

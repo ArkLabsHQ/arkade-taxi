@@ -177,3 +177,63 @@ export function createServiceLifecycle(deps: LifecycleDeps) {
 
     return { start, refresh, stop, status: (): LifecycleStatus => ({ ...state }) };
 }
+
+type LoopName = "freshness" | "reconcile";
+
+export interface BackgroundLoopDeps {
+    intervalMs: number;
+    /** The reconcile chain, i.e. the lifecycle's own `refresh`. */
+    reconcile(): Promise<void>;
+    /** Republishes the runtime snapshot and reports the sweep's chain clock. */
+    verifyRecovery(): Promise<{ chainHeight: bigint | null; chainTime: bigint | null }>;
+    sweep(chainHeight: bigint | null, chainTime: bigint | null): Promise<void>;
+    /** The custody solvency pass the lending gate reads. */
+    lendingGate(): Promise<void>;
+    onError(loop: LoopName, error: unknown): void;
+}
+
+/**
+ * Steady state runs as two independent timers, so a slow watcher scan inside the
+ * reconcile chain cannot stale readiness, delay the recovery sweep or delay the
+ * lending gate. One in-flight promise per loop; startup stays serialized in
+ * `initialize`, which runs before either timer is installed.
+ */
+export function createBackgroundLoops(deps: BackgroundLoopDeps) {
+    const timers: ReturnType<typeof setInterval>[] = [];
+    const pending = new Map<LoopName, Promise<void>>();
+
+    const freshness = async (): Promise<void> => {
+        try {
+            const safety = await deps.verifyRecovery();
+            await deps.sweep(safety.chainHeight, safety.chainTime);
+        } finally {
+            // What is owed is not conditional on whether recovery may submit.
+            await deps.lendingGate();
+        }
+    };
+
+    const run = (loop: LoopName, work: () => Promise<void>): Promise<void> => {
+        const existing = pending.get(loop);
+        if (existing) return existing;
+        const started = (async () => work())()
+            .catch((error: unknown) => deps.onError(loop, error))
+            .finally(() => pending.delete(loop));
+        pending.set(loop, started);
+        return started;
+    };
+
+    return {
+        start() {
+            if (timers.length) return;
+            for (const [loop, work] of [
+                ["freshness", freshness],
+                ["reconcile", () => deps.reconcile()],
+            ] as const)
+                timers.push(setInterval(() => void run(loop, work), deps.intervalMs));
+        },
+        stop() {
+            for (const timer of timers.splice(0)) clearInterval(timer);
+        },
+        drain: (): Promise<void> => Promise.all([...pending.values()]).then(() => {}),
+    };
+}
