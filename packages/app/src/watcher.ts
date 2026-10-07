@@ -610,7 +610,8 @@ async function classifySpend(
                 !Number.isSafeInteger(exactReceiverCoin.createdAt.getTime()) ||
                 exactReceiverCoin.createdAt.getTime() < 0 ||
                 exactReceiverCoin.isUnrolled !== false ||
-                exactReceiverCoin.isSwept !== false ||
+                // Already spent above, so its batch may since have been swept.
+                typeof exactReceiverCoin.isSwept !== "boolean" ||
                 typeof exactReceiverCoin.isPreconfirmed !== "boolean" ||
                 typeof exactReceiverCoin.status?.confirmed !== "boolean" ||
                 typeof exactReceiverCoin.status.isLeaf !== "boolean" ||

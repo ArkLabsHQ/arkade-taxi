@@ -1252,12 +1252,6 @@ describe("canonical covenant observation", () => {
             },
         ],
         [
-            "swept status",
-            (coin) => {
-                coin.isSwept = true;
-            },
-        ],
-        [
             "unrolled status",
             (coin) => {
                 coin.isUnrolled = true;
@@ -1284,6 +1278,21 @@ describe("canonical covenant observation", () => {
             state.db.close();
         },
     );
+
+    it("accepts a first recycle observation whose receiver funding is already swept", async () => {
+        const state = await setup("recycled");
+        const receiver = [...state.coins.entries()].find(
+            ([key]) => key !== `${state.outpoint.txid}:${state.outpoint.vout}`,
+        )![1];
+        receiver.isSwept = true;
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recycled",
+            spentTxid: state.finalArk!.id,
+        });
+        expect(state.policy.get().paused).toBe(false);
+        state.db.close();
+    });
 
     it.each([
         ["version", (checkpoint: Transaction) => setVersion(checkpoint, 2)],
@@ -1832,6 +1841,25 @@ describe("canonical covenant observation", () => {
             failureCode: "covenant_observation_disagreement",
         });
         expect(state.policy.get().paused).toBe(true);
+        state.db.close();
+    });
+
+    it("keeps a settled recycle whose receiver funding coin is later swept", async () => {
+        const state = await setup("recycled");
+        await state.watcher.catchUp();
+        const receiver = [...state.coins.entries()].find(
+            ([key]) => key !== `${state.outpoint.txid}:${state.outpoint.vout}`,
+        )![1];
+        receiver.isSwept = true;
+        state.setTip({ hash: "4e".repeat(32), height: 700001, time: NOW + 1 });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureDetail).toBeUndefined();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recycled",
+            observationTipHeight: 700001,
+        });
+        expect(state.policy.get().paused).toBe(false);
+        expect(state.watcher.status().blockers).toEqual([]);
         state.db.close();
     });
 
