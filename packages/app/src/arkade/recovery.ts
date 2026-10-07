@@ -452,6 +452,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                   ),
               ])
             : undefined;
+    const v2 = script.options.params.covenantVersion === 2;
     const transferAssets =
         id && units
             ? Packet.create([
@@ -459,7 +460,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                       AssetId.fromString(id),
                       null,
                       [AssetInput.create(0, units)],
-                      [AssetOutput.create(1, units)],
+                      [AssetOutput.create(v2 ? 0 : 1, units)],
                       [],
                   ),
               ])
@@ -474,20 +475,31 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     const topup = refundTopup(script.options.params, config.vtxoMinAmount);
     const recoveryKey =
         advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey;
-    const outputs = [
-        {
-            amount: topup,
-            script: payoutPkScript(advance.operatorKey, topup, advance.dust),
-        },
-        {
-            amount: lockup - topup,
-            script: payoutPkScript(recoveryKey, lockup - topup, advance.dust),
-        },
-        Extension.create([
-            ...(transferAssets ? [transferAssets] : []),
-            EmulatorPacket.create([{ vin: 0, script: script.covenant.refund }]),
-        ]).txOut(),
-    ];
+    const extension = Extension.create([
+        ...(transferAssets ? [transferAssets] : []),
+        EmulatorPacket.create([
+            { vin: 0, script: script.covenant.reclaim ?? script.covenant.refund },
+        ]),
+    ]).txOut();
+    const outputs = v2
+        ? [
+              {
+                  amount: lockup,
+                  script: payoutPkScript(advance.operatorKey, lockup, advance.dust),
+              },
+              extension,
+          ]
+        : [
+              {
+                  amount: topup,
+                  script: payoutPkScript(advance.operatorKey, topup, advance.dust),
+              },
+              {
+                  amount: lockup - topup,
+                  script: payoutPkScript(recoveryKey, lockup - topup, advance.dust),
+              },
+              extension,
+          ];
     let unroll: CSVMultisigTapscript.Type;
     try {
         unroll = CSVMultisigTapscript.decode(hex.decode(serverUnrollScript));

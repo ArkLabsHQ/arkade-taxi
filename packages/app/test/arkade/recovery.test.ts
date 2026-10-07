@@ -78,6 +78,7 @@ const sourceAdvance = (
             | "exitDelay"
             | "topup"
             | "paymentSats"
+            | "covenantVersion"
         >
     > = {},
 ) => {
@@ -374,6 +375,65 @@ describe("recovery graph", () => {
             amount: 20n,
             script: payoutPkScript(row.senderKey, 20n, row.dust),
         });
+    });
+
+    it("reclaims a v2 covenant whole to the operator through the reclaim leaf", () => {
+        const row = sourceAdvance("height", false, {
+            topup: 330n,
+            paymentSats: 20n,
+            covenantVersion: 2,
+        });
+        const intent = buildRecoveryIntent(row, config());
+        const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
+        const covenant = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: config().vtxoMinAmount,
+            params: covenantParamsOf(row),
+        });
+
+        expect(arkTx.outputsLength).toBe(3);
+        expect(arkTx.getOutput(0)).toEqual({
+            amount: 350n,
+            script: payoutPkScript(row.operatorKey, 350n, row.dust),
+        });
+        expect(arkTx.getOutput(2)).toEqual(P2A);
+        expect(
+            Extension.fromTx(arkTx)
+                .getEmulatorPacket()!
+                .entries.map((e) => hex.encode(e.script)),
+        ).toEqual([hex.encode(covenant.covenant.reclaim!)]);
+        expect(hex.encode(covenant.covenant.reclaim!)).not.toBe(
+            hex.encode(covenant.covenant.refund),
+        );
+        expect(intent.expectedTxid).toBe(arkTx.id);
+    });
+
+    it("round-trips a prepared v2 reclaim through startup without quarantine", () => {
+        const row = sourceAdvance("height", false, {
+            topup: 330n,
+            paymentSats: 20n,
+            covenantVersion: 2,
+        });
+        expect(() => assertRecoveryStartupInvariants([row], config())).not.toThrow();
+        expect(() =>
+            assertRecoveryStartupInvariants([preparedRecovery(row)], config()),
+        ).not.toThrow();
+        expect(startupError(preparedRecovery(row))).toBeUndefined();
+    });
+
+    it("moves a v2 reclaim's whole asset holding to the operator output", () => {
+        const row = sourceAdvance("height", true, { topup: 330n, covenantVersion: 2 });
+        const packet = Extension.fromTx(
+            Transaction.fromPSBT(base64.decode(buildRecoveryIntent(row, config()).arkTx)),
+        ).getAssetPacket()!.groups[0]!;
+
+        expect(packet.inputs.map((input) => [input.vin, input.amount])).toEqual([
+            [0, 9_007_199_254_740_993n],
+        ]);
+        expect(packet.outputs.map((output) => [output.vout, output.amount])).toEqual([
+            [0, 9_007_199_254_740_993n],
+        ]);
     });
 
     it("moves the exact persisted asset units to the sender receipt", () => {
