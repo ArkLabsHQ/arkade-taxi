@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import {
     ArkAddress,
     asset,
@@ -414,6 +415,24 @@ export const jsonResponse = (status: number, body: unknown): Response =>
         status,
         headers: { "content-type": "application/json" },
     });
+
+/** Runs a flow on fake timers, firing each pending timer only once the flow is blocked on it. */
+export const drive = async <T>(flow: Promise<T>): Promise<T> => {
+    let settled = false;
+    void flow.then(
+        () => (settled = true),
+        () => (settled = true),
+    );
+    for (let idle = 0; !settled;) {
+        await new Promise((resolve) => setImmediate(resolve));
+        if (settled) break;
+        if (vi.getTimerCount() > 0) {
+            idle = 0;
+            await vi.advanceTimersToNextTimerAsync();
+        } else if (++idle > 1_000) throw new Error("flow stalled without a pending timer");
+    }
+    return flow;
+};
 
 export type FetchCall = { url: string; init: RequestInit };
 
