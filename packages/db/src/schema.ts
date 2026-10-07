@@ -3,6 +3,13 @@ import type { AdvanceState } from "@arkade-taxi/core";
 
 export interface Migration {
     id: number;
+    /**
+     * Whether a build that knows nothing of this migration may still open the
+     * database afterwards: every table and column it reads still present, with
+     * the same type and the same meaning. Schema readability only — it cannot
+     * express a one-way deploy that depends on rows.
+     */
+    compat: "additive" | "breaking";
     up: string;
 }
 
@@ -173,9 +180,10 @@ CREATE TABLE proceeds_inputs (
 `;
 
 export const MIGRATIONS: readonly Migration[] = [
-    { id: 1, up: INITIAL_SCHEMA },
+    { id: 1, compat: "additive", up: INITIAL_SCHEMA },
     {
         id: 2,
+        compat: "additive",
         // Sponsored direct sends reuse the advances table: `locked` is their
         // terminal state, so no state CHECK changes. Existing rows default to
         // the covenant flow they were written by.
@@ -184,6 +192,7 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 3,
+        compat: "additive",
         // Sponsored swap fills live in their own tables: new states, new
         // reservation scope, no edits to the advances schema or its rows.
         up: `CREATE TABLE swap_fills (
@@ -242,6 +251,7 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 4,
+        compat: "additive",
         // The settlement proof identifies sponsor outputs by script, so the
         // sponsor script is stored beside the solver proceeds script. Rows
         // predate deployment, so no backfill beyond the empty default.
@@ -249,6 +259,7 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 5,
+        compat: "additive",
         // Additive and nullable: NULL is the legacy four-leaf covenant, so no
         // row is rewritten and no address changes.
         up: `ALTER TABLE advances ADD COLUMN claim_mode TEXT
@@ -256,11 +267,13 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 6,
+        compat: "additive",
         up: `ALTER TABLE advances ADD COLUMN recovery_recipient TEXT
             CHECK (recovery_recipient IS NULL OR recovery_recipient IN ('sender', 'receiver'))`,
     },
     {
         id: 7,
+        compat: "additive",
         up: `CREATE TABLE receive_quotes (
             id TEXT PRIMARY KEY,
             state TEXT NOT NULL CHECK (state IN ('quoted', 'bound', 'expired')),
@@ -304,12 +317,14 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 8,
+        compat: "additive",
         up: `ALTER TABLE swap_fills ADD COLUMN receive_quote_id TEXT;
         CREATE UNIQUE INDEX swap_fills_receive_quote ON swap_fills (receive_quote_id)
             WHERE receive_quote_id IS NOT NULL;`,
     },
     {
         id: 9,
+        compat: "additive",
         // Additive and nullable: NULL is a fill quoted without a caller
         // deadline, which is the legacy operator-TTL-only behaviour.
         up: `ALTER TABLE swap_fills ADD COLUMN valid_until INTEGER
@@ -317,6 +332,7 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 10,
+        compat: "additive",
         // Additive and nullable on both tables. NULL is a sender-paid transfer, which
         // is every row written before this migration. `advances` matters as much as
         // `receive_quotes`: the claim feed and every recovery rebuild read the advance,
@@ -335,6 +351,7 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 11,
+        compat: "additive",
         // Additive and nullable: SQLite cannot add a NOT NULL column without a
         // default, and a default here would be an address nobody can reproduce.
         // A NULL is a pre-exit-leaf row, and fromRow refuses to read one.
@@ -346,11 +363,75 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 12,
+        compat: "additive",
         // NULL is a dust-unit covenant, whose address must keep rebuilding unchanged.
         up: `ALTER TABLE advances ADD COLUMN payment_sats INTEGER
                 CHECK (payment_sats IS NULL OR payment_sats > 0)`,
     },
 ];
+
+/** Every table and column this build reads, keyed by the migration that added it. */
+const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; type: string }[] = [
+    { since: 1, table: "advances", column: "asset_units", type: "INTEGER" },
+    { since: 1, table: "proceeds_jobs", column: "lease_until", type: "INTEGER" },
+    { since: 1, table: "proceeds_inputs", column: "job_id", type: "TEXT" },
+    { since: 1, table: "proceeds_jobs", column: "submission_state", type: "TEXT" },
+    { since: 1, table: "proceeds_local_intents", column: "digest", type: "TEXT" },
+    { since: 2, table: "advances", column: "kind", type: "TEXT" },
+    { since: 3, table: "swap_fills", column: "graph_id", type: "TEXT" },
+    { since: 3, table: "swap_fill_reservations", column: "fill_id", type: "TEXT" },
+    { since: 4, table: "swap_fills", column: "sponsor_script", type: "TEXT" },
+    { since: 5, table: "advances", column: "claim_mode", type: "TEXT" },
+    { since: 6, table: "advances", column: "recovery_recipient", type: "TEXT" },
+    { since: 7, table: "receive_quotes", column: "input_expiry_floor_value", type: "INTEGER" },
+    { since: 7, table: "receive_quote_reservations", column: "quote_id", type: "TEXT" },
+    { since: 8, table: "swap_fills", column: "receive_quote_id", type: "TEXT" },
+    { since: 9, table: "swap_fills", column: "valid_until", type: "INTEGER" },
+    { since: 10, table: "advances", column: "receiver_fare_currency", type: "TEXT" },
+    { since: 11, table: "advances", column: "exit_signer_key", type: "BLOB" },
+    { since: 12, table: "advances", column: "payment_sats", type: "INTEGER" },
+];
+
+function missingSchema(db: Database, upto: number): string[] {
+    const probe = db.prepare<[string, string, string], { present: number }>(
+        "SELECT 1 AS present FROM pragma_table_info(?) WHERE name = ? AND type = ?",
+    );
+    return REQUIRED_SCHEMA.filter(
+        (c) => c.since <= upto && !probe.get(c.table, c.column, c.type),
+    ).map((c) => `${c.table}.${c.column} ${c.type}`);
+}
+
+/** The newest `breaking` migration applied. Absent is refused: a forgotten
+ * write must not read as permission. */
+function minReaderVersion(db: Database): number | undefined {
+    const table = db
+        .prepare<[], { present: number }>(
+            "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'schema_compat'",
+        )
+        .get();
+    if (!table) return undefined;
+    const row = db
+        .prepare<[], { v: bigint }>(
+            "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+        )
+        .safeIntegers(true)
+        .get();
+    return row && Number(row.v);
+}
+
+function recordMinReaderVersion(db: Database, ordered: readonly Migration[], target: number): void {
+    const breaking = ordered.filter((m) => m.id <= target && m.compat === "breaking");
+    db.exec(
+        `CREATE TABLE IF NOT EXISTS schema_compat (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            min_reader_version INTEGER NOT NULL
+        )`,
+    );
+    db.prepare(
+        `INSERT INTO schema_compat (id, min_reader_version) VALUES (1, ?)
+         ON CONFLICT (id) DO UPDATE SET min_reader_version = excluded.min_reader_version`,
+    ).run(breaking.length === 0 ? 0 : Math.max(...breaking.map((m) => m.id)));
+}
 
 export function applyMigrations(db: Database, migrations: readonly Migration[] = MIGRATIONS): void {
     const ordered = [...migrations].sort((a, b) => a.id - b.id);
@@ -365,146 +446,32 @@ export function applyMigrations(db: Database, migrations: readonly Migration[] =
 
     const current = Number(db.pragma("user_version", { simple: true }));
     const maxKnown = Math.max(...ordered.map((m) => m.id));
-    const hasCanonicalV1 =
-        current > 0 &&
-        db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'asset_units' AND type = 'INTEGER'",
-            )
-            .get() &&
-        db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'lease_until' AND type = 'INTEGER'",
-            )
-            .get() &&
-        db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('proceeds_inputs') WHERE name = 'job_id' AND type = 'TEXT'",
-            )
-            .get() &&
-        db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('proceeds_jobs') WHERE name = 'submission_state' AND type = 'TEXT'",
-            )
-            .get() &&
-        db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('proceeds_local_intents') WHERE name = 'digest' AND type = 'TEXT'",
-            )
-            .get();
-    const hasKind =
-        hasCanonicalV1 &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'kind' AND type = 'TEXT'",
-            )
-            .get();
-    const hasSwapFills =
-        hasKind &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'graph_id' AND type = 'TEXT'",
-            )
-            .get() &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('swap_fill_reservations') WHERE name = 'fill_id' AND type = 'TEXT'",
-            )
-            .get();
-    const hasSponsorScript =
-        hasSwapFills &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'sponsor_script' AND type = 'TEXT'",
-            )
-            .get();
-    const hasClaimMode =
-        hasSponsorScript &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'claim_mode' AND type = 'TEXT'",
-            )
-            .get();
-    const hasRecoveryRecipient =
-        hasClaimMode &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'recovery_recipient' AND type = 'TEXT'",
-            )
-            .get();
-    const hasReceiveQuotes =
-        hasRecoveryRecipient &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('receive_quotes') WHERE name = 'input_expiry_floor_value' AND type = 'INTEGER'",
-            )
-            .get() &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('receive_quote_reservations') WHERE name = 'quote_id' AND type = 'TEXT'",
-            )
-            .get();
-    const hasReceiveQuoteLink =
-        hasReceiveQuotes &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'receive_quote_id' AND type = 'TEXT'",
-            )
-            .get();
-    const hasSwapFillDeadline =
-        hasReceiveQuoteLink &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('swap_fills') WHERE name = 'valid_until' AND type = 'INTEGER'",
-            )
-            .get();
-    const hasReceiverPaid =
-        hasSwapFillDeadline &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'receiver_fare_currency' AND type = 'TEXT'",
-            )
-            .get();
-    const hasExitParams =
-        hasReceiverPaid &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'exit_signer_key' AND type = 'BLOB'",
-            )
-            .get();
-    const hasPaymentSats =
-        hasExitParams &&
-        !!db
-            .prepare(
-                "SELECT 1 FROM pragma_table_info('advances') WHERE name = 'payment_sats' AND type = 'INTEGER'",
-            )
-            .get();
-    if (
-        migrations === MIGRATIONS &&
-        current > 0 &&
-        (current > maxKnown ||
-            (current === 1 && !hasCanonicalV1) ||
-            (current === 2 && !hasKind) ||
-            (current === 3 && !hasSwapFills) ||
-            (current === 4 && !hasSponsorScript) ||
-            (current === 5 && !hasClaimMode) ||
-            (current === 6 && !hasRecoveryRecipient) ||
-            (current === 7 && !hasReceiveQuotes) ||
-            (current === 8 && !hasReceiveQuoteLink) ||
-            (current === 9 && !hasSwapFillDeadline) ||
-            (current === 10 && !hasReceiverPaid) ||
-            (current === 11 && !hasExitParams) ||
-            (current === 12 && !hasPaymentSats))
-    )
-        throw new Error(
-            "Incompatible development schema: recreate the database before starting this service",
-        );
+    if (migrations === MIGRATIONS && current > 0) {
+        if (current > maxKnown) {
+            const minReader = minReaderVersion(db);
+            const missing = missingSchema(db, maxKnown);
+            const reasons: string[] = [];
+            if (minReader === undefined)
+                reasons.push("the database records no forward-compatibility marker");
+            else if (minReader > maxKnown)
+                reasons.push(`migration ${minReader} declared itself breaking`);
+            if (missing.length > 0) reasons.push(`missing or mistyped: ${missing.join(", ")}`);
+            if (reasons.length > 0)
+                throw new Error(
+                    `database is at schema ${current}, this build knows ${maxKnown}; refused because ${reasons.join("; ")}`,
+                );
+        } else if (missingSchema(db, current).length > 0)
+            throw new Error(
+                "Incompatible development schema: recreate the database before starting this service",
+            );
+    }
     const pending = ordered.filter((m) => m.id > current);
     if (pending.length === 0) return;
     const target = pending[pending.length - 1]!.id;
 
     db.transaction(() => {
         for (const m of pending) db.exec(m.up);
+        recordMinReaderVersion(db, ordered, target);
         // PRAGMA takes no bind parameter; `target` is a validated integer.
         db.pragma(`user_version = ${target}`);
     })();

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
-import { ADVANCE_STATES, applyMigrations, MIGRATIONS } from "../src/schema.js";
+import { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "../src/schema.js";
 import { AdvanceRepository } from "../src/advances.js";
 import { ReceiveQuoteRepository } from "../src/receiveQuotes.js";
 
@@ -190,6 +190,7 @@ describe("migrations", () => {
             "proceeds_local_intents",
             "receive_quote_reservations",
             "receive_quotes",
+            "schema_compat",
             "sqlite_sequence",
             "swap_fill_reservations",
             "swap_fills",
@@ -564,8 +565,8 @@ describe("migrations", () => {
         const db = fresh();
 
         applyMigrations(db, [
-            { id: 2, up: "INSERT INTO t (v) VALUES ('x')" },
-            { id: 1, up: "CREATE TABLE t (v TEXT)" },
+            { id: 2, compat: "additive", up: "INSERT INTO t (v) VALUES ('x')" },
+            { id: 1, compat: "additive", up: "CREATE TABLE t (v TEXT)" },
         ]);
 
         expect(db.prepare<[], { v: string }>("SELECT v FROM t").get()?.v).toBe("x");
@@ -574,11 +575,11 @@ describe("migrations", () => {
 
     it("skips migrations at or below the current user_version", () => {
         const db = fresh();
-        applyMigrations(db, [{ id: 1, up: "CREATE TABLE t (v TEXT)" }]);
+        applyMigrations(db, [{ id: 1, compat: "additive", up: "CREATE TABLE t (v TEXT)" }]);
 
         applyMigrations(db, [
-            { id: 1, up: "SELECT raise_error_if_reapplied" },
-            { id: 2, up: "CREATE TABLE u (v TEXT)" },
+            { id: 1, compat: "additive", up: "SELECT raise_error_if_reapplied" },
+            { id: 2, compat: "additive", up: "CREATE TABLE u (v TEXT)" },
         ]);
 
         expect(tableNames(db)).toEqual(expect.arrayContaining(["t", "u"]));
@@ -590,8 +591,8 @@ describe("migrations", () => {
 
         expect(() =>
             applyMigrations(db, [
-                { id: 1, up: "CREATE TABLE t (v TEXT)" },
-                { id: 2, up: "CREATE TABLE ((( syntax error" },
+                { id: 1, compat: "additive", up: "CREATE TABLE t (v TEXT)" },
+                { id: 2, compat: "additive", up: "CREATE TABLE ((( syntax error" },
             ]),
         ).toThrow();
 
@@ -602,13 +603,76 @@ describe("migrations", () => {
     it("rejects duplicate or non-integer migration ids", () => {
         expect(() =>
             applyMigrations(fresh(), [
-                { id: 1, up: "CREATE TABLE a (v TEXT)" },
-                { id: 1, up: "CREATE TABLE b (v TEXT)" },
+                { id: 1, compat: "additive", up: "CREATE TABLE a (v TEXT)" },
+                { id: 1, compat: "additive", up: "CREATE TABLE b (v TEXT)" },
             ]),
         ).toThrow(/duplicate/i);
         expect(() =>
-            applyMigrations(fresh(), [{ id: 1.5, up: "CREATE TABLE a (v TEXT)" }]),
+            applyMigrations(fresh(), [
+                { id: 1.5, compat: "additive", up: "CREATE TABLE a (v TEXT)" },
+            ]),
         ).toThrow(/integer/i);
+    });
+});
+
+describe("rollback onto a newer schema", () => {
+    // Plays both binaries with the real code: the explicit list is the future
+    // build that migrates, the default MIGRATIONS is the one rolled back onto it.
+    const ahead = (compat: Migration["compat"], up: string): Database => {
+        const db = fresh();
+        applyMigrations(db, [...MIGRATIONS, { id: 13, compat, up }]);
+        expect(userVersion(db)).toBe(13);
+        return db;
+    };
+    const ADD_COLUMN = "ALTER TABLE advances ADD COLUMN covenant_version INTEGER";
+
+    it("starts against an additive newer schema", () => {
+        const db = ahead("additive", ADD_COLUMN);
+        try {
+            expect(() => applyMigrations(db)).not.toThrow();
+            expect(userVersion(db)).toBe(13);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("refuses a newer schema that dropped a column this build reads", () => {
+        const db = ahead("additive", "ALTER TABLE advances DROP COLUMN payment_sats");
+        const before = db.serialize();
+        try {
+            expect(() => applyMigrations(db)).toThrow(
+                /database is at schema 13, this build knows 12;[\s\S]*payment_sats/,
+            );
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("refuses an additive newer schema whose migration declared itself breaking", () => {
+        const db = ahead("breaking", ADD_COLUMN);
+        const before = db.serialize();
+        try {
+            expect(() => applyMigrations(db)).toThrow(
+                /database is at schema 13, this build knows 12;[\s\S]*migration 13/,
+            );
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("refuses a newer schema that records no compatibility marker", () => {
+        const db = migrated();
+        db.exec(`${ADD_COLUMN}; DROP TABLE schema_compat`);
+        db.pragma("user_version = 13");
+        try {
+            expect(() => applyMigrations(db)).toThrow(
+                /database is at schema 13, this build knows 12;[\s\S]*no forward-compatibility marker/,
+            );
+        } finally {
+            db.close();
+        }
     });
 });
 

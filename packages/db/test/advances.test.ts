@@ -553,6 +553,20 @@ describe("round-trip fidelity", () => {
         expect(repo.get("nope")).toBeUndefined();
         expect(() => repo.insert(advance())).toThrow(/UNIQUE constraint failed/);
     });
+
+    // The premise the schema-guard relaxation rests on: a build rolled back onto
+    // a newer schema prepares its `SELECT *` against the extra column.
+    it("decodes a row unchanged through a column this build does not know", () => {
+        repo.insert(advance({ id: "ahead", state: "locked" }));
+        const before = repo.get("ahead");
+
+        db.exec("ALTER TABLE advances ADD COLUMN covenant_version INTEGER");
+        db.prepare("UPDATE advances SET covenant_version = 2 WHERE id = 'ahead'").run();
+
+        const rolledBack = new AdvanceRepository(db);
+        expect(rolledBack.get("ahead")).toEqual(before);
+        expect(rolledBack.byState("locked")).toEqual([before]);
+    });
 });
 
 describe("queries", () => {
