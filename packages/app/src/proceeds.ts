@@ -907,7 +907,7 @@ export function createProceedsCollector(deps: Deps) {
                         const receiptKeys = new Set(plan.receipts.map(key));
                         const sponsor = selected.find((c) => !receiptKeys.has(key(c)));
                         if (sponsor && !canSpendOffchain(sponsor, clock))
-                            fail("proceeds_input_unavailable");
+                            fail("proceeds_inputs_aged");
                         const locked = new Set(
                             [...taxiLocksOf(), ...sdkLocks, ...plan.inputs].map(key),
                         );
@@ -921,12 +921,11 @@ export function createProceedsCollector(deps: Deps) {
                         );
                         if (plan.kind === "inventory-split") {
                             assertProceedsPlan(plan, selected, config);
+                            if (selected.some((c) => reserveValue(c, config, clock) === 0n))
+                                fail("proceeds_inputs_aged");
                             if (
-                                selected.some((c) => reserveValue(c, config, clock) === 0n) ||
-                                (!submitting &&
-                                    sdkLocks.some((p) =>
-                                        plan.inputs.some((c) => key(c) === key(p)),
-                                    ))
+                                !submitting &&
+                                sdkLocks.some((p) => plan.inputs.some((c) => key(c) === key(p)))
                             )
                                 fail("proceeds_input_unavailable");
                             assertSplitReservations();
@@ -987,12 +986,19 @@ export function createProceedsCollector(deps: Deps) {
             if (stopped) return Promise.resolve();
             pending ??= run()
                 .catch((error) => {
-                    blocker =
+                    const code =
                         error instanceof Error && /^proceeds_[a-z_]+$/.test(error.message)
                             ? error.message
                             : "proceeds_collection_failed";
                     try {
                         const job = jobs.active();
+                        // Inputs that merely aged past their reserve headroom are not
+                        // evidence of tampering, and a quarantine never clears.
+                        if (job && code === "proceeds_inputs_aged" && jobs.cancel(job.id)) {
+                            blocker = null;
+                            return;
+                        }
+                        blocker = code;
                         if (job) jobs.update(job.id, "quarantined", blocker, null);
                     } catch {
                         blocker = "proceeds_storage_unavailable";

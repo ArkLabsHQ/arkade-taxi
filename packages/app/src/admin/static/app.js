@@ -202,7 +202,8 @@ const BLOCKER_GROUPS = [
             "proceeds_payout_key_changed proceeds_lockup_mismatch proceeds_covenant_missing " +
             "proceeds_spend_mismatch proceeds_inputs_missing proceeds_input_facts_changed " +
             "proceeds_stopped proceeds_provider_unsafe proceeds_chain_tip_invalid " +
-            "proceeds_input_unavailable proceeds_collection_failed proceeds_storage_unavailable " +
+            "proceeds_input_unavailable proceeds_inputs_aged proceeds_collection_failed " +
+            "proceeds_storage_unavailable " +
             "proceeds_lease_lost proceeds_submission_evidence_missing proceeds_intent_unbound " +
             "proceeds_reservation_changed proceeds_intent_inputs_changed",
     ],

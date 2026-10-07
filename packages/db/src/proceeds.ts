@@ -202,6 +202,36 @@ export class ProceedsRepository {
             )
             .run(state, blocker, commitmentTxid, id);
     }
+    /** Drops a job that never reached the network and releases its inputs. Deletes
+     * rather than adding a fifth state, which the state CHECK would have to migrate. */
+    cancel(id: string): boolean {
+        assertNativeAccess(this.db);
+        return this.db
+            .transaction(() => {
+                const row = this.db
+                    .prepare<
+                        [string, string],
+                        { state: string; submission: string; intents: number | bigint }
+                    >(
+                        `SELECT state, submission_state AS submission,
+                                (SELECT count(*) FROM proceeds_local_intents WHERE job_id = ?) AS intents
+                         FROM proceeds_jobs WHERE id = ?`,
+                    )
+                    .get(id, id);
+                // count(*) arrives as a BigInt under the connection's safe integers.
+                if (
+                    !row ||
+                    row.state === "complete" ||
+                    row.submission !== "unsubmitted" ||
+                    Number(row.intents) !== 0
+                )
+                    return false;
+                this.db.prepare("DELETE FROM proceeds_inputs WHERE job_id = ?").run(id);
+                this.db.prepare("DELETE FROM proceeds_jobs WHERE id = ?").run(id);
+                return true;
+            })
+            .immediate();
+    }
     complete(id: string, commitmentTxid: string): void {
         assertNativeAccess(this.db);
         this.db

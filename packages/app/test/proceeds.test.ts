@@ -1852,3 +1852,100 @@ describe("inventory split replenishment progress", () => {
         },
     );
 });
+
+describe("a plan whose inputs age out of their reserve headroom", () => {
+    const singleton = fundingCoin({ value: 100000 });
+    const protectedCfg = { ...cfg, operatorMinReserveSats: 10000n };
+    // Admitted at height 700000 against a 900000 expiry; the tip then moves inside
+    // the 144-block headroom, as the e2e's setmocktime does in the time domain.
+    const aged = { height: 900_000 - 143, time: Math.floor(clock.timestamp.getTime() / 1000) };
+    const splitSetup = (durable = false) => {
+        const s = setup(
+            planInventorySplit([singleton], [], protectedCfg, {}, address, clock, -1n)!,
+            [singleton],
+            durable,
+        );
+        s.deps.config = protectedCfg;
+        return s;
+    };
+    const held = (s: ReturnType<typeof splitSetup>) => s.deps.reservations.listReservedOutpoints();
+
+    it("cancels the job, releases its inputs and re-plans", async () => {
+        const s = splitSetup();
+        expect(held(s)).toEqual([{ txid: singleton.txid, vout: singleton.vout }]);
+        s.setTip(aged);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(collector.status()).toMatchObject({ jobId: null, state: "idle", blocker: null });
+        expect(s.jobs.get("job")).toBeUndefined();
+        expect(s.jobs.active()).toBeUndefined();
+        expect(held(s)).toEqual([]);
+
+        // The next tick re-plans from current inventory, which now yields nothing.
+        await collector.tick();
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.jobs.active()).toBeUndefined();
+        expect(collector.status().blocker).toBeNull();
+    });
+
+    it("keeps quarantining an input whose own facts no longer hold", async () => {
+        const s = splitSetup();
+        s.setOutputs([{ ...singleton, script: bytesToHex(senderTree.pkScript) }]);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.jobs.active()).toMatchObject({
+            state: "quarantined",
+            blocker: "proceeds_input_unavailable",
+        });
+        expect(held(s)).toEqual([{ txid: singleton.txid, vout: singleton.vout }]);
+    });
+
+    it.each([
+        [
+            "an entered submission",
+            (db: Database) =>
+                db
+                    .prepare("UPDATE proceeds_jobs SET submission_state = 'entered' WHERE id = ?")
+                    .run("job"),
+            // Refused before the guard: an entered submission with no matching intent
+            // is already ambiguous, which is the stronger reason to hold the job.
+            "proceeds_submission_ambiguous",
+        ],
+        [
+            "a remembered local intent",
+            (db: Database) =>
+                db
+                    .prepare("INSERT INTO proceeds_local_intents (job_id, digest) VALUES (?, ?)")
+                    .run("job", "ab".repeat(32)),
+            "proceeds_inputs_aged",
+        ],
+    ])("quarantines rather than cancelling once there is %s", async (_, poke, blocker) => {
+        const s = splitSetup();
+        poke(s.db);
+        s.setTip(aged);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.jobs.active()).toMatchObject({ id: "job", state: "quarantined" });
+        expect(collector.status().blocker).toBe(blocker);
+        expect(held(s)).toEqual([{ txid: singleton.txid, vout: singleton.vout }]);
+    });
+
+    it("leaves no persisted blocker for a restarted collector to report", async () => {
+        const s = splitSetup(true);
+        s.setTip(aged);
+        await createProceedsCollector(s.deps).tick();
+        expect(s.jobs.active()).toBeUndefined();
+
+        s.restartDatabase();
+        const restarted = createProceedsCollector(s.deps);
+        expect(restarted.status()).toMatchObject({ jobId: null, state: "idle", blocker: null });
+        expect(s.jobs.get("job")).toBeUndefined();
+        expect(held(s)).toEqual([]);
+    });
+});
