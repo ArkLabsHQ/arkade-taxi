@@ -2770,3 +2770,56 @@ describe("proceeds of a receiver-paid recycle", () => {
         state.db.close();
     });
 });
+
+type WatcherDeps = Parameters<typeof createSpendWatcher>[0];
+type ScanMetrics = Parameters<NonNullable<WatcherDeps["onScanMetrics"]>>[0];
+
+const canonicalTip = { hash: "41".repeat(32), height: 700000, time: NOW };
+
+describe("canonical scan round trips", () => {
+    it("reports one scan's indexer round trips", async () => {
+        const state = await setup("purchased");
+        const observed: ScanMetrics[] = [];
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+            onScanMetrics: (metrics) => void observed.push(metrics),
+        });
+        await watcher.catchUp();
+        expect(observed).toHaveLength(1);
+        expect(observed[0]).toMatchObject({
+            watching: 1,
+            getVtxos: 1,
+            getVirtualTxs: 1,
+            outpoints: 1,
+            txids: 2,
+        });
+        expect(observed[0]!.elapsedMs).toBeGreaterThanOrEqual(0);
+        state.db.close();
+    });
+
+    it("reports a scan the canonical tip aborted", async () => {
+        const state = await setup("purchased");
+        const observed: ScanMetrics[] = [];
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => {
+                throw new Error("canonical tip unavailable");
+            },
+            onScanMetrics: (metrics) => void observed.push(metrics),
+        });
+        await watcher.catchUp();
+        expect(observed).toHaveLength(1);
+        expect(observed[0]).toMatchObject({ watching: 1, getVtxos: 0, getVirtualTxs: 0 });
+        expect(state.policy.get().paused).toBe(true);
+        state.db.close();
+    });
+});

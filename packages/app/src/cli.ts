@@ -147,6 +147,7 @@ async function runServe(): Promise<void> {
         tip: runtime.getChainTip,
         wallet: () => runtime.wallet,
         onPrompt: () => timed("watcher.reconcile", () => reconciler.tick()),
+        onScanMetrics: (metrics) => log.debug(metrics, "watcher indexer round trips"),
     });
 
     const intervalSeconds = Math.max(1, Math.ceil(config.reconcileIntervalMs / 1000));

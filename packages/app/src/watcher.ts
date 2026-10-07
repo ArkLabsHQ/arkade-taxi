@@ -94,6 +94,14 @@ export interface SpendWatcherDeps {
     tip(): Promise<{ hash: string; height: number; time: number }>;
     wallet?: () => Pick<Wallet, "getContractManager"> | undefined;
     onPrompt?: () => Promise<void>;
+    onScanMetrics?: (metrics: {
+        watching: number;
+        elapsedMs: number;
+        getVtxos: number;
+        getVirtualTxs: number;
+        outpoints: number;
+        txids: number;
+    }) => void;
 }
 
 class EvidenceError extends Error {}
@@ -904,6 +912,26 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             }));
 
     const scan = async (): Promise<void> => {
+        const startedAt = performance.now();
+        const counts = { getVtxos: 0, getVirtualTxs: 0, outpoints: 0, txids: 0 };
+        const counted: SpendWatcherDeps["indexer"] = {
+            getVtxos: (options) => {
+                counts.getVtxos++;
+                counts.outpoints += options?.outpoints?.length ?? 0;
+                return deps.indexer.getVtxos(options);
+            },
+            getVirtualTxs: (ids, options) => {
+                counts.getVirtualTxs++;
+                counts.txids += ids.length;
+                return deps.indexer.getVirtualTxs(ids, options);
+            },
+        };
+        const report = () =>
+            deps.onScanMetrics?.({
+                watching,
+                elapsedMs: performance.now() - startedAt,
+                ...counts,
+            });
         recoverable.clear();
         const current = rows();
         watching = current.length;
@@ -927,6 +955,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     detail: "canonical chain tip hash, height, and time are unavailable",
                 },
             ];
+            report();
             return;
         }
         for (const advance of current) {
@@ -1009,7 +1038,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             }
             let coin: VirtualCoin | undefined;
             try {
-                coin = await exactCoin(deps.indexer, observedAdvance.outpoint);
+                coin = await exactCoin(counted, observedAdvance.outpoint);
             } catch (error) {
                 const reason =
                     error instanceof EvidenceError
@@ -1077,7 +1106,13 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 }
                 continue;
             }
-            const observed = await classifySpend(observedAdvance, coin, deps, tip, verify);
+            const observed = await classifySpend(
+                observedAdvance,
+                coin,
+                { ...deps, indexer: counted },
+                tip,
+                verify,
+            );
             if (observed.kind === "unknown") {
                 if (terminal)
                     deps.advances.recordSpendDisagreement(
@@ -1126,6 +1161,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 tip,
             );
         }
+        report();
         lastScanAt = deps.now();
     };
 
