@@ -64,6 +64,7 @@ import { buildRecoveryIntent } from "./arkade/recovery.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import {
+    readFunding,
     rereadInventory,
     sameFundingSnapshot,
     withQuoteAdmission,
@@ -490,8 +491,7 @@ async function createAdmittedSwapFillQuote(
     let spendable;
     let intentLocks;
     try {
-        spendable = await deps.inventory.getSpendableVtxos();
-        intentLocks = await deps.inventory.getLockedVtxoOutpoints();
+        ({ spendable, intentLocks } = await readFunding(deps.inventory));
     } catch (cause) {
         throw new ServiceError(
             "runtime_unsafe",
@@ -889,25 +889,41 @@ const isOwnerServerLeaf = (leaf: Uint8Array, owner: Uint8Array, server: Uint8Arr
     }
 };
 
+/** One read for the whole set; each outpoint must still match exactly once, and
+ * its own code is reported in request order, as a read apiece would have. */
+async function observedCoins(
+    indexer: SwapFillQuoteDeps["senderInventory"],
+    wanted: readonly { outpoint: Outpoint; code: string; message: string }[],
+): Promise<VirtualCoin[]> {
+    let response;
+    try {
+        response = await indexer.getVtxos({
+            outpoints: wanted.map(({ outpoint }) => ({
+                txid: outpoint.txid,
+                vout: outpoint.vout,
+            })),
+        });
+    } catch (cause) {
+        throw new ServiceError("runtime_unsafe", 503, "funding verification unavailable", {
+            cause,
+        });
+    }
+    return wanted.map(({ outpoint, code, message }) => {
+        const matches = response.vtxos.filter(
+            (coin) => coin.txid === outpoint.txid && coin.vout === outpoint.vout,
+        );
+        if (matches.length !== 1) throw new ServiceError(code, 400, message);
+        return matches[0]!;
+    });
+}
+
 async function observedCoin(
     indexer: SwapFillQuoteDeps["senderInventory"],
     outpoint: Outpoint,
     code: string,
     message: string,
 ): Promise<VirtualCoin> {
-    let response;
-    try {
-        response = await indexer.getVtxos({ outpoints: [outpoint] });
-    } catch (cause) {
-        throw new ServiceError("runtime_unsafe", 503, "funding verification unavailable", {
-            cause,
-        });
-    }
-    const matches = response.vtxos.filter(
-        (coin) => coin.txid === outpoint.txid && coin.vout === outpoint.vout,
-    );
-    if (matches.length !== 1) throw new ServiceError(code, 400, message);
-    return matches[0]!;
+    return (await observedCoins(indexer, [{ outpoint, code, message }]))[0]!;
 }
 
 async function enrichSolverFund(
@@ -1255,19 +1271,18 @@ async function reverifyFreshness(
         latest.totalValue !== selection.totalValue
     )
         throw new ServiceError("runtime_unsafe", 503, "funding safety changed during construction");
-    await observedCoin(
-        deps.senderInventory,
-        fundingOutpoint,
-        "swap_fill_deposit_unknown",
-        "swap offer deposit is not served by the indexer",
-    );
-    for (const input of req.solverInputs)
-        await observedCoin(
-            deps.senderInventory,
-            { txid: input.txid, vout: input.vout },
-            "swap_fill_solver_unknown",
-            "solver funding is not served by the indexer",
-        );
+    await observedCoins(deps.senderInventory, [
+        {
+            outpoint: fundingOutpoint,
+            code: "swap_fill_deposit_unknown",
+            message: "swap offer deposit is not served by the indexer",
+        },
+        ...req.solverInputs.map((input) => ({
+            outpoint: { txid: input.txid, vout: input.vout },
+            code: "swap_fill_solver_unknown",
+            message: "solver funding is not served by the indexer",
+        })),
+    ]);
 }
 
 /** Runs `work` under one runtime admission, handing it the admitted bound-fill
