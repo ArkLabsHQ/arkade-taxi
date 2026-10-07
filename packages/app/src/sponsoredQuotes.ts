@@ -31,6 +31,7 @@ import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import {
     createAdmittedQuote,
     decodeSenderFunding,
+    readFunding,
     rereadInventory,
     sameFundingSnapshot,
     validateFakeLockup,
@@ -200,6 +201,7 @@ async function createReservedSponsoredQuote(
     const req = decodeBody(body, deps.config);
     const { policy, revision } = deps.policy.getSnapshot();
     const { config } = deps;
+    const firstFunding = readFunding(deps.inventory);
     await verifySenderFunding(
         req.senderInputs,
         req.senderKey,
@@ -244,8 +246,7 @@ async function createReservedSponsoredQuote(
     let spendable: ExtendedVirtualCoin[];
     let intentLocks: Outpoint[];
     try {
-        spendable = await deps.inventory.getSpendableVtxos();
-        intentLocks = await deps.inventory.getLockedVtxoOutpoints();
+        ({ spendable, intentLocks } = await firstFunding);
     } catch (cause) {
         throw new ServiceError(
             "runtime_unsafe",
