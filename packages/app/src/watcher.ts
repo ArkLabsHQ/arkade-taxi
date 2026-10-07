@@ -926,7 +926,9 @@ const prefetch = async (
                         } catch {
                             continue;
                         }
-                        if (!keys.has(id)) usable = false;
+                        // Unrequested or repeated: rawTransactions rejects both per
+                        // row, so the chunk must not answer around that rule.
+                        if (!keys.has(id) || found.has(id)) usable = false;
                         else found.set(id, encoded);
                     }
             } catch {

@@ -2920,6 +2920,46 @@ describe("canonical scan round trips", () => {
         b.db.close();
     });
 
+    // A complete batch answer carrying a redundant copy would otherwise be
+    // trusted, where the per-row read rejects it.
+    it("re-reads a row whose batched answer repeated a transaction id", async () => {
+        const { a, b } = await twoRecycles();
+        const inner = both(a.indexer, b.indexer);
+        const repeated = a.finalArk!.id;
+        const { calls, advances } = recorder([
+            { ...a.advances.byState("locked")[0]!, id: "row-a" },
+            { ...b.advances.byState("locked")[0]!, id: "row-b" },
+        ]);
+        const watcher = createSpendWatcher({
+            advances,
+            policy: a.policy,
+            indexer: {
+                ...inner,
+                getVirtualTxs: async (ids: string[]) => {
+                    const { txs } = await inner.getVirtualTxs(ids);
+                    const copy = txs.filter(
+                        (encoded) => Transaction.fromPSBT(base64.decode(encoded)).id === repeated,
+                    );
+                    return { txs: [...txs, ...copy] };
+                },
+            },
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(calls).toEqual([
+            {
+                method: "unknown",
+                id: "row-a",
+                detail: expect.stringContaining("omitted a required transaction"),
+            },
+            { method: "observation", id: "row-b" },
+        ]);
+        a.db.close();
+        b.db.close();
+    });
+
     it("fans 25 unspent covenant rows into one outpoint request", async () => {
         const state = await setup();
         const row = state.advances.byState("locked")[0]!;
