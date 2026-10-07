@@ -189,6 +189,13 @@ describe("cross-flow reservation fence", () => {
         expect(swapFills.listReservedOutpoints()).toEqual([]);
     });
 
+    it("rejects an advance quote at insert when a proceeds job holds the coin", () => {
+        new ProceedsRepository(db).create("job", { inputs: [{ ...COIN }] }, 1);
+        expect(() => reserve()).toThrow(ReservationConflictError);
+        expect(advances.get("quote-1")).toBeUndefined();
+        expect(reservations.listReservedOutpoints()).toEqual([COIN]);
+    });
+
     it("rejects a proceeds job when a swap fill holds the coin", () => {
         swapFills.insert(fill());
         expect(() =>

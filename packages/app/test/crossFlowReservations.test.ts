@@ -267,6 +267,33 @@ describe("cross-flow wiring through production quote paths", () => {
         ]);
     });
 
+    it("advance quote selection skips a live coin an active proceeds job holds", async () => {
+        const { terms, ledger } = setupWiring();
+        const held = { txid: FILL_TX, vout: 0 };
+        const alt = { txid: ALT_TX, vout: 0 };
+        const extra = { txid: EXTRA_TX, vout: 0 };
+        new ProceedsRepository(db).create("job", { inputs: [held] }, NOW);
+        const builder = new FakeLockupBuilder(config(), serverUnroll);
+        const d: QuoteDeps = {
+            ...quoteInfrastructure(new MemoryAdvances(), () => basePolicy()),
+            advances: ledger,
+            policy: terms,
+            reservations,
+            swapFills,
+            config: config(),
+            now: () => NOW,
+            randomId: () => "adv-proceeds-1",
+            inventory: operatorInventory(held, alt, extra),
+            lockupBuilder: builder,
+            lockupSubmitter: builder,
+        };
+        const response = await createQuote(d, quoteBody());
+        expect(ledger.get(response.transferId)?.operatorInputs).toEqual([alt]);
+        expect(builder.built[0]?.funding.inputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([
+            alt,
+        ]);
+    });
+
     it("sponsored quote selection skips a swap-fill coin through createSponsoredQuote", async () => {
         const { terms, ledger } = setupWiring();
         const fill = { txid: FILL_TX, vout: 0 };
