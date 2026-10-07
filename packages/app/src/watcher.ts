@@ -280,36 +280,6 @@ const exactExtension = (
 const exactAnchor = (tx: Transaction, index: number): void =>
     exactOutput(tx, index, P2A.amount, P2A.script, "P2A anchor");
 
-/** A leaf's own output by content: only out[0..1] are pinned, the rest is the spender's. */
-const soleOutput = (
-    tx: Transaction,
-    matches: (output: ReturnType<Transaction["getOutput"]>) => boolean,
-    label: string,
-): number => {
-    const found = Array.from({ length: tx.outputsLength }, (_, index) => index).filter((index) =>
-        matches(tx.getOutput(index)),
-    );
-    if (found.length !== 1) fail(`${label} output is missing or ambiguous`);
-    return found[0]!;
-};
-
-const extensionIndex = (tx: Transaction): number =>
-    soleOutput(
-        tx,
-        (output) => output.script !== undefined && Extension.isExtension(output.script),
-        "covenant extension",
-    );
-
-const anchorIndex = (tx: Transaction): number =>
-    soleOutput(
-        tx,
-        (output) =>
-            output.amount === P2A.amount &&
-            output.script !== undefined &&
-            sameBytes(output.script, P2A.script),
-        "P2A anchor",
-    );
-
 const exactTransactionHeader = (tx: Transaction, lockTime: number, label: string): void => {
     const sequence = lockTime === 0 ? 0xffffffff : 0xfffffffe;
     if (tx.version !== 3 || tx.lockTime !== lockTime)
@@ -750,11 +720,19 @@ async function classifySpend(
                 payoutPkScript(advance.operatorKey, facts.value, advance.dust),
                 "reclaim repayment",
             );
-            exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 0);
-            exactAnchor(arkTx, anchorIndex(arkTx));
+            const extensions = Array.from(
+                { length: arkTx.outputsLength },
+                (_, index) => index,
+            ).filter((index) => {
+                const script = arkTx.getOutput(index).script;
+                return script !== undefined && Extension.isExtension(script);
+            });
+            if (extensions.length !== 1) fail("reclaim extension output is missing or ambiguous");
+            exactExtension(arkTx, extensions[0]!, covenantProgram, [covenantHoldings], 0);
+            exactAnchor(arkTx, arkTx.outputsLength - 1);
         } else if (params.covenantVersion === 2) {
-            // The leaf pins INSPECTNUMINPUTS 2 and no output count, so neither do we.
-            if (arkTx.inputsLength !== 2) fail("refund input count mismatch");
+            if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
+                fail("refund input or output count mismatch");
             const refunderCoin = await secondInput(arkTx, facts.unroll, deps, verify, "refunder");
             const loan = loanSats(params);
             exactOutput(
@@ -774,15 +752,15 @@ async function classifySpend(
             );
             exactExtension(
                 arkTx,
-                extensionIndex(arkTx),
+                2,
                 covenantProgram,
                 [covenantHoldings, holdings(refunderCoin, "refunder funding outpoint")],
                 1,
             );
-            exactAnchor(arkTx, anchorIndex(arkTx));
+            exactAnchor(arkTx, 3);
         } else {
-            // buildRefund pins no input count on either v1 leaf, so a spender who
-            // brings their own coin is script-valid; out[0] and out[1] stay pinned.
+            if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
+                fail("refund input or output count mismatch");
             const topup = refundTopup(params, deps.config.vtxoMinAmount);
             exactOutput(
                 arkTx,
@@ -804,8 +782,8 @@ async function classifySpend(
                 ),
                 "refund recovery output",
             );
-            exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 1);
-            exactAnchor(arkTx, anchorIndex(arkTx));
+            exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
+            exactAnchor(arkTx, 3);
         }
         if (leaf === Leaf.Recovery) {
             if (
