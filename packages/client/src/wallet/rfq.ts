@@ -78,6 +78,10 @@ type Floor = ReceiverPaidCarrier["inputExpiryFloor"];
 const dropTaxi = (deps: AssetRfqSendDeps, reason: string, cause?: unknown) =>
     (deps.onError ?? console.error)(cause ?? reason, `dropped the receiver's Taxi (${reason})`);
 
+/** How a solver predating carriers refuses the unknown `profile.carrier`: a schema fault naming no field. */
+const refusesCarrierField = (error: unknown): boolean =>
+    error instanceof SwapRefusal && error.reason === "unsupported_payload" && !error.errorCode;
+
 // The solver can ask the Taxi for the fill only once it sees her deposit, and the Taxi refuses the fill and
 // its submission once the receive quote expires. This covers her send, the solver noticing it (a 3s sweep at
 // worst), the Taxi's fill quote (2.4-3.0s measured) and the co-signed submission, about 15s, doubled for skew.
@@ -177,11 +181,14 @@ const negotiate = async (
     let lastError: unknown;
     for (const solver of deps.solvers) {
         const routes = taxi ? [taxi, undefined] : [undefined];
+        let legacy = false;
         for (let i = 0; i < routes.length; i++) {
             const viaTaxi = routes[i];
-            const route: { carrier: ArkadeCarrierChoice; receiveAddress?: string } = viaTaxi
+            const route: { carrier?: ArkadeCarrierChoice; receiveAddress?: string } = viaTaxi
                 ? { carrier: viaTaxi.carrier.choice }
-                : { carrier: { mode: "purchase" }, receiveAddress: req.arkAddress };
+                : legacy
+                  ? { receiveAddress: req.arkAddress }
+                  : { carrier: { mode: "purchase" }, receiveAddress: req.arkAddress };
             try {
                 const negotiated = await deps.withRfqTransport(solver, (transport) =>
                     deps.requestArkadeSwap(deps.wallet, deps.arkServerUrl, transport, {
@@ -222,6 +229,9 @@ const negotiate = async (
                         error,
                     );
                     taxi = undefined;
+                } else if (!legacy && refusesCarrierField(error)) {
+                    legacy = true;
+                    routes.push(undefined);
                 } else {
                     (deps.onError ?? console.error)(
                         error,
