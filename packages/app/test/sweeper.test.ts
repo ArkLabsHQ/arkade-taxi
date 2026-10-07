@@ -323,6 +323,20 @@ describe("tick", () => {
         expect(advances.get("a")!.recoveryTxid).toBe("tx-a");
     });
 
+    it("shares one in-flight pass between concurrent ticks", async () => {
+        locked("a", 800_000n);
+        const sweeper = createSweeper(deps());
+
+        const first = sweeper.tick(HEIGHT);
+        expect(sweeper.tick(HEIGHT)).toBe(first);
+        await first;
+
+        const later = sweeper.tick(HEIGHT);
+        expect(later).not.toBe(first);
+        await later;
+        expect(recovery.seen).toEqual(["a"]);
+    });
+
     it("submits recovery for every advance whose locktime has passed", async () => {
         locked("a", 800_000n);
         locked("b", 900_000n);

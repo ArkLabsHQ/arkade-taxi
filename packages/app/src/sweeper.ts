@@ -111,6 +111,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     let blockers: RecoveryDeadline[] = [];
     let deadlines: RecoveryDeadline[] = [];
     let stopped = false;
+    let pending: Promise<TickResult> | undefined;
     const inFlight = new Map<string, Promise<void>>();
     const completed: SweepResult[] = [];
 
@@ -262,7 +263,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         }
     }
 
-    return {
+    const sweeper: Sweeper = {
         async tick(currentHeight, medianTime = null) {
             // Sponsored direct sends settle at `locked` and have no recovery
             // leaf; the reconciler observes and releases them instead.
@@ -459,5 +460,15 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             stopped = true;
             deps.recovery.stop?.();
         },
+    };
+
+    // Two steady-state loops drive the sweep and `completed` is a buffer shared
+    // across ticks, so a joined caller takes the running pass, never races it.
+    return {
+        ...sweeper,
+        tick: (currentHeight, medianTime = null) =>
+            (pending ??= sweeper.tick(currentHeight, medianTime).finally(() => {
+                pending = undefined;
+            })),
     };
 }
