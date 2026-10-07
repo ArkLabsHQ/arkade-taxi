@@ -218,16 +218,16 @@ const SCHEMA = z
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
-        // Refuses to start rather than quoting something unrecoverable: the
-        // emulator claim packet is pinned to the refund leaf (arkade/recovery.ts),
-        // so a v2 advance has no reclaim path. Lift this with that support, not
-        // before — the flip is one-way for as long as a v2 advance is live.
+        // Recovery and the watcher now handle v2, but a reclaim moves the whole
+        // covenant to the operator and there is no custody ledger to hand it back
+        // from. Lift this with that, not before — the flip is one-way for as long
+        // as a v2 advance is live.
         if (v.TAXI_COVENANT_VERSION === 2) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
                 path: ["TAXI_COVENANT_VERSION"],
                 message:
-                    "must be 1: covenant v2 recovery and watcher support is not built, so a v2 advance could not be recovered",
+                    "must be 1: v2 quote terms and the custody ledger are not built, so a reclaimed v2 delivery could never be recovered by its receiver",
             });
         }
         if (v.TAXI_ADMIN_PORT === v.TAXI_HTTP_PORT) {
