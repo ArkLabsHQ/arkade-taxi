@@ -48,3 +48,7 @@ jobs:
             # A committed vectors.json that no longer matches the Go reference is
             # worse than none: every test would still pass, against stale bytes.
             - run: git diff --exit-code packages/covenant/test/vectors.json
+            # Executes the v2 leaves in the emulator engine instead of comparing
+            # bytes, so it fails when a leaf's semantics change while its bytes
+            # still match a stale fixture. Clones the ref named in v2-vectors.json.
+            - run: node packages/covenant/test/engine/run.mjs
