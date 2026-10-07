@@ -206,6 +206,11 @@ async function setup(
     if (covenantVersion === 2) {
         request.params.topup = request.params.dust;
         request.params.covenantVersion = 2;
+        // Every v2 lockup output reaches dust, so the fixture's 10-sat fare and
+        // the sender change left by a whole-dust loan are both unbuildable.
+        request.fare.units = request.params.dust;
+        request.senderSats = request.senderInputs[0]!.value =
+            request.params.dust + (paymentSats ?? 0n);
     }
     const lockupValue = lockupSats(request.params);
     const covenant = new DustCovenantScript({

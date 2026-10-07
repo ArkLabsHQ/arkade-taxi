@@ -81,6 +81,7 @@ const sourceAdvance = (
             | "covenantVersion"
         >
     > = {},
+    fareSats = 10n,
 ) => {
     const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
     const cfg = config();
@@ -89,7 +90,7 @@ const sourceAdvance = (
         ? { txid: Uint8Array.from(sdkAsset.txid).reverse(), groupIndex: sdkAsset.groupIndex }
         : undefined;
     const base = advance({
-        fare: { currency: "sats", units: 10n },
+        fare: { currency: "sats", units: fareSats },
         ...terms,
         ...(assetId ? { assetId, assetUnits: 9_007_199_254_740_993n } : {}),
     });
@@ -378,11 +379,12 @@ describe("recovery graph", () => {
     });
 
     it("reclaims a v2 covenant whole to the operator through the reclaim leaf", () => {
-        const row = sourceAdvance("height", false, {
-            topup: 330n,
-            paymentSats: 20n,
-            covenantVersion: 2,
-        });
+        const row = sourceAdvance(
+            "height",
+            false,
+            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
+            330n,
+        );
         const intent = buildRecoveryIntent(row, config());
         const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
         const covenant = new DustCovenantScript({
@@ -410,11 +412,12 @@ describe("recovery graph", () => {
     });
 
     it("round-trips a prepared v2 reclaim through startup without quarantine", () => {
-        const row = sourceAdvance("height", false, {
-            topup: 330n,
-            paymentSats: 20n,
-            covenantVersion: 2,
-        });
+        const row = sourceAdvance(
+            "height",
+            false,
+            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
+            330n,
+        );
         expect(() => assertRecoveryStartupInvariants([row], config())).not.toThrow();
         expect(() =>
             assertRecoveryStartupInvariants([preparedRecovery(row)], config()),
