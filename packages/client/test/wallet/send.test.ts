@@ -235,12 +235,12 @@ describe("sender round trips", () => {
         await expect(drive(send("recycle"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
             "GET /v1/info": 1,
-            "POST /v1/transfers": 3,
+            "POST /v1/transfers": 6,
             "POST /v1/transfers/tr_01/lockup": 1,
-            "GET /v1/transfers/tr_01": 3,
+            "GET /v1/transfers/tr_01": 4,
         });
-        expect(taxi.times("POST /v1/transfers")).toEqual([0, 1_000, 3_000]);
-        expect(taxi.times("GET /v1/transfers/tr_01")).toEqual([3_000, 4_000, 5_000]);
+        expect(taxi.times("POST /v1/transfers")).toEqual([0, 500, 1_000, 1_500, 2_000, 3_000]);
+        expect(taxi.times("GET /v1/transfers/tr_01")).toEqual([3_000, 3_500, 4_000, 4_500]);
         expect(taxi.lockedAt()).toBe(4_500);
     });
 
@@ -251,11 +251,15 @@ describe("sender round trips", () => {
         await expect(drive(send("sponsored"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
             "GET /v1/info": 1,
-            "POST /v1/sponsored-transfers": 3,
+            "POST /v1/sponsored-transfers": 6,
             "POST /v1/sponsored-transfers/tr_01/lockup": 1,
-            "GET /v1/sponsored-transfers/tr_01": 3,
+            "GET /v1/sponsored-transfers/tr_01": 4,
         });
-        expect(taxi.times("POST /v1/sponsored-transfers")).toEqual([0, 1_000, 3_000]);
-        expect(taxi.times("GET /v1/sponsored-transfers/tr_01")).toEqual([3_000, 4_000, 5_000]);
+        expect(taxi.times("POST /v1/sponsored-transfers")).toEqual([
+            0, 500, 1_000, 1_500, 2_000, 3_000,
+        ]);
+        expect(taxi.times("GET /v1/sponsored-transfers/tr_01")).toEqual([
+            3_000, 3_500, 4_000, 4_500,
+        ]);
     });
 });
