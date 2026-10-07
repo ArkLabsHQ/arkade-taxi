@@ -1553,7 +1553,7 @@ describe("provider read budget", () => {
         expect(counter.waves()).toBe(3);
     });
 
-    it("spends six waves of eight reads on POST /v1/swap-fills", async () => {
+    it("spends five waves of eight reads on POST /v1/swap-fills", async () => {
         const { counter, response } = await run(
             "/v1/swap-fills",
             swapBody(),
@@ -1573,7 +1573,7 @@ describe("provider read budget", () => {
         ]);
         // The deposit and every solver input share the closing re-read.
         expect(counter.outpoints()).toEqual([1, 1, 2]);
-        expect(counter.waves()).toBe(6);
+        expect(counter.waves()).toBe(5);
     });
 
     it("reads the provider limits while the fill graph is being built", async () => {

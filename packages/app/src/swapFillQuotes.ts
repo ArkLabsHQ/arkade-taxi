@@ -415,6 +415,10 @@ async function createAdmittedSwapFillQuote(
         );
     if (offer.wantAmount <= 0n)
         throw new ServiceError("swap_fill_offer_invalid", 400, "swap offer want must be positive");
+    // Independent of the deposit read; every deposit check below still runs
+    // before this is awaited, so a bad deposit keeps reporting its own code.
+    const solver = enrichSolverFund(deps, req, offer);
+    void solver.catch(() => {});
     const deposit = await observedCoin(
         deps.senderInventory,
         fundingOutpoint,
@@ -455,11 +459,7 @@ async function createAdmittedSwapFillQuote(
             400,
             "solver funding must not spend the offer deposit",
         );
-    const {
-        fund: solverFund,
-        coins: solverCoins,
-        spends: solverSpends,
-    } = await enrichSolverFund(deps, req, offer);
+    const { fund: solverFund, coins: solverCoins, spends: solverSpends } = await solver;
     const bitcoinRule = ruleFor(policy.assetRules, undefined);
     if (!bitcoinRule) throw admissionError("asset_not_served");
     if (!bitcoinRule.enabled) throw admissionError("asset_disabled");
