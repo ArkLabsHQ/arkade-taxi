@@ -410,9 +410,9 @@ describe("CLI recovery under admission inventory degradation", () => {
             await new Promise((resolve) => setTimeout(resolve, 20));
             const during = await createRoutes(h.deps!).request("/ready");
             const body = await during.json();
-            expect(during.status).toBe(503);
-            expect(body.runtime.blockers).toContain("runtime_checking");
-            expect(body.runtime.chainTime).toBeNull();
+            expect(during.status).toBe(200);
+            expect(h.runtime!.pendingCheck()).toBeDefined();
+            expect(body.runtime.chainTime).not.toBeNull();
             expect(body.sweeper.lastTickMedianTime).toBe(String(NOW - 1));
             expect(body.sweeper.blockers).toEqual([]);
         } finally {

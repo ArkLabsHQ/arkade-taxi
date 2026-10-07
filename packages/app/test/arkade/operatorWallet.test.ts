@@ -279,7 +279,7 @@ describe("persistent operator runtime safety", () => {
             expect(s.runtime.wallet).toBeUndefined();
             expect(s.counts()).toEqual({ created: 2, disposed: 1 });
             expect(s.walletConfig.onchainProvider).toBe(onchainProvider);
-            expect(s.runtime.safety().blockers).toContain("runtime_checking");
+            expect(s.runtime.pendingCheck()).toBeDefined();
             await watcher.catchUp();
             expect(terms.get().paused).toBe(false);
             expect(watcher.status().blockers).toEqual([]);
@@ -800,6 +800,45 @@ describe("persistent operator runtime safety", () => {
         s.release();
         await refresh;
         expect(s.runtime.safety().blockers).toEqual([]);
+    });
+
+    it("keeps publishing a healthy snapshot while the next check is in flight", async () => {
+        const s = setup();
+        await s.runtime.refresh();
+        const healthy = s.runtime.safety();
+        expect(healthy.blockers).toEqual([]);
+        s.pause();
+        const refresh = s.runtime.refresh();
+        expect(s.runtime.pendingCheck()).toBeDefined();
+        expect(s.runtime.safety()).toEqual(healthy);
+        s.release();
+        await refresh;
+        expect(s.runtime.safety().blockers).toEqual([]);
+    });
+
+    it("keeps readiness closed through a check that follows a failed one", async () => {
+        const s = setup();
+        s.setOnline(false);
+        await s.runtime.refresh();
+        expect(s.runtime.safety().blockers).toContain("wallet_unsynced");
+        s.pause();
+        const refresh = s.runtime.refresh();
+        expect(s.runtime.safety().blockers).toEqual(["runtime_checking"]);
+        expect(s.runtime.safety().chainHeight).toBeNull();
+        s.release();
+        await refresh;
+        expect(s.runtime.safety().blockers).toContain("wallet_unsynced");
+    });
+
+    it("closes readiness when a check started from a healthy snapshot ends unhealthy", async () => {
+        const s = setup();
+        await s.runtime.refresh();
+        s.pause();
+        const refresh = s.runtime.refresh();
+        s.setOnline(false);
+        s.release();
+        expect((await refresh).blockers).toContain("wallet_unsynced");
+        expect(s.runtime.safety().blockers).toContain("wallet_unsynced");
     });
 
     it("rejects signer rotation and reopens with a new wallet only after revalidation", async () => {

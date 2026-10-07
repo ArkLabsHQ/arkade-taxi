@@ -203,12 +203,15 @@ export function createOperatorRuntime(
         blockers: [reason],
     });
     let snapshot = closed("runtime_unchecked");
+    const stale = (state: RuntimeSafety) =>
+        now() - state.checkedAt >= config.reconcileIntervalMs || now() < state.checkedAt;
 
     const safety = (): RuntimeSafety => {
         const state = stopped ? closed("runtime_stopped") : snapshot;
-        const stale =
-            now() - state.checkedAt >= config.reconcileIntervalMs || now() < state.checkedAt;
-        return { ...state, blockers: [...state.blockers, ...(stale ? ["runtime_stale"] : [])] };
+        return {
+            ...state,
+            blockers: [...state.blockers, ...(stale(state) ? ["runtime_stale"] : [])],
+        };
     };
 
     const dropWallet = async () => {
@@ -219,7 +222,9 @@ export function createOperatorRuntime(
     };
 
     const check = async (): Promise<RuntimeSafety> => {
-        snapshot = closed("runtime_checking");
+        // A healthy, still-fresh snapshot keeps being published here: every spend re-gates on
+        // this check's own result, so blanking it only closed readiness for the check's duration.
+        if (snapshot.blockers.length || stale(snapshot)) snapshot = closed("runtime_checking");
         const verified = await timed("runtime.providers", () =>
             verifyProviders(config, options.providers ?? providers),
         );

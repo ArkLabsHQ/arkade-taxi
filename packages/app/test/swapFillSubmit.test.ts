@@ -1031,7 +1031,7 @@ describe("submitSwapFill bound freshness gate", () => {
             return {
                 async settle(outcome: Promise<unknown>) {
                     await Promise.race([joining, outcome]);
-                    expect(runtime.safety().blockers).toContain("runtime_checking");
+                    expect(runtime.pendingCheck()).toBeDefined();
                     check.release();
                     return (await checking)!;
                 },

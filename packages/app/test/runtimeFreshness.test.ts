@@ -289,8 +289,8 @@ describe("quote and runtime refresh interleaving", () => {
             const check = h.runtime.refresh();
             await entered;
             const reads = { ...h.checkReads };
-            expect(h.runtime.safety().blockers).toContain("runtime_checking");
-            expect((await router.request("/ready")).status).toBe(503);
+            expect(h.runtime.pendingCheck()).toBeDefined();
+            expect((await router.request("/ready")).status).toBe(200);
             let settled = 0;
             const requests = [post(), post()].map((request) =>
                 Promise.resolve(request).then((response) => {
@@ -423,7 +423,7 @@ describe("quote and runtime refresh interleaving", () => {
             const entered = h.pauseWallet(walletRelease.pending);
             const refresh = h.runtime.refresh();
             await entered;
-            expect((await router.request("/ready")).status).toBe(503);
+            expect((await router.request("/ready")).status).toBe(200);
             let settled = false;
             const request = Promise.resolve(
                 router.request(
