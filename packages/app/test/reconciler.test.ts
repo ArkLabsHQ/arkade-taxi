@@ -602,6 +602,30 @@ describe("custody reconciliation", () => {
         state.db.close();
     });
 
+    it("reads no inventory and gates nothing while nothing is held in custody", async () => {
+        const state = setup();
+        const solvency = vi.fn();
+        const reconciler = createLockupReconciler({
+            advances: new AdvanceRepository(state.db, { custodyWindowSeconds: WINDOW }),
+            reservations: state.reservations,
+            policy: state.policy,
+            submission: { resume: async () => false },
+            indexer: indexer(async () => ({ vtxos: [] })),
+            custody: {
+                repo: new CustodyRepository(state.db),
+                solvency,
+                waiting: () => [],
+                alarmSeconds: 0,
+            },
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+        await reconciler.tick();
+        expect(solvency).not.toHaveBeenCalled();
+        expect(reconciler.status().custody).toBeUndefined();
+        state.db.close();
+    });
+
     it("warns, without blocking, once lending has dipped into what is owed", async () => {
         const state = custodySetup();
         const reconciler = build(state, { lendableSats: 400n, receivableSats: 1_000n });

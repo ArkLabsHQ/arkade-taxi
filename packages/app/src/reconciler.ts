@@ -129,6 +129,8 @@ async function reconcileCustody(deps: LockupReconcilerDeps): Promise<{
             detail: `custody window ends at ${row.expiresAt}; a release is honoured past it`,
         });
     const liabilities = custody.repo.liabilities();
+    // Nothing owed means nothing to dip into: no inventory read, and no lending gate.
+    if (liabilities.rows === 0) return { alarms };
     const solvency = await custody.solvency(liabilities);
     if (solvency.shortfall)
         alarms.push({
