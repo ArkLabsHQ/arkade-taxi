@@ -501,6 +501,16 @@ describe("createQuote admission", () => {
             expect(events.lastIndexOf("safety")).toBeGreaterThan(events.indexOf("sender-finished"));
         },
     );
+    it("reports the sender barrier when the concurrent funding read fails too", async () => {
+        const d = deps();
+        d.senderInventory.getVtxos = async () => ({ vtxos: [] });
+        d.inventory.getSpendableVtxos = () => Promise.reject(new Error("wallet offline"));
+        const failure = await caught(() => createQuote(d, quoteBody()));
+        expect(failure).toMatchObject({ code: "invalid_request", status: 400 });
+        // Flushes the macrotask an unhandled funding rejection would surface in.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(advances.rows.size).toBe(0);
+    });
     it("refuses a fare 8 below the minimum 10 before reservation", async () => {
         const d = deps({ policy: satsFareRule(ASSET, 8n) });
         await expect(
