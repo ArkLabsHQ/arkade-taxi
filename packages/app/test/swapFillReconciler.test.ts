@@ -10,7 +10,7 @@ import {
 import type { SwapFill, SwapFillGraph } from "@arkade-taxi/db";
 import { createSwapFillReconciler } from "../src/swapFillReconciler.js";
 import { fundingCoin, NOW } from "./fixtures.js";
-import { MemorySwapFills } from "./swapFillFixtures.js";
+import { checkpointSpending, MemorySwapFills } from "./swapFillFixtures.js";
 
 const OFFER = { txid: "dd".repeat(32), vout: 3 };
 const SOLVER_IN = { txid: "ee".repeat(32), vout: 1 };
@@ -33,11 +33,11 @@ const OUTPUT_SPECS = [
     { script: "52", sats: 1670, assets: [] as { assetId: string; amount: bigint }[] },
 ];
 
+const CHECKPOINTS = [OFFER, SOLVER_IN, TAXI_IN].map(checkpointSpending);
+
 const TRUSTED_ARK_TX = (() => {
     const tx = new Transaction({ version: 3, lockTime: 0 });
-    tx.addInput({ txid: OFFER.txid, index: OFFER.vout });
-    tx.addInput({ txid: SOLVER_IN.txid, index: SOLVER_IN.vout });
-    tx.addInput({ txid: TAXI_IN.txid, index: TAXI_IN.vout });
+    for (const cp of CHECKPOINTS) tx.addInput({ txid: cp.id, index: 0 });
     for (const o of OUTPUT_SPECS)
         tx.addOutput({ script: hex.decode(o.script), amount: BigInt(o.sats) });
     const packet = asset.Packet.create([
@@ -56,12 +56,7 @@ const TRUSTED_ARK_TX = (() => {
 
 const trustedGraph = (): SwapFillGraph => ({
     arkTx: TRUSTED_ARK_TX,
-    checkpoints: [OFFER, SOLVER_IN, TAXI_IN].map((o) => {
-        const cp = new Transaction({ version: 3, lockTime: 0 });
-        cp.addInput({ txid: o.txid, index: o.vout });
-        cp.addOutput({ script: new Uint8Array([0x51]), amount: 1000n });
-        return base64.encode(cp.toPSBT());
-    }),
+    checkpoints: CHECKPOINTS.map((cp) => base64.encode(cp.toPSBT())),
     graphId: new Uint8Array(32).fill(7),
     inputOwners: [null, "solver", "sponsor"],
 });
@@ -134,6 +129,13 @@ const setup = (rows: SwapFill[], coins: Map<string, VirtualCoin>, fail?: Error) 
 
 const ourTxid = (): string => preparedTx().id.toLowerCase();
 
+/** A fill bound to a receive quote whose submit came back ambiguous: the shape
+ * that holds the joint-liability blocker up. */
+const BOUND_AMBIGUOUS: Partial<SwapFill> = {
+    receiveQuoteId: "rq-1",
+    failureCode: "swap_fill_submission_ambiguous",
+};
+
 describe("swap-fill reconciliation", () => {
     it("keeps an ambiguous fill submitting while the offer is unspent, writing nothing", async () => {
         const coins = new Map([[key(OFFER), fundingCoin({ ...OFFER, script: "ac".repeat(34) })]]);
@@ -143,6 +145,56 @@ describe("swap-fill reconciliation", () => {
         expect(store.events).toEqual([]);
         expect(store.listReservedOutpoints()).toEqual([TAXI_IN]);
         expect(reconciler.status()).toEqual({ lastTickAt: NOW, submitting: 1, blockers: [] });
+    });
+
+    it("cancels a bound ambiguous fill whose solver input was spent by another tx", async () => {
+        const coins = new Map([
+            [key(OFFER), fundingCoin({ ...OFFER, script: "ac".repeat(34) })],
+            [key(SOLVER_IN), fundingCoin({ ...SOLVER_IN, isSpent: true, arkTxId: OTHER_TX })],
+        ]);
+        const { store, reconciler } = setup([fill(ourTxid(), BOUND_AMBIGUOUS)], coins);
+        await reconciler.tick();
+        const row = store.get("fill-1")!;
+        expect(row.state).toBe("cancelled");
+        expect(row.spentTxid).toBe(OTHER_TX);
+        expect(row.txid).toBeUndefined();
+        expect(row.outpoint).toBeUndefined();
+        expect(store.events).toEqual(["recordCancelled"]);
+        expect(store.listReservedOutpoints()).toEqual([]);
+        expect(reconciler.status().blockers).toEqual([]);
+    });
+
+    it("keeps a bound ambiguous fill submitting while every input is unspent", async () => {
+        const coins = new Map([
+            [key(OFFER), fundingCoin({ ...OFFER, script: "ac".repeat(34) })],
+            [key(SOLVER_IN), fundingCoin({ ...SOLVER_IN })],
+            [key(TAXI_IN), fundingCoin({ ...TAXI_IN })],
+        ]);
+        const { store, reconciler } = setup([fill(ourTxid(), BOUND_AMBIGUOUS)], coins);
+        await reconciler.tick();
+        expect(store.get("fill-1")!.state).toBe("submitting");
+        expect(store.events).toEqual([]);
+        expect(store.listReservedOutpoints()).toEqual([TAXI_IN]);
+        expect(reconciler.status().blockers).toEqual(["joint_fill_liability_unresolved"]);
+    });
+
+    it("keeps a bound ambiguous fill submitting when our own checkpoint took the solver input", async () => {
+        const coins = new Map([
+            [key(OFFER), fundingCoin({ ...OFFER, script: "ac".repeat(34) })],
+            [
+                key(SOLVER_IN),
+                fundingCoin({
+                    ...SOLVER_IN,
+                    isSpent: true,
+                    spentBy: checkpointSpending(SOLVER_IN).id,
+                }),
+            ],
+        ]);
+        const { store, reconciler } = setup([fill(ourTxid(), BOUND_AMBIGUOUS)], coins);
+        await reconciler.tick();
+        expect(store.get("fill-1")!.state).toBe("submitting");
+        expect(store.events).toEqual([]);
+        expect(store.listReservedOutpoints()).toEqual([TAXI_IN]);
     });
 
     it("never settles on the submit txid claim alone", async () => {

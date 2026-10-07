@@ -3,6 +3,7 @@ import { base64 } from "@scure/base";
 import type { SwapFill, SwapFillRepository } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
+    deriveJointInputs,
     deriveJointOutputs,
     JointGraphDerivationError,
     type DerivedJointOutput,
@@ -38,6 +39,7 @@ const TXID = /^[0-9a-f]{64}$/i;
 
 const NEVER_INVOKED_CODE = "swap_fill_submit_never_invoked";
 const OFFER_SPENT_CODE = "swap_fill_offer_cancelled";
+const INPUT_SPENT_CODE = "swap_fill_input_conflict";
 const UNEXPECTED_SPEND = "swap_fill_unexpected_spend";
 const JOINT_LIABILITY_UNRESOLVED = "joint_fill_liability_unresolved";
 
@@ -64,6 +66,21 @@ const trustedOutputs = (fill: SwapFill): TrustedOutput[] => {
         ),
     ];
 };
+
+const spendersOf = (coin: VirtualCoin): string[] =>
+    [coin.arkTxId, coin.spentBy]
+        .filter((txid): txid is string => typeof txid === "string" && TXID.test(txid))
+        .map((txid) => txid.toLowerCase());
+
+// Checkpoint signatures are witness data, so a prepared checkpoint keeps the
+// trusted graph's txid: these are the spenders our own fill puts on each coin.
+const ourSpenders = (fill: SwapFill, arkTxid: string | undefined): Set<string> =>
+    new Set([
+        ...(arkTxid ? [arkTxid] : []),
+        ...fill.graph.checkpoints.map((psbt) =>
+            Transaction.fromPSBT(base64.decode(psbt)).id.toLowerCase(),
+        ),
+    ]);
 
 const preparedTxid = (fill: SwapFill): string | undefined => {
     if (!fill.preparedArkTx) return undefined;
@@ -98,6 +115,47 @@ export function createSwapFillReconciler(deps: SwapFillReconcilerDeps): SwapFill
     let unexpected = new Set<string>();
     let pending: Promise<void> | undefined;
 
+    // The emulator is the terminal submitter for a covenant spend and hands
+    // back no finalize or pending handle, so elapsed time can never prove our
+    // tx did not land. A non-offer input already spent by a transaction that is
+    // not ours can: our checkpoint for it would be a double spend. That is the
+    // only safe way out of an ambiguous submit while the offer sits unspent.
+    const conflictingSpender = async (
+        fill: SwapFill,
+        ourTxid: string | undefined,
+    ): Promise<string | undefined> => {
+        let inputs: ReturnType<typeof deriveJointInputs>;
+        let ours: Set<string>;
+        try {
+            inputs = deriveJointInputs(fill.graph);
+            ours = ourSpenders(fill, ourTxid);
+        } catch (cause) {
+            if (cause instanceof JointGraphDerivationError) return undefined;
+            throw cause;
+        }
+        const offer = key(fill.offerTxid!.toLowerCase(), fill.offerVout!);
+        const wanted = inputs.filter((input) => key(input.txid, input.vout) !== offer);
+        if (wanted.length === 0) return undefined;
+        let coins: VirtualCoin[];
+        try {
+            const response = await deps.indexer.getVtxos({
+                outpoints: wanted.map(({ txid, vout }) => ({ txid, vout })),
+            });
+            if (!Array.isArray(response.vtxos)) return undefined;
+            coins = response.vtxos;
+        } catch {
+            return undefined;
+        }
+        const keys = new Set(wanted.map((input) => key(input.txid, input.vout)));
+        for (const coin of coins) {
+            if (!keys.has(key(coin.txid.toLowerCase(), coin.vout))) continue;
+            const spenders = spendersOf(coin);
+            if (spenders.length === 0 || spenders.some((txid) => ours.has(txid))) continue;
+            return spenders[0];
+        }
+        return undefined;
+    };
+
     const reconcile = async (fill: SwapFill): Promise<void> => {
         // F2: stale prepared bytes on quoted rows are inert; only submitting rows resolve.
         if (fill.state !== "submitting") return;
@@ -117,22 +175,25 @@ export function createSwapFillReconciler(deps: SwapFillReconcilerDeps): SwapFill
         } catch {
             return;
         }
-        const spenders = [offer?.arkTxId, offer?.spentBy]
-            .filter((txid): txid is string => typeof txid === "string" && TXID.test(txid))
-            .map((txid) => txid.toLowerCase());
+        const spenders = offer ? spendersOf(offer) : [];
         const spent = offer !== undefined && (offer.isSpent || offer.spentBy !== undefined);
         const ours = ourTxid !== undefined && spenders.includes(ourTxid);
         const now = deps.now();
         if (!spent) {
             // Never invoked means the provider definitely never ran, so the
             // fill is safe to re-quote; an invoked fill stays until observed.
-            if (!fill.submitInvoked)
+            if (!fill.submitInvoked) {
                 deps.swapFills.reconcileRequeue(
                     fill.id,
                     NEVER_INVOKED_CODE,
                     "provider was never invoked; safe to re-quote (not submitted)",
                     now,
                 );
+                return;
+            }
+            const conflict = await conflictingSpender(fill, ourTxid);
+            if (conflict !== undefined)
+                deps.swapFills.recordCancelled(fill.id, conflict, INPUT_SPENT_CODE, now);
             return;
         }
         if (ours) {

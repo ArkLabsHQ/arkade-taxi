@@ -91,6 +91,7 @@ const BLOCKER_SOURCES = [
 const NOT_BLOCKERS = new Set([
     ...["not_ready", "recovery_failed", "runtime_unsafe", "shutdown_failed", "shutdown_timeout"],
     ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
+    ...["swap_fill_input_conflict"],
     ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
     ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
     // Refusals inside the SDK's own background settlement, which only the SDK sees and logs,
