@@ -30,6 +30,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    loanSats,
     lockupSats,
     payoutPkScript,
     recycleFare,
@@ -44,7 +45,7 @@ import {
     openDatabase,
     type Database,
 } from "@arkade-taxi/db";
-import type { Advance, AdvanceState } from "@arkade-taxi/core";
+import { covenantParamsOf, type Advance, type AdvanceState } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { classifyObservedSpend, createSpendWatcher } from "../src/watcher.js";
@@ -57,6 +58,7 @@ import {
     operatorTree,
     policy as basePolicy,
     providerEmulatorKey,
+    senderKey,
     serverKey,
 } from "./fixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
@@ -153,6 +155,7 @@ async function setup(
     cfg = config(),
     receiverExtraLeaves: Uint8Array[] = [],
     paymentSats?: bigint,
+    covenantVersion?: 2,
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
@@ -198,6 +201,10 @@ async function setup(
     if (paymentSats !== undefined) {
         request.params.topup = request.params.dust;
         request.params.paymentSats = paymentSats;
+    }
+    if (covenantVersion === 2) {
+        request.params.topup = request.params.dust;
+        request.params.covenantVersion = 2;
     }
     const lockupValue = lockupSats(request.params);
     const covenant = new DustCovenantScript({
@@ -289,10 +296,41 @@ async function setup(
         const inputs = [covenantSpendInput(covenant, leaf, outpoint, lockupValue, covenantPacket)];
         const destination = new Uint8Array([0x51, 0x20, ...request.params.receiverKey]);
         const { operatorSats, assetFare } = recycleFare(request.params);
+        // v2 leaf 2 spends a second coin the covenant never names, so the harness
+        // lends the recycle fixture's tree to the refunder.
+        const v2SecondInput = covenantVersion === 2 && kind === "refunded";
         let outputs: { script: Uint8Array; amount: bigint }[];
         let receiverSource: Transaction | undefined;
         if (kind === "purchased") {
             outputs = [{ script: destination, amount: lockupValue }];
+        } else if (covenantVersion === 2 && kind === "recovered") {
+            outputs = [
+                {
+                    script: payoutPkScript(
+                        request.params.operatorKey,
+                        lockupValue,
+                        request.params.dust,
+                    ),
+                    amount: lockupValue,
+                },
+            ];
+        } else if (v2SecondInput) {
+            receiverSource = source(receiverTree.pkScript, 500n, 0x31);
+            inputs.push({
+                txid: receiverSource.id,
+                vout: 0,
+                value: 500n,
+                tapTree: receiverTree.encode(),
+                tapLeafScript: receiverTree.findLeaf(hex.encode(receiverTree.scripts[0])),
+            });
+            const loan = loanSats(request.params);
+            outputs = [
+                {
+                    script: payoutPkScript(request.params.operatorKey, loan, request.params.dust),
+                    amount: loan,
+                },
+                { script: receiverTree.pkScript, amount: lockupValue + 500n - loan },
+            ];
         } else if (kind === "recycled") {
             receiverSource = source(receiverTree.pkScript, 500n, 0x31);
             inputs.push({
@@ -334,9 +372,15 @@ async function setup(
             ];
         }
         const emulatorScript =
-            covenant.covenant[
-                leaf === Leaf.Recycle ? "recycle" : leaf === Leaf.Purchase ? "purchase" : "refund"
-            ];
+            leaf === Leaf.Recovery
+                ? (covenant.covenant.reclaim ?? covenant.covenant.refund)
+                : covenant.covenant[
+                      leaf === Leaf.Recycle
+                          ? "recycle"
+                          : leaf === Leaf.Purchase
+                            ? "purchase"
+                            : "refund"
+                  ];
         const spendPacket = paymentAsset
             ? asset.Packet.create([
                   asset.AssetGroup.create(
@@ -348,7 +392,15 @@ async function setup(
                                 asset.AssetOutput.create(0, assetFare),
                                 asset.AssetOutput.create(1, paymentUnits - assetFare),
                             ]
-                          : [asset.AssetOutput.create(kind === "purchased" ? 0 : 1, paymentUnits)],
+                          : [
+                                asset.AssetOutput.create(
+                                    kind === "purchased" ||
+                                        (covenantVersion === 2 && kind === "recovered")
+                                        ? 0
+                                        : 1,
+                                    paymentUnits,
+                                ),
+                            ],
                       [],
                   ),
               ])
@@ -374,7 +426,10 @@ async function setup(
         );
         ark = await emulatorIdentity(emulatorScript).sign(ark, [0]);
         if (kind === "refunded") ark = await senderIdentity.sign(ark, [0]);
-        if (kind === "recycled" && hex.encode(receiverOwner) !== hex.encode(serverKey))
+        if (
+            (kind === "recycled" || v2SecondInput) &&
+            hex.encode(receiverOwner) !== hex.encode(serverKey)
+        )
             ark = await receiverIdentity.sign(ark, [1]);
         const checkpoints = await Promise.all(
             graph.checkpoints.map(async (checkpoint, index) => {
@@ -384,7 +439,7 @@ async function setup(
                     signed = await senderIdentity.sign(signed, [0]);
                 if (
                     index === 1 &&
-                    kind === "recycled" &&
+                    (kind === "recycled" || v2SecondInput) &&
                     hex.encode(receiverOwner) !== hex.encode(serverKey)
                 )
                     signed = await receiverIdentity.sign(signed, [0]);
@@ -832,6 +887,177 @@ describe("canonical covenant observation", () => {
             state.db.close();
         },
     );
+
+    const setupV2 = (kind: SpendKind, payment = 100n, mutateGraph?: Parameters<typeof setup>[4]) =>
+        setup(
+            kind,
+            ":memory:",
+            false,
+            true,
+            mutateGraph,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            config(),
+            [],
+            payment,
+            2,
+        );
+
+    it("classifies a v2 refund repaying the whole loan to the operator", async () => {
+        const state = await setupV2("refunded");
+        expect(state.advance).toMatchObject({ covenantVersion: 2, topup: 330n, paymentSats: 100n });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "refunded",
+            spentTxid: state.finalArk!.id,
+        });
+        const ark = state.finalArk!;
+        expect(ark.inputsLength).toBe(2);
+        expect(ark.getOutput(0)).toEqual({
+            amount: 330n,
+            script: payoutPkScript(state.advance.operatorKey, 330n, state.advance.dust),
+        });
+        expect(ark.getOutput(1).amount).toBe(430n + 500n - 330n);
+        // The accepted out[1] script is input 1's own, and is neither key the leaf names.
+        expect(ark.getOutput(1).script).not.toEqual(
+            new Uint8Array([0x51, 0x20, ...state.advance.senderKey]),
+        );
+        expect(ark.getOutput(1).script).not.toEqual(
+            new Uint8Array([0x51, 0x20, ...state.advance.receiverKey]),
+        );
+        state.db.close();
+    });
+
+    it("rejects a v2 refund paying senderKey instead of the refunder's own coin", async () => {
+        const state = await setupV2("refunded", 100n, (graph) => {
+            const out = graph.arkTx.getOutput(1);
+            graph.arkTx.updateOutput(1, {
+                ...out,
+                script: new Uint8Array([0x51, 0x20, ...senderKey]),
+            });
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+        });
+        await expect(
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
+                { indexer: state.indexer, config: config() },
+                { height: 700000, time: NOW },
+            ),
+        ).resolves.toMatchObject({
+            kind: "unknown",
+            reason: "refund recovery output differs from the exact covenant shape",
+        });
+        state.db.close();
+    });
+
+    it("classifies a v2 reclaim as recovered and pins the whole lockup to the operator", async () => {
+        const state = await setupV2("recovered");
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recovered",
+            spentTxid: state.finalArk!.id,
+        });
+        const ark = state.finalArk!;
+        expect(ark.outputsLength).toBe(3);
+        expect(ark.getOutput(0)).toEqual({
+            amount: 430n,
+            script: payoutPkScript(state.advance.operatorKey, 430n, state.advance.dust),
+        });
+        expect(ark.getOutput(2)).toEqual(P2A);
+        state.db.close();
+    });
+
+    it.each(["refunded", "recovered"] as const)(
+        "conserves a v2 asset %s through the covenant extension",
+        async (kind) => {
+            const state = await setup(
+                kind,
+                ":memory:",
+                true,
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                "recycle",
+                "receiver",
+                { currency: "sats", units: 7n },
+                config(),
+                [],
+                undefined,
+                2,
+            );
+            await state.watcher.catchUp();
+            expect(state.advances.get(state.advance.id)).toMatchObject({
+                state: kind,
+                spentTxid: state.finalArk!.id,
+            });
+            expect(
+                Extension.fromTx(state.finalArk!).getAssetPacket()!.groups[0]!.outputs,
+            ).toMatchObject([
+                { vout: kind === "recovered" ? 0 : 1, amount: 9_007_199_254_740_993n },
+            ]);
+            state.db.close();
+        },
+    );
+
+    it("rejects a v2 reclaim whose CLTV is not mature at the canonical tip", async () => {
+        const state = await setupV2("recovered");
+        await expect(
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
+                { indexer: state.indexer, config: config() },
+                { height: Number(state.advance.locktime) - 1, time: NOW },
+            ),
+        ).resolves.toMatchObject({
+            kind: "unknown",
+            reason: "recovery height CLTV is not mature at the canonical tip",
+        });
+        state.db.close();
+    });
+
+    // Spec 3.2: two v2 covenants differing only in paymentSats share one address, so
+    // the exact value comparison is the only thing left binding the funded amount.
+    it("rejects a v2 covenant funded at the wrong value by the value comparison alone", async () => {
+        const state = await setupV2("recovered");
+        const params = covenantParamsOf(state.advances.get(state.advance.id)!);
+        const twin = new DustCovenantScript({
+            params: { ...params, paymentSats: 999n },
+            serverKey: config().serverPubkey,
+            emulatorKey: config().emulatorPubkey,
+            vtxoMinAmount: config().vtxoMinAmount,
+        });
+        expect(twin.address(config().addressHrp, config().serverPubkey).encode()).toBe(
+            state.advance.covenantAddress,
+        );
+
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const coin = state.coins.get(key)!;
+        const classify = (candidate: VirtualCoin) =>
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                candidate,
+                { indexer: state.indexer, config: config() },
+                { height: Number(state.advance.locktime), time: NOW },
+            );
+        await expect(classify(coin)).resolves.toMatchObject({ kind: "recovered" });
+        await expect(classify({ ...coin, value: 330 + 999 })).resolves.toEqual({
+            kind: "unknown",
+            txid: coin.arkTxId!,
+            reason: "spent outpoint evidence is incomplete or inconsistent",
+        });
+        state.db.close();
+    });
 
     it("accepts a three-leaf receiver funding tree in arkd's depth encoding", async () => {
         const receiverIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6));

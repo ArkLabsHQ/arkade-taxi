@@ -2,6 +2,7 @@ import {
     DustCovenantScript,
     Leaf,
     covenantSpendInput,
+    loanSats,
     lockupSats,
     payoutPkScript,
     recycleFare,
@@ -461,6 +462,101 @@ const arkInput = (
     exactSignatures(arkTx, index, selected, signers, label, verify);
 };
 
+/**
+ * The claimant's own coin at input 1 of a two-input covenant spend. `expected`
+ * pins its script to a persisted key; v2's refund leaf binds it to out[1]
+ * instead, so that caller passes none.
+ */
+const secondInput = async (
+    arkTx: Transaction,
+    unroll: CSVMultisigTapscript.Type,
+    deps: Pick<SpendWatcherDeps, "indexer" | "config">,
+    verify: SignatureCheck,
+    label: string,
+    expected?: Uint8Array,
+): Promise<VirtualCoin> => {
+    const checkpointId = txid(arkTx.getInput(1));
+    const raw = await rawTransactions(deps.indexer, [checkpointId]);
+    const checkpoint = raw.get(checkpointId)!;
+    exactTransactionHeader(checkpoint, 0, `${label} checkpoint`);
+    const spent = checkpoint.getInput(0);
+    const outpoint = { txid: txid(spent), vout: spent.index! };
+    const found = await exactCoin(deps.indexer, outpoint);
+    if (!found || !found.isSpent || found.spentBy !== checkpoint.id || found.arkTxId !== arkTx.id)
+        fail(`${label} funding outpoint lacks exact canonical spend evidence`);
+    const coin = found!;
+    const trees = getArkPsbtFields(checkpoint, 0, VtxoTaprootTree);
+    if (trees.length !== 1) fail(`${label} funding tree is missing or ambiguous`);
+    const tree = VtxoScript.decode(trees[0]!);
+    if (
+        !sameTapTree(trees[0]!, tree) ||
+        (expected !== undefined && !sameBytes(tree.pkScript, expected)) ||
+        coin.script !== hex.encode(tree.pkScript)
+    )
+        fail(`${label} funding tree does not belong to the persisted ${label}`);
+    const heightExpiry = coin.expiresAtHeight;
+    const timeExpiry = coin.expiresAt;
+    if (
+        (heightExpiry === undefined) === (timeExpiry === undefined) ||
+        (heightExpiry !== undefined &&
+            (!Number.isSafeInteger(heightExpiry) || heightExpiry <= 0)) ||
+        (timeExpiry !== undefined &&
+            (!(timeExpiry instanceof Date) ||
+                !Number.isSafeInteger(timeExpiry.getTime()) ||
+                timeExpiry.getTime() <= 0)) ||
+        !(coin.createdAt instanceof Date) ||
+        !Number.isSafeInteger(coin.createdAt.getTime()) ||
+        coin.createdAt.getTime() < 0 ||
+        coin.isUnrolled !== false ||
+        // Already spent above, so its batch may since have been swept.
+        typeof coin.isSwept !== "boolean" ||
+        typeof coin.isPreconfirmed !== "boolean" ||
+        typeof coin.status?.confirmed !== "boolean" ||
+        typeof coin.status.isLeaf !== "boolean" ||
+        coin.status.confirmed === coin.isPreconfirmed ||
+        coin.status.isLeaf === coin.isPreconfirmed ||
+        !Array.isArray(coin.commitmentTxIds) ||
+        coin.commitmentTxIds.some((id) => !/^[0-9a-f]{64}$/.test(id)) ||
+        !Number.isSafeInteger(coin.value) ||
+        coin.value <= 0
+    )
+        fail(`${label} funding canonical status or expiry is inconsistent`);
+    const leaves = checkpoint.getInput(0).tapLeafScript;
+    if (!leaves || leaves.length !== 1) fail(`${label} checkpoint leaf is ambiguous`);
+    const leafBody = scriptFromTapLeafScript(leaves![0]!);
+    const closure = MultisigTapscript.decode(leafBody);
+    if (
+        closure.params.pubkeys.length !== 2 ||
+        sameBytes(closure.params.pubkeys[0]!, closure.params.pubkeys[1]!) ||
+        !closure.params.pubkeys.some((pubkey) => sameBytes(pubkey, deps.config.serverPubkey))
+    )
+        fail(`${label} funding leaf has unexpected signers`);
+    const signers = closure.params.pubkeys;
+    const checkpointTree = directCheckpoint(
+        checkpoint,
+        outpoint,
+        BigInt(coin.value),
+        tree,
+        tree.findLeaf(hex.encode(leafBody)),
+        unroll,
+        signers,
+        `${label} checkpoint`,
+        verify,
+    );
+    arkInput(
+        arkTx,
+        1,
+        checkpoint,
+        BigInt(coin.value),
+        checkpointTree,
+        leafBody,
+        signers,
+        `${label} Arkade input`,
+        verify,
+    );
+    return coin;
+};
+
 async function classifySpend(
     advance: Advance,
     coin: VirtualCoin,
@@ -518,9 +614,13 @@ async function classifySpend(
             facts.value,
         ).tapLeafScript;
         const covenantProgram =
-            facts.script.covenant[
-                leaf === Leaf.Recycle ? "recycle" : leaf === Leaf.Purchase ? "purchase" : "refund"
-            ];
+            leaf === Leaf.Recycle
+                ? facts.script.covenant.recycle
+                : leaf === Leaf.Purchase
+                  ? facts.script.covenant.purchase
+                  : leaf === Leaf.Recovery
+                    ? (facts.script.covenant.reclaim ?? facts.script.covenant.refund)
+                    : facts.script.covenant.refund;
         const covenantSigners = [
             deps.config.serverPubkey,
             ...(leaf === Leaf.RefundSender ? [advance.senderKey] : []),
@@ -569,95 +669,13 @@ async function classifySpend(
         if (leaf === Leaf.Recycle) {
             if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
                 fail("recycle input or output count mismatch");
-            const receiverCheckpointId = txid(arkTx.getInput(1));
-            const receiverRaw = await rawTransactions(deps.indexer, [receiverCheckpointId]);
-            const receiverCheckpoint = receiverRaw.get(receiverCheckpointId)!;
-            exactTransactionHeader(receiverCheckpoint, 0, "receiver checkpoint");
-            const receiverInput = receiverCheckpoint.getInput(0);
-            const receiverOutpoint = { txid: txid(receiverInput), vout: receiverInput.index! };
-            const receiverCoin = await exactCoin(deps.indexer, receiverOutpoint);
-            if (
-                !receiverCoin ||
-                !receiverCoin.isSpent ||
-                receiverCoin.spentBy !== receiverCheckpoint.id ||
-                receiverCoin.arkTxId !== arkTx.id
-            )
-                fail("receiver funding outpoint lacks exact canonical spend evidence");
-            const exactReceiverCoin = receiverCoin!;
-            const trees = getArkPsbtFields(receiverCheckpoint, 0, VtxoTaprootTree);
-            if (trees.length !== 1) fail("receiver funding tree is missing or ambiguous");
-            const receiverTree = VtxoScript.decode(trees[0]!);
-            if (
-                !sameTapTree(trees[0]!, receiverTree) ||
-                !sameBytes(
-                    receiverTree.pkScript,
-                    new Uint8Array([0x51, 0x20, ...advance.receiverKey]),
-                ) ||
-                exactReceiverCoin.script !== hex.encode(receiverTree.pkScript)
-            )
-                fail("receiver funding tree does not belong to the persisted receiver");
-            const heightExpiry = exactReceiverCoin.expiresAtHeight;
-            const timeExpiry = exactReceiverCoin.expiresAt;
-            if (
-                (heightExpiry === undefined) === (timeExpiry === undefined) ||
-                (heightExpiry !== undefined &&
-                    (!Number.isSafeInteger(heightExpiry) || heightExpiry <= 0)) ||
-                (timeExpiry !== undefined &&
-                    (!(timeExpiry instanceof Date) ||
-                        !Number.isSafeInteger(timeExpiry.getTime()) ||
-                        timeExpiry.getTime() <= 0)) ||
-                !(exactReceiverCoin.createdAt instanceof Date) ||
-                !Number.isSafeInteger(exactReceiverCoin.createdAt.getTime()) ||
-                exactReceiverCoin.createdAt.getTime() < 0 ||
-                exactReceiverCoin.isUnrolled !== false ||
-                // Already spent above, so its batch may since have been swept.
-                typeof exactReceiverCoin.isSwept !== "boolean" ||
-                typeof exactReceiverCoin.isPreconfirmed !== "boolean" ||
-                typeof exactReceiverCoin.status?.confirmed !== "boolean" ||
-                typeof exactReceiverCoin.status.isLeaf !== "boolean" ||
-                exactReceiverCoin.status.confirmed === exactReceiverCoin.isPreconfirmed ||
-                exactReceiverCoin.status.isLeaf === exactReceiverCoin.isPreconfirmed ||
-                !Array.isArray(exactReceiverCoin.commitmentTxIds) ||
-                exactReceiverCoin.commitmentTxIds.some((id) => !/^[0-9a-f]{64}$/.test(id)) ||
-                !Number.isSafeInteger(exactReceiverCoin.value) ||
-                exactReceiverCoin.value <= 0
-            )
-                fail("receiver funding canonical status or expiry is inconsistent");
-            const leaves = receiverCheckpoint.getInput(0).tapLeafScript;
-            if (!leaves || leaves.length !== 1) fail("receiver checkpoint leaf is ambiguous");
-            const receiverLeafBody = scriptFromTapLeafScript(leaves![0]!);
-            const closure = MultisigTapscript.decode(receiverLeafBody);
-            if (
-                closure.params.pubkeys.length !== 2 ||
-                sameBytes(closure.params.pubkeys[0]!, closure.params.pubkeys[1]!) ||
-                !closure.params.pubkeys.some((pubkey) =>
-                    sameBytes(pubkey, deps.config.serverPubkey),
-                )
-            )
-                fail("receiver funding leaf has unexpected signers");
-            const receiverLeaf = receiverTree.findLeaf(hex.encode(receiverLeafBody));
-            const receiverSigners = closure.params.pubkeys;
-            const receiverCheckpointTree = directCheckpoint(
-                receiverCheckpoint,
-                receiverOutpoint,
-                BigInt(exactReceiverCoin.value),
-                receiverTree,
-                receiverLeaf,
-                facts.unroll,
-                receiverSigners,
-                "receiver checkpoint",
-                verify,
-            );
-            arkInput(
+            const exactReceiverCoin = await secondInput(
                 arkTx,
-                1,
-                receiverCheckpoint,
-                BigInt(exactReceiverCoin.value),
-                receiverCheckpointTree,
-                receiverLeafBody,
-                receiverSigners,
-                "receiver Arkade input",
+                facts.unroll,
+                deps,
                 verify,
+                "receiver",
+                new Uint8Array([0x51, 0x20, ...advance.receiverKey]),
             );
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             const merged = facts.value + BigInt(exactReceiverCoin.value) - operatorSats;
@@ -690,29 +708,74 @@ async function classifySpend(
             return { kind: "recycled", txid: arkTx.id };
         }
 
-        if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
-            fail("refund input or output count mismatch");
-        const topup = refundTopup(covenantParamsOf(advance), deps.config.vtxoMinAmount);
-        exactOutput(
-            arkTx,
-            0,
-            topup,
-            payoutPkScript(advance.operatorKey, topup, advance.dust),
-            "refund repayment",
-        );
-        exactOutput(
-            arkTx,
-            1,
-            facts.value - topup,
-            payoutPkScript(
-                advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
+        const params = covenantParamsOf(advance);
+        if (params.covenantVersion === 2 && leaf === Leaf.Recovery) {
+            // out[0] is tied to in[0], so the leaf pins no input count and neither may this.
+            if (arkTx.outputsLength !== 3) fail("reclaim output count mismatch");
+            exactOutput(
+                arkTx,
+                0,
+                facts.value,
+                payoutPkScript(advance.operatorKey, facts.value, advance.dust),
+                "reclaim repayment",
+            );
+            exactExtension(arkTx, 1, covenantProgram, [covenantHoldings], 0);
+            exactAnchor(arkTx, 2);
+        } else if (params.covenantVersion === 2) {
+            if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
+                fail("refund input or output count mismatch");
+            const refunderCoin = await secondInput(arkTx, facts.unroll, deps, verify, "refunder");
+            const loan = loanSats(params);
+            exactOutput(
+                arkTx,
+                0,
+                loan,
+                payoutPkScript(advance.operatorKey, loan, advance.dust),
+                "refund repayment",
+            );
+            // The leaf pins out[1] to in[1]'s own script; senderKey only signs it.
+            exactOutput(
+                arkTx,
+                1,
+                facts.value + BigInt(refunderCoin.value) - loan,
+                hex.decode(refunderCoin.script),
+                "refund recovery output",
+            );
+            exactExtension(
+                arkTx,
+                2,
+                covenantProgram,
+                [covenantHoldings, holdings(refunderCoin, "refunder funding outpoint")],
+                1,
+            );
+            exactAnchor(arkTx, 3);
+        } else {
+            if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
+                fail("refund input or output count mismatch");
+            const topup = refundTopup(params, deps.config.vtxoMinAmount);
+            exactOutput(
+                arkTx,
+                0,
+                topup,
+                payoutPkScript(advance.operatorKey, topup, advance.dust),
+                "refund repayment",
+            );
+            exactOutput(
+                arkTx,
+                1,
                 facts.value - topup,
-                advance.dust,
-            ),
-            "refund recovery output",
-        );
-        exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
-        exactAnchor(arkTx, 3);
+                payoutPkScript(
+                    advance.recoveryRecipient === "receiver"
+                        ? advance.receiverKey
+                        : advance.senderKey,
+                    facts.value - topup,
+                    advance.dust,
+                ),
+                "refund recovery output",
+            );
+            exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
+            exactAnchor(arkTx, 3);
+        }
         if (leaf === Leaf.Recovery) {
             if (
                 arkTx.lockTime !== Number(recoveryLocktime!.value) ||
