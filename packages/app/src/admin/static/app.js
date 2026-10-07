@@ -182,7 +182,7 @@ const BLOCKER_GROUPS = [
     ],
     [
         "The Taxi is collecting the fares and repayments it received; new payments wait until it finishes.",
-        "proceeds_collecting proceeds_output_pending proceeds_intent_pending proceeds_worker_active",
+        "proceeds_output_pending proceeds_intent_pending proceeds_worker_active",
     ],
     [
         "Collecting the Taxi's earnings needs more balance above the reserve. Send it more sats.",

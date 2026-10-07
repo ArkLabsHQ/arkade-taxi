@@ -172,11 +172,7 @@ export function operationalSnapshot(
     const startup = deps.startup?.();
     const proceeds = deps.proceeds?.();
     const blockers = [
-        ...(proceeds?.blocker
-            ? [safeCode(proceeds.blocker, "proceeds_blocked")]
-            : proceeds?.jobId
-              ? ["proceeds_collecting"]
-              : []),
+        ...(proceeds?.blocker ? [safeCode(proceeds.blocker, "proceeds_blocked")] : []),
         ...(!options.ignoreManualPause && paused ? ["manual_pause"] : []),
         ...(startup && !startup.complete
             ? [safeCode(startup.blocker ?? `startup_${startup.phase}`, "startup_blocked")]

@@ -36,16 +36,17 @@ coin into at most eight outputs to its own address. A single sufficiently funded
 coin can bootstrap the service; separate deposits are not required. The split
 keeps a reserve output and spendable working outputs, respects provider limits
 and the same settlement fee cap, and uses the collector's durable input fences
-and submission evidence. Pending outputs are never quote inventory. Quotes wait
-for the exact spendable outputs to be verified, then use the normal reserve rule.
+and submission evidence. Pending outputs are never quote inventory: a job's
+inputs stay reserved until it completes, so quotes skip them and use the normal
+reserve rule.
 Reserved, asset-bearing, renewing and short-lived coins are not split. An
 ambiguous submission retains its job and input reservations across restart.
 
 Inspect `proceeds` in `/health`, or `readiness.proceeds` in the admin port's `/admin/api/status`:
 it reports the active job,
-state, blocker, exact authorized fee and commitment. New quotes wait while a
-collection job is active, until its exact spendable self-output is verified;
-`/ready` reports `proceeds_collecting` or
+state, blocker, exact authorized fee and commitment. A collection job in flight
+does not close readiness; only the collector's own blocker does, and `/ready`
+reports that blocker, such as
 `proceeds_output_pending`. Existing covenant recovery continues independently.
 The fee cap defaults to zero; `proceeds_fee_cap_exceeded` requires deliberately configuring
 `TAXI_PROCEEDS_MAX_FEE_SATS` for the deployment's settlement fees. Existing

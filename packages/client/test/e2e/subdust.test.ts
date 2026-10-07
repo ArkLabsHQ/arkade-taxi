@@ -128,7 +128,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
                         quotes.push(await request.text());
                         if (quotes.length <= 2)
                             return Response.json(
-                                { error: "proceeds_collecting", code: "not_ready" },
+                                { error: "proceeds_output_pending", code: "not_ready" },
                                 { status: 503 },
                             );
                         const response = await fetchImpl(input, init);
@@ -142,7 +142,7 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
                         lockups.push({ url: request.url, body: await request.text() });
                         if (lockups.length <= 2)
                             return Response.json(
-                                { error: "proceeds_collecting", code: "not_ready" },
+                                { error: "proceeds_output_pending", code: "not_ready" },
                                 { status: 503 },
                             );
                     }

@@ -327,7 +327,7 @@ describe("quote and runtime refresh interleaving", () => {
             expect(h.builder.submitted).toEqual([]);
         },
     );
-    it.each(["proceeds_collecting", "runtime_stale"])(
+    it.each(["proceeds_blocked", "runtime_stale"])(
         "preserves the exact pre-effect %s refusal during final inventory revalidation",
         async (reason) => {
             const h = setup();
@@ -354,7 +354,7 @@ describe("quote and runtime refresh interleaving", () => {
             expect(h.advances.byState("quoted")).toEqual([]);
         },
     );
-    it("rechecks proceeds readiness before reserving a quote built during collection", async () => {
+    it("rechecks proceeds readiness before reserving a quote built while the collector is blocked", async () => {
         const h = setup();
         let collecting = false;
         const build = h.builder.buildUnsigned.bind(h.builder);
@@ -365,9 +365,9 @@ describe("quote and runtime refresh interleaving", () => {
         };
         await expect(
             createQuote(h.deps, quoteBody(), () => {
-                if (collecting) throw new Error("proceeds_collecting");
+                if (collecting) throw new Error("proceeds_blocked");
             }),
-        ).rejects.toThrow("proceeds_collecting");
+        ).rejects.toThrow("proceeds_blocked");
         expect(h.reservations.listReservedOutpoints()).toEqual([]);
         expect(h.advances.byState("quoted")).toEqual([]);
     });

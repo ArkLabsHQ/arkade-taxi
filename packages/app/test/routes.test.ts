@@ -670,20 +670,36 @@ describe("receiver claim routes", () => {
 });
 
 describe("runtime admission and readiness", () => {
-    it("blocks new quotes until an active collection output is verified", () => {
+    const collecting = () => ({
+        running: true,
+        jobId: "collection",
+        state: "settling",
+        blocker: null,
+        maxFeeSats: "0",
+        authorizedFeeSats: "0",
+        commitmentTxid: null,
+    });
+
+    it("keeps readiness open while a collection job runs, and still reports the job", () => {
         const d = deps();
-        d.proceeds = () => ({
-            running: true,
-            jobId: "collection",
-            state: "settling",
-            blocker: null,
-            maxFeeSats: "0",
-            authorizedFeeSats: "0",
-            commitmentTxid: null,
-        });
+        d.proceeds = collecting;
         const result = operationalSnapshot(d);
-        expect(result.ready).toBe(false);
-        expect(result.body.blockers).toContain("proceeds_collecting");
+        expect(result.ready).toBe(true);
+        expect(result.body.blockers).toEqual([]);
+        expect(result.body.proceeds).toEqual(collecting());
+    });
+
+    it("admits a financial POST while a collection job is in flight", async () => {
+        const res = await createRoutes({ ...deps(), proceeds: collecting }).request(
+            "/v1/transfers",
+            {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(quoteBody()),
+            },
+        );
+        expect(res.status).toBe(200);
+        expect(advances.rows.size).toBe(1);
     });
     it("exposes a fee-blocked proceeds collector without hiding its authorization", () => {
         const d = deps();
