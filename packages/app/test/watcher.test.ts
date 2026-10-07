@@ -1827,10 +1827,13 @@ describe("canonical covenant observation", () => {
             if (mode === "missing") state.coins.delete(receiverEntry[0]);
             else {
                 const read = state.indexer.getVtxos;
+                // Keyed on the whole batch, not outpoints[0]: once the scan reads
+                // every outpoint in one request, a first-key test never fires and
+                // the duplicate path goes unexercised behind a green assertion.
                 state.indexer.getVtxos = async (options) => {
                     const response = await read(options);
-                    return options?.outpoints?.[0]?.txid === receiverEntry[1].txid
-                        ? { vtxos: [receiverEntry[1], receiverEntry[1]] }
+                    return options?.outpoints?.some(({ txid }) => txid === receiverEntry[1].txid)
+                        ? { vtxos: [...response.vtxos, receiverEntry[1]] }
                         : response;
                 };
             }
@@ -2776,6 +2779,67 @@ type ScanMetrics = Parameters<NonNullable<WatcherDeps["onScanMetrics"]>>[0];
 
 const canonicalTip = { hash: "41".repeat(32), height: 700000, time: NOW };
 
+const counting = (inner: Pick<IndexerProvider, "getVtxos" | "getVirtualTxs">) => {
+    const calls = { getVtxos: 0, getVirtualTxs: 0 };
+    return {
+        calls,
+        getVtxos: (options: Parameters<IndexerProvider["getVtxos"]>[0]) => (
+            calls.getVtxos++,
+            inner.getVtxos(options)
+        ),
+        getVirtualTxs: (ids: string[]) => (calls.getVirtualTxs++, inner.getVirtualTxs(ids)),
+    };
+};
+
+/** One indexer over two independent fixtures, whose outpoints really differ. */
+const both = (
+    first: Pick<IndexerProvider, "getVtxos" | "getVirtualTxs">,
+    second: Pick<IndexerProvider, "getVtxos" | "getVirtualTxs">,
+): Pick<IndexerProvider, "getVtxos" | "getVirtualTxs"> => ({
+    getVtxos: async (options) => {
+        const seen = await Promise.all([first.getVtxos(options), second.getVtxos(options)]);
+        return { vtxos: seen.flatMap(({ vtxos }) => vtxos) };
+    },
+    getVirtualTxs: async (ids) => {
+        const seen = await Promise.all([first.getVirtualTxs(ids), second.getVirtualTxs(ids)]);
+        return { txs: seen.flatMap(({ txs }) => txs) };
+    },
+});
+
+const recorder = (rows: Advance[]) => {
+    const calls: { method: string; id: string; detail?: string }[] = [];
+    const advances: WatcherDeps["advances"] = {
+        byState: (state) => (state === "locked" ? rows : []),
+        recordSpendObservation: (id) => (calls.push({ method: "observation", id }), "recorded"),
+        recordStableSpendObservation: (id) => (calls.push({ method: "stable", id }), "advanced"),
+        recordSpendUnknown: (id, _txid, detail) =>
+            void calls.push({ method: "unknown", id, detail }),
+        recordCovenantUnrolled: (id, detail) => void calls.push({ method: "unrolled", id, detail }),
+        recordSpendDisagreement: (id, detail) =>
+            void calls.push({ method: "disagreement", id, detail }),
+        clearSpendUnknown: (id) => void calls.push({ method: "clear", id }),
+    };
+    return { calls, advances };
+};
+
+const otherReceiver = SingleKey.fromPrivateKey(new Uint8Array(32).fill(7));
+
+const twoRecycles = async () => {
+    const a = await setup("recycled");
+    const b = await setup(
+        "recycled",
+        ":memory:",
+        false,
+        true,
+        undefined,
+        undefined,
+        undefined,
+        otherReceiver,
+    );
+    expect(a.outpoint.txid).not.toBe(b.outpoint.txid);
+    return { a, b };
+};
+
 describe("canonical scan round trips", () => {
     it("reports one scan's indexer round trips", async () => {
         const state = await setup("purchased");
@@ -2821,5 +2885,85 @@ describe("canonical scan round trips", () => {
         expect(observed[0]).toMatchObject({ watching: 1, getVtxos: 0, getVirtualTxs: 0 });
         expect(state.policy.get().paused).toBe(true);
         state.db.close();
+    });
+
+    // A batched read that applied rawTransactions' fail-closed rule to the whole
+    // union would mark every row unknown over one pruned transaction, and
+    // recordSpendUnknown pauses the policy.
+    it("marks only the row whose canonical transaction the indexer omitted", async () => {
+        const { a, b } = await twoRecycles();
+        b.txs.delete(b.finalArk!.id);
+        const { calls, advances } = recorder([
+            { ...a.advances.byState("locked")[0]!, id: "row-a" },
+            { ...b.advances.byState("locked")[0]!, id: "row-b" },
+        ]);
+        const indexer = counting(both(a.indexer, b.indexer));
+        const watcher = createSpendWatcher({
+            advances,
+            policy: a.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(calls).toEqual([
+            { method: "observation", id: "row-a" },
+            {
+                method: "unknown",
+                id: "row-b",
+                detail: expect.stringContaining("omitted a required transaction"),
+            },
+        ]);
+        expect(indexer.calls.getVtxos).toBe(2);
+        a.db.close();
+        b.db.close();
+    });
+
+    it("fans 25 unspent covenant rows into one outpoint request", async () => {
+        const state = await setup();
+        const row = state.advances.byState("locked")[0]!;
+        const { calls, advances } = recorder(
+            Array.from({ length: 25 }, (_, index) => ({ ...row, id: `clone-${index}` })),
+        );
+        const indexer = counting(state.indexer);
+        const watcher = createSpendWatcher({
+            advances,
+            policy: state.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(indexer.calls).toEqual({ getVtxos: 1, getVirtualTxs: 0 });
+        expect(calls).toHaveLength(25);
+        expect([...new Set(calls.map(({ method }) => method))]).toEqual(["clear"]);
+        state.db.close();
+    });
+
+    it("batches two distinct spent rows into one request per pass", async () => {
+        const { a, b } = await twoRecycles();
+        const { calls, advances } = recorder([
+            { ...a.advances.byState("locked")[0]!, id: "row-a" },
+            { ...b.advances.byState("locked")[0]!, id: "row-b" },
+        ]);
+        const indexer = counting(both(a.indexer, b.indexer));
+        const watcher = createSpendWatcher({
+            advances,
+            policy: a.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(indexer.calls).toEqual({ getVtxos: 2, getVirtualTxs: 2 });
+        expect(calls).toEqual([
+            { method: "observation", id: "row-a" },
+            { method: "observation", id: "row-b" },
+        ]);
+        a.db.close();
+        b.db.close();
     });
 });

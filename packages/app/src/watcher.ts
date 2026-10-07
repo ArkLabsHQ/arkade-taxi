@@ -42,6 +42,8 @@ import { sameTapTree } from "./arkade/tapTree.js";
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;
 const SIGNATURE_CACHE_LIMIT = 1024;
+/** Both reads carry every key in the URL, so a scan-wide batch still chunks. */
+const CHUNK_KEYS = 100;
 const UNROLLED = "covenant outpoint was unrolled; no off-chain claim or recovery is possible";
 
 type SignatureCheck = (tx: Transaction, index: number, signers: string[]) => void;
@@ -857,6 +859,134 @@ export async function classifyObservedSpend(
 const activeStates = ["locking", "locked", "recovering"] as const;
 const terminalStates = ["recycled", "purchased", "refunded", "recovered"] as const;
 
+const chunk = <T>(items: readonly T[], size: number): T[][] =>
+    Array.from({ length: Math.ceil(items.length / size) }, (_, index) =>
+        items.slice(index * size, index * size + size),
+    );
+
+const outpointKey = ({ txid, vout }: { txid: string; vout: number }): string => `${txid}:${vout}`;
+
+/**
+ * One scan's reads in four waves, each key set derived locally from the wave
+ * before, so the count holds however many rows are watched. Best-effort
+ * throughout: a key the batch misses falls through to the same narrow read the
+ * row takes today, so one pruned transaction cannot condemn the others, and no
+ * row's evidence rule is ever answered out of another row's response.
+ */
+const prefetch = async (
+    provider: SpendWatcherDeps["indexer"],
+    outpoints: readonly { txid: string; vout: number }[],
+): Promise<SpendWatcherDeps["indexer"]> => {
+    const coins = new Map<string, VirtualCoin[]>();
+    const resolved = new Set<string>();
+    const txs = new Map<string, string>();
+
+    const loadCoins = async (wanted: readonly { txid: string; vout: number }[]) => {
+        const unique = [...new Map(wanted.map((o) => [outpointKey(o), o])).values()];
+        for (const group of chunk(unique, CHUNK_KEYS)) {
+            const keys = new Set(group.map(outpointKey));
+            const found = new Map<string, VirtualCoin[]>();
+            let usable = true;
+            try {
+                const response = await provider.getVtxos({ outpoints: group });
+                if (!response || !Array.isArray(response.vtxos)) usable = false;
+                else
+                    for (const coin of response.vtxos) {
+                        const key = outpointKey(coin);
+                        // An answer carrying outpoints nobody asked for is not
+                        // answering this question; its chunk takes the per-row path.
+                        if (!keys.has(key)) usable = false;
+                        else found.set(key, [...(found.get(key) ?? []), coin]);
+                    }
+            } catch {
+                usable = false;
+            }
+            if (!usable) continue;
+            // Every coin the chunk returned for a key is kept, so exactCoin still
+            // rejects an ambiguous outpoint on its own evidence.
+            for (const [key, hits] of found) coins.set(key, hits);
+            for (const key of keys) resolved.add(key);
+        }
+    };
+
+    const loadTxs = async (ids: readonly string[]) => {
+        const unique = [...new Set(ids)].filter((id) => /^[0-9a-f]{64}$/.test(id));
+        for (const group of chunk(unique, CHUNK_KEYS)) {
+            const keys = new Set(group);
+            const found = new Map<string, string>();
+            let usable = true;
+            try {
+                const response = await provider.getVirtualTxs(group);
+                if (!response || !Array.isArray(response.txs)) usable = false;
+                else
+                    for (const encoded of response.txs) {
+                        let id: string;
+                        try {
+                            id = Transaction.fromPSBT(base64.decode(encoded)).id;
+                        } catch {
+                            continue;
+                        }
+                        if (!keys.has(id)) usable = false;
+                        else found.set(id, encoded);
+                    }
+            } catch {
+                usable = false;
+            }
+            if (usable) for (const [id, encoded] of found) txs.set(id, encoded);
+        }
+    };
+
+    const parse = (id: string | undefined): Transaction | undefined => {
+        const encoded = id === undefined ? undefined : txs.get(id);
+        if (encoded === undefined) return undefined;
+        try {
+            return Transaction.fromPSBT(base64.decode(encoded));
+        } catch {
+            return undefined;
+        }
+    };
+
+    await loadCoins(outpoints);
+    const spent = [...coins.values()]
+        .filter((hits) => hits.length === 1 && hits[0]!.isSpent)
+        .map((hits) => hits[0]!);
+    await loadTxs(spent.flatMap(({ arkTxId, spentBy }) => [arkTxId ?? "", spentBy ?? ""]));
+    const checkpoints = spent.flatMap(({ arkTxId }) => {
+        try {
+            const arkTx = parse(arkTxId);
+            return arkTx?.inputsLength === 2 ? [txid(arkTx.getInput(1))] : [];
+        } catch {
+            return [];
+        }
+    });
+    await loadTxs(checkpoints);
+    await loadCoins(
+        checkpoints.flatMap((id) => {
+            try {
+                const input = parse(id)?.getInput(0);
+                return input?.index === undefined ? [] : [{ txid: txid(input), vout: input.index }];
+            } catch {
+                return [];
+            }
+        }),
+    );
+
+    return {
+        getVtxos: (options) => {
+            const keys = (
+                options && Object.keys(options).length === 1 ? options.outpoints : undefined
+            )?.map(outpointKey);
+            return keys?.every((key) => resolved.has(key))
+                ? Promise.resolve({ vtxos: keys.flatMap((key) => coins.get(key) ?? []) })
+                : provider.getVtxos(options);
+        },
+        getVirtualTxs: (ids, options) =>
+            !options && ids.every((id) => txs.has(id))
+                ? Promise.resolve({ txs: ids.map((id) => txs.get(id)!) })
+                : provider.getVirtualTxs(ids, options),
+    };
+};
+
 export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     let lastScanAt: number | null = null;
     let watching = 0;
@@ -958,6 +1088,21 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             report();
             return;
         }
+        // Derived here and discarded: a row whose lockup will not decode is left
+        // out of the batch rather than poisoning it, and still records its own
+        // failure below, in loop order.
+        const batched = await prefetch(
+            counted,
+            current.flatMap((advance) => {
+                if (advance.outpoint) return [advance.outpoint];
+                if (advance.state !== "locking") return [];
+                try {
+                    return [lockingOutpoint(advance)];
+                } catch {
+                    return [];
+                }
+            }),
+        );
         for (const advance of current) {
             const terminal = terminalStates.includes(
                 advance.state as (typeof terminalStates)[number],
@@ -1038,7 +1183,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             }
             let coin: VirtualCoin | undefined;
             try {
-                coin = await exactCoin(counted, observedAdvance.outpoint);
+                coin = await exactCoin(batched, observedAdvance.outpoint);
             } catch (error) {
                 const reason =
                     error instanceof EvidenceError
@@ -1109,7 +1254,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             const observed = await classifySpend(
                 observedAdvance,
                 coin,
-                { ...deps, indexer: counted },
+                { ...deps, indexer: batched },
                 tip,
                 verify,
             );
