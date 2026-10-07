@@ -602,6 +602,51 @@ describe("custody reconciliation", () => {
         state.db.close();
     });
 
+    it("shares one custody pass between the lending gate and a tick", async () => {
+        const state = custodySetup();
+        let release!: () => void;
+        const held = new Promise<void>((resolve) => (release = resolve));
+        let passes = 0;
+        const reconciler = createLockupReconciler({
+            advances: state.advances,
+            reservations: state.reservations,
+            policy: state.policy,
+            submission: { resume: async () => false },
+            indexer: indexer(async () => ({ vtxos: [] })),
+            custody: {
+                repo: state.custody,
+                solvency: async (liabilities) => {
+                    passes += 1;
+                    await held;
+                    return custodySolvencyView({
+                        liabilities,
+                        coins: [],
+                        lendableSats: 10_000n,
+                        receivableSats: 0n,
+                    });
+                },
+                waiting: () => [],
+                alarmSeconds: 0,
+            },
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+
+        const gate = reconciler.custody();
+        const tick = reconciler.tick();
+        expect(reconciler.custody()).toBe(gate);
+        for (const _ of [1, 2, 3]) await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(passes).toBe(1);
+        release();
+        await Promise.all([gate, tick]);
+        expect(passes).toBe(1);
+
+        // The guard clears, so the next interval is a genuinely new pass.
+        await reconciler.custody();
+        expect(passes).toBe(2);
+        state.db.close();
+    });
+
     it("reads no inventory and gates nothing while nothing is held in custody", async () => {
         const state = setup();
         const solvency = vi.fn();

@@ -43,6 +43,9 @@ export interface ReconcilerStatus {
 
 export interface LockupReconciler {
     tick(fresh?: boolean): Promise<void>;
+    /** The custody pass on its own in-flight promise: the freshness loop keeps
+     * the lending gate current off the tick, and a tick joins a running pass. */
+    custody(): Promise<void>;
     status(): ReconcilerStatus;
 }
 
@@ -184,6 +187,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
     let custodyAlarms: WatcherBlocker[] = [];
     let custodyCoverage: CustodyCoverage | undefined;
     let pending: Promise<void> | undefined;
+    let custodyPending: Promise<void> | undefined;
 
     const reconcile = async (advance: Advance): Promise<void> => {
         let expected: ReturnType<typeof expectedLockup>;
@@ -286,18 +290,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                             });
                         }
                     }
-                    try {
-                        const pass = await reconcileCustody(deps);
-                        custodyAlarms = pass.alarms;
-                        custodyCoverage = pass.coverage;
-                    } catch (cause) {
-                        custodyAlarms = [
-                            {
-                                code: "custody_reconcile_failed",
-                                detail: sanitizeOperationalError(cause, "custody reconcile failed"),
-                            },
-                        ];
-                    }
+                    await reconciler.custody();
                     await deps.watcher?.catchUp();
                     const remaining = deps.advances.byState("locking");
                     locking = remaining.length;
@@ -308,6 +301,23 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 });
             return pending;
         },
+        custody: () =>
+            (custodyPending ??= (async () => {
+                try {
+                    const pass = await reconcileCustody(deps);
+                    custodyAlarms = pass.alarms;
+                    custodyCoverage = pass.coverage;
+                } catch (cause) {
+                    custodyAlarms = [
+                        {
+                            code: "custody_reconcile_failed",
+                            detail: sanitizeOperationalError(cause, "custody reconcile failed"),
+                        },
+                    ];
+                }
+            })().finally(() => {
+                custodyPending = undefined;
+            })),
         status: () => {
             const watcher = deps.watcher?.status();
             const blockerDetails = watcher?.blockers ?? [];
