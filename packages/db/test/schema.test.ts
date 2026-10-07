@@ -674,6 +674,19 @@ describe("rollback onto a newer schema", () => {
             db.close();
         }
     });
+
+    // The deployed shape: a database an older build created and this one only opens.
+    it("leaves a database at the current version untouched when it has no marker", () => {
+        const db = migrated();
+        db.exec("DROP TABLE schema_compat");
+        const before = db.serialize();
+        try {
+            expect(() => applyMigrations(db)).not.toThrow();
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
 });
 
 describe("advances constraints", () => {
