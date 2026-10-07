@@ -2271,15 +2271,12 @@ describe("claim round trips", () => {
             );
             expect(txid).toBe(base.submitted()!.id);
             expect([...stages.values()]).toEqual([
-                ["taxi info"],
-                ["chain tip"],
+                ["chain tip", "taxi info"],
                 ["arkd info", "emulator info"],
                 ["arkd indexer"],
                 ["taxi transfers"],
-                ["arkd indexer"],
-                ["arkd info", "emulator info"],
-                ["arkd indexer"],
-                ["arkd info", "emulator info"],
+                ["arkd indexer", "arkd info", "emulator info"],
+                ["arkd indexer", "arkd info", "emulator info"],
                 ["arkd info", "emulator info"],
                 ["emulator tx"],
             ]);

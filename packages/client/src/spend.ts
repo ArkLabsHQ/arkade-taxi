@@ -932,6 +932,7 @@ async function verifyObservedClaim(
         arkdUrl,
         emulatorUrl,
     };
+    // Not alongside the info reads: the outpoint goes only to a provider proven to be the trusted one.
     const observed = await observe(base);
     if (
         facts.batchExpiry !== undefined &&
@@ -1265,8 +1266,10 @@ const execute = async (
     plan: SpendPlan,
     funding?: ReceiverWalletInput,
 ): Promise<string> => {
-    await refresh(state, funding);
-    const maxOpReturnOutputs = await freshProviderFacts(state);
+    const [, maxOpReturnOutputs] = await Promise.all([
+        refresh(state, funding),
+        freshProviderFacts(state),
+    ]);
     const packets = [
         ...(plan.assetPacket ? [plan.assetPacket] : []),
         EmulatorPacket.create([
@@ -1339,18 +1342,20 @@ const execute = async (
     const p2a = graph.arkTx.getOutput(graph.arkTx.outputsLength - 1);
     if (p2a.amount !== P2A.amount || !sameBytes(p2a.script!, P2A.script))
         reject("builder changed the required P2A output");
-    await attachPrevArkTxs(
-        graph.arkTx,
-        plan.inputs.map(({ txid }) => txid),
-        state.dependencies.indexer,
-    );
+    const [, signatureCapacity] = await Promise.all([
+        attachPrevArkTxs(
+            graph.arkTx,
+            plan.inputs.map(({ txid }) => txid),
+            state.dependencies.indexer,
+        ),
+        plan.human && freshProviderFacts(state),
+    ]);
 
     let ownerArk = Transaction.fromPSBT(graph.arkTx.toPSBT());
     let ownerCheckpoints = graph.checkpoints.map((checkpoint) =>
         Transaction.fromPSBT(checkpoint.toPSBT()),
     );
     if (plan.human) {
-        const signatureCapacity = await freshProviderFacts(state);
         if (signatureCapacity !== undefined && BigInt(opReturns) > signatureCapacity)
             reject("spend exceeds the refreshed Ark provider OP_RETURN limit");
         if (needsRefundExtensionPlacement && signatureCapacity === undefined)
