@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { hex } from "@scure/base";
 import { describe, expect, it } from "vitest";
 import { buildReclaim, buildScripts } from "../src/scripts.js";
-import type { DustCovenantParams } from "../src/params.js";
+import { exitTimelock, type DustCovenantParams } from "../src/params.js";
+import { DustCovenantScript } from "../src/vtxo.js";
 
 type Vector = {
     name: string;
@@ -95,6 +96,53 @@ describe(`additive receiver vectors from Go reference ${carrier.reference.slice(
                 expect(hex.encode(buildReclaim(toParams(v), BigInt(v.vtxoMinAmount)))).toBe(
                     v.reclaim,
                 );
+        },
+    );
+});
+
+type V2Vector = Vector & {
+    params: { operatorSignerKey: string; exitDelay: number; paymentSats?: number };
+    reclaim: string;
+    leaves: string[];
+    pkScript: string;
+};
+
+const v2 = JSON.parse(readFileSync(new URL("./v2-vectors.json", import.meta.url), "utf8")) as {
+    engine: string;
+    serverKey: string;
+    emulatorKey: string;
+    cases: V2Vector[];
+};
+
+describe(`hand-committed v2 vectors, executed in emulator ${v2.engine.slice(0, 8)}`, () => {
+    it("pins the engine run.mjs executes them in", () => {
+        expect(v2.engine).toBe("4feb9eaa81b49f8d321407e92dba107ec9ba5158");
+    });
+
+    it.each(v2.cases.map((c) => [c.name, c] as const))(
+        "%s rebuilds every script, leaf and the address",
+        (_name, v) => {
+            const script = new DustCovenantScript({
+                serverKey: hex.decode(v2.serverKey),
+                emulatorKey: hex.decode(v2.emulatorKey),
+                params: {
+                    ...toParams(v),
+                    operatorSignerKey: hex.decode(v.params.operatorSignerKey),
+                    exitDelay: exitTimelock(BigInt(v.params.exitDelay)),
+                    paymentSats:
+                        v.params.paymentSats === undefined
+                            ? undefined
+                            : BigInt(v.params.paymentSats),
+                    covenantVersion: 2,
+                },
+                vtxoMinAmount: BigInt(v.vtxoMinAmount),
+            });
+            expect(hex.encode(script.covenant.recycle)).toBe(v.recycle);
+            expect(hex.encode(script.covenant.purchase)).toBe(v.purchase);
+            expect(hex.encode(script.covenant.refund)).toBe(v.refund);
+            expect(hex.encode(script.covenant.reclaim!)).toBe(v.reclaim);
+            expect(script.scripts.map((leaf) => hex.encode(leaf))).toEqual(v.leaves);
+            expect(hex.encode(script.pkScript)).toBe(v.pkScript);
         },
     );
 });
