@@ -787,6 +787,9 @@ async function createAdmittedSwapFillQuote(
                 id: receiveQuote.id,
                 state: "locking",
                 ...receiveQuote.params,
+                ...(receiveQuote.covenantVersion === undefined
+                    ? {}
+                    : { covenantVersion: receiveQuote.covenantVersion }),
                 assetUnits: offer.wantAmount,
                 covenantAddress: receiveQuote.covenantAddress,
                 fare: receiveQuote.fare,

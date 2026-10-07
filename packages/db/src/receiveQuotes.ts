@@ -396,7 +396,10 @@ const decodeRow = (row: Row): ReceiveQuote => {
     if (
         hex(params.senderKey) !== row.maker_public_key ||
         params.topup !== row.loan_sats ||
-        (receiverFare === undefined ? params.dust <= params.topup : params.dust !== params.topup) ||
+        // Only a legacy sender-paid quote splits the dust; v2 lends all of it.
+        (receiverFare === undefined && row.covenant_version === null
+            ? params.dust <= params.topup
+            : params.dust !== params.topup) ||
         params.locktime !== recoveryLocktime.value ||
         batchExpiry.kind !== inputExpiryFloor.kind ||
         inputExpiryFloor.kind !== recoveryLocktime.kind ||
@@ -621,6 +624,7 @@ export class ReceiveQuoteRepository {
                     fill.fare.currency !== "sats" ||
                     fill.fare.units !== quote.fare.units ||
                     advance.topup !== quote.loanSats ||
+                    advance.covenantVersion !== quote.covenantVersion ||
                     advance.dust !== quote.params.dust ||
                     advance.assetUnits === undefined ||
                     advance.assetUnits <= 0n ||

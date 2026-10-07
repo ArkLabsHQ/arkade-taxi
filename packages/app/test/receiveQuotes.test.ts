@@ -9,7 +9,7 @@ import {
     SwapFillRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { DustCovenantScript, payoutPkScript, subDustScript } from "@arkade-taxi/covenant";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
 import {
@@ -234,6 +234,17 @@ describe("createReceiveQuote", () => {
             body(),
         );
         expect(response.params).toMatchObject({ dust: "1000", topup: "900" });
+    });
+
+    it("lends a sender-paid v2 quote the whole dust at vtxoMinAmount = dust", async () => {
+        const cfg = config({ covenantVersion: 2, vtxoMinAmount: 330n });
+        const { params } = await createReceiveQuote(deps({ config: cfg }), body());
+        const loan = quotes.get("receive-1")!.loanSats;
+        expect(params).toMatchObject({ dust: "330", topup: "330" });
+        expect(loan).toBe(cfg.dust);
+        expect(payoutPkScript(cfg.operatorKey, loan, cfg.dust)).not.toEqual(
+            subDustScript(cfg.operatorKey),
+        );
     });
 
     it("rejects an insufficient two-output split before inventory", async () => {

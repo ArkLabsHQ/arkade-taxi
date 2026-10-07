@@ -184,6 +184,11 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
 const toCovenantFare = (fare: FareSpec): DustCovenantParams["receiverFare"] =>
     fare.currency === "asset" ? { currency: "asset", units: fare.units } : fare;
 
+/** Rides beside the persisted `params`, never inside them: that JSON has a
+ * strict decoder a rolled-back build would choke on. */
+const covenantVersionOf = (config: RuntimeConfig) =>
+    config.covenantVersion === 2 ? { covenantVersion: 2 as const } : {};
+
 function deriveCovenant(config: RuntimeConfig, params: DustCovenantParams): string {
     try {
         return new DustCovenantScript({
@@ -211,11 +216,13 @@ type Terms =
 function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConfig): Terms {
     const receipt = config.vtxoMinAmount;
     const senderLoan = config.dust - receipt;
+    // v2 lends the whole dust on both payer paths, so there is no split to form
+    // and no sub-dust receipt to leave behind.
+    const v2 = config.covenantVersion === 2;
     if (
         receipt <= 0n ||
         config.dust <= 0n ||
-        senderLoan < receipt ||
-        senderLoan + receipt !== config.dust
+        (!v2 && (senderLoan < receipt || senderLoan + receipt !== config.dust))
     )
         throw badRequest("server limits cannot form a positive two-output split");
     const rule = ruleFor(policy.assetRules, req.assetId);
@@ -223,7 +230,7 @@ function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConf
     if (!rule.enabled) throw admissionError("asset_disabled");
     if (resolveClaimMode(rule.claim, "recycle") !== "recycle")
         throw badRequest("asset policy does not allow recycle claims");
-    const loan = req.payer === "receiver" ? config.dust : senderLoan;
+    const loan = v2 || req.payer === "receiver" ? config.dust : senderLoan;
     const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (loan > cap) throw admissionError("topup_exceeds_max_per_payment");
 
@@ -289,6 +296,7 @@ async function createAdmitted(
             locktime: 1n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
+            ...covenantVersionOf(deps.config),
             ...(terms.payer === "receiver"
                 ? { receiverFare: toCovenantFare(terms.receiverFare) }
                 : {}),
@@ -374,7 +382,10 @@ async function createReserved(
         recoveryRecipient: "receiver",
         ...(terms.payer === "receiver" ? { receiverFare: toCovenantFare(terms.receiverFare) } : {}),
     };
-    const covenantAddress = deriveCovenant(deps.config, params);
+    const covenantAddress = deriveCovenant(deps.config, {
+        ...params,
+        ...covenantVersionOf(deps.config),
+    });
     let latestSpendable: ExtendedVirtualCoin[];
     let latestLocks: Outpoint[];
     try {
@@ -436,6 +447,7 @@ async function createReserved(
         expiresAt: now + initial.policy.quoteTtlSeconds,
         policyRevision: initial.revision,
         operatorInputs: selection.inputs.map(operatorFundingInput),
+        ...covenantVersionOf(deps.config),
         ...(terms.payer === "receiver"
             ? { payer: "receiver" as const, receiverFare: terms.receiverFare }
             : {}),
