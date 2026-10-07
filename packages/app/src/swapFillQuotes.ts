@@ -575,6 +575,10 @@ async function createAdmittedSwapFillQuote(
                 ? { assetId: actualFare.assetId, amount: actualFare.units, script: taxiScript }
                 : { script: taxiScript, sats: actualFare.units }
             : undefined;
+    // In flight across the build, which needs none of it; still awaited below,
+    // so a build failure is reported ahead of an unreachable provider.
+    const limits = optionalLimits(deps);
+    void limits.catch(() => {});
     let graph: JointGraph;
     try {
         graph = await deps.swapFillBuilder.buildSwapFillGraph({
@@ -625,7 +629,7 @@ async function createAdmittedSwapFillQuote(
                 (c.assets ?? []).map((a) => ({ assetId: a.assetId, amount: BigInt(a.amount) })),
             ),
         ],
-        limits: await optionalLimits(deps),
+        limits: await limits,
         dust: config.dust,
         vtxoMinAmount: config.vtxoMinAmount,
         actualFare,

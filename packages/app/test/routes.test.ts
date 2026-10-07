@@ -1451,6 +1451,7 @@ const counting = (base: RouteDeps) => {
         names: () => calls.map(({ name }) => name).sort(),
         outpoints: () => calls.flatMap((c) => (c.outpoints === undefined ? [] : [c.outpoints])),
         waves: () => waves,
+        inFlight: () => inFlight,
         deps: {
             ...base,
             senderInventory: {
@@ -1477,19 +1478,22 @@ const counting = (base: RouteDeps) => {
 };
 
 describe("provider read budget", () => {
+    const prepared = (policyOver: Partial<Policy> = {}, depsOver: Partial<RouteDeps> = {}) =>
+        counting({ ...deps(policyOver), ...depsOver });
+    const send = (counter: ReturnType<typeof counting>, path: string, body: unknown) =>
+        createRoutes(counter.deps).request(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
     const run = async (
         path: string,
         body: unknown,
         policyOver: Partial<Policy> = {},
         depsOver: Partial<RouteDeps> = {},
     ) => {
-        const counter = counting({ ...deps(policyOver), ...depsOver });
-        const response = await createRoutes(counter.deps).request(path, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-        });
-        return { counter, response };
+        const counter = prepared(policyOver, depsOver);
+        return { counter, response: await send(counter, path, body) };
     };
 
     it("spends three waves of six reads on POST /v1/transfers", async () => {
@@ -1570,6 +1574,21 @@ describe("provider read budget", () => {
         // The deposit and every solver input share the closing re-read.
         expect(counter.outpoints()).toEqual([1, 1, 2]);
         expect(counter.waves()).toBe(6);
+    });
+
+    it("reads the provider limits while the fill graph is being built", async () => {
+        const counter = prepared({}, { receiveQuotes: undefined as never });
+        const build = swapFillBuilder.buildSwapFillGraph.bind(swapFillBuilder);
+        let duringBuild = 0;
+        counter.deps.swapFillBuilder = {
+            buildSwapFillGraph: (req: Parameters<typeof build>[0]) => {
+                duringBuild = counter.inFlight();
+                return build(req);
+            },
+        };
+        const response = await send(counter, "/v1/swap-fills", swapBody());
+        expect(response.status).toBe(200);
+        expect(duringBuild).toBe(1);
     });
 });
 
