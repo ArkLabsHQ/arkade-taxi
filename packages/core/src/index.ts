@@ -10,7 +10,7 @@ export {
     validateFundingSnapshot,
 } from "./ledger.js";
 export { computeExposure, sweepable } from "./exposure.js";
-export { admit } from "./admission.js";
+export { admit, type LendingGate } from "./admission.js";
 export {
     assessSolvency,
     computeReceivables,

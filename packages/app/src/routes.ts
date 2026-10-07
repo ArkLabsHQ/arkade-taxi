@@ -236,6 +236,28 @@ export function operationalSnapshot(
                   }
                 : {}),
             blockers: uniqueBlockers,
+            // Signed coverage, and deliberately not a blocker: lending into the
+            // liability is a choice the operator made, not a reason to stop.
+            ...(reconciler.custody
+                ? {
+                      custody: {
+                          coverageSats: reconciler.custody.coverageSats.toString(),
+                          owedSats: reconciler.custody.owedSats.toString(),
+                          rows: reconciler.custody.rows,
+                          shortfall: reconciler.custody.shortfall,
+                          coverageAssets: reconciler.custody.coverageAssets.map(
+                              ({ assetId, units }) => ({
+                                  assetId: {
+                                      txid: bytesToHex(assetId.txid),
+                                      groupIndex: assetId.groupIndex,
+                                  },
+                                  units: units.toString(),
+                              }),
+                          ),
+                          oldestWaitingSince: reconciler.custody.oldestWaiting?.since ?? null,
+                      },
+                  }
+                : {}),
             ...(runtime
                 ? {
                       runtime: {

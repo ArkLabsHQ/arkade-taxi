@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AssetIdRef } from "@arkade-taxi/covenant";
 import type { Exposure, Policy, QuoteRequest } from "../src/types.js";
 import { admit } from "../src/admission.js";
+import type { CustodySolvency } from "../src/solvency.js";
 import type { AssetRule, FareOption } from "../src/fares.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
@@ -390,5 +391,68 @@ describe("claim mode", () => {
         expect(reasonOf(ask("nonsense" as unknown as "recycle", "either"))).toBe(
             "unknown_claim_mode",
         );
+    });
+});
+
+describe("the custody lending gate", () => {
+    const solvency = (over: Partial<CustodySolvency> = {}): CustodySolvency => ({
+        coverageSats: 10_000n,
+        coverageAssets: [],
+        owedSats: 0n,
+        lendableSats: 10_000n,
+        receivableSats: 0n,
+        shortAssets: [],
+        shortfall: false,
+        ...over,
+    });
+    const gate = (over: Partial<CustodySolvency> = {}, unrecoverable?: boolean) =>
+        admit(request(), policy(), exposure(), DUST, MIN, {
+            solvency: solvency(over),
+            ...(unrecoverable === undefined ? {} : { unrecoverable }),
+        });
+
+    it("changes nothing when no gate is passed", () => {
+        expect(okOf(admit(request(), policy(), exposure(), DUST, MIN)).warnings).toBeUndefined();
+    });
+
+    it("admits and stays silent while coverage survives the loan", () => {
+        expect(okOf(gate({ coverageSats: DUST })).warnings).toBeUndefined();
+    });
+
+    it("lends anyway and warns with the coverage left after the loan", () => {
+        expect(okOf(gate({ coverageSats: DUST - 1n })).warnings).toEqual([
+            { code: "custody_funds_lent", coverageSats: -1n },
+        ]);
+        expect(okOf(gate({ coverageSats: -500n })).warnings).toEqual([
+            { code: "custody_funds_lent", coverageSats: -830n },
+        ]);
+    });
+
+    it("names a loan that can never be repaid", () => {
+        expect(okOf(gate({ coverageSats: 0n }, true)).warnings).toEqual([
+            { code: "custody_funds_lent_unrecoverable", coverageSats: -330n },
+        ]);
+        const purchase = admit(
+            request({ claimMode: "purchase" }),
+            policy({ assetRules: [rule({ claim: "purchase" })] }),
+            exposure(),
+            DUST,
+            MIN,
+            { solvency: solvency({ coverageSats: 0n }) },
+        );
+        expect(okOf(purchase).warnings).toEqual([
+            { code: "custody_funds_lent_unrecoverable", coverageSats: -330n },
+        ]);
+    });
+
+    it("refuses every quote in a shortfall, before any other check", () => {
+        expect(reasonOf(gate({ shortfall: true }))).toBe("custody_shortfall");
+        expect(
+            reasonOf(
+                admit(request({ assetId: asset(99) }), policy(), exposure(), DUST, MIN, {
+                    solvency: solvency({ shortfall: true }),
+                }),
+            ),
+        ).toBe("custody_shortfall");
     });
 });

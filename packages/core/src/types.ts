@@ -197,6 +197,13 @@ export interface QuoteRequest {
     fareId?: string;
 }
 
+/** Lending dipped into what the Taxi owes its custody receivers. Advisory: the
+ * loan is admitted anyway, and `coverageSats` is what is left after it. */
+export interface AdmissionWarning {
+    code: "custody_funds_lent" | "custody_funds_lent_unrecoverable";
+    coverageSats: bigint;
+}
+
 export type AdmissionDecision =
     | {
           ok: true;
@@ -204,5 +211,6 @@ export type AdmissionDecision =
           paymentSats?: bigint;
           fare: FareSpec;
           claim: ResolvedClaimMode;
+          warnings?: readonly AdmissionWarning[];
       }
     | { ok: false; reason: string };

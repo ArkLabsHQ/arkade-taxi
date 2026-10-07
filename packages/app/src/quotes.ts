@@ -2,7 +2,9 @@ import {
     admit,
     computeExposure,
     type Advance,
+    type AdmissionWarning,
     type AdvanceState,
+    type LendingGate,
     type Outpoint,
     type Policy,
     type FareSpec,
@@ -188,6 +190,10 @@ export interface QuoteDeps {
         ReceiveQuoteRepository,
         "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
     >;
+    /** The custody lending gate for this quote, read once against one snapshot.
+     * Absent leaves admission exactly as it was before custody existed. */
+    lending?: () => LendingGate | undefined;
+    onLendingWarning?: (warnings: readonly AdmissionWarning[]) => void;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
         getLockedVtxoOutpoints(): Promise<Outpoint[]>;
@@ -548,8 +554,16 @@ async function createReservedQuote(
             deps.advances.byState(state as AdvanceState),
         ),
     );
-    const decision = admit(req, policy, exposure, config.dust, config.vtxoMinAmount);
+    const decision = admit(
+        req,
+        policy,
+        exposure,
+        config.dust,
+        config.vtxoMinAmount,
+        deps.lending?.(),
+    );
     if (!decision.ok) throw admissionError(decision.reason);
+    if (decision.warnings?.length) deps.onLendingWarning?.(decision.warnings);
     const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
     if (senderPaysFare) {
         // A bitcoin transfer's payment IS its senderSats, and `topup` is derived

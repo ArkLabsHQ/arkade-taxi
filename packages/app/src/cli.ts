@@ -5,6 +5,7 @@ import { writeSync } from "node:fs";
 import { pino } from "pino";
 import {
     AdvanceRepository,
+    CustodyRepository,
     openDatabase,
     PolicyRepository,
     ReservationRepository,
@@ -25,9 +26,10 @@ import { createSweeper } from "./sweeper.js";
 import { createAdminApp, createApp, type ServerDeps } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
 import { SingleKey } from "@arkade-os/sdk";
-import { advanceKind } from "@arkade-taxi/core";
+import { advanceKind, computeReceivables } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
 import { createLockupReconciler } from "./reconciler.js";
+import { custodySolvencyView } from "./custody.js";
 import { createSwapFillReconciler } from "./swapFillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
@@ -67,11 +69,14 @@ async function runServe(): Promise<void> {
     };
 
     const db = openDatabase(config.dbPath);
-    const advances = new AdvanceRepository(db);
+    const advances = new AdvanceRepository(db, {
+        custodyWindowSeconds: Number(config.custodyWindowSeconds),
+    });
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
     const swapFills = new SwapFillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
+    const custody = new CustodyRepository(db);
     advances.assertExitParamsPresent();
     receiveQuotes.assertExitParamsPresent();
     assertRecoveryStartupInvariants(
@@ -81,11 +86,21 @@ async function runServe(): Promise<void> {
         config,
     );
     const jobs = new ProceedsRepository(db);
+    // The reconciler's own last pass, verbatim: one solvency view per tick, so
+    // quoting and the operator surface never disagree about what is owed.
+    const lendingGate = () => {
+        const solvency = reconciler?.status().custody;
+        return solvency ? { solvency } : undefined;
+    };
     const runtime = createOperatorRuntime(config, db, {
         phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
         reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+        // A `held` custody row binds no coin: the reclaimed coin is inventory,
+        // which the SDK renews by merging. Only the coins an in-flight release
+        // graph already spends are withheld from background settlement.
         heldOutpoints: () => [
             ...unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+            ...custody.listHeldOutpoints(),
             ...(jobs.active()?.plan.inputs ?? []),
         ],
     });
@@ -164,6 +179,30 @@ async function runServe(): Promise<void> {
         indexer: runtime.providers.indexerProvider,
         submission,
         watcher,
+        custody: {
+            repo: custody,
+            // One snapshot for the whole pass: the lendable figure and the coins
+            // behind the per-asset view must not disagree about "now".
+            solvency: async (liabilities) => {
+                const safety = runtime.safety();
+                const coins = runtime.wallet
+                    ? await runtime.wallet.getSpendableVtxos({ withRecoverable: false })
+                    : [];
+                return custodySolvencyView({
+                    liabilities,
+                    coins,
+                    lendableSats: safety.inventory?.usableSats ?? 0n,
+                    receivableSats: computeReceivables(
+                        ["locking", "locked", "recovering"].flatMap((state) =>
+                            advances.byState(state as "locking" | "locked" | "recovering"),
+                        ),
+                    ),
+                });
+            },
+            // Nothing can be waiting until the API pass wires a releaser.
+            waiting: () => [],
+            alarmSeconds: 7 * 86_400,
+        },
         now: seconds,
         clock: () => {
             const safety = runtime.safety();
@@ -218,6 +257,14 @@ async function runServe(): Promise<void> {
         phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
         reservations,
         receiveQuotes,
+        lending: () => lendingGate(),
+        onLendingWarning: (warnings) => {
+            for (const w of warnings)
+                log.warn(
+                    { code: w.code, coverageSats: w.coverageSats.toString() },
+                    "lending dipped into custody liabilities",
+                );
+        },
         inventory,
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),
         sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),

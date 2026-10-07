@@ -1,4 +1,11 @@
-import type { AdmissionDecision, Exposure, Policy, QuoteRequest } from "./types.js";
+import type {
+    AdmissionDecision,
+    AdmissionWarning,
+    Exposure,
+    Policy,
+    QuoteRequest,
+} from "./types.js";
+import type { CustodySolvency } from "./solvency.js";
 import {
     FareError,
     resolveFare,
@@ -8,14 +15,25 @@ import {
     type FareSpec,
 } from "./fares.js";
 
+export interface LendingGate {
+    solvency: CustodySolvency;
+    /** A loan this caller already knows can never be repaid: a sponsored
+     * advance has no repayment leaf. Purchase mode is detected below. */
+    unrecoverable?: boolean;
+}
+
 export function admit(
     req: QuoteRequest,
     policy: Policy,
     exposure: Exposure,
     dust: bigint,
     vtxoMinAmount: bigint,
+    lending?: LendingGate,
 ): AdmissionDecision {
     if (policy.paused) return { ok: false, reason: "paused" };
+    // Insolvency, not a liquidity dip: what is owed exceeds what is held plus
+    // what is still out on loan. Quoting on would deepen it.
+    if (lending?.solvency.shortfall) return { ok: false, reason: "custody_shortfall" };
 
     // One table, not a pair of flags. `assetId: null` is the bitcoin rule, so
     // "does this operator serve sub-dust bitcoin" and "does it serve USDT" are
@@ -68,5 +86,27 @@ export function admit(
     const claim = resolveClaimMode(rule.claim, req.claimMode);
     if (typeof claim !== "string") return { ok: false, reason: claim.reason };
 
-    return { ok: true, topup, ...(paymentSats > 0n ? { paymentSats } : {}), fare, claim };
+    // Lend anyway and say so: refusing here would strand a payer over a
+    // liability the operator chose to take on. One line flips it to a refusal.
+    const warnings: AdmissionWarning[] = [];
+    if (lending) {
+        const coverageSats = lending.solvency.coverageSats - topup;
+        if (coverageSats < 0n)
+            warnings.push({
+                code:
+                    lending.unrecoverable || claim === "purchase"
+                        ? "custody_funds_lent_unrecoverable"
+                        : "custody_funds_lent",
+                coverageSats,
+            });
+    }
+
+    return {
+        ok: true,
+        topup,
+        ...(paymentSats > 0n ? { paymentSats } : {}),
+        fare,
+        claim,
+        ...(warnings.length ? { warnings } : {}),
+    };
 }

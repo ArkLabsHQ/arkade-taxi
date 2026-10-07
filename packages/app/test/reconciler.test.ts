@@ -7,6 +7,7 @@ import { ArkAddress } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import {
     AdvanceRepository,
+    CustodyRepository,
     PolicyRepository,
     ReservationRepository,
     openDatabase,
@@ -20,6 +21,8 @@ import {
 } from "../src/arkade/sponsoredBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
 import { createLockupReconciler } from "../src/reconciler.js";
+import { custodySolvencyView } from "../src/custody.js";
+import { swapAssetId } from "../src/proceeds.js";
 import {
     config,
     fundingCoin,
@@ -516,5 +519,192 @@ describe("sponsored settlement", () => {
         ]);
         expect(state.reservations.listForAdvance(state.quote.id)).toHaveLength(1);
         state.db.close();
+    });
+});
+
+describe("custody reconciliation", () => {
+    const WINDOW = 8_640_000;
+    const RECLAIM = "12".repeat(32);
+    const ASSET = { txid: new Uint8Array(32).fill(9), groupIndex: 0 };
+
+    const custodySetup = () => {
+        const state = setup();
+        const advances = new AdvanceRepository(state.db, { custodyWindowSeconds: WINDOW });
+        const custody = new CustodyRepository(state.db);
+        advances.insert({
+            ...state.advances.get(state.quote.id)!,
+            id: "adv-custody",
+            state: "locked",
+            covenantVersion: 2,
+            paymentSats: 1_000n,
+            assetId: ASSET,
+            assetUnits: 7n,
+            outpoint: { txid: "9b".repeat(32), vout: 0 },
+        });
+        advances.recordSpendObservation("adv-custody", "locked", "recovered", RECLAIM, NOW, {
+            hash: "34".repeat(32),
+            height: 700_000,
+        });
+        return { ...state, advances, custody };
+    };
+
+    const build = (
+        state: ReturnType<typeof custodySetup>,
+        over: {
+            lendableSats?: bigint;
+            units?: bigint;
+            receivableSats?: bigint;
+            alarmSeconds?: number;
+            waiting?: readonly { advanceId: string; since: number }[];
+        } = {},
+    ) =>
+        createLockupReconciler({
+            advances: state.advances,
+            reservations: state.reservations,
+            policy: state.policy,
+            submission: { resume: async () => false },
+            indexer: indexer(async () => ({ vtxos: [] })),
+            custody: {
+                repo: state.custody,
+                solvency: async (liabilities) =>
+                    custodySolvencyView({
+                        liabilities,
+                        coins: [
+                            {
+                                txid: "cc".repeat(32),
+                                vout: 0,
+                                value: 5_000,
+                                assets: [{ assetId: swapAssetId(ASSET), amount: over.units ?? 7n }],
+                            } as never,
+                        ],
+                        lendableSats: over.lendableSats ?? 10_000n,
+                        receivableSats: over.receivableSats ?? 0n,
+                    }),
+                waiting: () => over.waiting ?? [],
+                alarmSeconds: over.alarmSeconds ?? 0,
+            },
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+
+    it("reports signed coverage and raises nothing while solvent", async () => {
+        const state = custodySetup();
+        const reconciler = build(state);
+        await reconciler.tick();
+        expect(reconciler.status().custody).toMatchObject({
+            coverageSats: 9_000n,
+            owedSats: 1_000n,
+            rows: 1,
+            shortfall: false,
+        });
+        expect(reconciler.status().warnings ?? []).toEqual([]);
+        expect(reconciler.status().blockers).not.toContain("custody_shortfall");
+        state.db.close();
+    });
+
+    it("warns, without blocking, once lending has dipped into what is owed", async () => {
+        const state = custodySetup();
+        const reconciler = build(state, { lendableSats: 400n, receivableSats: 1_000n });
+        await reconciler.tick();
+        expect(reconciler.status().custody?.coverageSats).toBe(-600n);
+        expect(reconciler.status().warnings).toMatchObject([{ code: "custody_funds_lent" }]);
+        state.db.close();
+    });
+
+    it("names a shortfall as a warning and in the coverage figure", async () => {
+        const state = custodySetup();
+        const reconciler = build(state, { lendableSats: 1n });
+        await reconciler.tick();
+        expect(reconciler.status().custody?.shortfall).toBe(true);
+        expect(reconciler.status().warnings).toMatchObject([{ code: "custody_shortfall" }]);
+        state.db.close();
+    });
+
+    it("is short when the held units fall below the liability", async () => {
+        const state = custodySetup();
+        const reconciler = build(state, { units: 6n });
+        await reconciler.tick();
+        expect(reconciler.status().custody?.shortfall).toBe(true);
+        state.db.close();
+    });
+
+    it("surfaces the oldest release waiting on liquidity", async () => {
+        const state = custodySetup();
+        const reconciler = build(state, {
+            waiting: [
+                { advanceId: "b", since: NOW + 5 },
+                { advanceId: "a", since: NOW + 1 },
+            ],
+        });
+        await reconciler.tick();
+        expect(reconciler.status().custody?.oldestWaiting).toEqual({
+            advanceId: "a",
+            since: NOW + 1,
+        });
+        expect(reconciler.status().warnings).toMatchObject([
+            { advanceId: "a", code: "custody_release_awaiting_liquidity" },
+        ]);
+        state.db.close();
+    });
+
+    it("alarms when a row nears its window without forfeiting it", async () => {
+        const state = custodySetup();
+        const reconciler = build(state, { alarmSeconds: WINDOW });
+        await reconciler.tick();
+        expect(reconciler.status().warnings).toMatchObject([
+            { advanceId: "adv-custody", code: "custody_window_ending" },
+        ]);
+        expect(state.custody.get("adv-custody")?.state).toBe("held");
+        state.db.close();
+    });
+
+    // Startup shortfall: it alerts and stops lending, it does not fail closed.
+    it("reads a shortfall back after a restart without refusing to start", async () => {
+        const dir = mkdtempSync(join(tmpdir(), "taxi-custody-"));
+        directories.push(dir);
+        const path = join(dir, "taxi.sqlite");
+        const first = setup(path);
+        const advances = new AdvanceRepository(first.db, { custodyWindowSeconds: WINDOW });
+        advances.insert({
+            ...first.advances.get(first.quote.id)!,
+            id: "adv-custody",
+            state: "locked",
+            covenantVersion: 2,
+            paymentSats: 1_000n,
+            outpoint: { txid: "9b".repeat(32), vout: 0 },
+        });
+        advances.recordSpendObservation("adv-custody", "locked", "recovered", RECLAIM, NOW, {
+            hash: "34".repeat(32),
+            height: 700_000,
+        });
+        first.db.close();
+
+        const db = openDatabase(path);
+        const custody = new CustodyRepository(db);
+        expect(custody.liabilities().owedSats).toBe(1_000n);
+        const reconciler = createLockupReconciler({
+            advances: new AdvanceRepository(db, { custodyWindowSeconds: WINDOW }),
+            reservations: new ReservationRepository(db),
+            policy: new PolicyRepository(db),
+            submission: { resume: async () => false },
+            indexer: indexer(async () => ({ vtxos: [] })),
+            custody: {
+                repo: custody,
+                solvency: async (liabilities) =>
+                    custodySolvencyView({
+                        liabilities,
+                        coins: [],
+                        lendableSats: 1n,
+                        receivableSats: 0n,
+                    }),
+                waiting: () => [],
+                alarmSeconds: 0,
+            },
+            now: () => NOW + 2,
+            clock: () => ({ height: 700000, timestamp: new Date(NOW * 1000) }),
+        });
+        await expect(reconciler.tick()).resolves.toBeUndefined();
+        expect(reconciler.status().custody?.shortfall).toBe(true);
+        db.close();
     });
 });

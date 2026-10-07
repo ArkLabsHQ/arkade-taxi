@@ -211,6 +211,7 @@ async function createReservedSponsoredQuote(
 
     const { outstandingSats, lockedCount } = deps.advances.exposureTotals();
     const exposure = { outstandingSats, lockedCount, oldestUnsweptLocktime: null };
+    const lending = deps.lending?.();
     const decision = admit(
         {
             receiverKey: req.receiverKey,
@@ -225,8 +226,11 @@ async function createReservedSponsoredQuote(
         exposure,
         config.dust,
         config.vtxoMinAmount,
+        // A sponsored advance has no repayment leaf, so this loan never returns.
+        lending && { ...lending, unrecoverable: true },
     );
     if (!decision.ok) throw admissionError(decision.reason);
+    if (decision.warnings?.length) deps.onLendingWarning?.(decision.warnings);
     const senderPaysFare = decision.fare.currency === "sats" && decision.fare.units > 0n;
     // The fare can only come out of sender change — never out of the payment,
     // and never out of the sponsorship the operator is giving away.

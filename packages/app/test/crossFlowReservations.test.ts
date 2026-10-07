@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
     AdvanceRepository,
+    CustodyRepository,
     openDatabase,
     PolicyRepository,
     ProceedsRepository,
@@ -13,6 +14,7 @@ import { bytesToHex } from "@arkade-taxi/protocol";
 import { unionReservedOutpoints } from "../src/arkade/reservedOutpoints.js";
 import { selectOperatorFunding } from "../src/arkade/inventory.js";
 import { createProceedsCollector, planProceeds } from "../src/proceeds.js";
+import { custodySolvencyView } from "../src/custody.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
 import {
     createSponsoredQuote,
@@ -41,10 +43,49 @@ import { arkInfo } from "./arkade/fixtures.js";
 const COIN_A = { txid: "aa".repeat(32), vout: 0 };
 const COIN_B = { txid: "bb".repeat(32), vout: 7 };
 const COIN_C = { txid: "cc".repeat(32), vout: 0 };
+// Sorts before every other fixture coin, so selection reaches for it first:
+// the custody union were ever dropped from a call site.
+const CUSTODY_TX = "0d".repeat(32);
 
 let db: Database;
 let reservations: ReservationRepository;
 let swapFills: SwapFillRepository;
+let custody: CustodyRepository;
+
+/** Reclaims a v2 advance, leaving its lockup as inventory at `(CUSTODY_TX, 0)`. */
+function custodyCoin(ledger: AdvanceRepository): { txid: string; vout: number } {
+    const cfg = config();
+    ledger.insert({
+        id: "adv-custody",
+        state: "locked",
+        receiverKey: new Uint8Array(32).fill(0xa1),
+        senderKey: new Uint8Array(32).fill(2),
+        operatorKey: new Uint8Array(32).fill(3),
+        operatorSignerKey: cfg.operatorSignerKey,
+        exitDelay: cfg.exitDelay,
+        dust: 330n,
+        topup: 330n,
+        paymentSats: 1_000n,
+        covenantVersion: 2,
+        locktime: 100n,
+        recoveryLocktime: { kind: "height", value: 100n },
+        batchExpiry: { kind: "height", value: 300n },
+        operatorInputs: [{ txid: "9a".repeat(32), vout: 0 }],
+        unsignedLockupTx: "unsigned",
+        unsignedLockupId: "fe".repeat(32),
+        covenantAddress: "tark1qcustody",
+        fare: { currency: "sats", units: 10n },
+        outpoint: { txid: "9b".repeat(32), vout: 0 },
+        createdAt: 1,
+        updatedAt: 1,
+        expiresAt: NOW + 60,
+    });
+    ledger.recordSpendObservation("adv-custody", "locked", "recovered", CUSTODY_TX, NOW, {
+        hash: "34".repeat(32),
+        height: 700_000,
+    });
+    return { txid: CUSTODY_TX, vout: 0 };
+}
 
 const GRAPH = {
     arkTx: "aGVsbG8=",
@@ -69,6 +110,8 @@ function setup(): void {
     );
     reservations = new ReservationRepository(db);
     swapFills = new SwapFillRepository(db);
+    custody = new CustodyRepository(db);
+    custodyCoin(new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 }));
     reservations.reserveQuote({
         advance: {
             id: "adv-1",
@@ -132,6 +175,35 @@ describe("cross-flow reservations", () => {
         expect(unionReservedOutpoints(reservations, swapFills)).toEqual([COIN_A, COIN_B]);
         expect(unionReservedOutpoints(reservations, reservations)).toEqual([COIN_A]);
         expect(unionReservedOutpoints(undefined, swapFills)).toEqual([COIN_B]);
+    });
+
+    // Model B: a reclaimed coin is ordinary inventory and stays lendable. What
+    // the receiver is owed lives in the ledger, not in that coin.
+    it("returns a reclaimed coin to inventory, reserving nothing", () => {
+        setup();
+        const spendable = [
+            fundingCoin({ txid: CUSTODY_TX, vout: 0 }),
+            fundingCoin({ txid: COIN_C.txid, vout: COIN_C.vout }),
+        ];
+        const cfg = config();
+        expect(custody.liabilities().owedSats).toBe(1_000n);
+        expect(custody.listHeldOutpoints()).toEqual([]);
+        const selection = selectOperatorFunding({
+            spendable,
+            reserved: unionReservedOutpoints(reservations, swapFills),
+            requiredSats: 1000n,
+            safety: runtimeSafety(),
+            nowMs: NOW * 1000,
+            maxSnapshotAgeMs: cfg.reconcileIntervalMs,
+            minExpiryHeadroomBlocks: cfg.minExpiryHeadroomBlocks,
+            minExpiryHeadroomSeconds: cfg.minExpiryHeadroomSeconds,
+            renewalThresholdSeconds: cfg.vtxoRenewalThresholdSeconds,
+            minReserveSats: 0n,
+            dustSats: cfg.dust,
+        });
+        expect(selection.inputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([
+            { txid: CUSTODY_TX, vout: 0 },
+        ]);
     });
 
     it("keeps both flows' coins out of operator funding selection", () => {
@@ -265,6 +337,79 @@ describe("cross-flow wiring through production quote paths", () => {
         expect(builder.built[0]?.funding.inputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([
             alt,
         ]);
+    });
+
+    // Model B lends it, and the gate's job is to say so rather than refuse.
+    it("lends a reclaimed coin through createQuote, warning that it did", async () => {
+        const { terms, ledger } = setupWiring();
+        const held = custodyCoin(new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 }));
+        const alt = { txid: ALT_TX, vout: 0 };
+        const extra = { txid: EXTRA_TX, vout: 0 };
+        const builder = new FakeLockupBuilder(config(), serverUnroll);
+        const warnings: unknown[] = [];
+        const liabilities = new CustodyRepository(db).liabilities();
+        const d: QuoteDeps = {
+            ...quoteInfrastructure(new MemoryAdvances(), () => basePolicy()),
+            advances: ledger,
+            policy: terms,
+            reservations,
+            swapFills,
+            lending: () => ({
+                solvency: custodySolvencyView({
+                    liabilities,
+                    coins: [],
+                    lendableSats: 1_000n,
+                    receivableSats: 0n,
+                }),
+            }),
+            onLendingWarning: (w) => warnings.push(...w),
+            config: config(),
+            now: () => NOW,
+            randomId: () => "adv-custody-1",
+            inventory: operatorInventory(held, alt, extra),
+            lockupBuilder: builder,
+            lockupSubmitter: builder,
+        };
+        const response = await createQuote(d, quoteBody());
+        expect(ledger.get(response.transferId)?.operatorInputs).toEqual([
+            { txid: CUSTODY_TX, vout: 0 },
+        ]);
+        expect(warnings).toEqual([{ code: "custody_funds_lent", coverageSats: -330n }]);
+    });
+
+    it("refuses a quote outright in a shortfall", async () => {
+        const { terms, ledger } = setupWiring();
+        const held = custodyCoin(new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 }));
+        const builder = new FakeLockupBuilder(config(), serverUnroll);
+        const d: QuoteDeps = {
+            ...quoteInfrastructure(new MemoryAdvances(), () => basePolicy()),
+            advances: ledger,
+            policy: terms,
+            reservations,
+            swapFills,
+            lending: () => ({
+                solvency: custodySolvencyView({
+                    liabilities: new CustodyRepository(db).liabilities(),
+                    coins: [],
+                    lendableSats: 1n,
+                    receivableSats: 0n,
+                }),
+            }),
+            config: config(),
+            now: () => NOW,
+            randomId: () => "adv-shortfall-1",
+            inventory: operatorInventory(
+                held,
+                { txid: ALT_TX, vout: 0 },
+                {
+                    txid: EXTRA_TX,
+                    vout: 0,
+                },
+            ),
+            lockupBuilder: builder,
+            lockupSubmitter: builder,
+        };
+        await expect(createQuote(d, quoteBody())).rejects.toThrow(/custody_shortfall/);
     });
 
     it("advance quote selection skips a live coin an active proceeds job holds", async () => {
