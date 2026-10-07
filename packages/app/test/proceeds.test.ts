@@ -1155,6 +1155,26 @@ describe("durable proceeds collector", () => {
         expect(changed.settle).not.toHaveBeenCalled();
         expect(changed.jobs.submissionEvidence("job").state).toBe("unsubmitted");
     });
+    it("scans a legacy terminal advance and skips a v2 one", async () => {
+        const s = setup();
+        const row = advance({
+            state: "refunded",
+            operatorKey: receiverKey,
+            arkTxid: receipt.txid,
+            spentTxid: "cd".repeat(32),
+            outpoint: { txid: receipt.txid, vout: 0 },
+        });
+        let rows = [row];
+        s.deps.advances = {
+            byState: (state: string) => (state === "refunded" ? rows : []),
+        } as never;
+        await expect(discoverProceeds(s.deps, [receipt])).rejects.toThrow(
+            "proceeds_payout_key_changed",
+        );
+        rows = [{ ...row, covenantVersion: 2 }];
+        expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
+    });
+
     it("discovers only the unspent fare from a verified sponsored lockup", async () => {
         const s = setup();
         expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);

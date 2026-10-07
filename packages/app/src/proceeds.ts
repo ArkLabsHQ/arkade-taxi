@@ -583,7 +583,11 @@ export async function discoverProceeds(
     const checkFare = (advance: Advance) =>
         check(
             { txid: advance.arkTxid!, vout: 1 },
-            advance.fare.currency === "sats" ? advance.fare.units : config.vtxoMinAmount,
+            advance.fare.currency === "sats"
+                ? advance.fare.units
+                : advance.covenantVersion === 2
+                  ? config.dust
+                  : config.vtxoMinAmount,
             advance.fare.currency === "asset"
                 ? [
                       {
@@ -596,6 +600,9 @@ export async function discoverProceeds(
     for (const advance of (["recycled", "purchased", "refunded", "recovered"] as const).flatMap(
         (s) => advances.byState(s),
     )) {
+        // A v2 advance repays `loanSats`, not `refundTopup`, and every one of its
+        // payouts is already a spendable coin, so this scan has nothing to rescue.
+        if (advance.covenantVersion === 2) continue;
         if (!advance.outpoint || !advance.arkTxid || !advance.spentTxid) continue;
         if (hex.encode(advance.operatorKey) !== hex.encode(config.operatorKey))
             fail("proceeds_payout_key_changed");
