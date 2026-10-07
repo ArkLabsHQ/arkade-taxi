@@ -575,8 +575,7 @@ async function createAdmittedSwapFillQuote(
                 ? { assetId: actualFare.assetId, amount: actualFare.units, script: taxiScript }
                 : { script: taxiScript, sats: actualFare.units }
             : undefined;
-    // In flight across the build, which needs none of it; still awaited below,
-    // so a build failure is reported ahead of an unreachable provider.
+    // In flight across the build, which needs none of it; still awaited below.
     const limits = optionalLimits(deps);
     void limits.catch(() => {});
     let graph: JointGraph;
