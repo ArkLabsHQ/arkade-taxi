@@ -8,6 +8,7 @@ import {
     shownConfig,
 } from "../src/config.js";
 import { verifyProviders } from "../src/arkade/providers.js";
+import { sanitizeOperationalError } from "../src/errors.js";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
     ArkAddress,
@@ -196,6 +197,23 @@ describe("aggregated validation", () => {
             expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: value }))).toThrow(
                 /TAXI_COVENANT_VERSION/,
             );
+    });
+
+    // cli.ts prints a startup failure through sanitizeOperationalError, which keeps
+    // only the first line: a refusal whose variable is on line two is invisible.
+    it("names the offending variables on the line a startup failure prints", () => {
+        const refused = (over: NodeJS.ProcessEnv) => {
+            try {
+                loadConfig(env(over));
+                return "";
+            } catch (e) {
+                return sanitizeOperationalError(e, "startup failed");
+            }
+        };
+        expect(refused({ TAXI_COVENANT_VERSION: "2" })).toContain("TAXI_COVENANT_VERSION");
+        expect(refused({ TAXI_ARKD_URL: "not-a-url", TAXI_HTTP_PORT: "99999" })).toContain(
+            "TAXI_ARKD_URL, TAXI_HTTP_PORT",
+        );
     });
 
     it("reports missing required vars together", () => {

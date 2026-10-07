@@ -137,8 +137,11 @@ export class ConfigError extends Error {
     readonly code = "invalid_config";
 
     constructor(readonly issues: ConfigIssue[]) {
+        // Variables on the first line: a startup failure is printed through
+        // sanitizeOperationalError, which keeps that line and drops the rest.
         super(
-            `taxi config: ${issues.length} invalid environment variable(s)\n` +
+            `taxi config: ${issues.length} invalid environment variable(s): ` +
+                `${[...new Set(issues.map((i) => i.variable))].sort().join(", ")}\n` +
                 issues.map((i) => `  - ${i.variable}: ${i.message}`).join("\n"),
         );
         this.name = "ConfigError";
