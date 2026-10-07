@@ -387,7 +387,7 @@ async function setup(
                     amount: lockupValue - topup,
                 },
             ];
-            if (strangerInput && kind === "recovered") {
+            if (strangerInput) {
                 receiverSource = source(receiverTree.pkScript, 500n, 0x31);
                 inputs.push({
                     txid: receiverSource.id,
@@ -1323,9 +1323,9 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    const v1Stranger = (mutateGraph?: Parameters<typeof setup>[4]) =>
+    const v1Stranger = (mutateGraph?: Parameters<typeof setup>[4], kind: SpendKind = "recovered") =>
         setup(
-            "recovered",
+            kind,
             ":memory:",
             false,
             true,
@@ -1342,6 +1342,84 @@ describe("canonical covenant observation", () => {
             undefined,
             true,
         );
+
+    // buildRefund has no INSPECTNUMINPUTS, so leaf 2 accepts a sender who brings
+    // their own coin. senderKey signing it makes the sender the only builder, not
+    // the shape the Taxi happens to emit.
+    it("classifies a sender-built v1 refund carrying their own input and change", async () => {
+        const state = await v1Stranger(undefined, "refunded");
+        const ark = state.finalArk!;
+        const topup = refundTopup(state.advance, config().vtxoMinAmount);
+
+        expect(ark.inputsLength).toBe(2);
+        expect(ark.getOutput(0)).toEqual({
+            amount: topup,
+            script: payoutPkScript(state.advance.operatorKey, topup, state.advance.dust),
+        });
+        expect(ark.getOutput(1)).toEqual({
+            amount: state.advance.dust - topup,
+            script: payoutPkScript(
+                state.advance.senderKey,
+                state.advance.dust - topup,
+                state.advance.dust,
+            ),
+        });
+        expect(ark.getOutput(2).amount).toBe(500n);
+
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        expect(state.policy.get().paused).toBe(false);
+        expect(row.failureCode).toBeUndefined();
+        expect(row).toMatchObject({ state: "refunded", spentTxid: ark.id });
+        state.db.close();
+    });
+
+    it.each([
+        ["underpays the operator", 0, "refund repayment"],
+        ["shorts the sender", 1, "refund recovery output"],
+    ] as const)("rejects a sender-built v1 refund that %s by a sat", async (_, vout, label) => {
+        const state = await v1Stranger((graph) => {
+            const pinned = graph.arkTx.getOutput(vout);
+            const change = graph.arkTx.getOutput(2);
+            graph.arkTx.updateOutput(vout, { ...pinned, amount: pinned.amount! - 1n });
+            graph.arkTx.updateOutput(2, { ...change, amount: change.amount! + 1n });
+        }, "refunded");
+        await expect(
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
+                { indexer: state.indexer, config: config() },
+                { height: 700000, time: NOW },
+            ),
+        ).resolves.toMatchObject({
+            kind: "unknown",
+            reason: `${label} differs from the exact covenant shape`,
+        });
+        state.db.close();
+    });
+
+    // v2 leaf 2 pins INSPECTNUMINPUTS 2 but no output count, so a zero-value extra
+    // conserves value and is script-valid. Appended after P2A, it also proves the
+    // anchor is found by content rather than at the end of the list.
+    it("classifies a v2 refund carrying an extra zero-value output", async () => {
+        const state = await setupV2("refunded", 100n, (graph) =>
+            graph.arkTx.addOutput({
+                amount: 0n,
+                script: new Uint8Array([0x51, 0x20, ...senderKey]),
+            }),
+        );
+        const ark = state.finalArk!;
+        expect(ark.outputsLength).toBe(5);
+        expect(ark.getOutput(3)).toEqual(P2A);
+        expect(ark.getOutput(4).amount).toBe(0n);
+
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        expect(state.policy.get().paused).toBe(false);
+        expect(row.failureCode).toBeUndefined();
+        expect(row).toMatchObject({ state: "refunded", spentTxid: ark.id });
+        state.db.close();
+    });
 
     // Leaf 3 is arkade-only on v1 too, and buildRefund pins no input count, so a
     // stranger's broadcast is valid. Classified unknown it pauses the Taxi, and
