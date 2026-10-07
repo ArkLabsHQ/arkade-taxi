@@ -782,9 +782,8 @@ async function classifySpend(
             );
             exactAnchor(arkTx, 3);
         } else {
-            // v1 leaf 3 is arkade-only and buildRefund pins no input count either, so
-            // a stranger may add their own input and change. Leaf 2 carries senderKey,
-            // is not permissionless, and keeps the shape it has always been held to.
+            // v1 leaf 3 is arkade-only and buildRefund pins no input count, so a
+            // stranger may add their own input and change; leaf 2 carries senderKey.
             const permissionless = leaf === Leaf.Recovery;
             if (!permissionless && (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4))
                 fail("refund input or output count mismatch");
