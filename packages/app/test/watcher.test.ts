@@ -387,6 +387,17 @@ async function setup(
                     amount: lockupValue - topup,
                 },
             ];
+            if (strangerInput && kind === "recovered") {
+                receiverSource = source(receiverTree.pkScript, 500n, 0x31);
+                inputs.push({
+                    txid: receiverSource.id,
+                    vout: 0,
+                    value: 500n,
+                    tapTree: receiverTree.encode(),
+                    tapLeafScript: receiverTree.findLeaf(hex.encode(receiverTree.scripts[0])),
+                });
+                outputs.push({ script: receiverTree.pkScript, amount: 500n });
+            }
         }
         const emulatorScript =
             leaf === Leaf.Recovery
@@ -1309,6 +1320,105 @@ describe("canonical covenant observation", () => {
             observationTipHash: "41".repeat(32),
         });
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual([]);
+        state.db.close();
+    });
+
+    const v1Stranger = (mutateGraph?: Parameters<typeof setup>[4]) =>
+        setup(
+            "recovered",
+            ":memory:",
+            false,
+            true,
+            mutateGraph,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            config(),
+            [],
+            undefined,
+            undefined,
+            true,
+        );
+
+    // Leaf 3 is arkade-only on v1 too, and buildRefund pins no input count, so a
+    // stranger's broadcast is valid. Classified unknown it pauses the Taxi, and
+    // clearSpendUnknown never unpauses.
+    it("classifies a third party's v1 recovery carrying its own input and change", async () => {
+        const state = await v1Stranger();
+        const ark = state.finalArk!;
+        const topup = refundTopup(state.advance, config().vtxoMinAmount);
+
+        expect(ark.inputsLength).toBe(2);
+        expect(ark.getOutput(0)).toEqual({
+            amount: topup,
+            script: payoutPkScript(state.advance.operatorKey, topup, state.advance.dust),
+        });
+        expect(ark.getOutput(1)).toEqual({
+            amount: state.advance.dust - topup,
+            script: payoutPkScript(
+                state.advance.senderKey,
+                state.advance.dust - topup,
+                state.advance.dust,
+            ),
+        });
+        expect(ark.getOutput(2).amount).toBe(500n);
+
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        expect(state.policy.get().paused).toBe(false);
+        expect(row.failureCode).toBeUndefined();
+        expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
+        state.db.close();
+    });
+
+    it.each([
+        [
+            "underpays the operator by a sat",
+            "refund repayment",
+            (ark: Transaction) => {
+                const operator = ark.getOutput(0);
+                const change = ark.getOutput(2);
+                ark.updateOutput(0, { ...operator, amount: operator.amount! - 1n });
+                ark.updateOutput(2, { ...change, amount: change.amount! + 1n });
+            },
+        ],
+        [
+            "pays the operator's share to the wrong key",
+            "refund repayment",
+            (ark: Transaction) => {
+                const operator = ark.getOutput(0);
+                ark.updateOutput(0, {
+                    ...operator,
+                    script: payoutPkScript(serverKey, operator.amount!, config().dust),
+                });
+            },
+        ],
+        [
+            "shorts the recovery output by a sat",
+            "refund recovery output",
+            (ark: Transaction) => {
+                const recovery = ark.getOutput(1);
+                const change = ark.getOutput(2);
+                ark.updateOutput(1, { ...recovery, amount: recovery.amount! - 1n });
+                ark.updateOutput(2, { ...change, amount: change.amount! + 1n });
+            },
+        ],
+    ] as const)("rejects a third party's v1 recovery that %s", async (_, label, mutate) => {
+        const state = await v1Stranger((graph) => mutate(graph.arkTx));
+        await expect(
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
+                { indexer: state.indexer, config: config() },
+                { height: Number(state.advance.locktime), time: NOW },
+            ),
+        ).resolves.toMatchObject({
+            kind: "unknown",
+            reason: `${label} differs from the exact covenant shape`,
+        });
         state.db.close();
     });
 

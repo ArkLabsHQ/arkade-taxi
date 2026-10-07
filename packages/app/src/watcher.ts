@@ -280,6 +280,37 @@ const exactExtension = (
 const exactAnchor = (tx: Transaction, index: number): void =>
     exactOutput(tx, index, P2A.amount, P2A.script, "P2A anchor");
 
+/** Where a permissionless leaf's own outputs sit when a stranger's are interleaved:
+ * by content, since only out[0..1] are pinned and the rest are not ours. */
+const soleOutput = (
+    tx: Transaction,
+    matches: (output: ReturnType<Transaction["getOutput"]>) => boolean,
+    label: string,
+): number => {
+    const found = Array.from({ length: tx.outputsLength }, (_, index) => index).filter((index) =>
+        matches(tx.getOutput(index)),
+    );
+    if (found.length !== 1) fail(`${label} output is missing or ambiguous`);
+    return found[0]!;
+};
+
+const extensionIndex = (tx: Transaction): number =>
+    soleOutput(
+        tx,
+        (output) => output.script !== undefined && Extension.isExtension(output.script),
+        "covenant extension",
+    );
+
+const anchorIndex = (tx: Transaction): number =>
+    soleOutput(
+        tx,
+        (output) =>
+            output.amount === P2A.amount &&
+            output.script !== undefined &&
+            sameBytes(output.script, P2A.script),
+        "P2A anchor",
+    );
+
 const exactTransactionHeader = (tx: Transaction, lockTime: number, label: string): void => {
     const sequence = lockTime === 0 ? 0xffffffff : 0xfffffffe;
     if (tx.version !== 3 || tx.lockTime !== lockTime)
@@ -720,16 +751,8 @@ async function classifySpend(
                 payoutPkScript(advance.operatorKey, facts.value, advance.dust),
                 "reclaim repayment",
             );
-            const extensions = Array.from(
-                { length: arkTx.outputsLength },
-                (_, index) => index,
-            ).filter((index) => {
-                const script = arkTx.getOutput(index).script;
-                return script !== undefined && Extension.isExtension(script);
-            });
-            if (extensions.length !== 1) fail("reclaim extension output is missing or ambiguous");
-            exactExtension(arkTx, extensions[0]!, covenantProgram, [covenantHoldings], 0);
-            exactAnchor(arkTx, arkTx.outputsLength - 1);
+            exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 0);
+            exactAnchor(arkTx, anchorIndex(arkTx));
         } else if (params.covenantVersion === 2) {
             if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
                 fail("refund input or output count mismatch");
@@ -759,7 +782,11 @@ async function classifySpend(
             );
             exactAnchor(arkTx, 3);
         } else {
-            if (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4)
+            // v1 leaf 3 is arkade-only and buildRefund pins no input count either, so
+            // a stranger may add their own input and change. Leaf 2 carries senderKey,
+            // is not permissionless, and keeps the shape it has always been held to.
+            const permissionless = leaf === Leaf.Recovery;
+            if (!permissionless && (arkTx.inputsLength !== 1 || arkTx.outputsLength !== 4))
                 fail("refund input or output count mismatch");
             const topup = refundTopup(params, deps.config.vtxoMinAmount);
             exactOutput(
@@ -782,8 +809,14 @@ async function classifySpend(
                 ),
                 "refund recovery output",
             );
-            exactExtension(arkTx, 2, covenantProgram, [covenantHoldings], 1);
-            exactAnchor(arkTx, 3);
+            exactExtension(
+                arkTx,
+                permissionless ? extensionIndex(arkTx) : 2,
+                covenantProgram,
+                [covenantHoldings],
+                1,
+            );
+            exactAnchor(arkTx, permissionless ? anchorIndex(arkTx) : 3);
         }
         if (leaf === Leaf.Recovery) {
             if (
