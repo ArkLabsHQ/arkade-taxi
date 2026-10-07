@@ -156,6 +156,7 @@ async function setup(
     receiverExtraLeaves: Uint8Array[] = [],
     paymentSats?: bigint,
     covenantVersion?: 2,
+    strangerInput = false,
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
     const receiverTree = new VtxoScript([
@@ -314,6 +315,17 @@ async function setup(
                     amount: lockupValue,
                 },
             ];
+            if (strangerInput) {
+                receiverSource = source(receiverTree.pkScript, 500n, 0x31);
+                inputs.push({
+                    txid: receiverSource.id,
+                    vout: 0,
+                    value: 500n,
+                    tapTree: receiverTree.encode(),
+                    tapLeafScript: receiverTree.findLeaf(hex.encode(receiverTree.scripts[0])),
+                });
+                outputs.push({ script: receiverTree.pkScript, amount: 500n });
+            }
         } else if (v2SecondInput) {
             receiverSource = source(receiverTree.pkScript, 500n, 0x31);
             inputs.push({
@@ -426,10 +438,7 @@ async function setup(
         );
         ark = await emulatorIdentity(emulatorScript).sign(ark, [0]);
         if (kind === "refunded") ark = await senderIdentity.sign(ark, [0]);
-        if (
-            (kind === "recycled" || v2SecondInput) &&
-            hex.encode(receiverOwner) !== hex.encode(serverKey)
-        )
+        if (receiverSource && hex.encode(receiverOwner) !== hex.encode(serverKey))
             ark = await receiverIdentity.sign(ark, [1]);
         const checkpoints = await Promise.all(
             graph.checkpoints.map(async (checkpoint, index) => {
@@ -439,7 +448,7 @@ async function setup(
                     signed = await senderIdentity.sign(signed, [0]);
                 if (
                     index === 1 &&
-                    (kind === "recycled" || v2SecondInput) &&
+                    receiverSource &&
                     hex.encode(receiverOwner) !== hex.encode(serverKey)
                 )
                     signed = await receiverIdentity.sign(signed, [0]);
@@ -888,7 +897,12 @@ describe("canonical covenant observation", () => {
         },
     );
 
-    const setupV2 = (kind: SpendKind, payment = 100n, mutateGraph?: Parameters<typeof setup>[4]) =>
+    const setupV2 = (
+        kind: SpendKind,
+        payment = 100n,
+        mutateGraph?: Parameters<typeof setup>[4],
+        strangerInput = false,
+    ) =>
         setup(
             kind,
             ":memory:",
@@ -905,6 +919,7 @@ describe("canonical covenant observation", () => {
             [],
             payment,
             2,
+            strangerInput,
         );
 
     it("classifies a v2 refund repaying the whole loan to the operator", async () => {
@@ -973,6 +988,63 @@ describe("canonical covenant observation", () => {
             script: payoutPkScript(state.advance.operatorKey, 430n, state.advance.dust),
         });
         expect(ark.getOutput(2)).toEqual(P2A);
+        state.db.close();
+    });
+
+    // A reclaim is permissionless (Fork 3), so a stranger's broadcast must not
+    // read as a disagreement: that pauses the Taxi and clearing it never unpauses.
+    it("classifies a third party's v2 reclaim carrying its own input and change", async () => {
+        const state = await setupV2("recovered", 100n, undefined, true);
+        const ark = state.finalArk!;
+        expect(ark.inputsLength).toBe(2);
+        expect(ark.outputsLength).toBe(4);
+        expect(ark.getOutput(0)).toEqual({
+            amount: 430n,
+            script: payoutPkScript(state.advance.operatorKey, 430n, state.advance.dust),
+        });
+        expect(ark.getOutput(1).amount).toBe(500n);
+        expect(ark.getOutput(3)).toEqual(P2A);
+
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
+        expect(row.failureCode).toBeUndefined();
+        expect(state.policy.get().paused).toBe(false);
+        state.db.close();
+    });
+
+    it.each([
+        [
+            "underpays the operator by a sat",
+            (ark: Transaction) => {
+                const operator = ark.getOutput(0);
+                const change = ark.getOutput(1);
+                ark.updateOutput(0, { ...operator, amount: operator.amount! - 1n });
+                ark.updateOutput(1, { ...change, amount: change.amount! + 1n });
+            },
+        ],
+        [
+            "pays the wrong key",
+            (ark: Transaction) => {
+                ark.updateOutput(0, {
+                    ...ark.getOutput(0),
+                    script: new Uint8Array([0x51, 0x20, ...senderKey]),
+                });
+            },
+        ],
+    ] as const)("rejects a third party's v2 reclaim that %s", async (_, mutate) => {
+        const state = await setupV2("recovered", 100n, (graph) => mutate(graph.arkTx), true);
+        await expect(
+            classifyObservedSpend(
+                state.advances.get(state.advance.id)!,
+                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
+                { indexer: state.indexer, config: config() },
+                { height: Number(state.advance.locktime), time: NOW },
+            ),
+        ).resolves.toMatchObject({
+            kind: "unknown",
+            reason: "reclaim repayment differs from the exact covenant shape",
+        });
         state.db.close();
     });
 

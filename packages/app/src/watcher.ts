@@ -710,8 +710,9 @@ async function classifySpend(
 
         const params = covenantParamsOf(advance);
         if (params.covenantVersion === 2 && leaf === Leaf.Recovery) {
-            // out[0] is tied to in[0], so the leaf pins no input count and neither may this.
-            if (arkTx.outputsLength !== 3) fail("reclaim output count mismatch");
+            // A reclaim is permissionless and the leaf pins only out[0] against
+            // in[0], so a stranger's own input and change must still classify. Read
+            // as a disagreement it would pause the Taxi, and clearing never unpauses.
             exactOutput(
                 arkTx,
                 0,
@@ -719,8 +720,16 @@ async function classifySpend(
                 payoutPkScript(advance.operatorKey, facts.value, advance.dust),
                 "reclaim repayment",
             );
-            exactExtension(arkTx, 1, covenantProgram, [covenantHoldings], 0);
-            exactAnchor(arkTx, 2);
+            const extensions = Array.from(
+                { length: arkTx.outputsLength },
+                (_, index) => index,
+            ).filter((index) => {
+                const script = arkTx.getOutput(index).script;
+                return script !== undefined && Extension.isExtension(script);
+            });
+            if (extensions.length !== 1) fail("reclaim extension output is missing or ambiguous");
+            exactExtension(arkTx, extensions[0]!, covenantProgram, [covenantHoldings], 0);
+            exactAnchor(arkTx, arkTx.outputsLength - 1);
         } else if (params.covenantVersion === 2) {
             if (arkTx.inputsLength !== 2 || arkTx.outputsLength !== 4)
                 fail("refund input or output count mismatch");
