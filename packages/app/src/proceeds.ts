@@ -68,7 +68,9 @@ export const holdings = (coins: readonly VirtualCoin[]) => {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([assetId, amount]) => ({ assetId, amount: amount.toString() }));
 };
-const swapAssetId = ({ txid, groupIndex }: AssetIdRef) =>
+/** The SDK's string form, which reverses the genesis txid that `AssetIdRef`
+ * keeps in internal order. One place, because getting it backwards is silent. */
+export const swapAssetId = ({ txid, groupIndex }: AssetIdRef) =>
     asset.AssetId.create(hex.encode(Uint8Array.from(txid).reverse()), groupIndex).toString();
 const facts = (c: VirtualCoin) => ({
     ...outpoint(c),

@@ -67,6 +67,19 @@ export {
 export { createRoutes, type HealthResponse, type RouteDeps } from "./routes.js";
 export { unionReservedOutpoints, type ReservedOutpointSource } from "./arkade/reservedOutpoints.js";
 export {
+    assertCustodyReleaseAuthorised,
+    createCustodyReleaser,
+    custodySolvencyView,
+    CustodyAwaitingLiquidityError,
+    CustodyReleaseError,
+    planCustodyRelease,
+    type CustodyPrepared,
+    type CustodyReleaseCode,
+    type CustodyReleasePlan,
+    type CustodyReleaser,
+    type CustodyReleaserDeps,
+} from "./custody.js";
+export {
     createSwapFillQuote,
     createSwapOfferCodec,
     getSwapFill,
