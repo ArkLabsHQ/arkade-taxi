@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { asset, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import type { Policy } from "@arkade-taxi/core";
@@ -355,6 +355,64 @@ describe("createSwapFillQuote", () => {
         } finally {
             db.close();
         }
+    });
+
+    // D2 makes renewal liveness safety-relevant, so a delegatee that derives a
+    // different address means this covenant would never be renewed.
+    it("fails a v2 lockup when the delegatee derives a different address", async () => {
+        const delegate = vi.fn(async () => "ark1qstranger");
+        await expect(
+            createBoundJointFill({
+                covenantVersion: 2,
+                delegatee: {
+                    client: { delegate },
+                    registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
+                },
+            }),
+        ).rejects.toThrow(/delegatee derives ark1qstranger/);
+        expect(delegate).toHaveBeenCalledOnce();
+    });
+
+    it("offers a v2 lockup once the two derivations agree, and leaves v1 unregistered", async () => {
+        const seen: string[] = [];
+        // The v2 covenant is deterministic, so derive its address from a throwaway
+        // quote: the stub has to answer with it before the advance exists.
+        const probe = insertReceiveQuote({ wantAmount: 5n, covenantVersion: 2 });
+        const expected = probe.covenant
+            .address(probe.cfg.addressHrp, probe.cfg.serverPubkey)
+            .encode();
+        probe.db.close();
+
+        const bound = await createBoundJointFill({
+            covenantVersion: 2,
+            delegatee: {
+                client: {
+                    delegate: async (templateId, variables) => {
+                        seen.push(templateId);
+                        expect(variables.locktime).toMatch(/^[0-9a-f]+$/);
+                        return expected;
+                    },
+                },
+                registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
+            },
+        });
+        expect(bound.advance.covenantAddress).toBe(expected);
+        expect(bound.advance.covenantVersion).toBe(2);
+        expect(seen).toEqual(["b".repeat(64)]);
+        bound.db.close();
+
+        const v1 = await createBoundJointFill({
+            delegatee: {
+                client: {
+                    delegate: async () => {
+                        throw new Error("a v1 covenant has no renew leaf to register");
+                    },
+                },
+                registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
+            },
+        });
+        expect(v1.advance.covenantVersion).toBeUndefined();
+        v1.db.close();
     });
 
     it("quotes a sponsored fill, persists the reservation and replays identical retries", async () => {

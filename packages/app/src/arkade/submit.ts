@@ -241,8 +241,7 @@ function assertPersistedFacts(advance: Advance, envelope: LockupEnvelope): void 
     if (!isDeepStrictEqual(outpoints, advance.operatorInputs))
         throw new LockupShapeError("persisted operator funding mismatch");
     const expiries = [...envelope.senderInputs, ...operatorInputs].map((input) => input.expiry);
-    // A v2 advance stores no batch expiry, and its deadline outlives the coins
-    // on purpose, so only the inputs' agreement with each other is checkable.
+    // A v2 advance stores no expiry, so only the inputs' agreement is checkable.
     const snapshot = advance.batchExpiry;
     if (
         expiries.some(

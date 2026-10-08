@@ -1,3 +1,4 @@
+import { registerRenewal, type DelegateeClient, type DelegateeRegistration } from "./delegatee.js";
 import {
     ArkAddress,
     CSVMultisigTapscript,
@@ -17,7 +18,7 @@ import {
     type FillFunding,
 } from "@arkade-os/swap";
 import { base64, hex } from "@scure/base";
-import { ruleFor, type Advance } from "@arkade-taxi/core";
+import { covenantParamsOf, ruleFor, type Advance } from "@arkade-taxi/core";
 import type { Outpoint } from "@arkade-taxi/core";
 import {
     bytesToHex,
@@ -172,6 +173,11 @@ export interface SwapFillQuoteDeps {
     nowMs: QuoteDeps["nowMs"];
     randomId: QuoteDeps["randomId"];
     swapFillBuilder: SwapFillGraphBuilder;
+    /** Renews v2 covenants. Absent leaves them unrenewed; see TAXI_DELEGATEE_URL. */
+    delegatee?: {
+        client: Pick<DelegateeClient, "delegate">;
+        registration: DelegateeRegistration;
+    };
     offerCodec?: OfferCodec;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;
     getServerUnroll?: () => CSVMultisigTapscript.Type;
@@ -668,6 +674,7 @@ async function createAdmittedSwapFillQuote(
         req.validUntil !== undefined && req.validUntil < quotedExpiry
             ? req.validUntil
             : quotedExpiry;
+    let renewal: Advance | undefined;
     const fill: SwapFill = {
         id: deps.randomId(),
         ...(receiveQuote ? { receiveQuoteId: receiveQuote.id } : {}),
@@ -798,8 +805,7 @@ async function createAdmittedSwapFillQuote(
                 createdAt: now,
                 updatedAt: now,
                 expiresAt: fill.expiresAt,
-                // A v2 advance stores no batch expiry: a renewal re-dates the
-                // coins, so a creation-time snapshot would go stale.
+                // A renewal re-dates the coins, so a snapshot would go stale.
                 ...(receiveQuote.covenantVersion === 2 ? {} : { batchExpiry }),
                 recoveryLocktime: receiveQuote.recoveryLocktime,
                 operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),
@@ -818,6 +824,7 @@ async function createAdmittedSwapFillQuote(
                 expectedPolicyRevision: revision,
                 now,
             });
+            renewal = advance;
         } else deps.swapFills.insert(fill, revision);
     } catch (cause) {
         const raced = deps.swapFills.getByOperation(req.operationId);
@@ -834,6 +841,16 @@ async function createAdmittedSwapFillQuote(
             sponsorScript: raced.sponsorScript,
         });
     }
+    // After bind, the commit, and before the lockup is offered: a network call
+    // has no place in the transaction, and the row makes a failure diagnosable.
+    if (renewal?.covenantVersion === 2 && deps.delegatee)
+        await registerRenewal(deps.delegatee.client, deps.delegatee.registration, {
+            params: covenantParamsOf(renewal),
+            serverKey: deps.config.serverPubkey,
+            covenantAddress: renewal.covenantAddress,
+            renewalBeforeExpirySeconds: deps.config.renewalBeforeExpirySeconds,
+            expiresAt: Number(renewal.locktime),
+        });
     return fillToResponse(fill, {
         receiverScript: offer.makerProceedsScript,
         solverScript: req.solverProceedsScript,

@@ -88,14 +88,20 @@ export interface InsertedReceiveQuote {
  * through the real repository — the setup every test that binds one, sender- or
  * receiver-paid, shares.
  */
+const V2_DEADLINE = BigInt(NOW) + 8_640_000n;
+
 export function insertReceiveQuote(opts: {
     wantAmount: bigint;
     receiverFare?: ReceiverFare;
     operatorCoin?: ExtendedVirtualCoin;
     db?: Database;
+    covenantVersion?: 2;
 }): InsertedReceiveQuote {
     const db = opts.db ?? openDatabase(":memory:");
-    const cfg = config({ vtxoMinAmount: 1n });
+    // A v2 quote lends the whole dust and its CLTV is wall-clock, so the funding
+    // evidence moves into the time domain with it.
+    const v2 = opts.covenantVersion === 2;
+    const cfg = config({ vtxoMinAmount: v2 ? 330n : 1n, ...(v2 ? { covenantVersion: 2 } : {}) });
     const policies = new PolicyRepository(db);
     const base = basePolicy();
     policies.update(
@@ -129,7 +135,7 @@ export function insertReceiveQuote(opts: {
     const depositCoin = fundingCoin({ ...BOUND_DEPOSIT, value: 10_000 });
     const makerKey = new Uint8Array(32).fill(9);
     const receiverPaid = opts.receiverFare !== undefined;
-    const loan = receiverPaid ? 330n : LOAN;
+    const loan = receiverPaid || v2 ? 330n : LOAN;
     const topLevelReceiverFare: FareSpec | undefined =
         opts.receiverFare === undefined
             ? undefined
@@ -145,9 +151,10 @@ export function insertReceiveQuote(opts: {
         dust: 330n,
         topup: loan,
         assetId: WANTED_ASSET,
-        locktime: 899_856n,
+        locktime: v2 ? V2_DEADLINE : 899_856n,
         claimMode: "recycle" as const,
         recoveryRecipient: "receiver" as const,
+        ...(v2 ? { covenantVersion: 2 as const } : {}),
         ...(opts.receiverFare === undefined ? {} : { receiverFare: opts.receiverFare }),
     };
     const covenant = new DustCovenantScript({
@@ -171,15 +178,20 @@ export function insertReceiveQuote(opts: {
                 : {}),
             batchExpiry: { kind: "height", value: 900_000n },
             inputExpiryFloor: { kind: "height", value: 900_000n },
-            recoveryLocktime: { kind: "height", value: 899_856n },
+            recoveryLocktime: v2
+                ? { kind: "time" as const, value: V2_DEADLINE }
+                : { kind: "height" as const, value: 899_856n },
             loanSats: loan,
             createdAt: NOW,
             expiresAt: NOW + 60,
             policyRevision: revision,
             operatorInputs: [operatorFundingInput(operatorCoin)],
+            ...(v2 ? { covenantVersion: 2 as const } : {}),
         },
         expectedPolicyRevision: revision,
-        recoveryExecutionBudget: { kind: "height", value: 72n },
+        recoveryExecutionBudget: v2
+            ? { kind: "time", value: 43_200n }
+            : { kind: "height", value: 72n },
     });
     return {
         db,
@@ -206,7 +218,12 @@ export function insertReceiveQuote(opts: {
  * the startup invariant rebuild the recovery intent from these exact bytes.
  */
 export async function createBoundJointFill(
-    over: { validUntil?: number; receiverFare?: ReceiverFare } = {},
+    over: {
+        validUntil?: number;
+        receiverFare?: ReceiverFare;
+        covenantVersion?: 2;
+        delegatee?: SwapFillQuoteDeps["delegatee"];
+    } = {},
 ): Promise<BoundJointFill> {
     const {
         db,
@@ -223,7 +240,11 @@ export async function createBoundJointFill(
         makerKey,
         loan,
         receiverPaid,
-    } = insertReceiveQuote({ wantAmount: WANT_UNITS, receiverFare: over.receiverFare });
+    } = insertReceiveQuote({
+        wantAmount: WANT_UNITS,
+        receiverFare: over.receiverFare,
+        ...(over.covenantVersion === undefined ? {} : { covenantVersion: over.covenantVersion }),
+    });
     try {
         const solverFunding = solverCoin({
             ...BOUND_SOLVER,
@@ -278,6 +299,7 @@ export async function createBoundJointFill(
             },
             providerLimits: async () => ({ vtxoMaxAmount: 10_000_000n }),
             getServerUnroll: () => serverUnroll,
+            ...(over.delegatee === undefined ? {} : { delegatee: over.delegatee }),
         };
         const quote = await createSwapFillQuote(deps, {
             operationId: "op-1",
