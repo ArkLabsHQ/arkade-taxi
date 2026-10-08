@@ -87,7 +87,10 @@ const insert = (repo: ReceiveQuoteRepository, policy: PolicyRepository, value = 
     repo.insert({
         quote: { ...value, policyRevision: policy.getSnapshot().revision },
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: "height", value: 72n },
+        recoveryExecutionBudget:
+            value.covenantVersion === 2
+                ? { kind: "time", value: 43_200n }
+                : { kind: "height", value: 72n },
     });
 
 const graph = {
@@ -229,11 +232,18 @@ describe("receive quote repository", () => {
         const repo = new ReceiveQuoteRepository(db);
         const fare = { currency: "asset" as const, units: 9n };
         const v2 = quote({
-            params: { ...quote().params, topup: 330n, receiverFare: fare },
+            params: {
+                ...quote().params,
+                topup: 330n,
+                receiverFare: fare,
+                locktime: 1_800_000_000n,
+            },
             payer: "receiver",
             receiverFare: { ...fare, assetId: ASSET },
             loanSats: 330n,
             covenantVersion: 2,
+            // Migration 15: a v2 deadline is wall-clock, not a margin off expiry.
+            recoveryLocktime: { kind: "time" as const, value: 1_800_000_000n },
         });
         insert(repo, policy, v2);
         expect(repo.get("receive-1")).toEqual({

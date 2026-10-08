@@ -150,9 +150,9 @@ function insertRawReceiveQuote(db: Database, overrides: Record<string, unknown> 
 
 describe("migration 13", () => {
     it("records no breaking migration, so a reader that stops at 12 is not locked out", () => {
-        const db = migrated();
+        const db = at(13);
         try {
-            expect(userVersion(db)).toBe(14);
+            expect(userVersion(db)).toBe(13);
             expect(MIGRATIONS.find((m) => m.id === 13)?.compat).toBe("additive");
             expect(
                 db
@@ -194,7 +194,7 @@ describe("migration 13", () => {
             insertRaw(db);
             insertRawReceiveQuote(db);
             applyMigrations(db);
-            expect(userVersion(db)).toBe(14);
+            expect(userVersion(db)).toBe(15);
             expect(db.prepare("SELECT id, topup, covenant_version FROM advances").all()).toEqual([
                 { id: "a1", topup: 300n, covenant_version: null },
             ]);
@@ -211,7 +211,14 @@ describe("migration 13", () => {
         try {
             expect(() => insertRaw(db, { id: "legacy" })).not.toThrow();
             expect(() => insertRaw(db, { id: "v2", covenant_version: 2n })).not.toThrow();
-            expect(() => insertRawReceiveQuote(db, { covenant_version: 2n })).not.toThrow();
+            // Since migration 15 a v2 quote also owes a time-domain deadline.
+            expect(() =>
+                insertRawReceiveQuote(db, {
+                    covenant_version: 2n,
+                    recovery_locktime_kind: "time",
+                    recovery_locktime_value: 1_800_000_000n,
+                }),
+            ).not.toThrow();
             for (const covenant_version of [0n, 1n, 3n]) {
                 expect(() =>
                     insertRaw(db, { id: `bad-${covenant_version}`, covenant_version }),
@@ -226,9 +233,117 @@ describe("migration 13", () => {
     });
 });
 
+describe("migration 15", () => {
+    const V2_DEADLINE = 1_800_000_000n;
+    const v2Quote = (over: Record<string, unknown> = {}) => ({
+        covenant_version: 2n,
+        recovery_locktime_kind: "time",
+        recovery_locktime_value: V2_DEADLINE,
+        ...over,
+    });
+
+    it("declares itself breaking, so a reader that stops at 14 is locked out", () => {
+        const db = migrated();
+        try {
+            expect(userVersion(db)).toBe(15);
+            expect(MIGRATIONS.find((m) => m.id === 15)?.compat).toBe("breaking");
+            expect(
+                db
+                    .prepare<[], { v: bigint }>(
+                        "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+                    )
+                    .get(),
+            ).toEqual({ v: 15n });
+        } finally {
+            db.close();
+        }
+    });
+
+    it("copies every v14 row unchanged and keeps every other column's shape", () => {
+        const fourteen = at(14);
+        insertRawReceiveQuote(fourteen, { id: "v1-kept" });
+        fourteen
+            .prepare(
+                `INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
+                 VALUES (?, 0, 'v1-kept', 1)`,
+            )
+            .run(hex32(9));
+        const before = {
+            shape: shape(fourteen),
+            quote: fourteen.prepare("SELECT * FROM receive_quotes WHERE id = 'v1-kept'").get(),
+            reservation: fourteen.prepare("SELECT * FROM receive_quote_reservations").all(),
+        };
+        applyMigrations(fourteen, MIGRATIONS);
+        expect(userVersion(fourteen)).toBe(15);
+        expect(fourteen.prepare("SELECT * FROM receive_quotes WHERE id = 'v1-kept'").get()).toEqual(
+            before.quote,
+        );
+        expect(fourteen.prepare("SELECT * FROM receive_quote_reservations").all()).toEqual(
+            before.reservation,
+        );
+        const after = shape(fourteen);
+        for (const [table, columns] of Object.entries(before.shape))
+            for (const [column, declared] of Object.entries(columns))
+                expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+        expect(
+            fourteen
+                .prepare<[], { name: string }>(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'receive_quotes'",
+                )
+                .all()
+                .map((r) => r.name),
+        ).toContain("receive_quotes_state_expiry");
+        fourteen.close();
+    });
+
+    it("admits a v2 deadline past the input floor, which v14 refused", () => {
+        const fourteen = at(14);
+        expect(() => insertRawReceiveQuote(fourteen, v2Quote({ id: "v2" }))).toThrow(
+            /CHECK constraint failed/,
+        );
+        fourteen.close();
+        const db = migrated();
+        try {
+            expect(() => insertRawReceiveQuote(db, v2Quote({ id: "v2" }))).not.toThrow();
+        } finally {
+            db.close();
+        }
+    });
+
+    it("still refuses a v1 quote that breaks the old ordering", () => {
+        const db = migrated();
+        try {
+            expect(() =>
+                insertRawReceiveQuote(db, { id: "v1-after", recovery_locktime_value: 900_001n }),
+            ).toThrow(/CHECK constraint failed/);
+            expect(() =>
+                insertRawReceiveQuote(db, { id: "v1-domain", recovery_locktime_kind: "time" }),
+            ).toThrow(/CHECK constraint failed/);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("holds a v2 deadline to a future time-domain CLTV", () => {
+        const db = migrated();
+        try {
+            for (const bad of [
+                { id: "v2-height", recovery_locktime_kind: "height" },
+                { id: "v2-low", recovery_locktime_value: 499_999_999n },
+                { id: "v2-past", created_at: V2_DEADLINE, expires_at: V2_DEADLINE + 1n },
+            ])
+                expect(() => insertRawReceiveQuote(db, v2Quote(bad)), bad.id).toThrow(
+                    /CHECK constraint failed/,
+                );
+        } finally {
+            db.close();
+        }
+    });
+});
+
 describe("migration 14", () => {
     it("records no breaking migration, so a reader that stops at 13 is not locked out", () => {
-        const db = migrated();
+        const db = at(14);
         try {
             expect(userVersion(db)).toBe(14);
             expect(MIGRATIONS.find((m) => m.id === 14)?.compat).toBe("additive");
@@ -268,7 +383,7 @@ describe("migration 14", () => {
         try {
             insertRaw(db, { covenant_version: 2n });
             applyMigrations(db);
-            expect(userVersion(db)).toBe(14);
+            expect(userVersion(db)).toBe(15);
             expect(db.prepare("SELECT id, covenant_version FROM advances").all()).toEqual([
                 { id: "a1", covenant_version: 2n },
             ]);
@@ -364,7 +479,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(14);
+            expect(userVersion(reopened)).toBe(15);
             expect(
                 reopened
                     .prepare(
@@ -388,11 +503,11 @@ describe("migrations", () => {
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
         expect(MIGRATIONS.map(({ id }) => id)).toEqual([
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
         ]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "custody",
@@ -464,7 +579,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -498,7 +613,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
@@ -512,7 +627,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(3);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
@@ -529,7 +644,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -548,7 +663,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -566,7 +681,7 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(8);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
@@ -600,7 +715,7 @@ describe("migrations", () => {
         });
         insertRawReceiveQuote(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         expect(
             db
                 .prepare<
@@ -708,7 +823,7 @@ describe("migrations", () => {
     it("adds the exit params at migration 11", () => {
         const db = migrated();
         try {
-            expect(userVersion(db)).toBe(14);
+            expect(userVersion(db)).toBe(15);
             for (const column of ["exit_signer_key", "exit_delay_type", "exit_delay_value"])
                 expect(
                     db
@@ -753,7 +868,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(14);
+        expect(userVersion(db)).toBe(15);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {
@@ -835,8 +950,8 @@ describe("rollback onto a newer schema", () => {
     // build that migrates, the default MIGRATIONS is the one rolled back onto it.
     const ahead = (compat: Migration["compat"], up: string): Database => {
         const db = fresh();
-        applyMigrations(db, [...MIGRATIONS, { id: 15, compat, up }]);
-        expect(userVersion(db)).toBe(15);
+        applyMigrations(db, [...MIGRATIONS, { id: 16, compat, up }]);
+        expect(userVersion(db)).toBe(16);
         return db;
     };
     const ADD_COLUMN = "ALTER TABLE advances ADD COLUMN covenant_type TEXT";
@@ -845,7 +960,7 @@ describe("rollback onto a newer schema", () => {
         const db = ahead("additive", ADD_COLUMN);
         try {
             expect(() => applyMigrations(db)).not.toThrow();
-            expect(userVersion(db)).toBe(15);
+            expect(userVersion(db)).toBe(16);
         } finally {
             db.close();
         }
@@ -856,7 +971,7 @@ describe("rollback onto a newer schema", () => {
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 15, this build knows 14;[\s\S]*covenant_version/,
+                /database is at schema 16, this build knows 15;[\s\S]*covenant_version/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -869,7 +984,7 @@ describe("rollback onto a newer schema", () => {
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 15, this build knows 14;[\s\S]*migration 15/,
+                /database is at schema 16, this build knows 15;[\s\S]*migration 16/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -880,10 +995,10 @@ describe("rollback onto a newer schema", () => {
     it("refuses a newer schema that records no compatibility marker", () => {
         const db = migrated();
         db.exec(`${ADD_COLUMN}; DROP TABLE schema_compat`);
-        db.pragma("user_version = 15");
+        db.pragma("user_version = 16");
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 15, this build knows 14;[\s\S]*no forward-compatibility marker/,
+                /database is at schema 16, this build knows 15;[\s\S]*no forward-compatibility marker/,
             );
         } finally {
             db.close();
@@ -893,7 +1008,7 @@ describe("rollback onto a newer schema", () => {
     // Both inputs a 13-era guard reads before admitting a newer database. The
     // cross-build run against origin/main's built package is the real proof;
     // this pins the preconditions that run depends on.
-    it("leaves a 13-era reader everything its guard checks", () => {
+    it("leaves a 13-era reader every column it reads, but migration 15 locks it out", () => {
         const db = migrated();
         const thirteen = at(13);
         const before = shape(thirteen);
@@ -905,7 +1020,7 @@ describe("rollback onto a newer schema", () => {
                         "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
                     )
                     .get(),
-            ).toEqual({ v: 0n });
+            ).toEqual({ v: 15n });
             const after = shape(db);
             for (const [table, columns] of Object.entries(before))
                 for (const [column, declared] of Object.entries(columns))
