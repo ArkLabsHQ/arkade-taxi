@@ -42,9 +42,17 @@ export interface TaxiConfig {
     operatorPrivkey: Uint8Array;
     /** Covenant version new quotes are built at. Only 1 starts; see SCHEMA. */
     covenantVersion: 1 | 2;
+    /** How long the Taxi lends its dust before the v2 reclaim CLTV matures,
+     * measured from lockup. A different clock from `custodyWindowSeconds`,
+     * which is the receiver's grace after the Taxi takes the coin. */
+    covenantDeadlineSeconds: bigint;
     /** The guarantee advertised beside `unclaimedMode: "custody"`, not an expiry:
      * past it a release is still honoured while the funds remain (spec §5.6). */
     custodyWindowSeconds: bigint;
+    /** Renews v2 covenants out of the Taxi's reach; unset leaves them unrenewed. */
+    delegateeUrl?: string;
+    /** `before_expiry_seconds` of the delegatee's renewal schedule. */
+    renewalBeforeExpirySeconds: bigint;
     logLevel: LogLevel;
 }
 
@@ -88,7 +96,10 @@ export const SHOWN_CONFIG = {
     vtxoReadMaxAgeMs: "TAXI_VTXO_READ_MAX_AGE_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
     covenantVersion: "TAXI_COVENANT_VERSION",
+    covenantDeadlineSeconds: "TAXI_COVENANT_DEADLINE_SECONDS",
     custodyWindowSeconds: "TAXI_CUSTODY_WINDOW_SECONDS",
+    delegateeUrl: "TAXI_DELEGATEE_URL",
+    renewalBeforeExpirySeconds: "TAXI_RENEWAL_BEFORE_EXPIRY_SECONDS",
     logLevel: "TAXI_LOG_LEVEL",
     operatorKey: null,
     operatorSignerKey: null,
@@ -237,9 +248,19 @@ const SCHEMA = z
             .enum(["1", "2"])
             .default("1")
             .transform((s) => Number(s) as 1 | 2),
+        // 100 days (decision 7), the v2 reclaim CLTV measured from lockup. The
+        // sum must still fit the uint32 locktime field, which the producer checks.
+        TAXI_COVENANT_DEADLINE_SECONDS: positiveSats
+            .refine((v) => v <= 4_294_967_295n, "must fit a uint32")
+            .default("8640000"),
         // 100 days (decision 7). Baked into every custody row at reclaim, so a
         // later change never moves a window a payer was already quoted.
         TAXI_CUSTODY_WINDOW_SECONDS: positiveSats.default("8640000"),
+        TAXI_DELEGATEE_URL: url.optional(),
+        // 3 days, matching TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS.
+        TAXI_RENEWAL_BEFORE_EXPIRY_SECONDS: positiveSats
+            .refine((v) => v <= 4_294_967_295n, "must fit a uint32")
+            .default("259200"),
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
@@ -337,7 +358,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
         covenantVersion: v.TAXI_COVENANT_VERSION,
+        covenantDeadlineSeconds: v.TAXI_COVENANT_DEADLINE_SECONDS,
         custodyWindowSeconds: v.TAXI_CUSTODY_WINDOW_SECONDS,
+        ...(v.TAXI_DELEGATEE_URL ? { delegateeUrl: v.TAXI_DELEGATEE_URL } : {}),
+        renewalBeforeExpirySeconds: v.TAXI_RENEWAL_BEFORE_EXPIRY_SECONDS,
         logLevel: v.TAXI_LOG_LEVEL,
     };
 }
