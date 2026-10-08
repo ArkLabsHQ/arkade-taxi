@@ -87,6 +87,11 @@ function adminDeps(deps: ServerDeps) {
                 deadlines: s.deadlines,
             };
         },
+        ...(deps.delegatee
+            ? {
+                  delegation: (address: string) => deps.delegatee!.client.getDelegation(address),
+              }
+            : {}),
         /** The lifecycle refresh resolves with a runtime check still in flight, which
          * publishes `runtime_checking` and no chain height; settle it here, so every
          * admin rescan ends on a snapshot its caller can read synchronously. */

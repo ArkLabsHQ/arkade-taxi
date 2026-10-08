@@ -38,6 +38,7 @@ import {
     type ShownConfigEntry,
 } from "../config.js";
 import { holdings } from "../proceeds.js";
+import type { DelegationView } from "../delegatee.js";
 import type { OperationalSnapshot } from "../routes.js";
 import type { RecoveryDeadline } from "../sweeper.js";
 
@@ -67,6 +68,8 @@ export interface AdminDeps {
     dust: bigint;
     vtxoMinAmount: bigint;
     sweeperStatus: () => SweeperStatus;
+    /** Why a v2 renewal was missed. Absent without TAXI_DELEGATEE_URL. */
+    delegation?: (address: string) => Promise<DelegationView>;
     rescan(): Promise<void>;
     operationalSnapshot(options?: { ignoreManualPause?: boolean }): OperationalSnapshot;
     now(): number;
@@ -725,6 +728,23 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             return accepted(c, { accepted: true, action: "rescan" });
         } catch (e) {
             return bad(c, message(e));
+        }
+    });
+
+    app.get(at("/api/advances/:id/delegation"), async (c) => {
+        const row = deps.advances.get(c.req.param("id") ?? "");
+        if (!row)
+            return c.json({ code: "not_found", error: "advance not found" }, 404, {
+                "cache-control": "no-store",
+            });
+        if (row.covenantVersion !== 2 || !deps.delegation)
+            return conflict(c, "no_delegation", "advance has no renewal delegation");
+        try {
+            return ok(c, { delegation: await deps.delegation(row.covenantAddress) });
+        } catch (e) {
+            return c.json({ code: "delegatee_unavailable", error: message(e) }, 503, {
+                "cache-control": "no-store",
+            });
         }
     });
 

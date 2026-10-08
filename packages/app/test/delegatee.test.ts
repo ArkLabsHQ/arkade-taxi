@@ -138,3 +138,48 @@ describe("delegatee registration", () => {
         await expect(client.register()).rejects.toThrow(/no artifact id/);
     });
 });
+
+describe("delegation monitoring", () => {
+    it("reads the renewal history by address without spending anything", async () => {
+        const fetch = vi.fn(async () =>
+            json({
+                delegation: { status: "active" },
+                renewals: [
+                    { success: true, attempted_at: 100 },
+                    { success: false, error: "no connector available", attempted_at: 200 },
+                ],
+            }),
+        );
+        const client = new DelegateeClient({
+            baseUrl: "https://delegatee.example",
+            fetch: fetch as unknown as typeof globalThis.fetch,
+        });
+
+        await expect(client.getDelegation("ark1qcovenant")).resolves.toEqual({
+            status: "active",
+            attempts: 2,
+            succeeded: 1,
+            lastAttemptAt: 200,
+            lastError: "no connector available",
+        });
+        expect(fetch.mock.calls[0]).toEqual([
+            "https://delegatee.example/v1/delegate/ark1qcovenant",
+            { method: "GET" },
+        ]);
+    });
+
+    it("reports a delegation the delegatee has never renewed", async () => {
+        const client = new DelegateeClient({
+            baseUrl: "https://delegatee.example",
+            fetch: (async () =>
+                json({
+                    delegation: { status: "cancelled" },
+                })) as unknown as typeof globalThis.fetch,
+        });
+        await expect(client.getDelegation("ark1qcovenant")).resolves.toEqual({
+            status: "cancelled",
+            attempts: 0,
+            succeeded: 0,
+        });
+    });
+});
