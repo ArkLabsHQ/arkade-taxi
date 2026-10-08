@@ -43,6 +43,8 @@ import {
 } from "./fixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 
+const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+
 const COIN_A = { txid: "aa".repeat(32), vout: 0 };
 const COIN_B = { txid: "bb".repeat(32), vout: 7 };
 const COIN_C = { txid: "cc".repeat(32), vout: 0 };
@@ -70,9 +72,9 @@ function custodyCoin(ledger: AdvanceRepository): { txid: string; vout: number } 
         topup: 330n,
         paymentSats: 1_000n,
         covenantVersion: 2,
-        locktime: 100n,
-        recoveryLocktime: { kind: "height", value: 100n },
-        batchExpiry: { kind: "height", value: 300n },
+        // A v2 advance keeps no batch expiry; its CLTV is wall-clock.
+        locktime: V2_DEADLINE,
+        recoveryLocktime: { kind: "time", value: V2_DEADLINE },
         operatorInputs: [{ txid: "9a".repeat(32), vout: 0 }],
         unsignedLockupTx: "unsigned",
         unsignedLockupId: "fe".repeat(32),

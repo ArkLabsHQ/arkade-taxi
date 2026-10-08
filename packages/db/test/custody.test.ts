@@ -23,6 +23,8 @@ const COIN_A = { txid: "a1".repeat(32), vout: 0 };
 const COIN_B = { txid: "b2".repeat(32), vout: 3 };
 const ASSET = { txid: new Uint8Array(32).fill(9), groupIndex: 0 };
 
+const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+
 function advance(overrides: Partial<Advance> = {}): Advance {
     const result: Advance = {
         id: "adv-1",
@@ -47,7 +49,17 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
+    // move together: a fixture cannot pick one without the other.
+    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
+        result.locktime = V2_DEADLINE;
+        delete result.batchExpiry;
+        delete result.recoveryLocktime;
+    }
+    result.recoveryLocktime ??= {
+        kind: result.batchExpiry?.kind ?? "time",
+        value: result.locktime,
+    };
     return result;
 }
 

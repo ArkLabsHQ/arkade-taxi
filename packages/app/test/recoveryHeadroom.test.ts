@@ -444,7 +444,7 @@ describe("CLI recovery under admission inventory degradation", () => {
             );
             expect(h.submissions).toBe(1);
             expect(h.runtime!.safety().chainTime).toBe(BigInt(NOW + 1));
-            expect(h.advance.batchExpiry.value - h.runtime!.safety().chainTime!).toBe(86399n);
+            expect(h.advance.batchExpiry!.value - h.runtime!.safety().chainTime!).toBe(86399n);
             const recovering = await createRoutes(h.deps!).request(`/v1/transfers/${h.advance.id}`);
             expect(await recovering.json()).toMatchObject({ state: "recovering" });
             await expectAdmissionClosed(h, blocker);

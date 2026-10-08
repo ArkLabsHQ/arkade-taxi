@@ -63,10 +63,15 @@ export function transition(a: Advance, to: AdvanceState, at: number): Advance {
 
 export function validateFundingSnapshot(a: Advance): void {
     const expiry = a.batchExpiry;
+    // A v2 advance keeps no batch expiry: its deadline is measured from lockup
+    // and a renewal re-dates the coins, so a snapshot would go stale.
+    const deadline = a.covenantVersion === 2;
     if (
-        !expiry ||
-        typeof expiry.value !== "bigint" ||
-        (expiry.kind !== "height" && expiry.kind !== "time")
+        deadline
+            ? expiry !== undefined
+            : !expiry ||
+              typeof expiry.value !== "bigint" ||
+              (expiry.kind !== "height" && expiry.kind !== "time")
     ) {
         throw new Error(`advance ${a.id}: batch expiry must be a tagged deadline`);
     }
@@ -75,17 +80,21 @@ export function validateFundingSnapshot(a: Advance): void {
         return;
     }
     const recovery = a.recoveryLocktime;
+    // The v2 deadline is wall-clock and strictly after the lockup it is measured
+    // from; a v1 locktime is a margin inside batch expiry instead.
+    const agrees = deadline
+        ? recovery?.kind === "time" && recovery.value > BigInt(a.createdAt)
+        : recovery?.kind === expiry!.kind && expiry!.value > recovery.value;
     if (
         !recovery ||
         typeof recovery.value !== "bigint" ||
         recovery.value !== a.locktime ||
-        recovery.kind !== expiry.kind ||
-        expiry.value <= recovery.value ||
+        !agrees ||
         (recovery.kind === "height" && recovery.value >= 500_000_000n) ||
         (recovery.kind === "time" && recovery.value < 500_000_000n)
     ) {
         throw new Error(
-            `advance ${a.id}: tagged recovery locktime must match and be strictly before batch expiry`,
+            `advance ${a.id}: tagged recovery locktime must match and agree with batch expiry`,
         );
     }
     validateJointSnapshot(a);

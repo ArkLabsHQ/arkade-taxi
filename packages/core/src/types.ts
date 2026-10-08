@@ -29,7 +29,9 @@ export type Outpoint = { txid: string; vout: number };
 export type ExpiryDeadline = { kind: "height"; value: bigint } | { kind: "time"; value: bigint };
 
 export interface FundingSnapshot {
-    batchExpiry: ExpiryDeadline;
+    /** The funding coins' expiry at lockup. Absent on v2, whose deadline is
+     * measured from lockup instead and whose coins a renewal re-dates. */
+    batchExpiry?: ExpiryDeadline;
     recoveryLocktime?: ExpiryDeadline;
     operatorInputs: Outpoint[];
     unsignedLockupTx: string;

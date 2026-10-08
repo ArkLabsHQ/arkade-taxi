@@ -139,7 +139,7 @@ const serializeDeadline = (deadline: RecoveryDeadline): SerializedRecoveryDeadli
     advanceId: deadline.advanceId,
     kind: deadline.kind,
     locktime: deadline.locktime.toString(),
-    batchExpiry: deadline.batchExpiry.toString(),
+    batchExpiry: (deadline.batchExpiry ?? deadline.locktime).toString(),
     remaining: deadline.remaining?.toString() ?? null,
     severity: deadline.severity,
     code: safeCode(deadline.code, "recovery_blocked"),

@@ -243,8 +243,8 @@ function toParams(a: Advance): AdvanceParams {
         created_at: a.createdAt,
         updated_at: a.updatedAt,
         expires_at: a.expiresAt,
-        batch_expiry_kind: a.batchExpiry.kind,
-        batch_expiry_value: a.batchExpiry.value,
+        batch_expiry_kind: a.batchExpiry?.kind ?? null,
+        batch_expiry_value: a.batchExpiry?.value ?? null,
         recovery_locktime_kind: a.recoveryLocktime?.kind ?? null,
         operator_inputs_json: JSON.stringify(
             a.operatorInputs.map(({ txid, vout }) => ({ txid, vout })),
@@ -304,9 +304,12 @@ function toParams(a: Advance): AdvanceParams {
 // says `undefined`. Timestamps and indices are narrowed back to `number`, which
 // safeIntegers would otherwise hand back as BigInt.
 function fromRow(r: AdvanceRow): Advance {
+    // A v2 row stores no batch expiry: its deadline is measured from lockup and
+    // a renewal re-dates the coins, so a creation-time snapshot would be stale.
+    const v2 = r.covenant_version !== null;
     if (
-        r.batch_expiry_kind === null ||
-        r.batch_expiry_value === null ||
+        (!v2 && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||
+        (v2 && (r.batch_expiry_kind !== null || r.batch_expiry_value !== null)) ||
         r.operator_inputs_json === null ||
         r.unsigned_lockup_tx === null ||
         r.unsigned_lockup_id === null
@@ -367,7 +370,9 @@ function fromRow(r: AdvanceRow): Advance {
         createdAt: Number(r.created_at),
         updatedAt: Number(r.updated_at),
         expiresAt: Number(r.expires_at),
-        batchExpiry: { kind: r.batch_expiry_kind, value: r.batch_expiry_value },
+        ...(r.batch_expiry_kind === null || r.batch_expiry_value === null
+            ? {}
+            : { batchExpiry: { kind: r.batch_expiry_kind, value: r.batch_expiry_value } }),
         operatorInputs,
         unsignedLockupTx: r.unsigned_lockup_tx,
         unsignedLockupId: r.unsigned_lockup_id,
@@ -504,15 +509,17 @@ export class AdvanceRepository {
         );
         this.#sweepable = read(
             `SELECT * FROM advances WHERE state = 'locked' AND kind = 'covenant' AND
-             recovery_locktime_kind = batch_expiry_kind AND
+             (recovery_locktime_kind = batch_expiry_kind
+              OR (batch_expiry_kind IS NULL AND recovery_locktime_kind = 'time')) AND
              ((recovery_locktime_kind = 'height' AND locktime <= ?) OR
               (recovery_locktime_kind = 'time' AND locktime <= ?))
              ORDER BY CASE recovery_locktime_kind WHEN 'height' THEN 0 ELSE 1 END,
-                      batch_expiry_value ASC, locktime ASC, id ASC`,
+                      coalesce(batch_expiry_value, 0) ASC, locktime ASC, id ASC`,
         );
         this.#sumTopup = read("SELECT sum(topup) AS total FROM advances WHERE state = ?");
-        this.#missingFunding =
-            read(`SELECT id FROM advances WHERE batch_expiry_kind IS NULL OR batch_expiry_value IS NULL
+        this.#missingFunding = read(`SELECT id FROM advances WHERE
+            (covenant_version IS NULL AND (batch_expiry_kind IS NULL OR batch_expiry_value IS NULL))
+            OR (covenant_version IS NOT NULL AND batch_expiry_kind IS NOT NULL)
             OR operator_inputs_json IS NULL OR unsigned_lockup_tx IS NULL OR unsigned_lockup_id IS NULL ORDER BY id`);
         this.#missingExitParams = read(
             `SELECT count(*) AS total FROM advances WHERE exit_signer_key IS NULL

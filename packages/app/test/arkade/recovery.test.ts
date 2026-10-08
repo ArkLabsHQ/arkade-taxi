@@ -83,7 +83,9 @@ const sourceAdvance = (
     > = {},
     fareSats = 10n,
 ) => {
-    const locktime = kind === "height" ? 850_000n : 1_757_000_000n;
+    // A time-domain fixture doubles as the v2 deadline shape: NOW + 100 days, so
+    // it is strictly after the createdAt the startup invariant compares it with.
+    const locktime = kind === "height" ? 850_000n : 1_757_000_000n + 8_640_000n;
     const cfg = config();
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
     const assetId = sdkAsset
@@ -341,7 +343,7 @@ const startupError = (row: Advance): string | undefined => {
 describe("recovery graph", () => {
     it.each([
         ["height", 850_000n],
-        ["time", 1_757_000_000n],
+        ["time", 1_757_000_000n + 8_640_000n],
     ] as const)("builds the exact %s recovery leaf graph", (kind, locktime) => {
         const row = sourceAdvance(kind);
         const intent = buildRecoveryIntent(row, config());
@@ -425,6 +427,30 @@ describe("recovery graph", () => {
             assertRecoveryStartupInvariants([preparedRecovery(row)], config()),
         ).not.toThrow();
         expect(startupError(preparedRecovery(row))).toBeUndefined();
+    });
+
+    // D2 gives v2 its own startup invariant: the deadline is a time-domain CLTV,
+    // strictly after the lockup, and bounded by neither the funding coins'
+    // domain nor their expiry.
+    it("holds a v2 deadline to its own invariant, not the funding coins'", () => {
+        const row = sourceAdvance(
+            "time",
+            false,
+            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
+            330n,
+        );
+        const v2 = { ...row, batchExpiry: undefined };
+        expect(() => assertRecoveryStartupInvariants([v2], config())).not.toThrow();
+
+        expect(() =>
+            assertRecoveryStartupInvariants(
+                [{ ...v2, recoveryLocktime: { kind: "height", value: v2.locktime } }],
+                config(),
+            ),
+        ).toThrow(/a v2 recovery locktime must be time-domain/);
+        expect(() =>
+            assertRecoveryStartupInvariants([{ ...v2, createdAt: Number(v2.locktime) }], config()),
+        ).toThrow(/a v2 deadline must fall after the lockup/);
     });
 
     it("moves a v2 reclaim's whole asset holding to the operator output", () => {
@@ -1385,7 +1411,7 @@ describe("durable recovery runner", () => {
                  (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind,
                   batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
             )
-            .run("aa".repeat(32), 0, row.id, row.batchExpiry.kind, row.batchExpiry.value, 1);
+            .run("aa".repeat(32), 0, row.id, row.batchExpiry!.kind, row.batchExpiry!.value, 1);
         const malformed = {
             submitTx: vi.fn(async (arkTx: string, checkpoints: string[]) => ({
                 signedArkTx: arkTx,

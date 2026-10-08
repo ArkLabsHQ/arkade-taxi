@@ -264,29 +264,45 @@ export const policy = (over: Partial<Policy> = {}): Policy => ({
     ...over,
 });
 
-export const advance = (over: Partial<Advance> = {}): Advance => ({
-    id: "adv-1",
-    state: "locked",
-    receiverKey,
-    senderKey,
-    operatorKey,
-    operatorSignerKey: config().operatorSignerKey,
-    exitDelay: config().exitDelay,
-    dust: DUST,
-    topup: 330n,
-    locktime: 850_000n,
-    recoveryLocktime: { kind: "height", value: 850_000n },
-    batchExpiry: { kind: "height", value: 1_000_000n },
-    operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
-    unsignedLockupTx: "unsigned",
-    unsignedLockupId: "bb".repeat(32),
-    covenantAddress: "tark1qcovenantexample",
-    fare: { currency: "sats", units: 8n },
-    createdAt: NOW,
-    updatedAt: NOW,
-    expiresAt: NOW + 60,
-    ...over,
-});
+/** The v2 deadline every fixture lends to: NOW + 100 days, in the time domain. */
+export const V2_DEADLINE = BigInt(NOW) + 8_640_000n;
+
+export const advance = (over: Partial<Advance> = {}): Advance => {
+    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
+    // move together: a fixture cannot pick one without the other.
+    const v2 = over.covenantVersion === 2;
+    const clock = v2
+        ? {
+              locktime: V2_DEADLINE,
+              recoveryLocktime: { kind: "time" as const, value: V2_DEADLINE },
+          }
+        : {
+              locktime: 850_000n,
+              recoveryLocktime: { kind: "height" as const, value: 850_000n },
+              batchExpiry: { kind: "height" as const, value: 1_000_000n },
+          };
+    return {
+        id: "adv-1",
+        state: "locked",
+        receiverKey,
+        senderKey,
+        operatorKey,
+        operatorSignerKey: config().operatorSignerKey,
+        exitDelay: config().exitDelay,
+        dust: DUST,
+        topup: 330n,
+        ...clock,
+        operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
+        unsignedLockupTx: "unsigned",
+        unsignedLockupId: "bb".repeat(32),
+        covenantAddress: "tark1qcovenantexample",
+        fare: { currency: "sats", units: 8n },
+        createdAt: NOW,
+        updatedAt: NOW,
+        expiresAt: NOW + 60,
+        ...over,
+    };
+};
 
 export const quoteBody = (over: Record<string, unknown> = {}) => {
     const value =

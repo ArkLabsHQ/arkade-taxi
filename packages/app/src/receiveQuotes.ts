@@ -369,7 +369,8 @@ async function createReserved(
     };
     const selection = structuredClone(selectOperatorFunding(options));
     const floor = inputFloor(selection.batchExpiry, req.fundingExpiry);
-    const recovery = recoveryDeadline(floor, initial.policy, firstSafety, deps.config);
+    const quotedAt = deps.now();
+    const recovery = recoveryDeadline(floor, initial.policy, firstSafety, deps.config, quotedAt);
     const params: ReceiveQuote["params"] = {
         receiverKey: req.receiverKey,
         senderKey: req.makerKey,
@@ -415,7 +416,10 @@ async function createReserved(
         nowMs: deps.nowMs(),
     });
     const latestFloor = inputFloor(latest.batchExpiry, req.fundingExpiry);
-    const latestRecovery = recoveryDeadline(latestFloor, initial.policy, latestSafety, deps.config);
+    const latestRecovery =
+        deps.config.covenantVersion === 2
+            ? recovery
+            : recoveryDeadline(latestFloor, initial.policy, latestSafety, deps.config, quotedAt);
     if (
         !sameSelection(selection, latest) ||
         latestFloor.kind !== floor.kind ||
@@ -432,7 +436,7 @@ async function createReserved(
             "policy changed during construction",
         );
     immutableTerms(req, currentPolicy.policy, deps.config);
-    const now = deps.now();
+    const now = quotedAt;
     const quote: ReceiveQuote = {
         id: deps.randomId(),
         state: "quoted",
@@ -457,10 +461,12 @@ async function createReserved(
     deps.receiveQuotes.insert({
         quote,
         expectedPolicyRevision: initial.revision,
+        // The budget shares the recovery locktime's domain, which for v2 is its
+        // own wall clock rather than the funding floor's.
         recoveryExecutionBudget: {
-            kind: floor.kind,
+            kind: recovery.kind,
             value:
-                floor.kind === "height"
+                recovery.kind === "height"
                     ? deps.config.recoveryBroadcastBlocks
                     : deps.config.recoveryBroadcastSeconds,
         },
@@ -476,12 +482,33 @@ function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadlin
     return { kind: batch.kind, value: hint.value < batch.value ? hint.value : batch.value };
 }
 
+/**
+ * v2 bounds how long the Taxi lends its dust, measured from now, so the CLTV is
+ * wall-clock and deliberately outlives the funding coins: a renewer must not be
+ * able to push the Taxi's own claim out. v1 keeps the margin off batch expiry.
+ */
 function recoveryDeadline(
     floor: ExpiryDeadline,
     policy: Policy,
     safety: RuntimeSafety,
     config: RuntimeConfig,
+    now: number,
 ): ExpiryDeadline {
+    if (config.covenantVersion === 2) {
+        const value = BigInt(now) + config.covenantDeadlineSeconds;
+        if (
+            value < 500_000_000n ||
+            value > 0xffff_ffffn ||
+            value <= safety.chainTime! ||
+            value <= BigInt(now)
+        )
+            throw new ServiceError(
+                ErrorCode.NoLocktimeHeadroom,
+                503,
+                `covenant deadline ${value} is not a future time-domain locktime`,
+            );
+        return { kind: "time", value };
+    }
     const clock = floor.kind === "height" ? safety.chainHeight! : safety.chainTime!;
     const headroom =
         floor.kind === "height" ? config.minExpiryHeadroomBlocks : config.minExpiryHeadroomSeconds;

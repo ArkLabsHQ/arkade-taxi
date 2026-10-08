@@ -82,7 +82,12 @@ function covenantScript(advance: Advance, config: RuntimeConfig): DustCovenantSc
 function assertTaggedLocktime(advance: Advance): NonNullable<Advance["recoveryLocktime"]> {
     const locktime = advance.recoveryLocktime;
     if (!locktime) fail(`advance ${advance.id}: missing tagged recovery locktime`);
-    if (locktime.kind !== advance.batchExpiry.kind)
+    // A v2 deadline is wall-clock by construction and stores no batch expiry to
+    // agree with, so it carries its own domain.
+    if (advance.batchExpiry === undefined) {
+        if (locktime.kind !== "time")
+            fail(`advance ${advance.id}: a v2 recovery locktime must be time-domain`);
+    } else if (locktime.kind !== advance.batchExpiry.kind)
         fail(`advance ${advance.id}: recovery locktime kind differs from batch expiry`);
     if (locktime.value !== advance.locktime)
         fail(`advance ${advance.id}: recovery locktime value differs from covenant locktime`);
@@ -252,7 +257,12 @@ export function assertRecoveryStartupInvariants(
             locktime.kind === "height"
                 ? config.recoveryBroadcastBlocks
                 : config.recoveryBroadcastSeconds;
-        if (locktime.value + budget >= advance.batchExpiry.value)
+        // A v2 deadline deliberately outlives batch expiry, so the race it must
+        // win is the lockup it was measured from, not the funding coins.
+        if (advance.batchExpiry === undefined) {
+            if (locktime.value <= BigInt(advance.createdAt))
+                fail(`advance ${advance.id}: a v2 deadline must fall after the lockup`);
+        } else if (locktime.value + budget >= advance.batchExpiry.value)
             fail(
                 `advance ${advance.id}: recovery locktime plus execution budget must be strictly before batch expiry`,
             );

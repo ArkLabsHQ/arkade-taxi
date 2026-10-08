@@ -666,7 +666,7 @@ async function classifySpend(
         if (
             leaf === Leaf.Recovery &&
             (!recoveryLocktime ||
-                recoveryLocktime.kind !== advance.batchExpiry.kind ||
+                recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time") ||
                 recoveryLocktime.value !== advance.locktime)
         )
             fail("recovery locktime tag is missing or inconsistent");

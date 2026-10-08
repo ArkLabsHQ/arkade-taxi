@@ -53,7 +53,8 @@ export interface RecoveryDeadline {
     advanceId: string;
     kind: ExpiryDeadline["kind"];
     locktime: bigint;
-    batchExpiry: bigint;
+    /** Null on v2, which stores none: its clock is the deadline itself. */
+    batchExpiry: bigint | null;
     remaining: bigint | null;
     severity: DeadlineSeverity;
     code: string;
@@ -131,16 +132,19 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         time: bigint | null,
     ): RecoveryDeadline => {
         const recovery = advance.recoveryLocktime;
+        // A v2 advance stores no batch expiry; its deadline is its own clock,
+        // so the countdown runs to the CLTV rather than to the funding coins.
+        const expiry = advance.batchExpiry;
         if (
             !recovery ||
-            recovery.kind !== advance.batchExpiry.kind ||
+            recovery.kind !== (expiry?.kind ?? "time") ||
             recovery.value !== advance.locktime
         )
             return {
                 advanceId: advance.id,
-                kind: advance.batchExpiry.kind,
+                kind: expiry?.kind ?? "time",
                 locktime: advance.locktime,
-                batchExpiry: advance.batchExpiry.value,
+                batchExpiry: expiry?.value ?? null,
                 remaining: -1n,
                 severity: "expired",
                 code: "recovery_locktime_invalid",
@@ -151,12 +155,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 advanceId: advance.id,
                 kind: recovery.kind,
                 locktime: recovery.value,
-                batchExpiry: advance.batchExpiry.value,
+                batchExpiry: expiry?.value ?? null,
                 remaining: null,
                 severity: "eligible",
                 code: `chain_${recovery.kind}_unavailable`,
             };
-        const remaining = advance.batchExpiry.value - chainClock;
+        const remaining = (expiry?.value ?? recovery.value) - chainClock;
         const severity =
             remaining <= 0n
                 ? "expired"
@@ -169,7 +173,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             advanceId: advance.id,
             kind: recovery.kind,
             locktime: recovery.value,
-            batchExpiry: advance.batchExpiry.value,
+            batchExpiry: expiry?.value ?? null,
             remaining,
             severity,
             code:
@@ -188,7 +192,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         if (severity) return severity;
         if (a.kind !== b.kind) return a.kind === "height" ? -1 : 1;
         return (
-            compareBig(a.batchExpiry, b.batchExpiry) ||
+            compareBig(a.batchExpiry ?? 0n, b.batchExpiry ?? 0n) ||
             compareBig(a.locktime, b.locktime) ||
             a.advanceId.localeCompare(b.advanceId)
         );
@@ -298,7 +302,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                     const recovery = advance.recoveryLocktime;
                     if (
                         !recovery ||
-                        recovery.kind !== advance.batchExpiry.kind ||
+                        recovery.kind !== (advance.batchExpiry?.kind ?? "time") ||
                         recovery.value !== advance.locktime
                     )
                         return oldest;

@@ -138,17 +138,23 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
     const inputs = [...req.senderInputs, ...operatorInputs];
     if (!req.senderInputs.length || !operatorInputs.length)
         throw new LockupShapeError("both funding owners required");
+    // A v2 deadline bounds the Taxi's lending from lockup, so it neither shares
+    // the funding expiry's domain nor falls before it. The inputs must still
+    // agree with each other and with the selection's recorded expiry.
+    const deadline = req.params.covenantVersion === 2;
     if (
         inputs.some(
             (input) =>
                 input.expiry.kind !== req.funding.batchExpiry.kind ||
-                input.expiry.value <= req.params.locktime,
+                (!deadline && input.expiry.value <= req.params.locktime),
         ) ||
         operatorInputs.reduce(
             (minimum, input) => (input.expiry.value < minimum ? input.expiry.value : minimum),
             operatorInputs[0].expiry.value,
         ) !== req.funding.batchExpiry.value ||
-        (req.funding.batchExpiry.kind === "time") !== req.params.locktime >= 500_000_000n
+        (deadline
+            ? req.params.locktime < 500_000_000n
+            : (req.funding.batchExpiry.kind === "time") !== req.params.locktime >= 500_000_000n)
     )
         throw new LockupShapeError("inconsistent funding expiry evidence");
     if (new Set(inputs.map((i) => `${i.txid}:${i.vout}`)).size !== inputs.length)

@@ -24,6 +24,7 @@ import { swapAssetId } from "../src/proceeds.js";
 
 const WINDOW = 8_640_000;
 const INT64_MAX = 9_223_372_036_854_775_807n;
+const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
 const RECLAIM = "12".repeat(32);
 const TIP = { hash: "34".repeat(32), height: 700_000 };
 const HELD_AT = 1_757_001_000;
@@ -97,8 +98,9 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         assetUnits: 7n,
         receiverFare: { currency: "asset", units: 2n },
         covenantVersion: 2,
-        locktime: 850_000n,
-        batchExpiry: { kind: "height", value: INT64_MAX },
+        // A v2 advance keeps no batch expiry; its CLTV is wall-clock.
+        locktime: V2_DEADLINE,
+        recoveryLocktime: { kind: "time", value: V2_DEADLINE },
         operatorInputs: [{ txid: "ab".repeat(32), vout: 7 }],
         unsignedLockupTx: "unsigned-lockup",
         unsignedLockupId: "cd".repeat(32),
@@ -110,7 +112,10 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    result.recoveryLocktime ??= {
+        kind: result.batchExpiry?.kind ?? "time",
+        value: result.locktime,
+    };
     return result;
 }
 

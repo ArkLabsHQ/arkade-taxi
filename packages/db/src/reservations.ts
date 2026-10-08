@@ -191,18 +191,25 @@ export class ReservationRepository {
                 // to both kinds.
                 if (advanceKind(advance) === "covenant") {
                     const recovery = advance.recoveryLocktime;
+                    // A v2 deadline is wall-clock and outlives the funding coins
+                    // by design, so the budget is measured in its own domain and
+                    // the race it must win is the lockup, not the expiry.
+                    const expiry = advance.batchExpiry;
+                    const domain = expiry?.kind ?? "time";
                     const policyMargin = BigInt(
-                        advance.batchExpiry.kind === "height"
+                        domain === "height"
                             ? policy.locktimeMarginBlocks
                             : policy.locktimeMarginSeconds,
                     );
                     if (
                         !recovery ||
-                        recovery.kind !== advance.batchExpiry.kind ||
+                        recovery.kind !== domain ||
                         recoveryExecutionBudget?.kind !== recovery.kind ||
                         recoveryExecutionBudget.value < 0n ||
                         policyMargin <= recoveryExecutionBudget.value ||
-                        recovery.value + recoveryExecutionBudget.value >= advance.batchExpiry.value
+                        (expiry
+                            ? recovery.value + recoveryExecutionBudget.value >= expiry.value
+                            : recovery.value <= BigInt(advance.createdAt))
                     )
                         throw new RecoveryBudgetConflictError(advance.id);
                 }
@@ -216,8 +223,11 @@ export class ReservationRepository {
                 ) {
                     throw new QuoteAdmissionError("topup_exceeds_max_per_payment");
                 }
+                // A v2 locktime is not a margin off batch expiry, so there is no
+                // headroom between the two to measure.
                 if (
                     advanceKind(advance) === "covenant" &&
+                    advance.batchExpiry !== undefined &&
                     advance.batchExpiry.value - advance.locktime <
                         BigInt(
                             advance.batchExpiry.kind === "height"
@@ -275,8 +285,8 @@ export class ReservationRepository {
                         input.txid,
                         input.vout,
                         advance.id,
-                        advance.batchExpiry.kind,
-                        advance.batchExpiry.value,
+                        advance.batchExpiry?.kind ?? null,
+                        advance.batchExpiry?.value ?? null,
                         advance.createdAt,
                     );
                 }
