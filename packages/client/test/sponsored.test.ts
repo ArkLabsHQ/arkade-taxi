@@ -265,6 +265,21 @@ describe("TaxiClient sponsored transfers", () => {
         expect(JSON.parse(String(fetch.calls.at(-1)?.init.body))).not.toHaveProperty("paymentSats");
     });
 
+    const verifiedAsk = () => ({
+        receiverAddress: sponsoredAddress(),
+        senderKey,
+        selectedVtxos: [coin()],
+        trustedServerKey: serverKey,
+        vtxoMinAmount: 10n,
+        hrp: HRP,
+        trustedServerUnrollScript: sponsoredArgs().trustedServerUnrollScript,
+        now: 1_000_000_000,
+        expect: {
+            maxContributionSats: 330n,
+            maxFare: { currency: "sats" as const, units: 10n },
+        },
+    });
+
     it("requests, signs and submits through the sponsored endpoints", async () => {
         const quote = sponsoredQuote();
         const { taxi, fetch } = client((url) => {
@@ -275,17 +290,7 @@ describe("TaxiClient sponsored transfers", () => {
                 outpoint: { txid: "aa".repeat(32), vout: 0 },
             });
         });
-        const { verified } = await taxi.requestVerifiedSponsoredQuote({
-            receiverAddress: sponsoredAddress(),
-            senderKey,
-            selectedVtxos: [coin()],
-            trustedServerKey: serverKey,
-            vtxoMinAmount: 10n,
-            hrp: HRP,
-            trustedServerUnrollScript: sponsoredArgs().trustedServerUnrollScript,
-            now: 1_000_000_000,
-            expect: { maxContributionSats: 330n, maxFare: { currency: "sats", units: 10n } },
-        });
+        const { verified } = await taxi.requestVerifiedSponsoredQuote(verifiedAsk());
         expect(verified.receiverAddress).toBe(sponsoredAddress());
         expect(fetch.calls.map((call) => call.url)).toEqual([
             `${BASE}/v1/info`,
@@ -294,6 +299,22 @@ describe("TaxiClient sponsored transfers", () => {
         const res = await taxi.prepareAndSubmitSponsoredLockup(verified, senderIdentity);
         expect(res.outpoint.vout).toBe(0);
         expect(fetch.calls.at(-1)?.url).toBe(`${BASE}/v1/sponsored-transfers/tr_01/lockup`);
+    });
+
+    it("re-reads an earlier /v1/info once and accepts a quote under a rotated operator key", async () => {
+        const current = sponsoredArgs().info;
+        let advertised = { ...current, operatorKey: bytesToHex(otherKey) };
+        const { taxi, fetch } = client((url) =>
+            jsonResponse(200, url === `${BASE}/v1/info` ? advertised : sponsoredQuote()),
+        );
+        await taxi.info();
+        advertised = current;
+        await expect(taxi.requestVerifiedSponsoredQuote(verifiedAsk())).resolves.toBeDefined();
+        expect(fetch.calls.map((call) => call.url)).toEqual([
+            `${BASE}/v1/info`,
+            `${BASE}/v1/sponsored-transfers`,
+            `${BASE}/v1/info`,
+        ]);
     });
 
     it("reports sponsored transfer status", async () => {

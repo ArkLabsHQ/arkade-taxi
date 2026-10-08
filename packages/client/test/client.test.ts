@@ -74,6 +74,43 @@ describe("info", () => {
         await expect(taxi.info()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     });
 
+    it("reads afresh unless the caller accepts a read of a given age", async () => {
+        vi.useFakeTimers({ now: 0, toFake: ["Date"] });
+        try {
+            const { taxi, fetch } = client(ok(info()));
+            const recent = () => taxi.info({ maxAgeMs: 30_000 });
+            await Promise.all([recent(), recent()]);
+            vi.setSystemTime(29_999);
+            await recent();
+            expect(fetch.calls).toHaveLength(1);
+            await taxi.info();
+            expect(fetch.calls).toHaveLength(2);
+            vi.setSystemTime(59_999);
+            await recent();
+            expect(fetch.calls).toHaveLength(3);
+            vi.setSystemTime(0);
+            await recent();
+            expect(fetch.calls).toHaveLength(4);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("never keeps a failed read and hands each caller its own copy", async () => {
+        let up = false;
+        const { taxi, fetch } = client(() =>
+            up
+                ? jsonResponse(200, info())
+                : jsonResponse(503, { error: "down", code: "not_ready" }),
+        );
+        const recent = () => taxi.info({ maxAgeMs: 30_000 });
+        await expect(recent()).rejects.toMatchObject({ code: "not_ready" });
+        up = true;
+        (await recent()).paused = true;
+        expect((await recent()).paused).toBe(false);
+        expect(fetch.calls).toHaveLength(2);
+    });
+
     it("throws NETWORK_ERROR when fetch itself rejects", async () => {
         const boom = new Error("socket hang up");
         const taxi = new TaxiClient({

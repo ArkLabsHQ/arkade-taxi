@@ -7,6 +7,7 @@ import {
     assetArgs,
     info,
     jsonResponse,
+    operatorKey,
     otherKey,
     params,
     quote,
@@ -285,6 +286,56 @@ describe("requestVerifiedQuote", () => {
             code: "PROTOCOL_VERSION_MISMATCH",
         });
         expect(fetch.calls).toHaveLength(1);
+    });
+
+    describe("against an earlier /v1/info read", () => {
+        const taxiAdvertising = (advertised: () => ReturnType<typeof info>) => {
+            const fetch = recordingFetch((url) =>
+                jsonResponse(200, url.endsWith("/info") ? advertised() : args().quote),
+            );
+            const paths = () => fetch.calls.map((c) => new URL(c.url).pathname);
+            return {
+                taxi: new client.TaxiClient({ baseUrl: "https://taxi.example", fetch }),
+                paths,
+            };
+        };
+
+        it("re-reads it once and accepts a quote under a rotated operator key", async () => {
+            let operator = otherKey;
+            const { taxi, paths } = taxiAdvertising(() => ({
+                ...info(),
+                operatorKey: bytesToHex(operator),
+            }));
+            await taxi.info();
+            operator = operatorKey;
+            await taxi.requestVerifiedQuote(request());
+            await taxi.requestVerifiedQuote(request());
+            expect(paths()).toEqual(["/v1/info", "/v1/transfers", "/v1/info", "/v1/transfers"]);
+        });
+
+        it("keeps the refusal when the re-read itself fails", async () => {
+            let reads = 0;
+            const { taxi } = taxiAdvertising(() => {
+                if (++reads > 1) throw new Error("socket hang up");
+                return { ...info(), operatorKey: bytesToHex(otherKey) };
+            });
+            await taxi.info();
+            await expect(taxi.requestVerifiedQuote(request())).rejects.toMatchObject({
+                code: "OPERATOR_KEY_MISMATCH",
+            });
+        });
+
+        it("re-reads it before quoting when it named another protocol version", async () => {
+            let version = PROTOCOL_VERSION + 1;
+            const { taxi, paths } = taxiAdvertising(() => ({
+                ...info(),
+                protocolVersion: version,
+            }));
+            await taxi.info();
+            version = PROTOCOL_VERSION;
+            await taxi.requestVerifiedQuote(request());
+            expect(paths()).toEqual(["/v1/info", "/v1/info", "/v1/transfers"]);
+        });
     });
 
     it.each(["canonical", "network", "server"])(
