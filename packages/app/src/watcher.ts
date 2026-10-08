@@ -24,6 +24,7 @@ import {
     arkade,
     assertAllowedSighashTypes,
     getArkPsbtFields,
+    isVtxoSpent,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
     type IContractManager,
@@ -87,6 +88,7 @@ export interface SpendWatcherDeps {
         | "recordSpendObservation"
         | "recordSpendUnknown"
         | "recordCovenantUnrolled"
+        | "recordCovenantRenewed"
         | "clearSpendUnknown"
         | "recordSpendDisagreement"
         | "recordStableSpendObservation"
@@ -323,10 +325,17 @@ const anchorIndex = (tx: Transaction): number =>
         "P2A anchor",
     );
 
-const exactTransactionHeader = (tx: Transaction, lockTime: number, label: string): void => {
-    const sequence = lockTime === 0 ? 0xffffffff : 0xfffffffe;
-    if (tx.version !== 3 || tx.lockTime !== lockTime)
+const exactTransactionHeader = (
+    tx: Transaction,
+    lockTime: number,
+    label: string,
+    /** A v2 reclaim can be taken early off a swept coin, so its CLTV is a
+     * ceiling, not an equality: refusing it would open no custody row. */
+    atMost = false,
+): void => {
+    if (tx.version !== 3 || (atMost ? tx.lockTime > lockTime : tx.lockTime !== lockTime))
         fail(`${label} version or locktime differs from the SDK 0.4.72 graph`);
+    const sequence = tx.lockTime === 0 ? 0xffffffff : 0xfffffffe;
     for (let index = 0; index < tx.inputsLength; index++) {
         if (tx.getInput(index).sequence !== sequence)
             fail(`${label} input ${index} sequence differs from the SDK 0.4.72 graph`);
@@ -454,6 +463,51 @@ const agrees = (
     } catch {
         return false;
     }
+};
+
+/** A batch settlement, not a checkpoint+arkTx pair: `settledBy` is the signal. */
+const renewalCommitment = (coin: VirtualCoin): string | undefined =>
+    /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.spentBy && !coin.arkTxId
+        ? coin.settledBy
+        : undefined;
+
+/** Script, value and assets: the only facts a renewal preserves. */
+const sameCovenant = (coin: VirtualCoin, facts: ReturnType<typeof covenantFacts>): boolean => {
+    try {
+        return (
+            coin.value === Number(facts.value) &&
+            coin.script === hex.encode(facts.script.pkScript) &&
+            !holdingsDiffer(holdings(coin, "covenant outpoint"), facts.expectedHoldings)
+        );
+    } catch {
+        return false;
+    }
+};
+
+const exactSuccessor = async (
+    provider: SpendWatcherDeps["indexer"],
+    predecessor: VirtualCoin,
+    facts: ReturnType<typeof covenantFacts>,
+): Promise<VirtualCoin> => {
+    let response: Awaited<ReturnType<IndexerProvider["getVtxos"]>>;
+    try {
+        response = await provider.getVtxos({ scripts: [predecessor.script] });
+    } catch {
+        return fail("canonical renewal successor evidence is unavailable");
+    }
+    if (!response || !Array.isArray(response.vtxos))
+        fail("indexer returned no renewal successor evidence");
+    const live = response.vtxos.filter(
+        (coin) =>
+            !isVtxoSpent(coin) &&
+            coin.isSwept === false &&
+            coin.isUnrolled === false &&
+            sameCovenant(coin, facts),
+    );
+    // Two v2 covenants differing only in paymentSats share one address, so an
+    // ambiguous pair is refused rather than guessed at.
+    if (live.length !== 1) fail("renewal successor is missing or ambiguous");
+    return live[0]!;
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
@@ -662,17 +716,21 @@ async function classifySpend(
         );
         if (leafIndex === undefined) fail("checkpoint selects no recognized covenant leaf");
         const leaf = leafIndex as Leaf;
+        const v2Reclaim = advance.covenantVersion === 2 && leaf === Leaf.Recovery;
         const recoveryLocktime = advance.recoveryLocktime;
         if (
             leaf === Leaf.Recovery &&
             (!recoveryLocktime ||
-                recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time") ||
+                // v1 only: a v2 advance keeps no batch expiry at all, and D2
+                // makes its deadline wall-clock where an expiry may be a height.
+                (advance.covenantVersion !== 2 &&
+                    recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time")) ||
                 recoveryLocktime.value !== advance.locktime)
         )
             fail("recovery locktime tag is missing or inconsistent");
         const expectedLockTime = leaf === Leaf.Recovery ? Number(recoveryLocktime!.value) : 0;
-        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint");
-        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction");
+        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint", v2Reclaim);
+        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction", v2Reclaim);
         const expectedLeaf = covenantSpendInput(
             facts.script,
             leaf,
@@ -844,13 +902,16 @@ async function classifySpend(
             exactAnchor(arkTx, anchorIndex(arkTx));
         }
         if (leaf === Leaf.Recovery) {
+            const ceiling = Number(recoveryLocktime!.value);
             if (
-                arkTx.lockTime !== Number(recoveryLocktime!.value) ||
-                checkpoint.lockTime !== Number(recoveryLocktime!.value)
+                arkTx.lockTime !== checkpoint.lockTime ||
+                (v2Reclaim ? arkTx.lockTime > ceiling : arkTx.lockTime !== ceiling)
             )
                 fail("recovery does not carry the exact persisted CLTV");
+            // An early reclaim matures against its own CLTV, not the ceiling.
+            const matured = v2Reclaim ? BigInt(arkTx.lockTime) : recoveryLocktime!.value;
             const chainClock = recoveryLocktime!.kind === "height" ? tip.height : tip.time;
-            if (!Number.isSafeInteger(chainClock) || BigInt(chainClock) < recoveryLocktime!.value)
+            if (!Number.isSafeInteger(chainClock) || BigInt(chainClock) < matured)
                 fail(
                     recoveryLocktime!.kind === "height"
                         ? "recovery height CLTV is not mature at the canonical tip"
@@ -909,7 +970,31 @@ const prefetch = async (
 }> => {
     const coins = new Map<string, VirtualCoin[]>();
     const resolved = new Set<string>();
+    const byScript = new Map<string, VirtualCoin[]>();
+    const resolvedScripts = new Set<string>();
     const txs = new Map<string, string>();
+
+    const loadScripts = async (wanted: readonly string[]) => {
+        for (const group of chunk([...new Set(wanted)], CHUNK_KEYS)) {
+            const keys = new Set(group);
+            const found = new Map<string, VirtualCoin[]>();
+            let usable = true;
+            try {
+                const response = await provider.getVtxos({ scripts: group });
+                if (!response || !Array.isArray(response.vtxos)) usable = false;
+                else
+                    for (const coin of response.vtxos) {
+                        if (!keys.has(coin.script)) usable = false;
+                        else found.set(coin.script, [...(found.get(coin.script) ?? []), coin]);
+                    }
+            } catch {
+                usable = false;
+            }
+            if (!usable) continue;
+            for (const [key, hits] of found) byScript.set(key, hits);
+            for (const key of keys) resolvedScripts.add(key);
+        }
+    };
 
     const loadCoins = async (wanted: readonly { txid: string; vout: number }[]) => {
         const unique = [...new Map(wanted.map((o) => [outpointKey(o), o])).values()];
@@ -979,6 +1064,13 @@ const prefetch = async (
     };
 
     await loadCoins([...outpoints, ...coinOnly]);
+    // One scan-wide wave off wave A's own coins; nothing renewed reads nothing.
+    await loadScripts(
+        outpoints.flatMap((outpoint) => {
+            const hits = coins.get(outpointKey(outpoint)) ?? [];
+            return hits.length === 1 && renewalCommitment(hits[0]!) ? [hits[0]!.script] : [];
+        }),
+    );
     // Only the classified rows pull the transaction waves; a coin-only row rides
     // wave A and stops there.
     const spent = outpoints.flatMap((outpoint) => {
@@ -1010,9 +1102,13 @@ const prefetch = async (
         cached: (outpoint) => resolved.has(outpointKey(outpoint)),
         indexer: {
             getVtxos: (options) => {
-                const keys = (
-                    options && Object.keys(options).length === 1 ? options.outpoints : undefined
-                )?.map(outpointKey);
+                const narrow = options && Object.keys(options).length === 1;
+                const scripts = narrow ? options.scripts : undefined;
+                if (scripts?.every((script) => resolvedScripts.has(script)))
+                    return Promise.resolve({
+                        vtxos: scripts.flatMap((script) => byScript.get(script) ?? []),
+                    });
+                const keys = (narrow ? options.outpoints : undefined)?.map(outpointKey);
                 return keys?.every((key) => resolved.has(key))
                     ? Promise.resolve({ vtxos: keys.flatMap((key) => coins.get(key) ?? []) })
                     : provider.getVtxos(options);
@@ -1219,6 +1315,30 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     deps.now(),
                     tip,
                 );
+                continue;
+            }
+            // Ahead of the spend paths: a renewed coin may arrive with `isSpent`
+            // unset, which would otherwise read as healthy at a dead outpoint.
+            if (coin && observedAdvance.covenantVersion === 2 && renewalCommitment(coin)) {
+                try {
+                    const facts = covenantFacts(observedAdvance, deps.config);
+                    if (!sameCovenant(coin, facts))
+                        fail("renewed covenant evidence differs from persisted facts");
+                    const successor = await exactSuccessor(batched.indexer, coin, facts);
+                    if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
+                        fail("renewal successor could not be adopted");
+                    recoverable.add(advance.id);
+                } catch (error) {
+                    deps.advances.recordSpendUnknown(
+                        advance.id,
+                        undefined,
+                        error instanceof EvidenceError
+                            ? error.message
+                            : "covenant renewal evidence could not be validated",
+                        deps.now(),
+                        tip,
+                    );
+                }
                 continue;
             }
             if (!coin || !coin.isSpent) {

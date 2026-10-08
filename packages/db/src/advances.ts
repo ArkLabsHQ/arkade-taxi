@@ -35,6 +35,8 @@ const COLUMNS = [
     "outpoint_txid",
     "outpoint_vout",
     "spent_txid",
+    "renewals",
+    "last_renewed_at",
     "created_at",
     "updated_at",
     "expires_at",
@@ -118,6 +120,8 @@ interface AdvanceRow {
     outpoint_txid: string | null;
     outpoint_vout: bigint | null;
     spent_txid: string | null;
+    renewals: bigint;
+    last_renewed_at: bigint | null;
     created_at: bigint;
     updated_at: bigint;
     expires_at: bigint;
@@ -240,6 +244,8 @@ function toParams(a: Advance): AdvanceParams {
         outpoint_txid: a.outpoint?.txid ?? null,
         outpoint_vout: a.outpoint?.vout ?? null,
         spent_txid: a.spentTxid ?? null,
+        renewals: a.renewals ?? 0,
+        last_renewed_at: a.lastRenewedAt ?? null,
         created_at: a.createdAt,
         updated_at: a.updatedAt,
         expires_at: a.expiresAt,
@@ -404,6 +410,8 @@ function fromRow(r: AdvanceRow): Advance {
         a.outpoint = { txid: r.outpoint_txid, vout: Number(r.outpoint_vout) };
     }
     if (r.spent_txid !== null) a.spentTxid = r.spent_txid;
+    if (r.renewals !== 0n) a.renewals = Number(r.renewals);
+    if (r.last_renewed_at !== null) a.lastRenewedAt = Number(r.last_renewed_at);
     if (r.submission_key !== null) a.submissionKey = r.submission_key;
     if (r.signed_envelope_digest !== null) a.signedEnvelopeDigest = r.signed_envelope_digest;
     if (r.submission_phase !== null) a.submissionPhase = r.submission_phase;
@@ -484,6 +492,9 @@ export class AdvanceRepository {
     readonly #lockupSubmission: Statement<[string, number, string]>;
     readonly #lockupFailure: Statement<[string, string, number, string]>;
     readonly #lockupObserved: Statement<[string, string, number, number, number, string]>;
+    readonly #covenantRenewed: Statement<
+        [string, number, number, number, number, string, string, number]
+    >;
     readonly #exposureTotals: Statement<[], { total: bigint; count: bigint }>;
     readonly #recoverySubmission: Statement<[string, number, string]>;
     readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
@@ -533,6 +544,17 @@ export class AdvanceRepository {
             db.prepare(`UPDATE advances SET state = 'locked', ark_txid = coalesce(ark_txid, ?),
             outpoint_txid = ?, outpoint_vout = ?, last_observed_at = ?, updated_at = max(updated_at, ?),
             failure_code = NULL, failure_detail = NULL WHERE id = ? AND state = 'locking'`);
+        // The NOT EXISTS keeps #byOutpoint single-valued: a successor another
+        // row already holds is refused rather than shadowed.
+        this.#covenantRenewed =
+            db.prepare(`UPDATE advances SET outpoint_txid = ?, outpoint_vout = ?,
+            renewals = renewals + 1, last_renewed_at = ?, last_observed_at = ?,
+            updated_at = max(updated_at, ?), failure_code = NULL, failure_detail = NULL
+            WHERE id = ? AND state = 'locked' AND kind = 'covenant' AND covenant_version = 2
+            AND NOT EXISTS (
+                SELECT 1 FROM advances other WHERE other.id != advances.id
+                AND other.outpoint_txid = ? AND other.outpoint_vout = ?
+            )`);
         // Mirrors `isExposed` in core without materializing rows: a sponsored
         // advance settles at `locked`, so only `locking` sponsored rows count.
         this.#exposureTotals = read(
@@ -1062,6 +1084,22 @@ export class AdvanceRepository {
         return (
             this.#lockupObserved.run(outpoint.txid, outpoint.txid, outpoint.vout, at, at, id)
                 .changes === 1
+        );
+    }
+
+    recordCovenantRenewed(id: string, successor: Outpoint, at: number): boolean {
+        assertNativeAccess(this.#db);
+        return (
+            this.#covenantRenewed.run(
+                successor.txid,
+                successor.vout,
+                at,
+                at,
+                at,
+                id,
+                successor.txid,
+                successor.vout,
+            ).changes === 1
         );
     }
 
