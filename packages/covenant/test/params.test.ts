@@ -245,6 +245,14 @@ describe("covenantVersion 2", () => {
         ).not.toThrow();
         expect(() => validateParams(receiverPaid(), 330n)).toThrow(/host its receipt/);
     });
+
+    it("requires a time-domain locktime, which legacy still accepts as a height", () => {
+        expect(() => validateParams(v2({ locktime: 499_999_999n }), MIN)).toThrow(
+            /must be time-domain/,
+        );
+        expect(() => validateParams(v2({ locktime: 500_000_000n }), MIN)).not.toThrow();
+        expect(() => validateParams(base(), MIN)).not.toThrow();
+    });
 });
 
 describe("exitTimelock", () => {
