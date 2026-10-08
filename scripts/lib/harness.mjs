@@ -168,6 +168,7 @@ const TASK12_TESTS = [
     "e2e/receiver-paid.e2e.test.ts",
     "e2e/exposure.e2e.test.ts",
     "e2e/verify-quote.e2e.test.ts",
+    "e2e/renewal.e2e.test.ts",
     "e2e/refund-recovery.e2e.test.ts",
     "e2e/resilience.e2e.test.ts",
     "e2e/suite-integrity.e2e.test.ts",
