@@ -1,0 +1,504 @@
+{
+  "formatVersion": 1,
+  "contractName": "DustCovenant",
+  "constructorInputs": [
+    {
+      "name": "receiverKey",
+      "type": "pubkey"
+    },
+    {
+      "name": "senderKey",
+      "type": "pubkey"
+    },
+    {
+      "name": "operatorKey",
+      "type": "pubkey"
+    },
+    {
+      "name": "operatorSats",
+      "type": "int"
+    },
+    {
+      "name": "loan",
+      "type": "int"
+    },
+    {
+      "name": "locktime",
+      "type": "int"
+    },
+    {
+      "name": "hasAsset",
+      "type": "int"
+    },
+    {
+      "name": "assetTxid",
+      "type": "bytes32"
+    },
+    {
+      "name": "assetGidx",
+      "type": "int"
+    },
+    {
+      "name": "assetFare",
+      "type": "int"
+    }
+  ],
+  "functions": [
+    {
+      "name": "recycle",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<assetFare>",
+          "<assetGidx>",
+          "<assetTxid>",
+          "<hasAsset>",
+          "<operatorSats>",
+          "<operatorKey>",
+          "<receiverKey>",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "0",
+          "OP_EQUALVERIFY",
+          "OP_INSPECTNUMINPUTS",
+          "2",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTINPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTINPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_OVER",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_3",
+          "OP_PICK",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_ROT",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_SWAP",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTVALUE",
+          "0",
+          "OP_INSPECTINPUTVALUE",
+          "1",
+          "OP_INSPECTINPUTVALUE",
+          "OP_ADD",
+          "OP_ROT",
+          "OP_SUB",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_EQUAL",
+          "OP_IF",
+          "OP_2",
+          "OP_PICK",
+          "0",
+          "OP_GREATERTHAN",
+          "OP_IF",
+          "0",
+          "OP_OVER",
+          "OP_3",
+          "OP_PICK",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_3",
+          "OP_PICK",
+          "OP_EQUALVERIFY",
+          "OP_ENDIF",
+          "0",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_NIP",
+          "OP_IF",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_NIP",
+          "OP_ENDIF",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "0",
+          "OP_3",
+          "OP_PICK",
+          "OP_5",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_ROT",
+          "OP_ADD",
+          "OP_4",
+          "OP_PICK",
+          "OP_SUB",
+          "OP_EQUALVERIFY",
+          "OP_ENDIF",
+          "OP_1",
+          "OP_NIP",
+          "OP_NIP",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "recycle",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:recycle>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "purchase",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<assetGidx>",
+          "<assetTxid>",
+          "<hasAsset>",
+          "<receiverKey>",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "0",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_SWAP",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "0",
+          "OP_INSPECTINPUTVALUE",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_EQUAL",
+          "OP_IF",
+          "0",
+          "OP_OVER",
+          "OP_3",
+          "OP_PICK",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "0",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_EQUALVERIFY",
+          "OP_ENDIF",
+          "OP_1",
+          "OP_NIP",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "purchase",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:purchase>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "repayRefund",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<assetGidx>",
+          "<assetTxid>",
+          "<hasAsset>",
+          "<loan>",
+          "<operatorKey>",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "0",
+          "OP_EQUALVERIFY",
+          "OP_INSPECTNUMINPUTS",
+          "2",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTINPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "1",
+          "OP_INSPECTINPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_2",
+          "OP_PICK",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_SWAP",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_INSPECTOUTPUTVALUE",
+          "0",
+          "OP_INSPECTINPUTVALUE",
+          "1",
+          "OP_INSPECTINPUTVALUE",
+          "OP_ADD",
+          "OP_ROT",
+          "OP_SUB",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_EQUAL",
+          "OP_IF",
+          "0",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_NIP",
+          "OP_IF",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_NIP",
+          "OP_ENDIF",
+          "1",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "0",
+          "OP_3",
+          "OP_PICK",
+          "OP_5",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_ROT",
+          "OP_ADD",
+          "OP_EQUALVERIFY",
+          "OP_ENDIF",
+          "OP_1",
+          "OP_NIP",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "repayRefund",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "senderSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<senderKey>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:repayRefund>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reclaimWhole",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<assetGidx>",
+          "<assetTxid>",
+          "<hasAsset>",
+          "<operatorKey>",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "0",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_NIP",
+          "1",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "OP_DROP",
+          "OP_SWAP",
+          "OP_EQUALVERIFY",
+          "0",
+          "OP_INSPECTOUTPUTVALUE",
+          "0",
+          "OP_INSPECTINPUTVALUE",
+          "OP_EQUALVERIFY",
+          "1",
+          "OP_EQUAL",
+          "OP_IF",
+          "0",
+          "OP_OVER",
+          "OP_3",
+          "OP_PICK",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "0",
+          "OP_2",
+          "OP_PICK",
+          "OP_4",
+          "OP_PICK",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_EQUALVERIFY",
+          "OP_ENDIF",
+          "OP_1",
+          "OP_NIP",
+          "OP_NIP"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "reclaimWhole",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<locktime>",
+            "OP_CHECKLOCKTIMEVERIFY",
+            "OP_DROP",
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:reclaimWhole>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    }
+  ],
+  "source": {
+    "entry": "dust_covenant.ark",
+    "files": {
+      "dust_covenant.ark": "// One artifact covers both the bitcoin and the asset shape: `hasAsset` and\n// `assetFare` are constructor params, so each branch is committed to by the\n// merkle root. The exit leaf is absent on purpose — its CSV delay is\n// seconds-domain above 512, and a `$param` CSV read back out of an artifact is\n// always blocks, so vtxo.ts still hand-builds it.\npragma arkade ^0.1.0;\n\ncontract DustCovenant(\n  pubkey receiverKey,\n  pubkey senderKey,\n  pubkey operatorKey,\n  int operatorSats,\n  int loan,\n  int locktime,\n  int hasAsset,\n  bytes32 assetTxid,\n  int assetGidx,\n  int assetFare\n) {\n  // in[0] covenant, in[1] receiver account. out[0] repays the operator and any\n  // sats fare, out[1] is the receiver's merged account.\n  function recycle() {\n    require(this.activeInputIndex == 0);\n    require(tx.numInputs == 2);\n    require(tx.inputs[1].witnessVersion == 1);\n    require(tx.inputs[1].scriptPubKey == receiverKey);\n    require(tx.outputs[0].value == operatorSats);\n    require(tx.outputs[0].witnessVersion == 1);\n    require(tx.outputs[0].scriptPubKey == operatorKey);\n    require(tx.outputs[1].witnessVersion == 1);\n    require(tx.outputs[1].scriptPubKey == receiverKey);\n    require(\n      tx.outputs[1].value == tx.inputs[0].value + tx.inputs[1].value - operatorSats\n    );\n    if (hasAsset == 1) {\n      if (assetFare > 0) {\n        require(tx.outputs[0].assets.lookup(assetTxid, assetGidx) == assetFare);\n      }\n      int carried = 0;\n      if (tx.inputs[1].assets.has(assetTxid, assetGidx)) {\n        carried = tx.inputs[1].assets.lookup(assetTxid, assetGidx);\n      }\n      require(\n        tx.outputs[1].assets.lookup(assetTxid, assetGidx) ==\n          tx.inputs[0].assets.lookup(assetTxid, assetGidx) + carried - assetFare\n      );\n    }\n  }\n\n  // Pins no input count. It reads only in[0], and out[0] is tied to in[0]'s\n  // value and asset amount, so an extra input cannot divert the covenant.\n  function purchase() {\n    require(this.activeInputIndex == 0);\n    require(tx.outputs[0].witnessVersion == 1);\n    require(tx.outputs[0].scriptPubKey == receiverKey);\n    require(tx.outputs[0].value == tx.inputs[0].value);\n    if (hasAsset == 1) {\n      require(\n        tx.outputs[0].assets.lookup(assetTxid, assetGidx) ==\n          tx.inputs[0].assets.lookup(assetTxid, assetGidx)\n      );\n    }\n  }\n\n  // in[0] covenant, in[1] the refunder's own coin, out[1] back to in[1]'s\n  // script. senderKey cannot stand in for it: that is the signing identity on\n  // this leaf, not a wallet address.\n  function repayRefund() {\n    require(this.activeInputIndex == 0);\n    require(tx.numInputs == 2);\n    require(tx.inputs[1].witnessVersion == 1);\n    require(tx.outputs[1].witnessVersion == 1);\n    require(tx.outputs[1].scriptPubKey == tx.inputs[1].scriptPubKey);\n    require(tx.outputs[0].value == loan);\n    require(tx.outputs[0].witnessVersion == 1);\n    require(tx.outputs[0].scriptPubKey == operatorKey);\n    require(tx.outputs[1].value == tx.inputs[0].value + tx.inputs[1].value - loan);\n    if (hasAsset == 1) {\n      int carried = 0;\n      if (tx.inputs[1].assets.has(assetTxid, assetGidx)) {\n        carried = tx.inputs[1].assets.lookup(assetTxid, assetGidx);\n      }\n      require(\n        tx.outputs[1].assets.lookup(assetTxid, assetGidx) ==\n          tx.inputs[0].assets.lookup(assetTxid, assetGidx) + carried\n      );\n    }\n  }\n\n  function repayRefund(\n    signature serverSig,\n    signature senderSig,\n    signature emulatorSig\n  ) tapscript {\n    require(checkMultisig([server, senderKey, emulator], [serverSig, senderSig, emulatorSig]));\n  }\n\n  // Purchase with the operator as payee, so a stranger's broadcast only pays\n  // the Taxi.\n  function reclaimWhole() {\n    require(this.activeInputIndex == 0);\n    require(tx.outputs[0].witnessVersion == 1);\n    require(tx.outputs[0].scriptPubKey == operatorKey);\n    require(tx.outputs[0].value == tx.inputs[0].value);\n    if (hasAsset == 1) {\n      require(\n        tx.outputs[0].assets.lookup(assetTxid, assetGidx) ==\n          tx.inputs[0].assets.lookup(assetTxid, assetGidx)\n      );\n    }\n  }\n\n  function reclaimWhole(signature serverSig, signature emulatorSig) tapscript {\n    require(after(locktime));\n    require(checkMultisig([server, emulator], [serverSig, emulatorSig]));\n  }\n}\n"
+    }
+  },
+  "compiler": {
+    "name": "arkadec",
+    "version": "0.1.0",
+    "options": {
+      "optimize": true
+    }
+  },
+  "fingerprint": "sha256:69b26e2b77081330307fe21816d38436aa452f5f5d726685e855eff76e7a9c6c"
+}

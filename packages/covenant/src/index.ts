@@ -19,13 +19,12 @@ export { artifactArgs, emitArtifact } from "./artifact.js";
 export {
     buildPurchase,
     buildReclaim,
-    buildReclaimWhole,
     buildRecycle,
     buildRefund,
-    buildRepayRefund,
     buildScripts,
     type CovenantScripts,
 } from "./scripts.js";
+export { compileV2, v2Args, V2_ARTIFACT } from "./v2-artifact.js";
 export {
     claimLeafDisabled,
     DISABLED_CLAIM_SCRIPT,

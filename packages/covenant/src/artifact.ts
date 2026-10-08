@@ -167,50 +167,6 @@ function refundAsm(p: DustCovenantParams, vtxoMinAmount: bigint): Asm {
     return finishAsm(out, p.assetId !== undefined);
 }
 
-function repayRefundAsm(p: DustCovenantParams): Asm {
-    const out: Asm = [
-        "PUSHCURRENTINPUTINDEX",
-        0,
-        "EQUALVERIFY",
-        "INSPECTNUMINPUTS",
-        2,
-        "EQUALVERIFY",
-        1,
-        "INSPECTINPUTSCRIPTPUBKEY",
-        1,
-        "EQUALVERIFY",
-        1,
-        "INSPECTOUTPUTSCRIPTPUBKEY",
-        1,
-        "EQUALVERIFY",
-        "EQUALVERIFY",
-        0,
-        "INSPECTOUTPUTVALUE",
-        "$loan",
-        "EQUALVERIFY",
-    ];
-    pinAsm(out, 0, "operatorKey", "operatorPinHash", loanSats(p), p.dust);
-    out.push(
-        1,
-        "INSPECTOUTPUTVALUE",
-        0,
-        "INSPECTINPUTVALUE",
-        1,
-        "INSPECTINPUTVALUE",
-        "ADD",
-        "$loan",
-        "SUB",
-        "EQUALVERIFY",
-    );
-    if (p.assetId) {
-        assetAsm(out, 1, true, true);
-        assetAsm(out, 0, false, true);
-        assetAsm(out, 1, false, false);
-        out.push("ADD", "EQUAL");
-    }
-    return finishAsm(out, p.assetId !== undefined);
-}
-
 function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
     const refs = new Set<string>();
     const collect = (tokens: readonly unknown[] = []) => {
@@ -235,9 +191,8 @@ function declaredParams(functions: Record<string, ArkadeFunction>): InputDef[] {
  */
 export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): ArkadeProgram {
     validateParams(p, vtxoMinAmount);
-    const v2 = p.covenantVersion === 2;
-    const refund = { asm: v2 ? repayRefundAsm(p) : refundAsm(p, vtxoMinAmount) };
-    const recovery = v2 ? { asm: purchaseAsm(p, "operatorKey") } : refund;
+    if (p.covenantVersion === 2) throw new Error("covenant: v2 is built from the artifact");
+    const refund = { asm: refundAsm(p, vtxoMinAmount) };
     const functions: Record<string, ArkadeFunction> = {
         recycle: { tapscript: { signers: ["$serverKey"] }, arkadeScript: { asm: recycleAsm(p) } },
         purchase: { tapscript: { signers: ["$serverKey"] }, arkadeScript: { asm: purchaseAsm(p) } },
@@ -247,7 +202,7 @@ export function emitArtifact(p: DustCovenantParams, vtxoMinAmount: bigint): Arka
         },
         recovery: {
             tapscript: { signers: ["$serverKey"], cltv: "$locktime" },
-            arkadeScript: recovery,
+            arkadeScript: refund,
         },
         exit: {
             tapscript: {

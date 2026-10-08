@@ -153,60 +153,6 @@ export function buildReclaim(p: DustCovenantParams, vtxoMinAmount: bigint): Uint
     return finish(out, p.assetId !== undefined);
 }
 
-/**
- * v2 leaf 2. in[0] covenant, in[1] the refunder's own coin, and out[1] goes back
- * to in[1]'s script. senderKey cannot stand in for receiverKey here: it is the
- * signing identity on this leaf, not a wallet address.
- */
-export function buildRepayRefund(p: DustCovenantParams): Uint8Array {
-    const loan = loanSats(p);
-    const out: arkade.ArkadeScriptType = [
-        "PUSHCURRENTINPUTINDEX",
-        0,
-        "EQUALVERIFY",
-        "INSPECTNUMINPUTS",
-        2,
-        "EQUALVERIFY",
-        1,
-        "INSPECTINPUTSCRIPTPUBKEY",
-        1,
-        "EQUALVERIFY",
-        1,
-        "INSPECTOUTPUTSCRIPTPUBKEY",
-        1,
-        "EQUALVERIFY",
-        "EQUALVERIFY",
-        0,
-        "INSPECTOUTPUTVALUE",
-        loan,
-        "EQUALVERIFY",
-    ];
-    pinOutput(out, 0, p.operatorKey, loan, p.dust);
-    out.push(
-        1,
-        "INSPECTOUTPUTVALUE",
-        0,
-        "INSPECTINPUTVALUE",
-        1,
-        "INSPECTINPUTVALUE",
-        "ADD",
-        loan,
-        "SUB",
-        "EQUALVERIFY",
-    );
-    if (p.assetId) {
-        appendAssetLookup(out, 1, p.assetId, true, true);
-        appendAssetLookup(out, 0, p.assetId, false, true);
-        appendAssetLookup(out, 1, p.assetId, false, false);
-        out.push("ADD", "EQUAL");
-    }
-    return finish(out, p.assetId !== undefined);
-}
-
-/** v2 leaf 3: purchase with the operator as payee, so a stranger's broadcast only pays the Taxi. */
-export const buildReclaimWhole = (p: DustCovenantParams): Uint8Array =>
-    buildPurchase({ ...p, receiverKey: p.operatorKey });
-
 export type CovenantScripts = {
     recycle: Uint8Array;
     purchase: Uint8Array;
@@ -215,10 +161,13 @@ export type CovenantScripts = {
     reclaim?: Uint8Array;
 };
 
+/** v1 only. v2 compiles from contracts/dust_covenant.ark — see v2-artifact.ts. */
 export function buildScripts(p: DustCovenantParams, vtxoMinAmount: bigint): CovenantScripts {
     validateParams(p, vtxoMinAmount);
-    const scripts = { recycle: buildRecycle(p), purchase: buildPurchase(p) };
-    if (p.covenantVersion === 2)
-        return { ...scripts, refund: buildRepayRefund(p), reclaim: buildReclaimWhole(p) };
-    return { ...scripts, refund: buildRefund(p, vtxoMinAmount) };
+    if (p.covenantVersion === 2) throw new Error("covenant: v2 is built from the artifact");
+    return {
+        recycle: buildRecycle(p),
+        purchase: buildPurchase(p),
+        refund: buildRefund(p, vtxoMinAmount),
+    };
 }

@@ -1,0 +1,117 @@
+// One artifact covers both the bitcoin and the asset shape: `hasAsset` and
+// `assetFare` are constructor params, so each branch is committed to by the
+// merkle root. The exit leaf is absent on purpose — its CSV delay is
+// seconds-domain above 512, and a `$param` CSV read back out of an artifact is
+// always blocks, so vtxo.ts still hand-builds it.
+pragma arkade ^0.1.0;
+
+contract DustCovenant(
+  pubkey receiverKey,
+  pubkey senderKey,
+  pubkey operatorKey,
+  int operatorSats,
+  int loan,
+  int locktime,
+  int hasAsset,
+  bytes32 assetTxid,
+  int assetGidx,
+  int assetFare
+) {
+  // in[0] covenant, in[1] receiver account. out[0] repays the operator and any
+  // sats fare, out[1] is the receiver's merged account.
+  function recycle() {
+    require(this.activeInputIndex == 0);
+    require(tx.numInputs == 2);
+    require(tx.inputs[1].witnessVersion == 1);
+    require(tx.inputs[1].scriptPubKey == receiverKey);
+    require(tx.outputs[0].value == operatorSats);
+    require(tx.outputs[0].witnessVersion == 1);
+    require(tx.outputs[0].scriptPubKey == operatorKey);
+    require(tx.outputs[1].witnessVersion == 1);
+    require(tx.outputs[1].scriptPubKey == receiverKey);
+    require(
+      tx.outputs[1].value == tx.inputs[0].value + tx.inputs[1].value - operatorSats
+    );
+    if (hasAsset == 1) {
+      if (assetFare > 0) {
+        require(tx.outputs[0].assets.lookup(assetTxid, assetGidx) == assetFare);
+      }
+      int carried = 0;
+      if (tx.inputs[1].assets.has(assetTxid, assetGidx)) {
+        carried = tx.inputs[1].assets.lookup(assetTxid, assetGidx);
+      }
+      require(
+        tx.outputs[1].assets.lookup(assetTxid, assetGidx) ==
+          tx.inputs[0].assets.lookup(assetTxid, assetGidx) + carried - assetFare
+      );
+    }
+  }
+
+  // Pins no input count. It reads only in[0], and out[0] is tied to in[0]'s
+  // value and asset amount, so an extra input cannot divert the covenant.
+  function purchase() {
+    require(this.activeInputIndex == 0);
+    require(tx.outputs[0].witnessVersion == 1);
+    require(tx.outputs[0].scriptPubKey == receiverKey);
+    require(tx.outputs[0].value == tx.inputs[0].value);
+    if (hasAsset == 1) {
+      require(
+        tx.outputs[0].assets.lookup(assetTxid, assetGidx) ==
+          tx.inputs[0].assets.lookup(assetTxid, assetGidx)
+      );
+    }
+  }
+
+  // in[0] covenant, in[1] the refunder's own coin, out[1] back to in[1]'s
+  // script. senderKey cannot stand in for it: that is the signing identity on
+  // this leaf, not a wallet address.
+  function repayRefund() {
+    require(this.activeInputIndex == 0);
+    require(tx.numInputs == 2);
+    require(tx.inputs[1].witnessVersion == 1);
+    require(tx.outputs[1].witnessVersion == 1);
+    require(tx.outputs[1].scriptPubKey == tx.inputs[1].scriptPubKey);
+    require(tx.outputs[0].value == loan);
+    require(tx.outputs[0].witnessVersion == 1);
+    require(tx.outputs[0].scriptPubKey == operatorKey);
+    require(tx.outputs[1].value == tx.inputs[0].value + tx.inputs[1].value - loan);
+    if (hasAsset == 1) {
+      int carried = 0;
+      if (tx.inputs[1].assets.has(assetTxid, assetGidx)) {
+        carried = tx.inputs[1].assets.lookup(assetTxid, assetGidx);
+      }
+      require(
+        tx.outputs[1].assets.lookup(assetTxid, assetGidx) ==
+          tx.inputs[0].assets.lookup(assetTxid, assetGidx) + carried
+      );
+    }
+  }
+
+  function repayRefund(
+    signature serverSig,
+    signature senderSig,
+    signature emulatorSig
+  ) tapscript {
+    require(checkMultisig([server, senderKey, emulator], [serverSig, senderSig, emulatorSig]));
+  }
+
+  // Purchase with the operator as payee, so a stranger's broadcast only pays
+  // the Taxi.
+  function reclaimWhole() {
+    require(this.activeInputIndex == 0);
+    require(tx.outputs[0].witnessVersion == 1);
+    require(tx.outputs[0].scriptPubKey == operatorKey);
+    require(tx.outputs[0].value == tx.inputs[0].value);
+    if (hasAsset == 1) {
+      require(
+        tx.outputs[0].assets.lookup(assetTxid, assetGidx) ==
+          tx.inputs[0].assets.lookup(assetTxid, assetGidx)
+      );
+    }
+  }
+
+  function reclaimWhole(signature serverSig, signature emulatorSig) tapscript {
+    require(after(locktime));
+    require(checkMultisig([server, emulator], [serverSig, emulatorSig]));
+  }
+}
