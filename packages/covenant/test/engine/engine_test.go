@@ -41,6 +41,7 @@ type vector struct {
 		AssetTxid            *string `json:"assetTxid"`
 		AssetIndex           uint16  `json:"assetIndex"`
 		ReceiverFareCurrency *string `json:"receiverFareCurrency"`
+		ReceiverFareUnits    uint64  `json:"receiverFareUnits"`
 	} `json:"params"`
 	Recycle  string   `json:"recycle"`
 	Refund   string   `json:"refund"`
@@ -259,6 +260,40 @@ func TestInputOneValue(t *testing.T) {
 					drifted := c.valid.clone()
 					drifted.ins[1].Value++
 					requireRejected(t, run(t, f, v, c.leaf, c.script, drifted))
+				})
+			}
+		})
+	}
+}
+
+// TestInputOneValue skips recycle under a fare, so without this the asset-fare
+// branch of the recycle covenant is never executed — and it is the clause that
+// decides how much of the asset the operator may take.
+func TestRecycleAssetFare(t *testing.T) {
+	f := load(t)
+	for _, v := range f.Cases {
+		if v.Params.ReceiverFareCurrency == nil || *v.Params.ReceiverFareCurrency != "asset" {
+			continue
+		}
+		t.Run(v.Name, func(t *testing.T) {
+			leaf, script := decode(t, v.Leaves[leafRecycle]), decode(t, v.Recycle)
+			fare, held := v.Params.ReceiverFareUnits, uint64(27)
+			require.NotZero(t, fare)
+			valid := twoInputs(t, v, p2tr(decode(t, v.Params.ReceiverKey)), v.Params.Topup)
+			valid.assetOut = []uint64{fare, held - fare}
+			require.NoError(t, run(t, f, v, leaf, script, valid))
+
+			// fare_withheld is unbalanced on purpose: out[1] satisfies the
+			// in[0]+in[1]-fare equation exactly, so only the fare clause itself
+			// can reject it. Balanced, conservation already implies out[0].
+			for name, outs := range map[string][]uint64{
+				"fare_short":    {fare - 1, held - fare + 1},
+				"fare_withheld": {0, held - fare},
+			} {
+				t.Run(name, func(t *testing.T) {
+					c := valid.clone()
+					c.assetOut = outs
+					requireRejected(t, run(t, f, v, leaf, script, c))
 				})
 			}
 		})

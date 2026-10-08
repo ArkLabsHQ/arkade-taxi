@@ -161,10 +161,12 @@ describe("covenant v2", () => {
         expect(v2.pkScript).not.toEqual(legacy.pkScript);
     });
 
-    it("changes only leaves 2 and 3", () => {
+    // Every covenant leaf is compiled from dust_covenant.ark now, so all four
+    // move; only the hand-built exit is shared with v1.
+    it("changes every covenant leaf and keeps the exit", () => {
         expect(
             v2.scripts.map((leaf, i) => hex.encode(leaf) !== hex.encode(legacy.scripts[i])),
-        ).toEqual([false, false, true, true, false]);
+        ).toEqual([true, true, true, true, false]);
     });
 
     it("commits leaf 2 to the v2 refund and leaf 3 to the reclaim", () => {
