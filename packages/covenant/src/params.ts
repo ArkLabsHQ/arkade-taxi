@@ -110,6 +110,11 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     if (p.locktime === 0n) {
         throw new Error("covenant: locktime must be non-zero");
     }
+    // v2 anchors the reclaim CLTV to a wall-clock deadline, not to batch expiry,
+    // so its domain is fixed here rather than agreed with the funding inputs.
+    if (v2 && p.locktime < 500_000_000n) {
+        throw new Error(`covenant: a v2 locktime must be time-domain, got ${p.locktime}`);
+    }
     if (p.claimMode !== undefined && p.claimMode !== "recycle" && p.claimMode !== "purchase") {
         throw new Error(`covenant: unknown claimMode ${String(p.claimMode)}`);
     }
