@@ -376,10 +376,21 @@ describe("joint funded graph", () => {
 describe("covenant v2 outputs", () => {
     const cfg = config();
     const fareAsset = asset.AssetId.create("12".repeat(32), 0);
+    const V2_DEADLINE = 1_800_000_000n;
 
     const request = (over: { v2?: true; senderSats?: bigint; fare?: bigint }) => {
         const req = buildRequest();
-        if (over.v2) req.params.covenantVersion = 2;
+        if (over.v2) {
+            req.params.covenantVersion = 2;
+            // D2 anchors the v2 CLTV to wall-clock seconds, so the funding
+            // expiry evidence moves into the time domain with it.
+            req.params.locktime = V2_DEADLINE;
+            const expiry = V2_DEADLINE + 86_401n;
+            req.senderInputs[0].expiry = { kind: "time", value: expiry };
+            req.funding.batchExpiry = { kind: "time", value: expiry };
+            delete req.funding.inputs[0].expiresAtHeight;
+            req.funding.inputs[0].expiresAt = new Date(Number(expiry) * 1000);
+        }
         req.params.topup = req.params.dust;
         req.senderSats = req.senderInputs[0].value = over.senderSats ?? 330n;
         req.fare.units = over.fare ?? 0n;

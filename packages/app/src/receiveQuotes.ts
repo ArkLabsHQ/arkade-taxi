@@ -293,7 +293,9 @@ async function createAdmitted(
             dust: deps.config.dust,
             topup: terms.loan,
             assetId: req.assetId,
-            locktime: 1n,
+            // A placeholder: this derivation only proves the keys form a
+            // covenant. v2 refuses a height, so the stand-in is time-domain.
+            locktime: deps.config.covenantVersion === 2 ? 500_000_000n : 1n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
             ...covenantVersionOf(deps.config),

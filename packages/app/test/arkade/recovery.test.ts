@@ -111,7 +111,9 @@ const sourceAdvance = (
             ...(assetId ? { assetId } : {}),
         },
     });
-    const expiry = locktime + (kind === "height" ? 100n : 10_000n);
+    // The time gap must clear recoveryBroadcastSeconds, or a startup invariant
+    // run on a time-domain row refuses it.
+    const expiry = locktime + (kind === "height" ? 100n : 86_401n);
     const expiryFields =
         kind === "height"
             ? { expiresAtHeight: Number(expiry), expiresAt: undefined }
@@ -380,7 +382,7 @@ describe("recovery graph", () => {
 
     it("reclaims a v2 covenant whole to the operator through the reclaim leaf", () => {
         const row = sourceAdvance(
-            "height",
+            "time",
             false,
             { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
             330n,
@@ -413,7 +415,7 @@ describe("recovery graph", () => {
 
     it("round-trips a prepared v2 reclaim through startup without quarantine", () => {
         const row = sourceAdvance(
-            "height",
+            "time",
             false,
             { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
             330n,
@@ -426,7 +428,7 @@ describe("recovery graph", () => {
     });
 
     it("moves a v2 reclaim's whole asset holding to the operator output", () => {
-        const row = sourceAdvance("height", true, { topup: 330n, covenantVersion: 2 });
+        const row = sourceAdvance("time", true, { topup: 330n, covenantVersion: 2 });
         const packet = Extension.fromTx(
             Transaction.fromPSBT(base64.decode(buildRecoveryIntent(row, config()).arkTx)),
         ).getAssetPacket()!.groups[0]!;
