@@ -25,7 +25,10 @@ export {
     PolicyRevisionConflictError,
     RecoveryBudgetConflictError,
     LockupClaimError,
+    QuoteAdmissionError,
+    totalExposure,
     type LockupClaimResult,
+    type QuoteAdmissionCode,
     type ReserveQuoteRequest,
 } from "./reservations.js";
 export { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "./schema.js";
