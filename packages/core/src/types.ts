@@ -144,6 +144,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     outpoint?: Outpoint;
     spentTxid?: string;
 
+    /** v2 renewals: non-terminal, so the advance stays `locked` and `outpoint`
+     * moves to the successor. Absent is zero. */
+    renewals?: number;
+    lastRenewedAt?: number;
+
     createdAt: number;
     updatedAt: number;
     /** Quote validity. Past this, an untaken quote becomes `expired`. */

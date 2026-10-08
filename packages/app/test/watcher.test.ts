@@ -40,6 +40,7 @@ import {
 } from "@arkade-taxi/covenant";
 import {
     AdvanceRepository,
+    CustodyRepository,
     PolicyRepository,
     ProceedsRepository,
     ReservationRepository,
@@ -536,9 +537,11 @@ async function setup(
     const indexer: Pick<IndexerProvider, "getVtxos" | "getVirtualTxs"> = {
         getVtxos: async (options) => ({
             vtxos:
-                (options && "outpoints" in options ? options.outpoints : undefined)
-                    ?.map(({ txid, vout }) => coins.get(`${txid}:${vout}`))
-                    .filter((coin): coin is VirtualCoin => coin !== undefined) ?? [],
+                options && "scripts" in options && options.scripts
+                    ? [...coins.values()].filter((coin) => options.scripts!.includes(coin.script))
+                    : ((options && "outpoints" in options ? options.outpoints : undefined)
+                          ?.map(({ txid, vout }) => coins.get(`${txid}:${vout}`))
+                          .filter((coin): coin is VirtualCoin => coin !== undefined) ?? []),
         }),
         getVirtualTxs: async (txids) => ({
             txs: txids
@@ -935,7 +938,7 @@ describe("canonical covenant observation", () => {
     );
 
     const setupV2 = (
-        kind: SpendKind,
+        kind: SpendKind | undefined,
         payment = 100n,
         mutateGraph?: Parameters<typeof setup>[4],
         strangerInput = false,
@@ -1133,6 +1136,141 @@ describe("canonical covenant observation", () => {
             reason: "recovery time CLTV is not mature at canonical median time",
         });
         state.db.close();
+    });
+
+    /** A batch settlement: `settledBy` alone, with the successor at the same script and value. */
+    const renew = (
+        state: Awaited<ReturnType<typeof setup>>,
+        successor: { txid: string; vout: number },
+        over: Partial<VirtualCoin> = {},
+    ) => {
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const spent = state.coins.get(key)!;
+        state.coins.set(key, { ...spent, settledBy: "ab".repeat(32) });
+        state.coins.set(`${successor.txid}:${successor.vout}`, {
+            ...spent,
+            ...successor,
+            settledBy: undefined,
+            ...over,
+        });
+    };
+
+    it("keeps a renewed covenant locked at its new outpoint", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        renew(state, successor);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            outpoint: successor,
+            renewals: 1,
+            // The fixture's tip() advances the clock one review interval per scan.
+            lastRenewedAt: NOW + 10 + 3600,
+        });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        state.db.close();
+    });
+
+    // D5 is the net for exactly what D2 makes possible: arkd may accept leaf 3
+    // early off a swept coin, and the exact header check would refuse it.
+    it("opens a custody row for an early third-party reclaim", async () => {
+        const early = Number(BigInt(NOW) + 8_640_000n) - 86_400;
+        const state = await setupV2(
+            "recovered",
+            100n,
+            (graph) => {
+                setLockTime(graph.arkTx, early);
+                setLockTime(graph.checkpoints[0]!, early);
+                graph.arkTx.updateInput(0, { txid: graph.checkpoints[0]!.id });
+            },
+            true,
+        );
+        expect(state.finalArk!.lockTime).toBe(early);
+        expect(early).toBeLessThan(Number(state.advance.locktime));
+
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recovered",
+            spentTxid: state.finalArk!.id,
+        });
+        expect(new CustodyRepository(state.db).get(state.advance.id)).toMatchObject({
+            state: "held",
+            owedSats: 100n,
+            loanSats: 330n,
+        });
+        state.db.close();
+    });
+
+    it("does not create a second advance for a renewal", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        const sibling = {
+            ...state.advance,
+            id: "sibling",
+            state: "locked" as const,
+            outpoint: { txid: "6b".repeat(32), vout: 0 },
+        };
+        state.advances.insert(sibling);
+        renew(state, successor);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({ outpoint: successor });
+        expect(state.advances.get("sibling")).toMatchObject({ outpoint: sibling.outpoint });
+        expect(state.advances.byOutpoint(successor)?.id).toBe(state.advance.id);
+        expect(state.advances.byOutpoint(state.outpoint)).toBeUndefined();
+        state.db.close();
+    });
+
+    it("refuses a successor another advance already holds", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        state.advances.insert({
+            ...state.advance,
+            id: "sibling",
+            state: "locked",
+            outpoint: successor,
+        });
+        renew(state, successor);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            outpoint: state.outpoint,
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("renewal successor could not be adopted"),
+        });
+        state.db.close();
+    });
+
+    // Spec 3.2 again: a twin differing only in paymentSats lives at the same
+    // script, so value is the only thing separating its coin from a successor.
+    it("does not confuse two covenants differing only in value by a renewal", async () => {
+        const state = await setupV2(undefined);
+        const twinValue = 330 + 999;
+        const script = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!.script;
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        renew(state, successor);
+        state.coins.set("twin", {
+            ...state.coins.get(`${successor.txid}:${successor.vout}`)!,
+            txid: "5c".repeat(32),
+            vout: 0,
+            value: twinValue,
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            outpoint: successor,
+            renewals: 1,
+        });
+
+        // With only the twin's coin at that script, there is no successor to bind.
+        const alone = await setupV2(undefined);
+        renew(alone, { txid: "5c".repeat(32), vout: 0 }, { value: twinValue });
+        expect(alone.coins.get(`5c${"5c".repeat(31)}:0`)!.script).toBe(script);
+        await alone.watcher.catchUp();
+        expect(alone.advances.get(alone.advance.id)).toMatchObject({
+            outpoint: alone.outpoint,
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("renewal successor is missing or ambiguous"),
+        });
+        state.db.close();
+        alone.db.close();
     });
 
     // Spec 3.2: two v2 covenants differing only in paymentSats share one address, so
@@ -1470,6 +1608,41 @@ describe("canonical covenant observation", () => {
         expect(state.policy.get().paused).toBe(false);
         expect(row.failureCode).toBeUndefined();
         expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
+        state.db.close();
+    });
+
+    // The v2 ceiling must not reach v1: here the CLTV is still an equality, so an
+    // early recovery is refused on the header rather than recorded.
+    it("refuses a v1 recovery carrying a locktime below the persisted CLTV", async () => {
+        const state = await v1Stranger((graph) => {
+            const early = 699_999;
+            setLockTime(graph.arkTx, early);
+            setLockTime(graph.checkpoints[0]!, early);
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining(
+                "covenant checkpoint version or locktime differs",
+            ),
+        });
+        state.db.close();
+    });
+
+    // The renewal path is v2-only, so a v1 coin reporting settledBy keeps today's
+    // behaviour exactly: healthy unspent evidence, no outpoint move, no renewal.
+    it("leaves a v1 covenant reporting a settling commitment untouched", async () => {
+        const state = await setup();
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.set(key, { ...state.coins.get(key)!, settledBy: "ab".repeat(32) });
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        expect(row).toMatchObject({ state: "locked", outpoint: state.outpoint });
+        expect(row.renewals).toBeUndefined();
+        expect(row.lastRenewedAt).toBeUndefined();
+        expect(row.failureCode).toBeUndefined();
+        expect(state.watcher.isRecoverable(state.advance.id)).toBe(true);
         state.db.close();
     });
 
@@ -2207,6 +2380,8 @@ describe("canonical covenant observation", () => {
                     recordSpendUnknown: (...args) => state.advances.recordSpendUnknown(...args),
                     recordCovenantUnrolled: (...args) =>
                         state.advances.recordCovenantUnrolled(...args),
+                    recordCovenantRenewed: (...args) =>
+                        state.advances.recordCovenantRenewed(...args),
                     clearSpendUnknown: (...args) => state.advances.clearSpendUnknown(...args),
                     recordSpendDisagreement: (...args) =>
                         state.advances.recordSpendDisagreement(...args),
@@ -2839,6 +3014,7 @@ const recorder = (rows: Advance[], held: AdvanceState = "locked") => {
         recordSpendUnknown: (id, _txid, detail) =>
             void calls.push({ method: "unknown", id, detail }),
         recordCovenantUnrolled: (id, detail) => void calls.push({ method: "unrolled", id, detail }),
+        recordCovenantRenewed: (id) => (calls.push({ method: "renewed", id }), true),
         recordSpendDisagreement: (id, detail) =>
             void calls.push({ method: "disagreement", id, detail }),
         clearSpendUnknown: (id) => void calls.push({ method: "clear", id }),
@@ -3006,6 +3182,50 @@ describe("canonical scan round trips", () => {
         state.db.close();
     });
 
+    // The successor read must stay scan-wide: one script wave beside the outpoint
+    // wave, however many rows renewed, or a mass renewal becomes a read burst.
+    it("fans 25 renewed covenant rows into one script request", async () => {
+        const state = await setup(
+            undefined,
+            ":memory:",
+            false,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            config(),
+            [],
+            100n,
+            2,
+        );
+        const row = state.advances.byState("locked")[0]!;
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const predecessor = state.coins.get(key)!;
+        state.coins.set(key, { ...predecessor, settledBy: "ab".repeat(32) });
+        state.coins.set("successor", { ...predecessor, txid: "7a".repeat(32), vout: 1 });
+        const { calls, advances } = recorder(
+            Array.from({ length: 25 }, (_, index) => ({ ...row, id: `clone-${index}` })),
+        );
+        const indexer = counting(state.indexer);
+        const watcher = createSpendWatcher({
+            advances,
+            policy: state.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(indexer.calls).toEqual({ getVtxos: 2, getVirtualTxs: 0 });
+        expect(calls).toHaveLength(25);
+        expect([...new Set(calls.map(({ method }) => method))]).toEqual(["renewed"]);
+        state.db.close();
+    });
+
     it("batches two distinct spent rows into one request per pass", async () => {
         const { a, b } = await twoRecycles();
         const { calls, advances } = recorder([
@@ -3050,6 +3270,7 @@ const countingRows = (inner: AdvanceRepository) => {
         recordSpendObservation: (...args) => inner.recordSpendObservation(...args),
         recordSpendUnknown: (...args) => inner.recordSpendUnknown(...args),
         recordCovenantUnrolled: (...args) => inner.recordCovenantUnrolled(...args),
+        recordCovenantRenewed: (...args) => inner.recordCovenantRenewed(...args),
         clearSpendUnknown: (...args) => inner.clearSpendUnknown(...args),
         recordSpendDisagreement: (...args) => inner.recordSpendDisagreement(...args),
         recordStableSpendObservation: (...args) => inner.recordStableSpendObservation(...args),
