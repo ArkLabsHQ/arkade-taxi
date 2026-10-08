@@ -20,7 +20,7 @@ const params = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => (
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
-    locktime: 800_000n,
+    locktime: 1_800_000_000n,
     covenantVersion: 2,
     ...over,
 });
@@ -78,25 +78,27 @@ describe("v2 is compiled from Arkade source", () => {
         expect(onDisk).not.toHaveProperty("updatedAt");
     });
 
-    it("declares the four covenant spend groups in leaf order", () => {
+    it("declares the five covenant spend groups in leaf order", () => {
         expect(V2_ARTIFACT.functions.map((f) => f.name)).toEqual([
             "recycle",
             "purchase",
             "repayRefund",
             "reclaimWhole",
+            "renew",
         ]);
         for (const group of V2_ARTIFACT.functions) expect(group.arkade).toBeDefined();
     });
 
-    it("keeps five leaves with Exit last, for every v2 shape", () => {
+    it("keeps six leaves with Renew after Exit, for every v2 shape", () => {
         for (const [name, p] of Object.entries(SHAPES)) {
             const s = new DustCovenantScript(opts(p));
-            expect(s.scripts, name).toHaveLength(5);
+            expect(s.scripts, name).toHaveLength(6);
         }
         expect(Leaf.Exit).toBe(4);
+        expect(Leaf.Renew).toBe(5);
     });
 
-    it("takes leaves 0-3 from the artifact and keeps the exit hand-built", () => {
+    it("takes leaves 0-3 and 5 from the artifact and keeps the exit hand-built", () => {
         for (const [name, p] of Object.entries(SHAPES)) {
             const s = new DustCovenantScript(opts(p));
             const c = compile(p);
@@ -105,6 +107,7 @@ describe("v2 is compiled from Arkade source", () => {
                 [Leaf.Purchase, "purchase"],
                 [Leaf.RefundSender, "repayRefund"],
                 [Leaf.Recovery, "reclaimWhole"],
+                [Leaf.Renew, "renew"],
             ] as const) {
                 if (p.claimMode !== undefined && (leaf === Leaf.Purchase || leaf === Leaf.Recycle))
                     continue;
@@ -121,7 +124,7 @@ describe("v2 is compiled from Arkade source", () => {
         }
     });
 
-    it("exposes all four covenant scripts, resolved from the artifact", () => {
+    it("exposes all five covenant scripts, resolved from the artifact", () => {
         for (const [name, p] of Object.entries(SHAPES)) {
             const s = new DustCovenantScript(opts(p));
             const c = compile(p);
@@ -130,12 +133,16 @@ describe("v2 is compiled from Arkade source", () => {
                 "reclaim",
                 "recycle",
                 "refund",
+                "renew",
             ]);
             expect(hex.encode(s.covenant.refund)).toBe(
                 hex.encode(c.functionByName("repayRefund")!.arkadeScript!),
             );
             expect(hex.encode(s.covenant.reclaim!)).toBe(
                 hex.encode(c.functionByName("reclaimWhole")!.arkadeScript!),
+            );
+            expect(hex.encode(s.covenant.renew!)).toBe(
+                hex.encode(c.functionByName("renew")!.arkadeScript!),
             );
         }
     });
@@ -154,7 +161,7 @@ describe("v2 is compiled from Arkade source", () => {
         const recycleOnly = new DustCovenantScript(
             opts(params({ assetId: asset, claimMode: "recycle" })),
         );
-        expect(recycleOnly.scripts).toHaveLength(5);
+        expect(recycleOnly.scripts).toHaveLength(6);
         expect(recycleOnly.scripts[Leaf.Recycle]).toEqual(open.scripts[Leaf.Recycle]);
         expect(recycleOnly.scripts[Leaf.Purchase]).not.toEqual(open.scripts[Leaf.Purchase]);
         const closure = MultisigTapscript.decode(recycleOnly.scripts[Leaf.Purchase]!);
@@ -170,7 +177,7 @@ describe("v2 is compiled from Arkade source", () => {
         );
         for (const over of [
             { dust: 400n, topup: 400n },
-            { locktime: 900_000n },
+            { locktime: 1_900_000_000n },
             { receiverKey: key(9) },
         ] as Partial<DustCovenantParams>[]) {
             expect(new DustCovenantScript(opts(params(over))).pkScript).not.toEqual(

@@ -486,6 +486,60 @@ export const V2_ARTIFACT = {
                     ]
                 }
             ]
+        },
+        {
+            "name": "renew",
+            "arkade": {
+                "inputs": [],
+                "asm": [
+                    "0x74797065",
+                    "OP_INSPECTINTENTMESSAGE",
+                    "OP_VERIFY",
+                    "0x7265676973746572",
+                    "OP_EQUALVERIFY",
+                    "0x6f6e636861696e5f6f75747075745f696e6465786573",
+                    "OP_INSPECTINTENTMESSAGE",
+                    "OP_VERIFY",
+                    "0x5b5d",
+                    "OP_EQUALVERIFY",
+                    "0x636f7369676e6572735f7075626c69635f6b6579732e31",
+                    "OP_INSPECTINTENTMESSAGE",
+                    "OP_NIP",
+                    "OP_NOT",
+                    "OP_VERIFY",
+                    "OP_PUSHCURRENTINPUTINDEX",
+                    "1",
+                    "OP_SUB",
+                    "7",
+                    "0",
+                    "OP_TUNNEL"
+                ]
+            },
+            "leaves": [
+                {
+                    "name": "renew",
+                    "witness": [
+                        {
+                            "name": "serverSig",
+                            "type": "signature",
+                            "encoding": "schnorr-64",
+                            "injected": true
+                        },
+                        {
+                            "name": "emulatorSig",
+                            "type": "signature",
+                            "encoding": "schnorr-64",
+                            "injected": true
+                        }
+                    ],
+                    "asm": [
+                        "<SERVER_KEY>",
+                        "OP_CHECKSIGVERIFY",
+                        "<EMULATOR_KEY:renew>",
+                        "OP_CHECKSIG"
+                    ]
+                }
+            ]
         }
     ]
 };
