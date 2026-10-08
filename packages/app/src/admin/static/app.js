@@ -1681,8 +1681,14 @@ const CONFIG_MEANINGS = {
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
     covenantVersion:
         "Which covenant new payments are built at. Only 1 starts: version 2 has no recovery path yet, so the Taxi refuses to run on it.",
+    covenantDeadlineSeconds:
+        "How long, in seconds, the Taxi lends its dust on a version 2 payment before it may take the whole covenant back. Measured from the moment the payment is locked up, and fixed in the address, so a change only affects new payments.",
     custodyWindowSeconds:
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
+    delegateeUrl:
+        "The renewal service that keeps a version 2 covenant from expiring. Unset leaves those covenants unrenewed.",
+    renewalBeforeExpirySeconds:
+        "How long, in seconds, before a coin expires the renewal service is asked to renew it.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

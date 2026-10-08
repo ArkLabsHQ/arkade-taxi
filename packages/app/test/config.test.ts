@@ -233,6 +233,37 @@ describe("aggregated validation", () => {
             );
     });
 
+    // The deadline is a separate clock from the custody window: this one measures
+    // how long the Taxi lends, that one the receiver's grace after a reclaim.
+    it("defaults the v2 deadline to 100 days, and lands it in the time domain", () => {
+        const cfg = loadConfig(env());
+        expect(cfg.covenantDeadlineSeconds).toBe(8_640_000n);
+        expect(BigInt(Math.floor(Date.now() / 1000)) + cfg.covenantDeadlineSeconds).toBeGreaterThan(
+            500_000_000n,
+        );
+        const moved = loadConfig(env({ TAXI_COVENANT_DEADLINE_SECONDS: "604800" }));
+        expect(moved.covenantDeadlineSeconds).toBe(604_800n);
+        expect(moved.custodyWindowSeconds).toBe(8_640_000n);
+        for (const value of ["0", "-1", "", "4294967296"])
+            expect(() => loadConfig(env({ TAXI_COVENANT_DEADLINE_SECONDS: value }))).toThrow(
+                /TAXI_COVENANT_DEADLINE_SECONDS/,
+            );
+    });
+
+    it("leaves the delegatee unset and defaults its renewal lead to three days", () => {
+        expect(loadConfig(env()).delegateeUrl).toBeUndefined();
+        expect(loadConfig(env()).renewalBeforeExpirySeconds).toBe(259_200n);
+        expect(
+            loadConfig(env({ TAXI_DELEGATEE_URL: "https://delegatee.example" })).delegateeUrl,
+        ).toBe("https://delegatee.example");
+        expect(() => loadConfig(env({ TAXI_DELEGATEE_URL: "not-a-url" }))).toThrow(
+            /TAXI_DELEGATEE_URL/,
+        );
+        expect(() => loadConfig(env({ TAXI_RENEWAL_BEFORE_EXPIRY_SECONDS: "4294967296" }))).toThrow(
+            /TAXI_RENEWAL_BEFORE_EXPIRY_SECONDS/,
+        );
+    });
+
     // cli.ts prints a startup failure through sanitizeOperationalError, which keeps
     // only the first line: a refusal whose variable is on line two is invisible.
     it("names the offending variables on the line a startup failure prints", () => {
