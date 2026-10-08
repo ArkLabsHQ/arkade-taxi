@@ -1,5 +1,5 @@
 import { ArkAddress } from "@arkade-os/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
@@ -440,6 +440,61 @@ describe("TaxiClient receive quotes", () => {
         ).rejects.toThrow(/payer is sender, but the request named receiver/);
         expect(JSON.parse(fetch.calls[1]!.init.body as string)).toMatchObject({
             payer: "receiver",
+        });
+    });
+
+    describe("against an earlier /v1/info read", () => {
+        beforeEach(() => vi.useFakeTimers({ now: 1_000_000_001_000, toFake: ["Date"] }));
+        afterEach(() => vi.useRealTimers());
+
+        const ask = () => {
+            const { expect: expected, quote: _, info: __, now: ___, ...trust } = args();
+            return {
+                ...trust,
+                receiverAddress,
+                makerPublicKey: senderKey,
+                assetId: ASSET,
+                fareId: "receive",
+                fundingExpiry: expected.fundingExpiry,
+                expect: {
+                    maxServiceFareSats: expected.maxServiceFareSats,
+                    minRecoveryLocktime: expected.minRecoveryLocktime,
+                    minInputExpiryFloor: expected.minInputExpiryFloor,
+                },
+            };
+        };
+        const taxiAdvertising = (advertised: () => InfoResponse) => {
+            const fetch = recordingFetch((_url, init) =>
+                jsonResponse(200, init.method === "GET" ? advertised() : quote()),
+            );
+            const methods = () => fetch.calls.map((call) => call.init.method);
+            return { taxi: new TaxiClient({ baseUrl: "https://taxi.example", fetch }), methods };
+        };
+        const withoutAsset = (): InfoResponse => ({ ...info(), assetRules: [] });
+
+        it("reads it once for consecutive receive quotes", async () => {
+            const { taxi, methods } = taxiAdvertising(info);
+            await taxi.requestVerifiedReceiveQuote(ask());
+            await taxi.requestVerifiedReceiveQuote(ask());
+            expect(methods()).toEqual(["GET", "POST", "POST"]);
+        });
+
+        it("re-reads it once and accepts a quote the operator's new policy allows", async () => {
+            let advertised = withoutAsset;
+            const { taxi, methods } = taxiAdvertising(() => advertised());
+            await taxi.info();
+            advertised = info;
+            await expect(taxi.requestVerifiedReceiveQuote(ask())).resolves.toBeDefined();
+            expect(methods()).toEqual(["GET", "POST", "GET"]);
+        });
+
+        it("refuses after that one re-read when the current policy refuses too", async () => {
+            const { taxi, methods } = taxiAdvertising(withoutAsset);
+            await taxi.info();
+            await expect(taxi.requestVerifiedReceiveQuote(ask())).rejects.toThrow(
+                /absent from advertised policy/,
+            );
+            expect(methods()).toEqual(["GET", "POST", "GET"]);
         });
     });
 

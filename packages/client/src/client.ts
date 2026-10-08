@@ -32,7 +32,7 @@ import {
     decodeSwapFillQuote,
     decodeSwapFillStatus,
 } from "./decode.js";
-import { ClientErrorCode, TaxiError } from "./errors.js";
+import { ClientErrorCode, QuoteVerificationError, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
 import { fundingInputsFromVtxos } from "./funding.js";
@@ -95,6 +95,8 @@ export interface TaxiClientOptions {
 
 type ClaimEventName = "claims-snapshot" | "claims-changed";
 const MAX_RECEIVER_BATCH = 64;
+const INFO_TTL_MS = 30_000;
+const copyInfo = (info: InfoResponse): InfoResponse => JSON.parse(JSON.stringify(info));
 
 export interface EventSourceLike {
     addEventListener(type: ClaimEventName, listener: (event: { data: string }) => void): void;
@@ -243,6 +245,7 @@ export class TaxiClient {
     private readonly baseUrl: string;
     private readonly fetchImpl: typeof fetch;
     private readonly eventSourceFactory: ((url: string) => EventSourceLike) | undefined;
+    private lastInfo: { at: number; read: Promise<InfoResponse> } | undefined;
 
     constructor(opts: TaxiClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -254,10 +257,52 @@ export class TaxiClient {
                 : (url) => new globalThis.EventSource(url) as unknown as EventSourceLike);
     }
 
-    async info(): Promise<InfoResponse> {
-        const body = (await this.request("GET", "/v1/info")) as InfoResponse;
-        decodeInfo(body);
-        return body;
+    /** A fresh read unless `maxAgeMs` accepts this client's latest one; a failed read is never kept. */
+    async info({ maxAgeMs = 0 }: { maxAgeMs?: number } = {}): Promise<InfoResponse> {
+        return copyInfo(await this.readInfo(maxAgeMs).read);
+    }
+
+    private readInfo(maxAgeMs: number): { read: Promise<InfoResponse>; reused: boolean } {
+        const last = this.lastInfo;
+        if (last !== undefined && Math.abs(Date.now() - last.at) < maxAgeMs)
+            return { read: last.read, reused: true };
+        const read = this.request("GET", "/v1/info").then((body) => {
+            decodeInfo(body as InfoResponse);
+            return body as InfoResponse;
+        });
+        const entry = { at: Date.now(), read };
+        this.lastInfo = entry;
+        read.catch(() => {
+            if (this.lastInfo === entry) this.lastInfo = undefined;
+        });
+        return { read, reused: false };
+    }
+
+    /** Quotes against a read up to 30 s old. The operator may have changed its policy since, so a
+     * refusal of a read made before this call is checked once more against a fresh one. */
+    private async quoteAgainstInfo<Q, T>(
+        request: () => Promise<Q>,
+        verify: (quote: Q, info: InfoResponse) => T,
+    ): Promise<T> {
+        const { read, reused } = this.readInfo(INFO_TTL_MS);
+        let info = copyInfo(await read);
+        let earlier = reused;
+        const check = async <R>(run: (info: InfoResponse) => R): Promise<R> => {
+            try {
+                return run(info);
+            } catch (error) {
+                if (!earlier || !(error instanceof QuoteVerificationError)) throw error;
+                earlier = false;
+                const fresh = await this.info().catch(() => undefined);
+                if (fresh === undefined || JSON.stringify(fresh) === JSON.stringify(info))
+                    throw error;
+                info = fresh;
+                return run(info);
+            }
+        };
+        await check((current) => assertProtocolVersion(current.protocolVersion));
+        const quote = await request();
+        return check((current) => verify(quote, current));
     }
 
     async requestQuote(req: QuoteRequest): Promise<QuoteResponse> {
@@ -308,31 +353,32 @@ export class TaxiClient {
     ): Promise<{ verified: VerifiedReceiveQuote }> {
         const request = immutablePlainCopy(raw, "verified receive quote request");
         await preflightReceiveRequest(request);
-        const info = await this.info();
-        assertProtocolVersion(info.protocolVersion);
-        const quote = await this.requestReceiveQuote(request);
         return {
-            verified: verifyReceiveQuote({
-                quote,
-                info,
-                trustedServerKey: request.trustedServerKey,
-                trustedEmulatorKey: request.trustedEmulatorKey,
-                dust: request.dust,
-                vtxoMinAmount: request.vtxoMinAmount,
-                hrp: request.hrp,
-                now: Math.floor(Date.now() / 1000),
-                expect: {
-                    ...request.expect,
-                    receiverAddress: request.receiverAddress,
-                    makerPublicKey: request.makerPublicKey,
-                    assetId: request.assetId,
-                    ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
-                    ...(request.fundingExpiry === undefined
-                        ? {}
-                        : { fundingExpiry: request.fundingExpiry }),
-                    ...(request.payer === undefined ? {} : { payer: request.payer }),
-                },
-            }),
+            verified: await this.quoteAgainstInfo(
+                () => this.requestReceiveQuote(request),
+                (quote, info) =>
+                    verifyReceiveQuote({
+                        quote,
+                        info,
+                        trustedServerKey: request.trustedServerKey,
+                        trustedEmulatorKey: request.trustedEmulatorKey,
+                        dust: request.dust,
+                        vtxoMinAmount: request.vtxoMinAmount,
+                        hrp: request.hrp,
+                        now: Math.floor(Date.now() / 1000),
+                        expect: {
+                            ...request.expect,
+                            receiverAddress: request.receiverAddress,
+                            makerPublicKey: request.makerPublicKey,
+                            assetId: request.assetId,
+                            ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
+                            ...(request.fundingExpiry === undefined
+                                ? {}
+                                : { fundingExpiry: request.fundingExpiry }),
+                            ...(request.payer === undefined ? {} : { payer: request.payer }),
+                        },
+                    }),
+            ),
         };
     }
 
@@ -363,30 +409,32 @@ export class TaxiClient {
         const senderInputs = fundingInputsFromVtxos(selectedVtxos);
         const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
         const receiverKey = receiver.vtxoTaprootKey;
-        const info = await this.info();
-        assertProtocolVersion(info.protocolVersion);
-        const quote = await this.requestQuote({
-            ...request,
-            receiverKey,
-            claimMode: requestedClaimMode,
-            senderInputs,
-            senderSats,
-        });
-        const verified = verifyQuote({
-            ...request,
-            quote,
-            info,
-            senderInputs,
-            senderSats,
-            expect: {
-                ...request.expect,
-                receiverKey,
-                senderKey: request.senderKey,
-                assetId: request.assetId,
-                claimMode: requestedClaimMode,
-                paymentSats: request.paymentSats,
-            },
-        });
+        const verified = await this.quoteAgainstInfo(
+            () =>
+                this.requestQuote({
+                    ...request,
+                    receiverKey,
+                    claimMode: requestedClaimMode,
+                    senderInputs,
+                    senderSats,
+                }),
+            (quote, info) =>
+                verifyQuote({
+                    ...request,
+                    quote,
+                    info,
+                    senderInputs,
+                    senderSats,
+                    expect: {
+                        ...request.expect,
+                        receiverKey,
+                        senderKey: request.senderKey,
+                        assetId: request.assetId,
+                        claimMode: requestedClaimMode,
+                        paymentSats: request.paymentSats,
+                    },
+                }),
+        );
         return { verified, senderInputs };
     }
 
@@ -447,27 +495,25 @@ export class TaxiClient {
             );
         const senderInputs = fundingInputsFromVtxos(selectedVtxos);
         const senderSats = senderInputs.reduce((sum, input) => sum + input.value, 0n);
-        const info = await this.info();
-        const quote = await this.requestSponsoredQuote({
-            ...request,
-            senderInputs,
-            senderSats,
-        });
-        const verified = verifySponsoredQuote({
-            ...request,
-            quote,
-            info,
-            senderInputs,
-            senderSats,
-            expect: {
-                ...request.expect,
-                receiverAddress: request.receiverAddress,
-                senderKey: request.senderKey,
-                assetId: request.assetId,
-                extraPacket: request.extraPacket,
-                paymentSats: request.paymentSats,
-            },
-        });
+        const verified = await this.quoteAgainstInfo(
+            () => this.requestSponsoredQuote({ ...request, senderInputs, senderSats }),
+            (quote, info) =>
+                verifySponsoredQuote({
+                    ...request,
+                    quote,
+                    info,
+                    senderInputs,
+                    senderSats,
+                    expect: {
+                        ...request.expect,
+                        receiverAddress: request.receiverAddress,
+                        senderKey: request.senderKey,
+                        assetId: request.assetId,
+                        extraPacket: request.extraPacket,
+                        paymentSats: request.paymentSats,
+                    },
+                }),
+        );
         return { verified, senderInputs };
     }
 

@@ -95,8 +95,20 @@ export const arkadeContextOf = (
     };
 };
 
-export const taxiClient = (url: string, fetchImpl: typeof fetch = boundedFetch) =>
-    new TaxiClient({ baseUrl: url, fetch: (input, init) => fetchImpl(input, init) });
+// ponytail: one client per Taxi URL and fetch for the session; evict if a wallet ever meets many Taxis.
+const clients = new WeakMap<typeof fetch, Map<string, TaxiClient>>();
+
+/** Shared per URL and fetch, so repeated probes of one Taxi can reuse a /v1/info read. */
+export const taxiClient = (url: string, fetchImpl: typeof fetch = boundedFetch): TaxiClient => {
+    const byUrl = clients.get(fetchImpl) ?? new Map<string, TaxiClient>();
+    clients.set(fetchImpl, byUrl);
+    let client = byUrl.get(url);
+    if (client === undefined) {
+        client = new TaxiClient({ baseUrl: url, fetch: (input, init) => fetchImpl(input, init) });
+        byUrl.set(url, client);
+    }
+    return client;
+};
 
 export const boundedFetch: typeof fetch = (input, init) => {
     const timeout = AbortSignal.timeout(10_000);
@@ -148,14 +160,18 @@ const bitcoinRule = (info: TaxiInfo) => info.assetRules.find((rule) => rule?.ass
 const capOf = (info: TaxiInfo, rule: TaxiInfo["assetRules"][number]) =>
     wireUnits(rule.maxTopupSats === null ? info.maxPerPaymentTopupSats : rule.maxTopupSats);
 
+// Only what to display rests on such a read: the send, a resume and the claim watch read afresh.
+const DISPLAY_INFO_MAX_AGE_MS = 30_000;
+
 const fetchInfo = async (
     url: string,
     ctx: Pick<TaxiProbeContext, "fetch" | "pageProtocol">,
+    maxAgeMs = 0,
 ): Promise<TaxiInfo | undefined> => {
     // The browser would block it anyway; asking first only fails slower.
     if (isMixedContent(url, ctx.pageProtocol)) return undefined;
     try {
-        return await taxiClient(url, ctx.fetch).info();
+        return await taxiClient(url, ctx.fetch).info({ maxAgeMs });
     } catch {
         return undefined;
     }
@@ -223,7 +239,7 @@ export const probeReceiverTaxi = async (
 
 /** Check the receiver's own Taxi before displaying either repayment choice. */
 export const probeOwnTaxi = async (url: string, ctx: TaxiProbeContext): Promise<ProbeResult> => {
-    const info = await fetchInfo(url, ctx);
+    const info = await fetchInfo(url, ctx, DISPLAY_INFO_MAX_AGE_MS);
     return info
         ? vetInfo({ url, operatorKey: info.operatorKey }, info, ctx, false)
         : { ok: false, reason: "unreachable" };
@@ -290,7 +306,7 @@ export const probeBitcoinTaxi = async (
     receiverAddress: string,
     amount: bigint,
 ): Promise<BitcoinTaxiOffer> => {
-    const info = await fetchInfo(taxi.url, ctx);
+    const info = await fetchInfo(taxi.url, ctx, DISPLAY_INFO_MAX_AGE_MS);
     if (!info) return { ok: false, reason: "unreachable" };
     return vetBitcoinTaxi(info, ctx, {
         receiverAddress,

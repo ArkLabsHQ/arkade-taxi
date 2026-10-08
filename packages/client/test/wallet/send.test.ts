@@ -40,7 +40,9 @@ import {
     unroll,
 } from "../fixtures.js";
 
-const TAXI = "https://taxi.example";
+let taxiUrl = "";
+let taxis = 0;
+let paused = false;
 const receiverAddress = new ArkAddress(serverKey, receiverKey, HRP).encode();
 const ASSET = asset.AssetId.create("12".repeat(32), 7).toString();
 const FARE_UNITS = 1_000_000n;
@@ -55,6 +57,7 @@ const ctx: ArkadeContext = {
 };
 const info = () => ({
     ...baseInfo(),
+    paused,
     assetRules: [
         {
             assetId: null,
@@ -201,7 +204,7 @@ const send = (mode: "recycle" | "sponsored") =>
     sender().sendDirectTaxi({
         wallet,
         network: "regtest",
-        taxi: { url: TAXI },
+        taxi: { url: taxiUrl },
         receiverAddress,
         ...(mode === "sponsored" ? { assetId: ASSET, amount: 200_000_000n } : { amount: 50n }),
         mode,
@@ -209,6 +212,8 @@ const send = (mode: "recycle" | "sponsored") =>
     });
 
 beforeEach(() => {
+    taxiUrl = `https://taxi-${++taxis}.example`;
+    paused = false;
     vi.useFakeTimers({
         now: NOW * 1000,
         toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
@@ -227,12 +232,12 @@ describe("sender round trips", () => {
         current = coin(1_000);
         const probe = { ...ctx, fetch: boundedFetch, pageProtocol: "https:" };
         for (const amount of [40n, 50n])
-            expect((await probeBitcoinTaxi({ url: TAXI }, probe, receiverAddress, amount)).ok).toBe(
-                true,
-            );
+            expect(
+                (await probeBitcoinTaxi({ url: taxiUrl }, probe, receiverAddress, amount)).ok,
+            ).toBe(true);
         await expect(drive(send("recycle"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
-            "GET /v1/info": 6,
+            "GET /v1/info": 2,
             "POST /v1/transfers": 3,
             "POST /v1/transfers/tr_01/lockup": 1,
             "GET /v1/transfers/tr_01": 3,
@@ -248,12 +253,27 @@ describe("sender round trips", () => {
         current = coin(700, [{ assetId: ASSET, amount: 200_000_000n + FARE_UNITS }]);
         await expect(drive(send("sponsored"))).resolves.toMatch(/^[0-9a-f]{64}$/);
         expect(taxi.count()).toEqual({
-            "GET /v1/info": 4,
+            "GET /v1/info": 1,
             "POST /v1/sponsored-transfers": 3,
             "POST /v1/sponsored-transfers/tr_01/lockup": 1,
             "GET /v1/sponsored-transfers/tr_01": 3,
         });
         expect(taxi.times("POST /v1/sponsored-transfers")).toEqual([0, 1_000, 3_000]);
         expect(taxi.times("GET /v1/sponsored-transfers/tr_01")).toEqual([3_000, 4_000, 5_000]);
+    });
+
+    it("sends on a fresh /v1/info read after a probe saw the Taxi paused", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", taxi.fetch);
+        current = coin(1_000);
+        paused = true;
+        const probe = { ...ctx, fetch: boundedFetch, pageProtocol: "https:" };
+        expect(await probeBitcoinTaxi({ url: taxiUrl }, probe, receiverAddress, 50n)).toEqual({
+            ok: false,
+            reason: "paused",
+        });
+        paused = false;
+        await expect(drive(send("recycle"))).resolves.toMatch(/^[0-9a-f]{64}$/);
+        expect(taxi.count()["GET /v1/info"]).toBe(2);
     });
 });
