@@ -67,6 +67,13 @@ SDK's renewal, keeps boarding deposits, and reports
 `renewal_threshold_exceeds_vtxo_lifetime`, which closes admission until the
 threshold is lowered.
 `TAXI_RECONCILE_INTERVAL_MS=30000` controls refresh and snapshot staleness;
+`TAXI_TERMINAL_REVIEW_SECONDS=3600` is the canary cadence at which a settled
+advance's coin is re-read. A settled verdict is re-examined from its coin — not
+by re-proving transactions whose bytes cannot change — on start, on a dropped
+contract subscription, when an event names its covenant script, and otherwise at
+this interval; a coin that contradicts the record earns one full
+re-classification of that advance alone, while evidence that is merely
+unavailable is reported as a warning and retried.
 `TAXI_OPERATOR_MIN_RESERVE_SATS=10000` requires verified usable wallet capacity.
 The live policy has separate `locktimeMarginBlocks=144` and
 `locktimeMarginSeconds=86400` fields. Timestamp CLTV is compared with chain

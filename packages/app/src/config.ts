@@ -26,6 +26,10 @@ export interface TaxiConfig {
     recoveryCriticalSeconds: bigint;
     vtxoRenewalThresholdSeconds: bigint;
     reconcileIntervalMs: number;
+    /** Canary cadence for the terminal coin-only review. A reorg that reverses a
+     * terminal verdict shows up in the coin, and a catch-up already re-reads it;
+     * this is the backstop for a window no catch-up covered. */
+    terminalReviewSeconds: bigint;
     operatorMinReserveSats: bigint;
     proceedsMaxFeeSats: bigint;
     /** Signs the operator's own funding inputs at lockup and co-signs every
@@ -76,6 +80,7 @@ export const SHOWN_CONFIG = {
     recoveryCriticalSeconds: "TAXI_RECOVERY_CRITICAL_SECONDS",
     vtxoRenewalThresholdSeconds: "TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS",
     reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
+    terminalReviewSeconds: "TAXI_TERMINAL_REVIEW_SECONDS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
     covenantVersion: "TAXI_COVENANT_VERSION",
     custodyWindowSeconds: "TAXI_CUSTODY_WINDOW_SECONDS",
@@ -208,6 +213,7 @@ const SCHEMA = z
         // The SDK's own default (VtxoManager DEFAULT_THRESHOLD_SECONDS, 3 days).
         TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: positiveSats.default("259200"),
         TAXI_RECONCILE_INTERVAL_MS: interval.default("30000"),
+        TAXI_TERMINAL_REVIEW_SECONDS: positiveSats.default("3600"),
         TAXI_OPERATOR_MIN_RESERVE_SATS: positiveSats.default("10000"),
         TAXI_PROCEEDS_MAX_FEE_SATS: z
             .string()
@@ -313,6 +319,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         recoveryCriticalSeconds: v.TAXI_RECOVERY_CRITICAL_SECONDS,
         vtxoRenewalThresholdSeconds: v.TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS,
         reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
+        terminalReviewSeconds: v.TAXI_TERMINAL_REVIEW_SECONDS,
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,

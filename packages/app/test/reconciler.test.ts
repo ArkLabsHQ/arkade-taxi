@@ -114,7 +114,13 @@ describe("locking reconciliation", () => {
             submission: { resume },
             watcher: {
                 catchUp,
-                status: () => ({ lastScanAt: NOW, watching: 0, blockers: [], warnings: [] }),
+                status: () => ({
+                    lastScanAt: NOW,
+                    watching: 0,
+                    activelyScanned: 0,
+                    blockers: [],
+                    warnings: [],
+                }),
             },
             indexer: indexer(async () => ({ vtxos: [] })),
             now: () => NOW + 2,
@@ -151,6 +157,7 @@ describe("locking reconciliation", () => {
                 status: () => ({
                     lastScanAt: NOW,
                     watching: 1,
+                    activelyScanned: 1,
                     blockers: [
                         { advanceId: state.quote.id, code: "watcher_block", detail: "detail" },
                     ],

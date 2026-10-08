@@ -98,6 +98,8 @@ const NOT_BLOCKERS = new Set([
     // and the SDK's intent states.
     ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],
     ...["waiting_to_submit", "waiting_for_batch", "batch_in_progress"],
+    // An SDK contract-event type the watcher reads, not a readiness code.
+    ...["connection_reset"],
 ]);
 
 function backendBlockerCodes(): string[] {

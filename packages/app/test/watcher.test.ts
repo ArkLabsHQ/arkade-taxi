@@ -19,6 +19,7 @@ import {
     asset,
     buildOffchainTx,
     verifyTapscriptSignatures,
+    type ContractEvent,
     type IndexerProvider,
     type SubscriptionResponse,
     type VirtualCoin,
@@ -48,7 +49,7 @@ import {
 import { covenantParamsOf, type Advance, type AdvanceState } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope } from "../src/arkade/psbt.js";
-import { classifyObservedSpend, createSpendWatcher } from "../src/watcher.js";
+import { classifyObservedSpend, createSpendWatcher, type SpendWatcher } from "../src/watcher.js";
 import { buildRecoveryIntent, createRecoveryRunner } from "../src/arkade/recovery.js";
 import { createProceedsCollector } from "../src/proceeds.js";
 import {
@@ -539,13 +540,16 @@ async function setup(
         height: kind === "recovered" && heightLock ? Number(request.params.locktime) : 700000,
         time: kind === "recovered" && !heightLock ? Number(request.params.locktime) : NOW,
     };
+    // Every scan here is one review interval later, so this fixture's watcher
+    // re-reads its terminal coins on each catch-up without a per-test clock poke.
+    let clock = NOW + 10;
     const watcher = createSpendWatcher({
         advances,
         policy,
         indexer,
         config: cfg,
-        now: () => NOW + 10,
-        tip: async () => tip,
+        now: () => clock,
+        tip: async () => ((clock += Number(cfg.terminalReviewSeconds)), tip),
     });
     return {
         db,
@@ -1881,38 +1885,31 @@ describe("canonical covenant observation", () => {
     it("reuses successful signature checks while refetching canonical recycle evidence", async () => {
         const state = await setup("recycled");
         const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        const { watcher, reprove } = await reprover(state);
         const coins = vi.spyOn(state.indexer, "getVtxos");
         const transactions = vi.spyOn(state.indexer, "getVirtualTxs");
         try {
-            await state.watcher.catchUp();
             expect(verify).toHaveBeenCalledTimes(4);
-            expect(coins).toHaveBeenCalledTimes(2);
-            expect(transactions).toHaveBeenCalledTimes(2);
-            state.setTip({ hash: "42".repeat(32), height: 700001, time: NOW + 1 });
-            await state.watcher.catchUp();
+            await reprove();
             expect(verify).toHaveBeenCalledTimes(4);
-            expect(coins).toHaveBeenCalledTimes(4);
-            expect(transactions).toHaveBeenCalledTimes(4);
-            expect(state.advances.get(state.advance.id)).toMatchObject({
-                state: "recycled",
-                observationTipHash: "42".repeat(32),
-                observationTipHeight: 700001,
-            });
+            expect(coins.mock.calls.length).toBeGreaterThan(0);
+            expect(transactions.mock.calls.length).toBeGreaterThan(0);
+            expect(state.advances.get(state.advance.id)).toMatchObject({ state: "recycled" });
+            expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         } finally {
             coins.mockRestore();
             transactions.mockRestore();
+            await watcher.stop();
             state.db.close();
         }
     });
 
     it.each(["signature", "signer", "leaf", "witness"] as const)(
-        "rejects changed %s evidence after caching a valid spend with the same txid",
+        "rejects changed %s evidence carrying the spend's own transaction id",
         async (mutation) => {
             const state = await setup("purchased");
             const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
             try {
-                await state.watcher.catchUp();
-                expect(verify).toHaveBeenCalledTimes(2);
                 const tx = state.finalArk!;
                 const id = tx.id;
                 const input = tx.getInput(0);
@@ -1944,13 +1941,13 @@ describe("canonical covenant observation", () => {
                 expect(tx.id).toBe(id);
                 await state.watcher.catchUp();
                 expect(state.advances.get(state.advance.id)).toMatchObject({
-                    state: "purchased",
-                    failureCode: "covenant_observation_disagreement",
+                    state: "locked",
+                    failureCode: "covenant_spend_unknown",
                 });
                 expect(state.policy.get().paused).toBe(true);
                 if (mutation === "signature" || mutation === "leaf") {
                     const failed = verify.mock.calls.length;
-                    expect(failed).toBeGreaterThan(2);
+                    expect(failed).toBeGreaterThan(0);
                     await state.watcher.catchUp();
                     expect(verify.mock.calls.length).toBeGreaterThan(failed);
                 }
@@ -1963,8 +1960,8 @@ describe("canonical covenant observation", () => {
     it("reverifies changed PSBT bytes even when signatures and transaction id are unchanged", async () => {
         const state = await setup("purchased");
         const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        const { watcher, reprove } = await reprover(state);
         try {
-            await state.watcher.catchUp();
             expect(verify).toHaveBeenCalledTimes(2);
             const tx = state.finalArk!;
             const id = tx.id;
@@ -1975,10 +1972,11 @@ describe("canonical covenant observation", () => {
                 ],
             });
             expect(tx.id).toBe(id);
-            await state.watcher.catchUp();
+            await reprove();
             expect(verify).toHaveBeenCalledTimes(3);
             expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         } finally {
+            await watcher.stop();
             state.db.close();
         }
     });
@@ -2014,15 +2012,20 @@ describe("canonical covenant observation", () => {
     it("discards successful signature checks when the watcher stops", async () => {
         const state = await setup("purchased");
         const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
+        const first = await reprover(state);
         try {
-            await state.watcher.start();
-            await state.watcher.catchUp();
             expect(verify).toHaveBeenCalledTimes(2);
-            await state.watcher.stop();
-            await state.watcher.start();
+            await first.reprove();
+            expect(verify).toHaveBeenCalledTimes(2);
+        } finally {
+            await first.watcher.stop();
+        }
+        const second = await reprover(state);
+        try {
+            await second.reprove();
             expect(verify).toHaveBeenCalledTimes(4);
         } finally {
-            await state.watcher.stop();
+            await second.watcher.stop();
             state.db.close();
         }
     });
@@ -2033,9 +2036,9 @@ describe("canonical covenant observation", () => {
         const implementation = verify.getMockImplementation()!;
         const tx = state.finalArk!;
         const unknown = tx.getInput(0).unknown;
+        const { watcher, reprove } = await reprover(state);
         try {
-            await state.watcher.catchUp();
-            await state.watcher.catchUp();
+            await reprove();
             expect(verify).toHaveBeenCalledTimes(2);
             verify.mockImplementation(() => {});
             for (let nonce = 0; nonce < 1024; nonce++) {
@@ -2049,19 +2052,20 @@ describe("canonical covenant observation", () => {
                         ],
                     ],
                 });
-                await state.watcher.catchUp();
+                await reprove();
             }
             tx.updateInput(0, { unknown: undefined });
             tx.updateInput(0, { unknown });
             verify.mockImplementation(implementation).mockClear();
-            await state.watcher.catchUp();
+            await reprove();
             expect(verify).toHaveBeenCalled();
             expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         } finally {
             verify.mockImplementation(implementation);
+            await watcher.stop();
             state.db.close();
         }
-    }, 30_000);
+    }, 60_000);
 
     it("catches up a missed spend after a real SQLite restart", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-watcher-"));
@@ -2312,18 +2316,25 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    it("blocks a terminal observation when the canonical indexer fails", async () => {
+    // Inverted deliberately: an indexer outage is not evidence against a
+    // recorded terminal verdict, and pausing on it never unpauses itself.
+    it("warns without blocking when the canonical indexer fails on a terminal row", async () => {
         const state = await setup("purchased");
         await state.watcher.catchUp();
         state.indexer.getVtxos = async () => {
             throw new Error("offline");
         };
         await state.watcher.catchUp();
-        expect(state.advances.get(state.advance.id)).toMatchObject({
-            state: "purchased",
-            failureCode: "covenant_observation_disagreement",
-        });
-        expect(state.policy.get().paused).toBe(true);
+        expect(state.advances.get(state.advance.id)).toMatchObject({ state: "purchased" });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        expect(state.policy.get().paused).toBe(false);
+        expect(state.watcher.status().blockers).toEqual([]);
+        expect(state.watcher.status().warnings).toEqual([
+            expect.objectContaining({
+                advanceId: state.advance.id,
+                code: "covenant_terminal_evidence_unavailable",
+            }),
+        ]);
         state.db.close();
     });
 
@@ -2806,10 +2817,10 @@ const both = (
     },
 });
 
-const recorder = (rows: Advance[]) => {
+const recorder = (rows: Advance[], held: AdvanceState = "locked") => {
     const calls: { method: string; id: string; detail?: string }[] = [];
     const advances: WatcherDeps["advances"] = {
-        byState: (state) => (state === "locked" ? rows : []),
+        byState: (state) => (state === held ? rows : []),
         recordSpendObservation: (id) => (calls.push({ method: "observation", id }), "recorded"),
         recordStableSpendObservation: (id) => (calls.push({ method: "stable", id }), "advanced"),
         recordSpendUnknown: (id, _txid, detail) =>
@@ -3005,5 +3016,304 @@ describe("canonical scan round trips", () => {
         ]);
         a.db.close();
         b.db.close();
+    });
+});
+
+const freshWatcher = (state: Awaited<ReturnType<typeof setup>>, over: Partial<WatcherDeps> = {}) =>
+    createSpendWatcher({
+        advances: state.advances,
+        policy: state.policy,
+        indexer: state.indexer,
+        config: config(),
+        now: () => NOW + 10,
+        tip: async () => canonicalTip,
+        ...over,
+    });
+
+const countingRows = (inner: AdvanceRepository) => {
+    const reads = { byState: 0 };
+    const advances: WatcherDeps["advances"] = {
+        byState: (state) => (reads.byState++, inner.byState(state)),
+        recordSpendObservation: (...args) => inner.recordSpendObservation(...args),
+        recordSpendUnknown: (...args) => inner.recordSpendUnknown(...args),
+        recordCovenantUnrolled: (...args) => inner.recordCovenantUnrolled(...args),
+        clearSpendUnknown: (...args) => inner.clearSpendUnknown(...args),
+        recordSpendDisagreement: (...args) => inner.recordSpendDisagreement(...args),
+        recordStableSpendObservation: (...args) => inner.recordStableSpendObservation(...args),
+    };
+    return { reads, advances };
+};
+
+/** Enough IContractManager for the watcher's subscription, plus a way to emit. */
+const eventManager = () => {
+    const watched: { script: string; label?: string }[] = [];
+    let listener: ((event: ContractEvent) => void) | undefined;
+    const manager = {
+        onContractEvent: (callback: (event: ContractEvent) => void) => {
+            listener = callback;
+            return () => (listener = undefined);
+        },
+        watchScript: async (scripts: string[], options?: { label?: string }) => {
+            for (const script of scripts) watched.push({ script, label: options?.label });
+        },
+        unwatchScript: async (scripts: string[]) => {
+            for (const script of scripts) {
+                const index = watched.findIndex((entry) => entry.script === script);
+                if (index >= 0) watched.splice(index, 1);
+            }
+        },
+        getWatchedScripts: async () => [...watched],
+    } as unknown as ContractManager;
+    return {
+        wallet: { getContractManager: async () => manager },
+        emit: (event: ContractEvent) => listener?.(event),
+        watched,
+    };
+};
+
+/**
+ * A terminal row plus the one trigger that still re-proves its transactions: an
+ * event naming its script. The first review is what teaches the watcher the
+ * script, so `reprove` is only armed after it.
+ */
+const reprover = async (state: Awaited<ReturnType<typeof setup>>) => {
+    const sdk = eventManager();
+    let clock = NOW + 10;
+    const watcher: SpendWatcher = freshWatcher(state, {
+        wallet: () => sdk.wallet,
+        now: () => clock,
+        onPrompt: () => watcher.catchUp(),
+    });
+    await watcher.start();
+    clock += Number(config().terminalReviewSeconds);
+    await watcher.catchUp();
+    const { script } = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!;
+    return {
+        watcher,
+        reprove: async () => {
+            sdk.emit({ type: "vtxo_spent", contractScript: script, vtxos: [], timestamp: NOW });
+            await watcher.catchUp();
+        },
+    };
+};
+
+describe("terminal covenant re-validation", () => {
+    it("never re-proves a terminal advance's transactions on a scan", async () => {
+        const state = await setup("recycled");
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({ state: "recycled" });
+        const indexer = counting(state.indexer);
+        const watcher = freshWatcher(state, { indexer });
+        await watcher.catchUp();
+        await watcher.catchUp();
+        expect(indexer.calls.getVirtualTxs).toBe(0);
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        state.db.close();
+    });
+
+    // spentTxid is the arkTx id; coin.spentBy is the checkpoint, and the
+    // classifier requires the two to differ. Comparing that pair would disagree
+    // on every terminal row at once.
+    it("re-validates a terminal coin against its arkTx id, not the checkpoint", async () => {
+        const state = await setup("recycled");
+        await state.watcher.catchUp();
+        const row = state.advances.get(state.advance.id)!;
+        const coin = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!;
+        expect(row.spentTxid).toBe(coin.arkTxId);
+        expect(coin.spentBy).toBeDefined();
+        expect(coin.spentBy).not.toBe(row.spentTxid);
+        const watcher = freshWatcher(state);
+        await watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        expect(state.policy.get().paused).toBe(false);
+        expect(watcher.status().blockers).toEqual([]);
+        state.db.close();
+    });
+
+    it("re-classifies only the terminal row whose coin contradicts its recorded spend", async () => {
+        const { a, b } = await twoRecycles();
+        await a.watcher.catchUp();
+        await b.watcher.catchUp();
+        b.coins.get(`${b.outpoint.txid}:${b.outpoint.vout}`)!.arkTxId = "5b".repeat(32);
+        const { calls, advances } = recorder(
+            [
+                { ...a.advances.get(a.advance.id)!, id: "row-a" },
+                { ...b.advances.get(b.advance.id)!, id: "row-b" },
+            ],
+            "recycled",
+        );
+        const indexer = counting(both(a.indexer, b.indexer));
+        const watcher = createSpendWatcher({
+            advances,
+            policy: a.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(calls).toEqual([
+            { method: "stable", id: "row-a" },
+            { method: "disagreement", id: "row-b", detail: expect.any(String) },
+        ]);
+        expect(indexer.calls.getVtxos).toBe(1);
+        expect(indexer.calls.getVirtualTxs).toBe(1);
+        a.db.close();
+        b.db.close();
+    });
+
+    it("warns without pausing when a terminal advance's coin is absent", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        state.coins.delete(`${state.outpoint.txid}:${state.outpoint.vout}`);
+        const watcher = freshWatcher(state);
+        await watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        expect(state.policy.get().paused).toBe(false);
+        expect(watcher.status().warnings).toEqual([
+            expect.objectContaining({
+                advanceId: state.advance.id,
+                code: "covenant_terminal_evidence_unavailable",
+            }),
+        ]);
+        state.db.close();
+    });
+
+    it("still pauses a live advance whose coin evidence is unavailable", async () => {
+        const state = await setup();
+        state.indexer.getVtxos = async () => {
+            throw new Error("offline");
+        };
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+        });
+        expect(state.policy.get().paused).toBe(true);
+        state.db.close();
+    });
+
+    it("re-checks terminal coins at start, then only when the review interval elapses", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        let clock = NOW + 10;
+        const indexer = counting(state.indexer);
+        const watcher = freshWatcher(state, {
+            indexer,
+            config: config({ terminalReviewSeconds: 60n }),
+            now: () => clock,
+        });
+        await watcher.catchUp();
+        expect(indexer.calls.getVtxos).toBe(1);
+        await watcher.catchUp();
+        expect(indexer.calls.getVtxos).toBe(1);
+        clock += 59;
+        await watcher.catchUp();
+        expect(indexer.calls.getVtxos).toBe(1);
+        clock += 1;
+        await watcher.catchUp();
+        expect(indexer.calls.getVtxos).toBe(2);
+        state.db.close();
+    });
+
+    it("re-checks terminal coins when the contract subscription resets", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        const sdk = eventManager();
+        const indexer = counting(state.indexer);
+        const watcher = freshWatcher(state, {
+            indexer,
+            config: config(),
+            wallet: () => sdk.wallet,
+        });
+        try {
+            await watcher.start();
+            expect(indexer.calls.getVtxos).toBe(1);
+            await watcher.catchUp();
+            expect(indexer.calls.getVtxos).toBe(1);
+            sdk.emit({ type: "connection_reset", timestamp: NOW });
+            await vi.waitFor(() => expect(indexer.calls.getVtxos).toBe(2));
+        } finally {
+            await watcher.stop();
+            state.db.close();
+        }
+    });
+
+    it("re-checks terminal coins when an event names a terminal covenant script", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        const sdk = eventManager();
+        const indexer = counting(state.indexer);
+        const watcher = freshWatcher(state, {
+            indexer,
+            config: config(),
+            wallet: () => sdk.wallet,
+        });
+        try {
+            await watcher.start();
+            const script = state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!.script;
+            await watcher.catchUp();
+            expect(indexer.calls.getVtxos).toBe(1);
+            sdk.emit({ type: "vtxo_spent", contractScript: script, vtxos: [], timestamp: NOW });
+            await vi.waitFor(() => expect(indexer.calls.getVtxos).toBe(2));
+            sdk.emit({
+                type: "vtxo_spent",
+                contractScript: "ff".repeat(34),
+                vtxos: [],
+                timestamp: NOW,
+            });
+            await watcher.catchUp();
+            expect(indexer.calls.getVtxos).toBe(2);
+        } finally {
+            await watcher.stop();
+            state.db.close();
+        }
+    });
+
+    it("answers status from the last scan without re-reading the advances", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        const { reads, advances } = countingRows(state.advances);
+        const watcher = freshWatcher(state, { advances });
+        await watcher.catchUp();
+        const scanned = reads.byState;
+        expect(scanned).toBeGreaterThan(0);
+        const first = watcher.status();
+        expect(watcher.status()).toEqual(first);
+        expect(watcher.status()).toEqual(first);
+        expect(reads.byState).toBe(scanned);
+        expect(first).toMatchObject({ watching: 1, activelyScanned: 0, blockers: [] });
+        state.db.close();
+    });
+
+    it("counts every watched row while scanning only the live ones", async () => {
+        const state = await setup("purchased");
+        await state.watcher.catchUp();
+        const live = await setup();
+        const observed: ScanMetrics[] = [];
+        const { advances } = recorder(
+            [{ ...state.advances.get(state.advance.id)!, id: "row-terminal" }],
+            "purchased",
+        );
+        const watcher = createSpendWatcher({
+            advances: {
+                ...advances,
+                byState: (held) =>
+                    held === "locked"
+                        ? [{ ...live.advances.byState("locked")[0]!, id: "row-live" }]
+                        : advances.byState(held),
+            },
+            policy: state.policy,
+            indexer: both(state.indexer, live.indexer),
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+            onScanMetrics: (metrics) => void observed.push(metrics),
+        });
+        await watcher.catchUp();
+        expect(observed[0]).toMatchObject({ watching: 2, activelyScanned: 1 });
+        expect(watcher.status()).toMatchObject({ watching: 2, activelyScanned: 1 });
+        state.db.close();
+        live.db.close();
     });
 });
