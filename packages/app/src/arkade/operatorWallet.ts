@@ -124,6 +124,14 @@ export function createOperatorRuntime(
         return turn;
     };
     const held = async () => new Set((await options.heldOutpoints()).map(outpointKey));
+    // An absent filter is the SDK's one `withRecoverable: true` default, so
+    // naming the window has to restate it or this read silently stops seeing
+    // swept coins and the headroom blockers they raise.
+    const inventoryRead = {
+        withRecoverable: true,
+        withUnrolled: false,
+        maxSyncAgeMs: Math.max(0, Math.min(config.vtxoReadMaxAgeMs, config.reconcileIntervalMs)),
+    };
     const tooShort = (lifetime: bigint) =>
         lifetime - config.vtxoRenewalThresholdSeconds < RENEWAL_MARGIN_SECONDS;
     // arkd advertises no VTXO lifetime; a batch output's own span is it. Below 512 it counts blocks.
@@ -374,7 +382,7 @@ export function createOperatorRuntime(
             }
             const [tip, coins] = await Promise.allSettled([
                 timed("runtime.chainTip", () => wallet!.onchainProvider.getChainTip()),
-                timed("runtime.spendableVtxos", () => wallet!.getSpendableVtxos()),
+                timed("runtime.spendableVtxos", () => wallet!.getSpendableVtxos(inventoryRead)),
             ]);
             if (
                 tip.status === "fulfilled" &&
@@ -540,6 +548,7 @@ export function createOperatorRuntime(
     return {
         providers,
         storage,
+        inventoryRead,
         safety,
         pendingCheck: () => pending,
         refresh,

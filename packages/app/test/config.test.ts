@@ -109,6 +109,17 @@ describe("loadConfig", () => {
             );
     });
 
+    it("defaults the reusable inventory sync to five seconds and admits zero", () => {
+        const cfg = loadConfig(env());
+        expect(cfg.vtxoReadMaxAgeMs).toBe(5000);
+        expect(cfg.vtxoReadMaxAgeMs).toBeLessThanOrEqual(cfg.reconcileIntervalMs);
+        expect(loadConfig(env({ TAXI_VTXO_READ_MAX_AGE_MS: "0" })).vtxoReadMaxAgeMs).toBe(0);
+        for (const value of ["-1", "x", "2147483648"])
+            expect(() => loadConfig(env({ TAXI_VTXO_READ_MAX_AGE_MS: value }))).toThrow(
+                /TAXI_VTXO_READ_MAX_AGE_MS/,
+            );
+    });
+
     it("takes an optional admin port that must differ from the HTTP port", () => {
         expect(loadConfig(env()).adminPort).toBeUndefined();
         expect(loadConfig(env({ TAXI_ADMIN_PORT: "9090" })).adminPort).toBe(9090);

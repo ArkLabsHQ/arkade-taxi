@@ -30,6 +30,10 @@ export interface TaxiConfig {
      * terminal verdict shows up in the coin, and a catch-up already re-reads it;
      * this is the backstop for a window no catch-up covered. */
     terminalReviewSeconds: bigint;
+    /** How stale an indexer sync the SDK may reuse for the reads that gate
+     * nothing, clamped at the read to `reconcileIntervalMs`. A quote's own reads
+     * pass no window and so always sync; 0 disables it. */
+    vtxoReadMaxAgeMs: number;
     operatorMinReserveSats: bigint;
     proceedsMaxFeeSats: bigint;
     /** Signs the operator's own funding inputs at lockup and co-signs every
@@ -81,6 +85,7 @@ export const SHOWN_CONFIG = {
     vtxoRenewalThresholdSeconds: "TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS",
     reconcileIntervalMs: "TAXI_RECONCILE_INTERVAL_MS",
     terminalReviewSeconds: "TAXI_TERMINAL_REVIEW_SECONDS",
+    vtxoReadMaxAgeMs: "TAXI_VTXO_READ_MAX_AGE_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
     covenantVersion: "TAXI_COVENANT_VERSION",
     custodyWindowSeconds: "TAXI_CUSTODY_WINDOW_SECONDS",
@@ -186,6 +191,12 @@ const url = z.string().url("must be an absolute URL");
 const interval = positiveSats
     .refine((v) => v <= 2_147_483_647n, "must fit a positive timer interval")
     .transform(Number);
+const nonNegativeInterval = z
+    .string()
+    .regex(DECIMAL, "must be a non-negative decimal amount")
+    .transform(BigInt)
+    .refine((v) => v <= 2_147_483_647n, "must fit a timer interval")
+    .transform(Number);
 
 const SCHEMA = z
     .object({
@@ -214,6 +225,7 @@ const SCHEMA = z
         TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: positiveSats.default("259200"),
         TAXI_RECONCILE_INTERVAL_MS: interval.default("30000"),
         TAXI_TERMINAL_REVIEW_SECONDS: positiveSats.default("3600"),
+        TAXI_VTXO_READ_MAX_AGE_MS: nonNegativeInterval.default("5000"),
         TAXI_OPERATOR_MIN_RESERVE_SATS: positiveSats.default("10000"),
         TAXI_PROCEEDS_MAX_FEE_SATS: z
             .string()
@@ -320,6 +332,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         vtxoRenewalThresholdSeconds: v.TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS,
         reconcileIntervalMs: v.TAXI_RECONCILE_INTERVAL_MS,
         terminalReviewSeconds: v.TAXI_TERMINAL_REVIEW_SECONDS,
+        vtxoReadMaxAgeMs: v.TAXI_VTXO_READ_MAX_AGE_MS,
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,

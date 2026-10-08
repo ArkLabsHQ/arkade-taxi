@@ -1675,6 +1675,8 @@ const CONFIG_MEANINGS = {
         "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
     terminalReviewSeconds:
         "How often, in seconds, the Taxi re-reads the coin of a payment it already settled, as a safety net; it also does so on start and whenever its chain subscription drops.",
+    vtxoReadMaxAgeMs:
+        "How old, in milliseconds, a coin reading may be when the Taxi re-checks its own wallet; it never reuses one to price or fund a payment. Capped by TAXI_RECONCILE_INTERVAL_MS; 0 re-reads every time.",
     proceedsMaxFeeSats:
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
     covenantVersion:

@@ -186,8 +186,13 @@ async function runServe(): Promise<void> {
             // behind the per-asset view must not disagree about "now".
             solvency: async (liabilities) => {
                 const safety = runtime.safety();
+                // Reports coverage and raises alarms, never a gate, so it reuses
+                // the runtime's window — which also brings it nearer lendableSats.
                 const coins = runtime.wallet
-                    ? await runtime.wallet.getSpendableVtxos({ withRecoverable: false })
+                    ? await runtime.wallet.getSpendableVtxos({
+                          ...runtime.inventoryRead,
+                          withRecoverable: false,
+                      })
                     : [];
                 return custodySolvencyView({
                     liabilities,
