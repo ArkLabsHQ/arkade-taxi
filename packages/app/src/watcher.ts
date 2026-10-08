@@ -465,11 +465,10 @@ const agrees = (
     }
 };
 
-/** A batch settlement, not a checkpoint+arkTx pair: `settledBy` is the signal. */
+/** A batch settlement: arkd carries a forfeit in `spentBy` beside the
+ * commitment, so an absent `arkTxId` is what separates it from a spend. */
 const renewalCommitment = (coin: VirtualCoin): string | undefined =>
-    /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.spentBy && !coin.arkTxId
-        ? coin.settledBy
-        : undefined;
+    /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.arkTxId ? coin.settledBy : undefined;
 
 /** Script, value and assets: the only facts a renewal preserves. */
 const sameCovenant = (coin: VirtualCoin, facts: ReturnType<typeof covenantFacts>): boolean => {
@@ -488,7 +487,7 @@ const exactSuccessor = async (
     provider: SpendWatcherDeps["indexer"],
     predecessor: VirtualCoin,
     facts: ReturnType<typeof covenantFacts>,
-): Promise<VirtualCoin> => {
+): Promise<VirtualCoin | undefined> => {
     let response: Awaited<ReturnType<IndexerProvider["getVtxos"]>>;
     try {
         response = await provider.getVtxos({ scripts: [predecessor.script] });
@@ -505,9 +504,9 @@ const exactSuccessor = async (
             sameCovenant(coin, facts),
     );
     // Two v2 covenants differing only in paymentSats share one address, so an
-    // ambiguous pair is refused rather than guessed at.
-    if (live.length !== 1) fail("renewal successor is missing or ambiguous");
-    return live[0]!;
+    // ambiguous pair is refused rather than guessed at. None is not a renewal.
+    if (live.length > 1) fail("renewal successor is ambiguous");
+    return live[0];
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
@@ -1317,17 +1316,22 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 );
                 continue;
             }
-            // Ahead of the spend paths: a renewed coin may arrive with `isSpent`
-            // unset, which would otherwise read as healthy at a dead outpoint.
+            // Ahead of the spend paths: classifySpend refuses an empty arkTxId.
+            let settledHandled = false;
             if (coin && observedAdvance.covenantVersion === 2 && renewalCommitment(coin)) {
                 try {
                     const facts = covenantFacts(observedAdvance, deps.config);
                     if (!sameCovenant(coin, facts))
                         fail("renewed covenant evidence differs from persisted facts");
+                    // No live coin at this script is a batch spend through some
+                    // other leaf, so it takes the ordinary classification below.
                     const successor = await exactSuccessor(batched.indexer, coin, facts);
-                    if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
-                        fail("renewal successor could not be adopted");
-                    recoverable.add(advance.id);
+                    if (successor) {
+                        if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
+                            fail("renewal successor could not be adopted");
+                        recoverable.add(advance.id);
+                        settledHandled = true;
+                    }
                 } catch (error) {
                     deps.advances.recordSpendUnknown(
                         advance.id,
@@ -1338,9 +1342,10 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         deps.now(),
                         tip,
                     );
+                    settledHandled = true;
                 }
-                continue;
             }
+            if (settledHandled) continue;
             if (!coin || !coin.isSpent) {
                 if (coin) {
                     if (coin.isUnrolled) {
