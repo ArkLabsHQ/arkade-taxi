@@ -8,7 +8,7 @@ export { V2_ARTIFACT };
 type Compiled = InstanceType<typeof arkade.ArkadeProgramScript>;
 type Args = ConstructorParameters<typeof arkade.ArkadeProgramScript>[1];
 
-const PROGRAM = arkade.programFromArtifact(V2_ARTIFACT);
+let program: ReturnType<typeof arkade.programFromArtifact> | undefined;
 const NO_ASSET = new Uint8Array(32);
 
 /**
@@ -37,4 +37,8 @@ export const compileV2 = (
     serverKey: Uint8Array,
     emulatorKey: Uint8Array,
 ): Compiled =>
-    new arkade.ArkadeProgramScript(PROGRAM, v2Args(p, serverKey), { serverKey, emulatorKey });
+    new arkade.ArkadeProgramScript(
+        (program ??= arkade.programFromArtifact(V2_ARTIFACT)),
+        v2Args(p, serverKey),
+        { serverKey, emulatorKey },
+    );

@@ -277,9 +277,9 @@ func TestRecycleAssetFare(t *testing.T) {
 		}
 		t.Run(v.Name, func(t *testing.T) {
 			leaf, script := decode(t, v.Leaves[leafRecycle]), decode(t, v.Recycle)
-			fare, held := v.Params.ReceiverFareUnits, uint64(27)
-			require.NotZero(t, fare)
 			valid := twoInputs(t, v, p2tr(decode(t, v.Params.ReceiverKey)), v.Params.Topup)
+			fare, held := v.Params.ReceiverFareUnits, valid.assetIn[0]+valid.assetIn[1]
+			require.NotZero(t, fare)
 			valid.assetOut = []uint64{fare, held - fare}
 			require.NoError(t, run(t, f, v, leaf, script, valid))
 
@@ -327,6 +327,9 @@ func TestRefund(t *testing.T) {
 				c := valid.clone()
 				c.assetIn, c.assetOut = []uint64{7}, []uint64{0, 7}
 				require.NoError(t, run(t, f, v, leaf, script, c))
+			})
+			reject("operator_skims_when_refunder_holds_none", func(c *spend) {
+				c.assetIn, c.assetOut = []uint64{7}, []uint64{1, 6}
 			})
 		})
 	}
