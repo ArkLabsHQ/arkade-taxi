@@ -24,7 +24,9 @@ const opts = (v2: boolean) => ({
         exitDelay: { value: 86_016n, type: "seconds" as const },
         dust: 330n,
         topup: 330n,
-        locktime: 800_000n,
+        // v2 demands a time-domain locktime; v1 accepts one too, so both shapes
+        // reach the artifact load this test is about.
+        locktime: 1_800_000_000n,
         ...(v2 && { covenantVersion: 2 as const }),
     },
 });

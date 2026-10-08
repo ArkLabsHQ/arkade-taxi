@@ -238,7 +238,23 @@ describe("createReceiveQuote", () => {
 
     it("lends a sender-paid v2 quote the whole dust at vtxoMinAmount = dust", async () => {
         const cfg = config({ covenantVersion: 2, vtxoMinAmount: 330n });
-        const { params } = await createReceiveQuote(deps({ config: cfg }), body());
+        // D2 anchors the v2 CLTV to wall-clock seconds, so a height-expiry
+        // inventory cannot fund one.
+        const timeCoin = (vout: number) => {
+            const coin = fundingCoin({ vout, expiresAt: new Date((NOW + 200_000) * 1000) });
+            delete coin.expiresAtHeight;
+            return coin;
+        };
+        const { params } = await createReceiveQuote(
+            deps({
+                config: cfg,
+                inventory: {
+                    getSpendableVtxos: async () => [timeCoin(0), timeCoin(1)],
+                    getLockedVtxoOutpoints: async () => [],
+                },
+            }),
+            body(),
+        );
         const loan = quotes.get("receive-1")!.loanSats;
         expect(params).toMatchObject({ dust: "330", topup: "330" });
         expect(loan).toBe(cfg.dust);

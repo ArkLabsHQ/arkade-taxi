@@ -207,6 +207,18 @@ async function setup(
     if (covenantVersion === 2) {
         request.params.topup = request.params.dust;
         request.params.covenantVersion = 2;
+        // D2 anchors the v2 CLTV to a wall-clock deadline, so the covenant
+        // package refuses a height here. The funding expiry still follows it:
+        // inverting the order is what migration 15 has to unblock.
+        if (locktime === undefined) {
+            const deadline = BigInt(NOW) + 8_640_000n;
+            request.params.locktime = deadline;
+            const expiry = deadline + 86_401n;
+            request.senderInputs[0]!.expiry = { kind: "time", value: expiry };
+            delete request.funding.inputs[0]!.expiresAtHeight;
+            request.funding.inputs[0]!.expiresAt = new Date(Number(expiry) * 1000);
+            request.funding.batchExpiry = { kind: "time", value: expiry };
+        }
         // Every v2 lockup output reaches dust, so the fixture's 10-sat fare and
         // the sender change left by a whole-dust loan are both unbuildable.
         request.fare.units = request.params.dust;
@@ -231,7 +243,7 @@ async function setup(
         ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
         batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: {
-            kind: request.funding.batchExpiry.kind,
+            kind: covenantVersion === 2 ? "time" : request.funding.batchExpiry.kind,
             value: request.params.locktime,
         },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
@@ -1113,11 +1125,11 @@ describe("canonical covenant observation", () => {
                 state.advances.get(state.advance.id)!,
                 state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
                 { indexer: state.indexer, config: config() },
-                { height: Number(state.advance.locktime) - 1, time: NOW },
+                { height: 700000, time: Number(state.advance.locktime) - 1 },
             ),
         ).resolves.toMatchObject({
             kind: "unknown",
-            reason: "recovery height CLTV is not mature at the canonical tip",
+            reason: "recovery time CLTV is not mature at canonical median time",
         });
         state.db.close();
     });
@@ -1144,7 +1156,7 @@ describe("canonical covenant observation", () => {
                 state.advances.get(state.advance.id)!,
                 candidate,
                 { indexer: state.indexer, config: config() },
-                { height: Number(state.advance.locktime), time: NOW },
+                { height: 700000, time: Number(state.advance.locktime) },
             );
         await expect(classify(coin)).resolves.toMatchObject({ kind: "recovered" });
         await expect(classify({ ...coin, value: 330 + 999 })).resolves.toEqual({
