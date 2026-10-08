@@ -78,11 +78,7 @@ function handBuilt({ serverKey, emulatorKey, params, vtxoMinAmount }: DustCovena
     };
 }
 
-/**
- * v2's five covenant leaves come out of the compiled artifact, tweak and all.
- * The exit leaf does not: its CSV delay is seconds-domain above 512, and a
- * `$param` CSV read back out of an artifact is always blocks.
- */
+/** Every v2 leaf comes out of the compiled artifact, tweak and all. */
 function fromArtifact({
     serverKey,
     emulatorKey,
@@ -101,6 +97,8 @@ function fromArtifact({
     const refund = leaf("repayRefund");
     const reclaim = leaf("reclaimWhole");
     const renew = leaf("renew");
+    const exit = compiled.functionByName("exit");
+    if (!exit) throw new Error("covenant: artifact declares no exit");
     const claimLeaf = (which: Leaf, script: Uint8Array) =>
         claimLeafDisabled(params, which)
             ? MultisigTapscript.encode({
@@ -124,7 +122,7 @@ function fromArtifact({
             claimLeaf(Leaf.Purchase, purchase.leafScript),
             refund.leafScript,
             reclaim.leafScript,
-            exitLeaf(params),
+            exit.leafScript,
             renew.leafScript,
         ],
     };
