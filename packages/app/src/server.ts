@@ -67,6 +67,8 @@ function adminDeps(deps: ServerDeps) {
     return {
         advances: deps.advances,
         policy: deps.policy,
+        swapFills: deps.swapFills,
+        receiveQuotes: deps.receiveQuotes,
         recoveryExecutionBudget: {
             height: deps.config.recoveryBroadcastBlocks,
             time: deps.config.recoveryBroadcastSeconds,

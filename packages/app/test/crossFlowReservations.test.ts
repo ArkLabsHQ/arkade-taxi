@@ -5,13 +5,16 @@ import {
     openDatabase,
     PolicyRepository,
     ProceedsRepository,
+    ReceiveQuoteRepository,
     ReservationRepository,
     SwapFillRepository,
+    totalExposure as fenceExposure,
     type Database,
 } from "@arkade-taxi/db";
 import { ArkAddress } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { unionReservedOutpoints } from "../src/arkade/reservedOutpoints.js";
+import { totalExposure } from "../src/exposure.js";
 import { selectOperatorFunding } from "../src/arkade/inventory.js";
 import { createProceedsCollector, planProceeds } from "../src/proceeds.js";
 import { custodySolvencyView } from "../src/custody.js";
@@ -228,6 +231,44 @@ describe("cross-flow reservations", () => {
             dustSats: cfg.dust,
         });
         expect(selection.inputs.map(({ txid, vout }) => ({ txid, vout }))).toEqual([COIN_C]);
+    });
+
+    // Admission reads repositories and the fence reads one SQL statement, so
+    // nothing but this keeps the two definitions of exposure in step.
+    it("counts the exposure the reservation fence counts", () => {
+        setup();
+        const ledger = new AdvanceRepository(db);
+        ledger.insert({
+            id: "adv-locked",
+            state: "locked",
+            receiverKey: new Uint8Array(32).fill(1),
+            senderKey: new Uint8Array(32).fill(2),
+            operatorKey: new Uint8Array(32).fill(3),
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
+            dust: 330n,
+            topup: 330n,
+            locktime: 100n,
+            recoveryLocktime: { kind: "height", value: 100n },
+            batchExpiry: { kind: "height", value: 300n },
+            operatorInputs: [COIN_C],
+            unsignedLockupTx: "unsigned",
+            unsignedLockupId: "7e".repeat(32),
+            covenantAddress: "tark1qlocked",
+            fare: { currency: "sats", units: 0n },
+            outpoint: { txid: "7f".repeat(32), vout: 0 },
+            createdAt: 1,
+            updatedAt: 1,
+            expiresAt: NOW + 60,
+        });
+        const fence = fenceExposure(db);
+
+        expect(fence.total).toBe(660n);
+        expect(totalExposure(ledger, swapFills, new ReceiveQuoteRepository(db))).toEqual({
+            outstandingSats: fence.total,
+            lockedCount: Number(fence.count),
+            oldestUnsweptLocktime: null,
+        });
     });
 
     it("rejects proceeds collection over a swap-fill reservation", () => {

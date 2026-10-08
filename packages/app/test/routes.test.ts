@@ -6,10 +6,12 @@ import {
     AdvanceRepository,
     openDatabase,
     PolicyRepository,
+    ReceiveQuoteRepository,
     ReservationRepository,
+    SwapFillRepository,
+    totalExposure,
     type InsertReceiveQuoteRequest,
     type ReceiveQuote,
-    type ReceiveQuoteRepository,
 } from "@arkade-taxi/db";
 import { assetIdKey } from "@arkade-taxi/core";
 import { assetIdToWire, bytesToHex, PROTOCOL_VERSION } from "@arkade-taxi/protocol";
@@ -2128,6 +2130,193 @@ describe("CORS", () => {
         expect(preflight.status).not.toBe(204);
         expect(preflight.headers.get("access-control-allow-origin")).toBeNull();
         expect(preflight.headers.get("access-control-allow-credentials")).toBeNull();
+    });
+});
+
+describe("exposure cap across flows", () => {
+    const RECEIVE_RULE = {
+        assetId: ASSET,
+        enabled: true,
+        claim: "either" as const,
+        maxTopupSats: null,
+        fares: [],
+    };
+
+    const receiveRow = (policyRevision: bigint): ReceiveQuote => ({
+        id: "rcv-cap",
+        state: "quoted",
+        receiverAddress,
+        makerPublicKey: bytesToHex(senderKey),
+        params: {
+            receiverKey,
+            senderKey,
+            operatorKey,
+            operatorSignerKey: config().operatorSignerKey,
+            exitDelay: config().exitDelay,
+            dust: 330n,
+            topup: 329n,
+            assetId: ASSET,
+            locktime: 849_856n,
+            claimMode: "recycle",
+            recoveryRecipient: "receiver",
+        },
+        covenantAddress: "tark1qreceivecap",
+        fare: { currency: "sats", units: 0n },
+        batchExpiry: { kind: "height", value: 850_000n },
+        inputExpiryFloor: { kind: "height", value: 850_000n },
+        recoveryLocktime: { kind: "height", value: 849_856n },
+        loanSats: 329n,
+        createdAt: NOW,
+        expiresAt: NOW + 600,
+        policyRevision,
+        operatorInputs: [
+            {
+                txid: "7e".repeat(32),
+                vout: 0,
+                value: 20_000n,
+                tapTree: new Uint8Array([1]),
+                spendLeaf: new Uint8Array([2]),
+                expiry: { kind: "height", value: 850_000n },
+            },
+        ],
+    });
+
+    /** The memory stores carry no cap fence, so only the real repositories can
+     * show admission and the fence disagreeing. */
+    const realStores = (over: Partial<Policy> = {}) => {
+        const db = openDatabase(":memory:");
+        const terms = new PolicyRepository(db);
+        terms.update(basePolicy({ ...over }), "test");
+        const ledger = new AdvanceRepository(db);
+        const quotes = new ReceiveQuoteRepository(db);
+        return {
+            db,
+            ledger,
+            quotes,
+            terms,
+            router: createRoutes({
+                ...deps(),
+                advances: ledger,
+                policy: terms,
+                reservations: new ReservationRepository(db),
+                receiveQuotes: quotes,
+            }),
+        };
+    };
+
+    const openReceive = (quotes: ReceiveQuoteRepository, terms: PolicyRepository) => {
+        const revision = terms.getSnapshot().revision;
+        quotes.insert({
+            quote: receiveRow(revision),
+            expectedPolicyRevision: revision,
+            recoveryExecutionBudget: { kind: "height", value: config().recoveryBroadcastBlocks },
+        });
+    };
+
+    const postTransfer = (router: ReturnType<typeof createRoutes>) =>
+        router.request("/v1/transfers", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(quoteBody()),
+        });
+
+    const capped = (over: Partial<Policy> = {}) =>
+        realStores({
+            maxOutstandingSats: 500n,
+            assetRules: [...basePolicy().assetRules, RECEIVE_RULE],
+            ...over,
+        });
+
+    it("refuses an advance quote with a typed 409 when open receive quotes fill the cap", async () => {
+        const { db, ledger, quotes, terms, router } = capped();
+        try {
+            openReceive(quotes, terms);
+            const res = await postTransfer(router);
+
+            expect(res.status).toBe(409);
+            expect(((await res.json()) as ErrorResponse).code).toBe("exceeds_max_outstanding");
+            expect(ledger.byState("quoted")).toEqual([]);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("refuses on the concurrent-advance count the fence sees, not the advance count", async () => {
+        const { db, quotes, terms, router } = capped({
+            maxOutstandingSats: 100_000n,
+            maxConcurrentAdvances: 1,
+        });
+        try {
+            openReceive(quotes, terms);
+            const res = await postTransfer(router);
+
+            expect(res.status).toBe(409);
+            expect(((await res.json()) as ErrorResponse).code).toBe("max_concurrent_advances");
+        } finally {
+            db.close();
+        }
+    });
+
+    it("reports the operator's exposure as the fence counts it, not advances alone", async () => {
+        const { db, ledger, quotes, terms } = capped();
+        try {
+            openReceive(quotes, terms);
+            const admin = createAdminApp({
+                ...deps(),
+                advances: ledger,
+                policy: terms,
+                reservations: new ReservationRepository(db),
+                swapFills: new SwapFillRepository(db),
+                receiveQuotes: quotes,
+                sweeperIntervalMs: 1_000,
+                sweeperRunning: () => true,
+                rescan: async () => {},
+                boarding: {
+                    address: async () => "bcrt1pboarding",
+                    deposits: async () => boardingView().deposits!,
+                },
+            });
+
+            const { exposure } = (await (await admin.request("/api/status")).json()) as {
+                exposure: { outstandingSats: string; activeCount: number };
+            };
+            const fence = totalExposure(db);
+
+            expect(fence.total).toBe(329n);
+            expect(exposure.outstandingSats).toBe(String(fence.total));
+            expect(exposure.activeCount).toBe(Number(fence.count));
+        } finally {
+            db.close();
+        }
+    });
+
+    it("maps a fence refusal raced in after admission to the same typed 409", async () => {
+        const { db, ledger, router } = capped();
+        const build = lockupBuilder.buildUnsigned.bind(lockupBuilder);
+        try {
+            // Admission has already passed when this lands, and an advance row
+            // reserves no outpoint, so only the cap fence can refuse.
+            lockupBuilder.buildUnsigned = async (request) => {
+                const funding = await build(request);
+                ledger.insert(
+                    advance({
+                        id: "adv-raced",
+                        state: "locked",
+                        topup: 330n,
+                        outpoint: { txid: "5c".repeat(32), vout: 0 },
+                        operatorInputs: [{ txid: "5d".repeat(32), vout: 0 }],
+                    }),
+                );
+                return funding;
+            };
+            const res = await postTransfer(router);
+
+            expect(res.status).toBe(409);
+            expect(((await res.json()) as ErrorResponse).code).toBe("exceeds_max_outstanding");
+            expect(ledger.byState("quoted")).toEqual([]);
+        } finally {
+            db.close();
+        }
     });
 });
 

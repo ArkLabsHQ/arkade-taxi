@@ -1,6 +1,5 @@
 import {
     admit,
-    computeExposure,
     type Advance,
     type AdmissionWarning,
     type AdvanceState,
@@ -53,6 +52,7 @@ import {
     type FundingSelection,
 } from "./arkade/inventory.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
+import { totalExposure } from "./exposure.js";
 import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors.js";
 import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit.js";
 
@@ -185,7 +185,10 @@ export interface QuoteDeps {
     >;
     /** Swap-fill reservations also tie up Taxi coins; unioned into funding
      * selection so an advance never double-spends a fill's coin. */
-    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints" | "expireQuotes">;
+    swapFills?: Pick<
+        SwapFillRepository,
+        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
+    >;
     receiveQuotes?: Pick<
         ReceiveQuoteRepository,
         "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
@@ -552,11 +555,7 @@ async function createReservedQuote(
     );
     trace?.observe("quote.sender.first", "ok");
 
-    const exposure = computeExposure(
-        ["locking", "locked", "recovering"].flatMap((state) =>
-            deps.advances.byState(state as AdvanceState),
-        ),
-    );
+    const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
     const decision = admit(
         req,
         policy,

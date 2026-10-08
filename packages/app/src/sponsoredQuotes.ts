@@ -27,6 +27,7 @@ import { LockupShapeError } from "./lockup.js";
 import { verifySenderFunding } from "./arkade/senderFunding.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
+import { totalExposure } from "./exposure.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
 import {
     createAdmittedQuote,
@@ -211,8 +212,7 @@ async function createReservedSponsoredQuote(
         config,
     );
 
-    const { outstandingSats, lockedCount } = deps.advances.exposureTotals();
-    const exposure = { outstandingSats, lockedCount, oldestUnsweptLocktime: null };
+    const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
     const lending = deps.lending?.();
     const decision = admit(
         {
