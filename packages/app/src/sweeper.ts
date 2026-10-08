@@ -132,8 +132,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         time: bigint | null,
     ): RecoveryDeadline => {
         const recovery = advance.recoveryLocktime;
-        // A v2 advance stores no batch expiry; its deadline is its own clock,
-        // so the countdown runs to the CLTV rather than to the funding coins.
+        // No stored expiry on v2: the countdown runs to the CLTV itself.
         const expiry = advance.batchExpiry;
         if (
             !recovery ||

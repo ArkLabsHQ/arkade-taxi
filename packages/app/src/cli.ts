@@ -30,6 +30,7 @@ import { advanceKind, computeReceivables } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
 import { createLockupReconciler } from "./reconciler.js";
 import { custodySolvencyView } from "./custody.js";
+import { DelegateeClient } from "./delegatee.js";
 import { createSwapFillReconciler } from "./swapFillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
@@ -242,6 +243,15 @@ async function runServe(): Promise<void> {
         },
         getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
     };
+    // Once, before any quote; both calls are idempotent on their derived id.
+    const delegatee = config.delegateeUrl
+        ? await (async () => {
+              const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
+              const registration = await client.register();
+              log.info({ ...registration }, "delegatee renewal template registered");
+              return { client, registration };
+          })()
+        : undefined;
     const swapFillBuilder = new ProductionSwapFillGraphBuilder(() => {
         const wallet = runtime.wallet;
         if (!wallet) throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
@@ -276,6 +286,7 @@ async function runServe(): Promise<void> {
         sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),
         swapFills,
         swapFillBuilder,
+        ...(delegatee ? { delegatee } : {}),
         swapFillSubmit: {
             swapFills,
             policy,

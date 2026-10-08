@@ -15,6 +15,7 @@ import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./re
 import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
 import {
     createSwapFillQuote,
+    type SwapFillQuoteDeps,
     getSwapFill,
     type OfferCodec,
     type SwapFillGraphBuilder,
@@ -36,6 +37,7 @@ export interface RouteDeps extends QuoteDeps {
     sponsoredBuilder: SponsoredLockupBuilder;
     swapFills: SwapFillStore;
     swapFillBuilder: SwapFillGraphBuilder;
+    delegatee?: SwapFillQuoteDeps["delegatee"];
     swapFillSubmit: SwapFillSubmitDeps;
     offerCodec: OfferCodec;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;

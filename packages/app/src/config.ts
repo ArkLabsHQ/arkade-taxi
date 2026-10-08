@@ -42,9 +42,8 @@ export interface TaxiConfig {
     operatorPrivkey: Uint8Array;
     /** Covenant version new quotes are built at. Only 1 starts; see SCHEMA. */
     covenantVersion: 1 | 2;
-    /** How long the Taxi lends its dust before the v2 reclaim CLTV matures,
-     * measured from lockup. A different clock from `custodyWindowSeconds`,
-     * which is the receiver's grace after the Taxi takes the coin. */
+    /** How long the Taxi lends its dust before the v2 reclaim CLTV matures. A
+     * different clock from `custodyWindowSeconds`, the post-reclaim grace. */
     covenantDeadlineSeconds: bigint;
     /** The guarantee advertised beside `unclaimedMode: "custody"`, not an expiry:
      * past it a release is still honoured while the funds remain (spec §5.6). */
@@ -248,8 +247,7 @@ const SCHEMA = z
             .enum(["1", "2"])
             .default("1")
             .transform((s) => Number(s) as 1 | 2),
-        // 100 days (decision 7), the v2 reclaim CLTV measured from lockup. The
-        // sum must still fit the uint32 locktime field, which the producer checks.
+        // 100 days (decision 7). The producer checks the sum fits a uint32.
         TAXI_COVENANT_DEADLINE_SECONDS: positiveSats
             .refine((v) => v <= 4_294_967_295n, "must fit a uint32")
             .default("8640000"),

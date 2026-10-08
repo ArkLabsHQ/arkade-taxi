@@ -138,9 +138,8 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
     const inputs = [...req.senderInputs, ...operatorInputs];
     if (!req.senderInputs.length || !operatorInputs.length)
         throw new LockupShapeError("both funding owners required");
-    // A v2 deadline bounds the Taxi's lending from lockup, so it neither shares
-    // the funding expiry's domain nor falls before it. The inputs must still
-    // agree with each other and with the selection's recorded expiry.
+    // A v2 deadline neither shares the funding expiry's domain nor falls before
+    // it; the inputs must still agree with each other and with the selection.
     const deadline = req.params.covenantVersion === 2;
     if (
         inputs.some(

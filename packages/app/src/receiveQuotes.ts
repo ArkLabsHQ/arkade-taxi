@@ -293,8 +293,7 @@ async function createAdmitted(
             dust: deps.config.dust,
             topup: terms.loan,
             assetId: req.assetId,
-            // A placeholder: this derivation only proves the keys form a
-            // covenant. v2 refuses a height, so the stand-in is time-domain.
+            // Only proves the keys form a covenant; v2 refuses a height.
             locktime: deps.config.covenantVersion === 2 ? 500_000_000n : 1n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
@@ -482,11 +481,8 @@ function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadlin
     return { kind: batch.kind, value: hint.value < batch.value ? hint.value : batch.value };
 }
 
-/**
- * v2 bounds how long the Taxi lends its dust, measured from now, so the CLTV is
- * wall-clock and deliberately outlives the funding coins: a renewer must not be
- * able to push the Taxi's own claim out. v1 keeps the margin off batch expiry.
- */
+/** v2's CLTV is wall-clock and outlives the funding coins on purpose: a renewer
+ * must not push the Taxi's own claim out. v1 keeps its margin off expiry. */
 function recoveryDeadline(
     floor: ExpiryDeadline,
     policy: Policy,

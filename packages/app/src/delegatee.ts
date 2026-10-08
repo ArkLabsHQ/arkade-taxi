@@ -2,7 +2,6 @@ import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { V2_ARTIFACT, v2Args, type DustCovenantParams } from "@arkade-taxi/covenant";
 
-/** The one-input renewal watch a delegatee runs for a v2 covenant. */
 export interface DelegateeRegistration {
     artifactId: string;
     templateId: string;
@@ -19,12 +18,8 @@ const TEMPLATE_FORMAT = "delegateed-template/v1";
 
 const snake = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
-/**
- * The renewal template, derived from the artifact so a new constructor field
- * cannot be forgotten here. `arguments` are keyed by constructor field, each
- * bound to a variable of the same name in snake case; `renewal_window` drives
- * the schedule alone and names no field.
- */
+/** Derived from the artifact, so a new constructor field cannot be forgotten
+ * here. `renewal_window` drives the schedule alone and names no field. */
 export function renewalTemplate(artifactId: string): string {
     const variables: Record<string, string> = { renewal_window: "int" };
     const args: Record<string, string> = {};
@@ -44,8 +39,7 @@ export function renewalTemplate(artifactId: string): string {
                 spend: { function: "renew", leaf: "renew" },
             },
         ],
-        // Flags 7 preserves value, script and assets, so every route is a
-        // remainder: no amount, no asset, no fee cap.
+        // Flags 7 preserves value, script and assets: every route is a remainder.
         outputs: [
             {
                 name: "renewed",
@@ -109,7 +103,6 @@ export class DelegateeClient {
         return { artifactId, templateId };
     }
 
-    /** The watch address the delegatee derives for these variables. */
     async delegate(
         templateId: string,
         variables: Record<string, string>,
