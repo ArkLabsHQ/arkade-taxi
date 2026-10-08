@@ -1134,6 +1134,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             at - lastReviewAt >= Number(deps.config.terminalReviewSeconds);
         cache(current, settled);
         scanBlockers = [];
+        let advanced = false;
         let tip: Awaited<ReturnType<SpendWatcherDeps["tip"]>>;
         try {
             tip = await deps.tip();
@@ -1290,9 +1291,15 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 deps.now(),
                 tip,
             );
+            advanced = true;
         }
         if (reviewing) await review(settled, batched, tip, at);
-        cache(covenantRows(activeStates), reviewing ? covenantRows(terminalStates) : settled);
+        // Re-read what this scan wrote to, and nothing else: the terminal rows
+        // are the group that grows forever.
+        cache(
+            covenantRows(activeStates),
+            reviewing || advanced ? covenantRows(terminalStates) : settled,
+        );
         report();
         lastScanAt = deps.now();
     };

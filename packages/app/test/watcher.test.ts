@@ -3286,6 +3286,37 @@ describe("terminal covenant re-validation", () => {
         state.db.close();
     });
 
+    it("keeps the total current when a live advance settles between reviews", async () => {
+        const state = await setup("purchased");
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const spent = state.coins.get(key)!;
+        state.coins.set(key, {
+            ...spent,
+            isSpent: false,
+            spentBy: undefined,
+            arkTxId: undefined,
+            isSwept: false,
+            isUnrolled: false,
+        });
+        const row = { ...state.advances.byState("locked")[0]!, id: "row" };
+        let held: AdvanceState = "locked";
+        const { advances } = recorder([row]);
+        const watcher = freshWatcher(state, {
+            advances: {
+                ...advances,
+                byState: (state) => (state === held ? [row] : []),
+                recordSpendObservation: () => ((held = "purchased"), "recorded"),
+            },
+        });
+        await watcher.catchUp();
+        expect(watcher.status()).toMatchObject({ watching: 1, activelyScanned: 1 });
+        state.coins.set(key, spent);
+        await watcher.catchUp();
+        expect(held).toBe("purchased");
+        expect(watcher.status()).toMatchObject({ watching: 1, activelyScanned: 0 });
+        state.db.close();
+    });
+
     it("counts every watched row while scanning only the live ones", async () => {
         const state = await setup("purchased");
         await state.watcher.catchUp();
