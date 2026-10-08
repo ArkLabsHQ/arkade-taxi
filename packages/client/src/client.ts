@@ -256,11 +256,7 @@ export class TaxiClient {
     constructor(opts: TaxiClientOptions) {
         this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
         this.fetchImpl = opts.fetch ?? globalThis.fetch;
-        this.eventSourceFactory =
-            opts.eventSourceFactory ??
-            (typeof globalThis.EventSource === "undefined"
-                ? undefined
-                : (url) => new globalThis.EventSource(url) as unknown as EventSourceLike);
+        this.eventSourceFactory = opts.eventSourceFactory;
     }
 
     /** A fresh read unless `maxAgeMs` accepts this client's latest one; a failed read is never kept. */
@@ -626,7 +622,13 @@ export class TaxiClient {
 
     subscribeClaims(args: SubscribeClaimsArgs): ClaimSubscription {
         const receiverAddresses = this.claimReceiverAddresses(args.receiverAddresses);
-        if (this.eventSourceFactory === undefined) {
+        // Looked up per subscription: a shared client can predate an EventSource polyfill.
+        const eventSourceFactory =
+            this.eventSourceFactory ??
+            (typeof globalThis.EventSource === "undefined"
+                ? undefined
+                : (url: string) => new globalThis.EventSource(url) as unknown as EventSourceLike);
+        if (eventSourceFactory === undefined) {
             throw new TaxiError(
                 ClientErrorCode.EventSourceUnavailable,
                 "taxi: EventSource is not available in this environment",
@@ -635,7 +637,7 @@ export class TaxiClient {
 
         let source: EventSourceLike;
         try {
-            source = this.eventSourceFactory(
+            source = eventSourceFactory(
                 `${this.baseUrl}${this.claimsPath("/v1/claims/events", receiverAddresses)}`,
             );
         } catch (cause) {

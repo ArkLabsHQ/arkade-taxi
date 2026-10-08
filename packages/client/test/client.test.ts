@@ -619,4 +619,34 @@ describe("receiver claims", () => {
             Object.defineProperty(globalThis, "EventSource", { configurable: true, value: saved });
         }
     });
+
+    it("uses an EventSource installed after the client was built", () => {
+        const saved = globalThis.EventSource;
+        try {
+            Object.defineProperty(globalThis, "EventSource", {
+                configurable: true,
+                value: undefined,
+            });
+            const taxi = new TaxiClient({ baseUrl: BASE });
+            const source = new FakeEventSource("unused");
+            const installed = vi.fn(function () {
+                return source;
+            });
+            Object.defineProperty(globalThis, "EventSource", {
+                configurable: true,
+                value: installed,
+            });
+            taxi.subscribeClaims({
+                receiverAddresses: [receiverAddress.encode()],
+                onSnapshot: vi.fn(),
+                onChanged: vi.fn(),
+                onError: vi.fn(),
+            });
+            expect(installed).toHaveBeenCalledWith(
+                `${BASE}/v1/claims/events?receiver=${encodeURIComponent(receiverAddress.encode())}`,
+            );
+        } finally {
+            Object.defineProperty(globalThis, "EventSource", { configurable: true, value: saved });
+        }
+    });
 });
