@@ -16,6 +16,10 @@ export const V2_ARTIFACT = {
             "type": "pubkey"
         },
         {
+            "name": "operatorSignerKey",
+            "type": "pubkey"
+        },
+        {
             "name": "operatorSats",
             "type": "int"
         },
@@ -25,6 +29,10 @@ export const V2_ARTIFACT = {
         },
         {
             "name": "locktime",
+            "type": "int"
+        },
+        {
+            "name": "exitDelay",
             "type": "int"
         },
         {
@@ -536,6 +544,35 @@ export const V2_ARTIFACT = {
                         "<SERVER_KEY>",
                         "OP_CHECKSIGVERIFY",
                         "<EMULATOR_KEY:renew>",
+                        "OP_CHECKSIG"
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "exit",
+            "leaves": [
+                {
+                    "name": "exit",
+                    "witness": [
+                        {
+                            "name": "senderSig",
+                            "type": "signature",
+                            "encoding": "schnorr-64"
+                        },
+                        {
+                            "name": "operatorSig",
+                            "type": "signature",
+                            "encoding": "schnorr-64"
+                        }
+                    ],
+                    "asm": [
+                        "<exitDelay>",
+                        "OP_CHECKSEQUENCEVERIFY",
+                        "OP_DROP",
+                        "<senderKey>",
+                        "OP_CHECKSIGVERIFY",
+                        "<operatorSignerKey>",
                         "OP_CHECKSIG"
                     ]
                 }

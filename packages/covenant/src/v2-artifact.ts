@@ -1,4 +1,4 @@
-import { arkade } from "@arkade-os/sdk";
+import { arkade, timelockToSequence } from "@arkade-os/sdk";
 import { V2_ARTIFACT } from "./dust-covenant-artifact.js";
 import { loanSats, recycleFare, type DustCovenantParams } from "./params.js";
 
@@ -21,9 +21,11 @@ export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
         receiverKey: p.receiverKey,
         senderKey: p.senderKey,
         operatorKey: p.operatorKey,
+        operatorSignerKey: p.operatorSignerKey,
         operatorSats,
         loan: loanSats(p),
         locktime: p.locktime,
+        exitDelay: BigInt(timelockToSequence(p.exitDelay)),
         hasAsset: p.assetId ? 1n : 0n,
         assetTxid: p.assetId?.txid ?? NO_ASSET,
         assetGidx: BigInt(p.assetId?.groupIndex ?? 0),

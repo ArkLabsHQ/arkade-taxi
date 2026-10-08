@@ -78,15 +78,18 @@ describe("v2 is compiled from Arkade source", () => {
         expect(onDisk).not.toHaveProperty("updatedAt");
     });
 
-    it("declares the five covenant spend groups in leaf order", () => {
+    // arkadec lists covenant groups before plain tapscript; vtxo.ts sets leaf order.
+    it("declares the covenant groups in leaf order, then the exit as plain tapscript", () => {
         expect(V2_ARTIFACT.functions.map((f) => f.name)).toEqual([
             "recycle",
             "purchase",
             "repayRefund",
             "reclaimWhole",
             "renew",
+            "exit",
         ]);
-        for (const group of V2_ARTIFACT.functions) expect(group.arkade).toBeDefined();
+        for (const group of V2_ARTIFACT.functions)
+            expect(group.arkade !== undefined, group.name).toBe(group.name !== "exit");
     });
 
     it("keeps six leaves with Renew after Exit, for every v2 shape", () => {
@@ -98,7 +101,7 @@ describe("v2 is compiled from Arkade source", () => {
         expect(Leaf.Renew).toBe(5);
     });
 
-    it("takes leaves 0-3 and 5 from the artifact and keeps the exit hand-built", () => {
+    it("takes every leaf from the artifact, the exit byte-identical to the hand-built one", () => {
         for (const [name, p] of Object.entries(SHAPES)) {
             const s = new DustCovenantScript(opts(p));
             const c = compile(p);
@@ -107,6 +110,7 @@ describe("v2 is compiled from Arkade source", () => {
                 [Leaf.Purchase, "purchase"],
                 [Leaf.RefundSender, "repayRefund"],
                 [Leaf.Recovery, "reclaimWhole"],
+                [Leaf.Exit, "exit"],
                 [Leaf.Renew, "renew"],
             ] as const) {
                 if (p.claimMode !== undefined && (leaf === Leaf.Purchase || leaf === Leaf.Recycle))

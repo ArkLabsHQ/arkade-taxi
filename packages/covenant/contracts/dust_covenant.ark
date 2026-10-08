@@ -1,17 +1,18 @@
 // One artifact covers both the bitcoin and the asset shape: `hasAsset` and
 // `assetFare` are constructor params, so each branch is committed to by the
-// merkle root. The exit leaf is absent on purpose — its CSV delay is
-// seconds-domain above 512, and a `$param` CSV read back out of an artifact is
-// always blocks, so vtxo.ts still hand-builds it.
+// merkle root.
 pragma arkade ^0.1.0;
 
 contract DustCovenant(
   pubkey receiverKey,
   pubkey senderKey,
   pubkey operatorKey,
+  pubkey operatorSignerKey,
   int operatorSats,
   int loan,
   int locktime,
+  // The raw BIP68 sequence, pushed as-is: 86016 s is 4194472, not 86016.
+  int exitDelay,
   int hasAsset,
   bytes32 assetTxid,
   int assetGidx,
@@ -113,6 +114,11 @@ contract DustCovenant(
   function reclaimWhole(signature serverSig, signature emulatorSig) tapscript {
     require(after(locktime));
     require(checkMultisig([server, emulator], [serverSig, emulatorSig]));
+  }
+
+  function exit(signature senderSig, signature operatorSig) tapscript {
+    require(older(exitDelay));
+    require(checkMultisig([senderKey, operatorSignerKey], [senderSig, operatorSig]));
   }
 
   // No clock: liveness is what keeps the coin unswept, so renewal stays open to
