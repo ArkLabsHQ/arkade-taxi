@@ -44,6 +44,30 @@ export class RecoveryBudgetConflictError extends Error {
     }
 }
 
+const QUOTE_ADMISSION_MESSAGE = {
+    paused: "paused",
+    asset_not_served: "asset not served",
+    topup_exceeds_max_per_payment: "topup exceeds per-payment limit",
+    no_locktime_headroom: "insufficient batch expiry margin",
+    exceeds_max_outstanding: "exceeds max outstanding",
+    max_concurrent_advances: "max concurrent advances",
+} as const;
+
+export type QuoteAdmissionCode = keyof typeof QUOTE_ADMISSION_MESSAGE;
+
+/**
+ * A policy refusal raised by the authoritative fence, after admission already
+ * weighed the same limits and let the quote through. `code` is the admission
+ * reason, so the client decodes a fence refusal exactly as it decodes the
+ * earlier refusal rather than reading it as a server fault.
+ */
+export class QuoteAdmissionError extends Error {
+    constructor(readonly code: QuoteAdmissionCode) {
+        super(`reservation: ${QUOTE_ADMISSION_MESSAGE[code]}`);
+        this.name = "QuoteAdmissionError";
+    }
+}
+
 export class LockupClaimError extends Error {
     constructor(
         readonly code:
@@ -182,15 +206,15 @@ export class ReservationRepository {
                     )
                         throw new RecoveryBudgetConflictError(advance.id);
                 }
-                if (policy.paused) throw new Error("reservation: paused");
+                if (policy.paused) throw new QuoteAdmissionError("paused");
                 const rule = ruleFor(policy.assetRules, advance.assetId);
-                if (!rule?.enabled) throw new Error("reservation: asset not served");
+                if (!rule?.enabled) throw new QuoteAdmissionError("asset_not_served");
                 if (
                     advance.topup <= 0n ||
                     advance.topup > advance.dust ||
                     advance.topup > (rule.maxTopupSats ?? policy.maxPerPaymentTopupSats)
                 ) {
-                    throw new Error("reservation: topup exceeds per-payment limit");
+                    throw new QuoteAdmissionError("topup_exceeds_max_per_payment");
                 }
                 if (
                     advanceKind(advance) === "covenant" &&
@@ -201,13 +225,13 @@ export class ReservationRepository {
                                 : policy.locktimeMarginSeconds,
                         )
                 ) {
-                    throw new Error("reservation: insufficient batch expiry margin");
+                    throw new QuoteAdmissionError("no_locktime_headroom");
                 }
                 const exposure = totalExposure(this.#db);
                 if (exposure.total + advance.topup > policy.maxOutstandingSats)
-                    throw new Error("reservation: exceeds max outstanding");
+                    throw new QuoteAdmissionError("exceeds_max_outstanding");
                 if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
-                    throw new Error("reservation: max concurrent advances");
+                    throw new QuoteAdmissionError("max_concurrent_advances");
                 const conflict = this.#db
                     .prepare<[string, number], { advance_id: string }>(
                         "SELECT advance_id FROM operator_input_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",

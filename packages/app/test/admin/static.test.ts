@@ -94,6 +94,9 @@ const NOT_BLOCKERS = new Set([
     ...["swap_fill_input_conflict"],
     ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
     ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
+    // Refusals of one quote, which the fence raises alongside those above; the
+    // operator's readiness is not what they report.
+    ...["asset_not_served", "topup_exceeds_max_per_payment", "no_locktime_headroom"],
     // Refusals inside the SDK's own background settlement, which only the SDK sees and logs,
     // and the SDK's intent states.
     ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],

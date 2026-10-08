@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import {
     DatabaseBusyError,
     PolicyRevisionConflictError,
+    QuoteAdmissionError,
     RecoveryBudgetConflictError,
 } from "@arkade-taxi/db";
 import { LockupShapeError } from "./lockup.js";
@@ -63,6 +64,10 @@ export class ServiceError extends Error {
             return new ServiceError(e.code, 409, e.message, { cause: e });
         if (e instanceof RecoveryBudgetConflictError)
             return new ServiceError(e.code, 503, e.message, { cause: e });
+        if (e instanceof QuoteAdmissionError)
+            return e.code === ErrorCode.NoLocktimeHeadroom
+                ? new ServiceError(e.code, 503, e.message, { cause: e })
+                : admissionError(e.code, e);
         if (e instanceof LockupShapeError)
             return new ServiceError(e.code, 503, e.message, { cause: e });
         if (e instanceof Error && e.message.startsWith("protocol: ")) {
@@ -111,7 +116,7 @@ const isKnown = (r: string): r is AdmissionReason =>
  * says the same request will keep losing until the operator's state changes.
  * An unrecognised reason is still a policy refusal, so it takes 409 too.
  */
-export function admissionError(reason: string): ServiceError {
+export function admissionError(reason: string, cause?: unknown): ServiceError {
     // No operator state would let the same request through, so this one is the
     // request being wrong rather than a limit it hit.
     if (reason === "invalid_payment_sats")
@@ -122,5 +127,5 @@ export function admissionError(reason: string): ServiceError {
         );
     const status: ContentfulStatusCode = reason === "paused" ? 503 : 409;
     const message = isKnown(reason) ? ADMISSION_MESSAGE[reason] : `quote refused: ${reason}`;
-    return new ServiceError(reason, status, message);
+    return new ServiceError(reason, status, message, { cause });
 }
