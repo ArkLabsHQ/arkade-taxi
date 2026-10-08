@@ -437,6 +437,83 @@ export const MIGRATIONS: readonly Migration[] = [
         );
         CREATE INDEX custody_release_inputs_advance ON custody_release_inputs (advance_id);`,
     },
+    {
+        id: 15,
+        // Breaking: the two ordering CHECKs an older build relies on to mean
+        // "every quote" now hold for v1 only, so that build would read a v2
+        // deadline as a corrupt row rather than a deliberate one.
+        compat: "breaking",
+        // D2 anchors a v2 recovery CLTV to lockup + 100 days instead of a margin
+        // off batch expiry, so for v2 it is wall-clock and lands after the
+        // funding floor. SQLite cannot drop a table CHECK, hence the rebuild.
+        // receive_quote_reservations.quote_id references this table and foreign
+        // keys stay immediate here: neither `foreign_keys` nor
+        // `defer_foreign_keys` takes effect inside the transaction
+        // applyMigrations wraps a migration in, so the children move aside and
+        // come back instead.
+        up: `CREATE TABLE receive_quote_reservations_v15 AS
+            SELECT outpoint_txid, outpoint_vout, quote_id, created_at
+            FROM receive_quote_reservations;
+        DELETE FROM receive_quote_reservations;
+        CREATE TABLE receive_quotes_v15 (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'bound', 'expired')),
+            receiver_address TEXT NOT NULL CHECK (length(receiver_address) > 0),
+            maker_public_key TEXT NOT NULL CHECK (
+                length(maker_public_key) = 64 AND maker_public_key NOT GLOB '*[^0-9a-f]*'
+            ),
+            params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+            covenant_address TEXT NOT NULL CHECK (length(covenant_address) > 0),
+            fare_json TEXT NOT NULL CHECK (json_valid(fare_json)),
+            batch_expiry_kind TEXT NOT NULL CHECK (batch_expiry_kind IN ('height', 'time')),
+            batch_expiry_value INTEGER NOT NULL,
+            input_expiry_floor_kind TEXT NOT NULL CHECK (input_expiry_floor_kind IN ('height', 'time')),
+            input_expiry_floor_value INTEGER NOT NULL,
+            recovery_locktime_kind TEXT NOT NULL CHECK (recovery_locktime_kind IN ('height', 'time')),
+            recovery_locktime_value INTEGER NOT NULL,
+            loan_sats INTEGER NOT NULL CHECK (loan_sats > 0),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+            operator_inputs_json TEXT NOT NULL CHECK (json_valid(operator_inputs_json)),
+            bound_fill_id TEXT,
+            payer TEXT CHECK (payer IS NULL OR payer = 'receiver'),
+            receiver_fare_json TEXT CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json)),
+            covenant_version INTEGER CHECK (covenant_version IS NULL OR covenant_version = 2),
+            CHECK ((payer IS NULL) = (receiver_fare_json IS NULL)),
+            CHECK (expires_at > created_at),
+            CHECK (batch_expiry_kind = input_expiry_floor_kind),
+            CHECK (batch_expiry_value >= input_expiry_floor_value),
+            CHECK (covenant_version IS NOT NULL OR input_expiry_floor_kind = recovery_locktime_kind),
+            CHECK (covenant_version IS NOT NULL OR input_expiry_floor_value > recovery_locktime_value),
+            CHECK (covenant_version IS NULL OR (
+                recovery_locktime_kind = 'time'
+                AND recovery_locktime_value >= 500000000
+                AND recovery_locktime_value > created_at
+            )),
+            CHECK ((state = 'bound') = (bound_fill_id IS NOT NULL))
+        );
+        INSERT INTO receive_quotes_v15 (
+            id, state, receiver_address, maker_public_key, params_json, covenant_address,
+            fare_json, batch_expiry_kind, batch_expiry_value, input_expiry_floor_kind,
+            input_expiry_floor_value, recovery_locktime_kind, recovery_locktime_value,
+            loan_sats, created_at, expires_at, policy_revision, operator_inputs_json,
+            bound_fill_id, payer, receiver_fare_json, covenant_version
+        ) SELECT
+            id, state, receiver_address, maker_public_key, params_json, covenant_address,
+            fare_json, batch_expiry_kind, batch_expiry_value, input_expiry_floor_kind,
+            input_expiry_floor_value, recovery_locktime_kind, recovery_locktime_value,
+            loan_sats, created_at, expires_at, policy_revision, operator_inputs_json,
+            bound_fill_id, payer, receiver_fare_json, covenant_version
+        FROM receive_quotes;
+        DROP TABLE receive_quotes;
+        ALTER TABLE receive_quotes_v15 RENAME TO receive_quotes;
+        CREATE INDEX receive_quotes_state_expiry ON receive_quotes (state, expires_at);
+        INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
+            SELECT outpoint_txid, outpoint_vout, quote_id, created_at
+            FROM receive_quote_reservations_v15;
+        DROP TABLE receive_quote_reservations_v15;`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */

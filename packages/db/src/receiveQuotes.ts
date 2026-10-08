@@ -402,9 +402,15 @@ const decodeRow = (row: Row): ReceiveQuote => {
             : params.dust !== params.topup) ||
         params.locktime !== recoveryLocktime.value ||
         batchExpiry.kind !== inputExpiryFloor.kind ||
-        inputExpiryFloor.kind !== recoveryLocktime.kind ||
         batchExpiry.value < inputExpiryFloor.value ||
-        inputExpiryFloor.value <= recoveryLocktime.value ||
+        // Migration 15: a v2 deadline is wall-clock and outlives the funding
+        // floor, so only its own domain and futureness are checkable here.
+        (row.covenant_version === null
+            ? inputExpiryFloor.kind !== recoveryLocktime.kind ||
+              inputExpiryFloor.value <= recoveryLocktime.value
+            : recoveryLocktime.kind !== "time" ||
+              recoveryLocktime.value < 500_000_000n ||
+              recoveryLocktime.value <= row.created_at) ||
         operatorInputs.some(
             (input) =>
                 input.assetPacket !== undefined ||
@@ -502,17 +508,24 @@ export class ReceiveQuoteRepository {
                 if (q.loanSats > cap)
                     throw new Error("receive quote: loan exceeds per-payment limit");
                 const budget = request.recoveryExecutionBudget;
+                // A v2 deadline is not a margin off the floor, so the budget is
+                // measured in its own domain and races the lockup, not the coins.
+                const deadline = q.covenantVersion === 2;
+                const domain = deadline ? "time" : q.batchExpiry.kind;
                 const margin = BigInt(
-                    q.batchExpiry.kind === "height"
+                    domain === "height"
                         ? policy.locktimeMarginBlocks
                         : policy.locktimeMarginSeconds,
                 );
                 if (
+                    q.recoveryLocktime.kind !== domain ||
                     budget.kind !== q.recoveryLocktime.kind ||
                     budget.value < 0n ||
                     margin <= budget.value ||
-                    q.recoveryLocktime.value + budget.value >= q.inputExpiryFloor.value ||
-                    q.inputExpiryFloor.value - q.recoveryLocktime.value !== margin
+                    (deadline
+                        ? q.recoveryLocktime.value <= BigInt(q.createdAt)
+                        : q.recoveryLocktime.value + budget.value >= q.inputExpiryFloor.value ||
+                          q.inputExpiryFloor.value - q.recoveryLocktime.value !== margin)
                 )
                     throw new Error("receive quote: recovery execution budget is unsafe");
                 const current = allReservedOutpoints(this.db);
