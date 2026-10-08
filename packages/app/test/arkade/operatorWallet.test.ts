@@ -320,7 +320,9 @@ describe("persistent operator runtime safety", () => {
                     "operational phase",
                 ]),
             );
-            expect(s.runtime.safety().blockers).toContain("runtime_checking");
+            // The in-flight check publishes nothing: the pre-check closed state
+            // is still what a synchronous reader sees.
+            expect(s.runtime.safety().blockers).toEqual(["runtime_unchecked"]);
             expect(debug.mock.calls).toContainEqual([
                 expect.objectContaining({ phase: "runtime.chainTip", outcome: "ok" }),
                 "operational phase",
@@ -823,8 +825,9 @@ describe("persistent operator runtime safety", () => {
         expect(s.runtime.safety().blockers).toContain("wallet_unsynced");
         s.pause();
         const refresh = s.runtime.refresh();
-        expect(s.runtime.safety().blockers).toEqual(["runtime_checking"]);
-        expect(s.runtime.safety().chainHeight).toBeNull();
+        // Still closed, and now by its own cause: blanking a snapshot that is
+        // already blocked changed no reader's verdict, only its diagnosis.
+        expect(s.runtime.safety().blockers).toEqual(["wallet_unsynced"]);
         s.release();
         await refresh;
         expect(s.runtime.safety().blockers).toContain("wallet_unsynced");

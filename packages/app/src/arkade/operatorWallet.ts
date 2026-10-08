@@ -222,9 +222,11 @@ export function createOperatorRuntime(
     };
 
     const check = async (): Promise<RuntimeSafety> => {
-        // A healthy, still-fresh snapshot keeps being published here: every spend re-gates on
-        // this check's own result, so blanking it only closed readiness for the check's duration.
-        if (snapshot.blockers.length || stale(snapshot)) snapshot = closed("runtime_checking");
+        // A still-fresh snapshot keeps being published here: every spend re-gates on this check's
+        // own result, so blanking it only closed readiness for the check's duration. A blocked one
+        // keeps its own cause too -- it is already closed, and runtime_checking only hides why.
+        // Only a stale snapshot is blanked, because a stale healthy one would read as healthy.
+        if (stale(snapshot)) snapshot = closed("runtime_checking");
         const verified = await timed("runtime.providers", () =>
             verifyProviders(config, options.providers ?? providers),
         );

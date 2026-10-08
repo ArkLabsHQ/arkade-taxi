@@ -502,6 +502,34 @@ describe("quote and runtime refresh interleaving", () => {
         },
     );
 
+    it("keeps publishing a blocked runtime's own cause while it is re-checked", async () => {
+        const h = setup();
+        await h.lifecycle.start();
+        await h.lifecycle.refresh();
+        const router = h.router();
+        h.setInfo(arkInfo({ signerPubkey: bytesToHex(emulatorKey) }));
+        h.setNow(NOW * 1_000 + 1_000);
+        await h.runtime.refresh();
+        expect(h.runtime.safety().blockers).toEqual(["server_identity_mismatch"]);
+
+        // The snapshot is blocked but still fresh, so the check has nothing to
+        // protect a reader from: blanking it would only hide why it is closed.
+        const release = gate();
+        const entered = h.pauseCheck(release.pending);
+        const refresh = h.runtime.refresh();
+        await entered;
+        try {
+            const ready = await router.request("/ready");
+            const body = await ready.json();
+            expect(ready.status).toBe(503);
+            expect(body.blockers).toContain("server_identity_mismatch");
+            expect(body.blockers).not.toContain("runtime_checking");
+        } finally {
+            release.release();
+            await refresh;
+        }
+    });
+
     it("does not admit an HTTP quote when new verification itself becomes stale", async () => {
         const h = setup();
         await h.lifecycle.start();
