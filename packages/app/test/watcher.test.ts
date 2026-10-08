@@ -1138,19 +1138,35 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    /** A batch settlement: `settledBy` alone, with the successor at the same script and value. */
+    const COMMITMENT = "f7".repeat(32);
+    /**
+     * Verbatim from a real arkd renewal (e2e `renewal-r2.json`): the consumed
+     * coin carries a forfeit in `spentBy` AND the commitment in `settledBy`,
+     * with `arkTxId` empty. The read at the script returns both coins.
+     */
     const renew = (
         state: Awaited<ReturnType<typeof setup>>,
         successor: { txid: string; vout: number },
         over: Partial<VirtualCoin> = {},
     ) => {
         const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
-        const spent = state.coins.get(key)!;
-        state.coins.set(key, { ...spent, settledBy: "ab".repeat(32) });
+        const live = state.coins.get(key)!;
+        state.coins.set(key, {
+            ...live,
+            isSpent: true,
+            spentBy: "f6".repeat(32),
+            settledBy: COMMITMENT,
+            arkTxId: "",
+            isPreconfirmed: true,
+        });
         state.coins.set(`${successor.txid}:${successor.vout}`, {
-            ...spent,
+            ...live,
             ...successor,
-            settledBy: undefined,
+            isSpent: false,
+            spentBy: "",
+            settledBy: "",
+            arkTxId: "",
+            isPreconfirmed: false,
             ...over,
         });
     };
@@ -1259,7 +1275,8 @@ describe("canonical covenant observation", () => {
             renewals: 1,
         });
 
-        // With only the twin's coin at that script, there is no successor to bind.
+        // Only the twin's coin at that script: no successor at this value, so the
+        // spend is not a renewal and takes the ordinary classification.
         const alone = await setupV2(undefined);
         renew(alone, { txid: "5c".repeat(32), vout: 0 }, { value: twinValue });
         expect(alone.coins.get(`5c${"5c".repeat(31)}:0`)!.script).toBe(script);
@@ -1267,10 +1284,45 @@ describe("canonical covenant observation", () => {
         expect(alone.advances.get(alone.advance.id)).toMatchObject({
             outpoint: alone.outpoint,
             failureCode: "covenant_spend_unknown",
-            failureDetail: expect.stringContaining("renewal successor is missing or ambiguous"),
+            failureDetail: expect.stringContaining("spent outpoint evidence is incomplete"),
         });
         state.db.close();
         alone.db.close();
+    });
+
+    it("refuses two live coins at the same script and value as ambiguous", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        renew(state, successor);
+        state.coins.set("rival", {
+            ...state.coins.get(`${successor.txid}:${successor.vout}`)!,
+            txid: "5c".repeat(32),
+            vout: 0,
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            outpoint: state.outpoint,
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("renewal successor is ambiguous"),
+        });
+        state.db.close();
+    });
+
+    // An offchain spend that also carries a commitment must stay a spend: the
+    // arkTxId is what separates the two, so a reclaim still reaches custody.
+    it("classifies a reclaim carrying a commitment txid as recovered", async () => {
+        const state = await setupV2("recovered");
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const spent = state.coins.get(key)!;
+        expect(spent.arkTxId).toMatch(/^[0-9a-f]{64}$/);
+        state.coins.set(key, { ...spent, settledBy: COMMITMENT });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recovered",
+            spentTxid: state.finalArk!.id,
+        });
+        expect(new CustodyRepository(state.db).get(state.advance.id)?.state).toBe("held");
+        state.db.close();
     });
 
     // Spec 3.2: two v2 covenants differing only in paymentSats share one address, so
@@ -3205,8 +3257,19 @@ describe("canonical scan round trips", () => {
         const row = state.advances.byState("locked")[0]!;
         const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
         const predecessor = state.coins.get(key)!;
-        state.coins.set(key, { ...predecessor, settledBy: "ab".repeat(32) });
-        state.coins.set("successor", { ...predecessor, txid: "7a".repeat(32), vout: 1 });
+        state.coins.set(key, {
+            ...predecessor,
+            isSpent: true,
+            spentBy: "f6".repeat(32),
+            settledBy: "f7".repeat(32),
+            arkTxId: "",
+        });
+        state.coins.set("successor", {
+            ...predecessor,
+            txid: "7a".repeat(32),
+            vout: 1,
+            isPreconfirmed: false,
+        });
         const { calls, advances } = recorder(
             Array.from({ length: 25 }, (_, index) => ({ ...row, id: `clone-${index}` })),
         );
@@ -3220,7 +3283,10 @@ describe("canonical scan round trips", () => {
             tip: async () => canonicalTip,
         });
         await watcher.catchUp();
-        expect(indexer.calls).toEqual({ getVtxos: 2, getVirtualTxs: 0 });
+        // One outpoint wave plus one script wave, however many rows renewed. The
+        // transaction wave still fetches the forfeit a renewal never reads; it is
+        // one batched call, and the rows that find no successor do need it.
+        expect(indexer.calls).toEqual({ getVtxos: 2, getVirtualTxs: 1 });
         expect(calls).toHaveLength(25);
         expect([...new Set(calls.map(({ method }) => method))]).toEqual(["renewed"]);
         state.db.close();
