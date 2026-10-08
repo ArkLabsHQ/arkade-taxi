@@ -25,6 +25,7 @@ export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
         operatorSats,
         loan: loanSats(p),
         locktime: p.locktime,
+        // Encoded here: artifact.ts's typed v1 mirror passes the bare value instead.
         exitDelay: BigInt(timelockToSequence(p.exitDelay)),
         hasAsset: p.assetId ? 1n : 0n,
         assetTxid: p.assetId?.txid ?? NO_ASSET,
