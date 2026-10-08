@@ -123,7 +123,12 @@ describe("the hand-written mirror is v1 only", () => {
         const v = cases[0];
         expect(() =>
             emitArtifact(
-                { ...toParams(v), covenantVersion: 2, topup: BigInt(v.params.dust) },
+                {
+                    ...toParams(v),
+                    covenantVersion: 2,
+                    topup: BigInt(v.params.dust),
+                    locktime: 1_800_000_000n,
+                },
                 BigInt(v.vtxoMinAmount),
             ),
         ).toThrow(/v2 is built from the artifact/);

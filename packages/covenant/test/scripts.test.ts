@@ -178,9 +178,9 @@ describe("buildRefund", () => {
 describe("buildScripts", () => {
     // A v1 build from v2 params would be a silently wrong covenant, not a typo.
     it("refuses v2, which compiles from the artifact instead", () => {
-        expect(() => buildScripts({ ...base(), covenantVersion: 2 }, 330n)).toThrow(
-            /v2 is built from the artifact/,
-        );
+        expect(() =>
+            buildScripts({ ...base(), locktime: 1_800_000_000n, covenantVersion: 2 }, 330n),
+        ).toThrow(/v2 is built from the artifact/);
     });
 
     it("rejects invalid params before building", () => {

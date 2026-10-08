@@ -16,6 +16,8 @@ export enum Leaf {
     RefundSender = 2,
     Recovery = 3,
     Exit = 4,
+    /** v2 only, appended so every earlier value and sibling proof keeps its meaning. */
+    Renew = 5,
 }
 
 export interface DustCovenantOptions {
@@ -77,7 +79,7 @@ function handBuilt({ serverKey, emulatorKey, params, vtxoMinAmount }: DustCovena
 }
 
 /**
- * v2's four covenant leaves come out of the compiled artifact, tweak and all.
+ * v2's five covenant leaves come out of the compiled artifact, tweak and all.
  * The exit leaf does not: its CSV delay is seconds-domain above 512, and a
  * `$param` CSV read back out of an artifact is always blocks.
  */
@@ -98,6 +100,7 @@ function fromArtifact({
     const purchase = leaf("purchase");
     const refund = leaf("repayRefund");
     const reclaim = leaf("reclaimWhole");
+    const renew = leaf("renew");
     const claimLeaf = (which: Leaf, script: Uint8Array) =>
         claimLeafDisabled(params, which)
             ? MultisigTapscript.encode({
@@ -114,6 +117,7 @@ function fromArtifact({
             purchase: purchase.arkadeScript,
             refund: refund.arkadeScript,
             reclaim: reclaim.arkadeScript,
+            renew: renew.arkadeScript,
         },
         scripts: [
             claimLeaf(Leaf.Recycle, recycle.leafScript),
@@ -121,6 +125,7 @@ function fromArtifact({
             refund.leafScript,
             reclaim.leafScript,
             exitLeaf(params),
+            renew.leafScript,
         ],
     };
 }

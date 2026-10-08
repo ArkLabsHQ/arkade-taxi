@@ -159,6 +159,7 @@ export type CovenantScripts = {
     refund: Uint8Array;
     /** v2 only; absent, the recovery leaf reuses refund. */
     reclaim?: Uint8Array;
+    renew?: Uint8Array;
 };
 
 /** v1 only. v2 compiles from contracts/dust_covenant.ark — see v2-artifact.ts. */

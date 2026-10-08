@@ -214,6 +214,7 @@ describe("refundTopup", () => {
 describe("covenantVersion 2", () => {
     const v2 = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => ({
         ...base(),
+        locktime: 1_800_000_000n,
         covenantVersion: 2,
         ...over,
     });
@@ -239,7 +240,9 @@ describe("covenantVersion 2", () => {
     });
 
     it("accepts receiver-owned recovery at dust = vtxoMinAmount, which legacy refuses", () => {
-        expect(() => validateParams(receiverPaid({ covenantVersion: 2 }), 330n)).not.toThrow();
+        expect(() =>
+            validateParams(receiverPaid({ covenantVersion: 2, locktime: 1_800_000_000n }), 330n),
+        ).not.toThrow();
         expect(() => validateParams(receiverPaid(), 330n)).toThrow(/host its receipt/);
     });
 });

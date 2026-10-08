@@ -151,13 +151,18 @@ describe("claim mode is committed to by the tree", () => {
 
 describe("covenant v2", () => {
     const legacy = new DustCovenantScript(opts());
-    const v2 = new DustCovenantScript(opts({ ...params(), covenantVersion: 2 }));
+    const v2 = new DustCovenantScript(
+        opts({ ...params(), locktime: 1_800_000_000n, covenantVersion: 2 }),
+    );
     const pathLengths = (s: DustCovenantScript) =>
         s.scripts.map((leaf) => s.findLeaf(hex.encode(leaf))[0].merklePath.length);
     const tweak = (script: Uint8Array) => arkade.computeArkadeScriptPublicKey(key(5), script);
 
-    it("keeps the tree height and every merkle-path length, at a new address", () => {
-        expect(pathLengths(v2)).toEqual(pathLengths(legacy));
+    // A sixth leaf re-balances the individual paths, so height is what holds.
+    it("appends renew without deepening the tree, at a new address", () => {
+        expect(v2.scripts).toHaveLength(6);
+        expect(legacy.scripts).toHaveLength(5);
+        expect(Math.max(...pathLengths(v2))).toBe(Math.max(...pathLengths(legacy)));
         expect(v2.pkScript).not.toEqual(legacy.pkScript);
     });
 
@@ -165,7 +170,7 @@ describe("covenant v2", () => {
     // move; only the hand-built exit is shared with v1.
     it("changes every covenant leaf and keeps the exit", () => {
         expect(
-            v2.scripts.map((leaf, i) => hex.encode(leaf) !== hex.encode(legacy.scripts[i])),
+            legacy.scripts.map((leaf, i) => hex.encode(leaf) !== hex.encode(v2.scripts[i])),
         ).toEqual([true, true, true, true, false]);
     });
 

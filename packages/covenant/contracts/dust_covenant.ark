@@ -114,4 +114,14 @@ contract DustCovenant(
     require(after(locktime));
     require(checkMultisig([server, emulator], [serverSig, emulatorSig]));
   }
+
+  // No clock: liveness is what keeps the coin unswept, so renewal stays open to
+  // anyone. Without the register check an off-chain self-send would satisfy the
+  // tunnel while leaving batch expiry exactly where it was.
+  function renew() {
+    require(tx.intent.field("type") == "register");
+    require(tx.intent.field("onchain_output_indexes") == "[]");
+    require(!tx.intent.has("cosigners_public_keys.1"));
+    require(this.tunnel(this.activeInputIndex - 1));
+  }
 }

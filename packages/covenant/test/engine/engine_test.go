@@ -12,6 +12,7 @@ import (
 
 	"github.com/arkade-os/arkd/pkg/ark-lib/asset"
 	"github.com/arkade-os/arkd/pkg/ark-lib/extension"
+	"github.com/arkade-os/arkd/pkg/ark-lib/intent"
 	scriptlib "github.com/arkade-os/arkd/pkg/ark-lib/script"
 	"github.com/arkade-os/emulator/pkg/arkade"
 	"github.com/btcsuite/btcd/btcec/v2"
@@ -27,8 +28,12 @@ const (
 	leafRecycle = 0
 	leafRefund  = 2
 	leafReclaim = 3
+	leafRenew   = 5
 	coinSats    = int64(1000)
 )
+
+// The renew covenant pins no cosigner, so any plausible key exercises the gate.
+const cosignerKey = "02ab7c1f5e4d3b2a19087766554433221100ffeeddccbbaa99887766554433221100"
 
 type vector struct {
 	Name   string `json:"name"`
@@ -46,6 +51,7 @@ type vector struct {
 	Recycle  string   `json:"recycle"`
 	Refund   string   `json:"refund"`
 	Reclaim  string   `json:"reclaim"`
+	Renew    string   `json:"renew"`
 	Leaves   []string `json:"leaves"`
 	PkScript string   `json:"pkScript"`
 }
@@ -103,15 +109,21 @@ func (f fetcher) FetchVtxoPrevOutPkScript(op wire.OutPoint) []byte {
 }
 
 // assetIn[i] and assetOut[i] are the units at input or output i; zero is absent.
+// vin is the input the covenant is spent at and intent the message bound to the
+// run; only renew needs either.
 type spend struct {
 	ins, outs         []*wire.TxOut
 	assetIn, assetOut []uint64
+	vin               uint16
+	intent            string
 }
 
 func (s spend) clone() spend {
 	c := spend{
 		assetIn:  append([]uint64(nil), s.assetIn...),
 		assetOut: append([]uint64(nil), s.assetOut...),
+		vin:      s.vin,
+		intent:   s.intent,
 	}
 	for _, o := range s.ins {
 		cp := *o
@@ -164,7 +176,7 @@ func run(t *testing.T, f fixture, v vector, leaf, script []byte, s spend) error 
 	for _, out := range s.outs {
 		tx.AddTxOut(out)
 	}
-	entry := arkade.EmulatorEntry{Vin: 0, Script: script}
+	entry := arkade.EmulatorEntry{Vin: s.vin, Script: script}
 	ext := extension.Extension{arkade.EmulatorPacket{entry}}
 	if v.Params.AssetTxid != nil {
 		ext = append(extension.Extension{assetPacket(t, v, s)}, ext...)
@@ -175,14 +187,20 @@ func run(t *testing.T, f fixture, v vector, leaf, script []byte, s spend) error 
 
 	ptx, err := psbt.NewFromUnsignedTx(tx)
 	require.NoError(t, err)
-	ptx.Inputs[0].TaprootLeafScript = []*psbt.TaprootTapLeafScript{
+	ptx.Inputs[s.vin].TaprootLeafScript = []*psbt.TaprootTapLeafScript{
 		{Script: leaf, LeafVersion: txscript.BaseLeafVersion},
 	}
 	program, err := arkade.ReadArkadeScript(ptx, pubkey(t, f.EmulatorKey), entry)
 	if err != nil {
 		return err
 	}
-	return program.Execute(tx, fetcher{txscript.NewMultiPrevOutFetcher(prevouts)}, 0)
+	var opts []arkade.ExecuteOption
+	if s.intent != "" {
+		opts = append(opts, arkade.WithIntentMessage(s.intent))
+	}
+	return program.Execute(
+		tx, fetcher{txscript.NewMultiPrevOutFetcher(prevouts)}, int(s.vin), opts...,
+	)
 }
 
 // Index and stack errors mean the script aborted before the condition under test.
@@ -193,6 +211,16 @@ func requireRejected(t *testing.T, err error) {
 	require.Contains(t, []txscript.ErrorCode{
 		txscript.ErrEvalFalse, txscript.ErrVerify, txscript.ErrEqualVerify, txscript.ErrNumEqualVerify,
 	}, scriptErr.ErrorCode, "aborted instead of evaluating false: %v", err)
+}
+
+// OP_TUNNEL rejects with the same code a stack underflow raises, so its reason
+// is matched on the message instead.
+func requireTunnelRejected(t *testing.T, err error, reason string) {
+	t.Helper()
+	var scriptErr txscript.Error
+	require.ErrorAs(t, err, &scriptErr, "expected a script error, got %v", err)
+	require.Equal(t, txscript.ErrInvalidStackOperation, scriptErr.ErrorCode, "got %v", err)
+	require.ErrorContains(t, err, reason)
 }
 
 func lockup(v vector) int64 { return v.Params.Dust + v.Params.PaymentSats }
@@ -368,6 +396,90 @@ func TestReclaim(t *testing.T) {
 				t.Run(name, func(t *testing.T) {
 					c := stranger.clone()
 					mutate(&c)
+					requireRejected(t, run(t, f, v, leaf, script, c))
+				})
+			}
+		})
+	}
+}
+
+// Each negative case varies exactly one gated field, so a rejection isolates
+// the clause it exercises.
+func registerMessage(
+	t *testing.T, kind intent.IntentMessageType, onchain []int, cosigners ...string,
+) string {
+	t.Helper()
+	message, err := intent.RegisterMessage{
+		BaseMessage:          intent.BaseMessage{Type: kind},
+		OnchainOutputIndexes: onchain,
+		CosignersPublicKeys:  cosigners,
+	}.Encode()
+	require.NoError(t, err)
+	return message
+}
+
+// The covenant renews at input 1 so OP_TUNNEL's out[i-1] is out[0]; in[0] stands
+// for the intent proof's BIP322 message input.
+func renewal(t *testing.T, v vector) spend {
+	t.Helper()
+	return spend{
+		vin:    1,
+		intent: registerMessage(t, intent.IntentMessageTypeRegister, []int{}, cosignerKey),
+		ins: []*wire.TxOut{
+			{Value: coinSats, PkScript: walletScript(9)},
+			{Value: lockup(v), PkScript: decode(t, v.PkScript)},
+		},
+		outs:     []*wire.TxOut{{Value: lockup(v), PkScript: decode(t, v.PkScript)}},
+		assetIn:  []uint64{0, 7},
+		assetOut: []uint64{7},
+	}
+}
+
+func TestRenew(t *testing.T) {
+	f := load(t)
+	for _, v := range f.Cases {
+		t.Run(v.Name, func(t *testing.T) {
+			leaf, script := decode(t, v.Leaves[leafRenew]), decode(t, v.Renew)
+			valid := renewal(t, v)
+			require.NoError(t, run(t, f, v, leaf, script, valid))
+
+			tunnel := map[string]struct {
+				reason string
+				mutate func(*spend)
+			}{
+				"value_short":   {"source value", func(c *spend) { c.outs[0].Value-- }},
+				"script_changed": {"source script", func(c *spend) {
+					c.outs[0].PkScript = walletScript(8)
+				}},
+				"assets_changed": {"source assets", func(c *spend) { c.assetOut = []uint64{6} }},
+			}
+			for name, tc := range tunnel {
+				if name == "assets_changed" && v.Params.AssetTxid == nil {
+					continue
+				}
+				t.Run(name, func(t *testing.T) {
+					c := valid.clone()
+					tc.mutate(&c)
+					requireTunnelRejected(t, run(t, f, v, leaf, script, c), tc.reason)
+				})
+			}
+
+			// An off-chain spend binds no message, so both field clauses reject it.
+			for name, message := range map[string]string{
+				"offchain_spend": "",
+				"not_register": registerMessage(
+					t, intent.IntentMessageTypeDelete, []int{}, cosignerKey,
+				),
+				"onchain_output": registerMessage(
+					t, intent.IntentMessageTypeRegister, []int{0}, cosignerKey,
+				),
+				"second_cosigner": registerMessage(
+					t, intent.IntentMessageTypeRegister, []int{}, cosignerKey, cosignerKey,
+				),
+			} {
+				t.Run(name, func(t *testing.T) {
+					c := valid.clone()
+					c.intent = message
 					requireRejected(t, run(t, f, v, leaf, script, c))
 				})
 			}
