@@ -18,6 +18,7 @@ import {
     type Policy,
 } from "@arkade-taxi/core";
 import { ADVANCE_STATES, type AdvanceRepository, type PolicyRepository } from "@arkade-taxi/db";
+import { totalExposure, type ExposureSource } from "../exposure.js";
 import {
     assetIdFromWire,
     assetIdToWire,
@@ -58,6 +59,10 @@ export interface SweeperStatus {
 export interface AdminDeps {
     advances: AdvanceRepository;
     policy: PolicyRepository;
+    /** Swap fills and open receive quotes tie up capital too, so the status
+     * under-reports what the operator has lent without them. */
+    swapFills?: ExposureSource;
+    receiveQuotes?: ExposureSource;
     recoveryExecutionBudget: { height: bigint; time: bigint };
     dust: bigint;
     vtxoMinAmount: bigint;
@@ -504,10 +509,9 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         const active = byState.flatMap(([, rows]) =>
             rows.filter((row) => ACTIVE_EXPOSURE_STATES.has(row.state) && isExposed(row)),
         );
+        const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
         const oldest = { height: null as bigint | null, time: null as bigint | null };
-        let outstandingSats = 0n;
         for (const row of active) {
-            outstandingSats += row.topup;
             // Sponsored advances have no recovery deadline; their locktime is
             // a CHECK-satisfying sentinel, so exclude them from the oldest
             // unswept computation.
@@ -527,8 +531,8 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             dust: satsToWire(deps.dust),
             vtxoMinAmount: satsToWire(deps.vtxoMinAmount),
             exposure: {
-                outstandingSats: satsToWire(outstandingSats),
-                activeCount: active.length,
+                outstandingSats: satsToWire(exposure.outstandingSats),
+                activeCount: exposure.lockedCount,
                 oldestUnsweptLocktime: {
                     height: oldest.height === null ? null : satsToWire(oldest.height),
                     time: oldest.time === null ? null : satsToWire(oldest.time),
