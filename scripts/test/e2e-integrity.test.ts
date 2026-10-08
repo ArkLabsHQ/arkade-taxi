@@ -18,12 +18,12 @@ describe("live E2E result gate", () => {
     it("requires the full manifest by default and precisely the direct scenarios locally", () => {
         const full = readScenarioIds();
         const direct = readScenarioIds("direct");
-        expect(full).toHaveLength(23);
-        expect(direct).toHaveLength(19);
+        expect(full).toHaveLength(24);
+        expect(direct).toHaveLength(20);
         const passing = {
             ...result(),
-            numTotalTests: 21,
-            numPassedTests: 21,
+            numTotalTests: 22,
+            numPassedTests: 22,
             testResults: [
                 {
                     assertionResults: [

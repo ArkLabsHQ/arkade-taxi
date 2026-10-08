@@ -92,13 +92,18 @@ export const SCENARIOS = [
         title: "unclaimed receiver-paid covenant reclaimed at its locktime without a fare",
     },
     {
+        id: "v2-covenant-batch-renewal",
+        title: "a funded v2 covenant is renewed into a new batch and the Taxi follows it",
+        timeout: 600_000,
+    },
+    {
         id: "covenant-unilateral-exit-with-arkd-down",
         title: "sender and Taxi exit an unrolled covenant on-chain with arkd and the emulator down",
         timeout: 600_000,
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 24;
+export const EXPECTED_TOTAL = 25;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);
