@@ -209,23 +209,15 @@ export class ProceedsRepository {
         return this.db
             .transaction(() => {
                 const row = this.db
-                    .prepare<
-                        [string, string],
-                        { state: string; submission: string; intents: number | bigint }
-                    >(
-                        `SELECT state, submission_state AS submission,
-                                (SELECT count(*) FROM proceeds_local_intents WHERE job_id = ?) AS intents
-                         FROM proceeds_jobs WHERE id = ?`,
+                    .prepare<[string], { state: string; submission: string }>(
+                        "SELECT state, submission_state AS submission FROM proceeds_jobs WHERE id = ?",
                     )
-                    .get(id, id);
-                // count(*) arrives as a BigInt under the connection's safe integers.
-                if (
-                    !row ||
-                    row.state === "complete" ||
-                    row.submission !== "unsubmitted" ||
-                    Number(row.intents) !== 0
-                )
+                    .get(id);
+                // `enterSubmission` is fenced ahead of registerIntent, so an unsubmitted
+                // job never offered an intent: the ones it remembered cannot confirm.
+                if (!row || row.state === "complete" || row.submission !== "unsubmitted")
                     return false;
+                this.db.prepare("DELETE FROM proceeds_local_intents WHERE job_id = ?").run(id);
                 this.db.prepare("DELETE FROM proceeds_inputs WHERE job_id = ?").run(id);
                 this.db.prepare("DELETE FROM proceeds_jobs WHERE id = ?").run(id);
                 return true;

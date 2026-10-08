@@ -51,6 +51,26 @@ describe("proceeds reservations", () => {
             db.exec("DROP TRIGGER deny_proceeds_entry");
         }
     });
+    it("cancels an unsubmitted job with remembered intents but never an entered one", () => {
+        const repo = new ProceedsRepository(db);
+        const digest = "dd".repeat(32);
+        repo.create("a", plan, 10);
+        repo.claim("a", "one", 10, 20);
+        repo.rememberLocalIntent("a", "one", 11, digest);
+        expect(repo.cancel("a")).toBe(true);
+        expect(repo.get("a")).toBeUndefined();
+        expect(new ReservationRepository(db).listReservedOutpoints()).toEqual([]);
+        expect(db.prepare("SELECT count(*) AS rows FROM proceeds_local_intents").get()).toEqual({
+            rows: 0n,
+        });
+
+        repo.create("b", plan, 20);
+        repo.claim("b", "one", 20, 30);
+        repo.rememberLocalIntent("b", "one", 21, digest);
+        repo.enterSubmission("b", "one", 21, digest);
+        expect(repo.cancel("b")).toBe(false);
+        expect(new ReservationRepository(db).listReservedOutpoints()).toEqual([input]);
+    });
     it("rejects a changed reservation snapshot even when selected inputs do not overlap", () => {
         const repo = new ProceedsRepository(db);
         expect(() => repo.create("a", plan, 10, [{ txid: "bb".repeat(32), vout: 1 }])).toThrow(
