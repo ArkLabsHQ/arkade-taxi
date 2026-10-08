@@ -74,6 +74,14 @@ contract subscription, when an event names its covenant script, and otherwise at
 this interval; a coin that contradicts the record earns one full
 re-classification of that advance alone, while evidence that is merely
 unavailable is reported as a warning and retried.
+`TAXI_VTXO_READ_MAX_AGE_MS=5000` is how old an indexer sync the SDK may reuse for
+the runtime's own wallet re-check and the custody coverage report — the two reads
+that gate nothing and whose figures already travel beside a snapshot up to
+`TAXI_RECONCILE_INTERVAL_MS` old, which also caps this. Every read a quote prices
+or funds from, and every proceeds read, passes no window and so syncs. Spends are
+written to the Taxi's own database as they happen, so a reused sync can only miss
+coins that have just arrived, which withholds capacity rather than inventing it.
+Set it to 0 to sync on every read.
 `TAXI_OPERATOR_MIN_RESERVE_SATS=10000` requires verified usable wallet capacity.
 The live policy has separate `locktimeMarginBlocks=144` and
 `locktimeMarginSeconds=86400` fields. Timestamp CLTV is compared with chain

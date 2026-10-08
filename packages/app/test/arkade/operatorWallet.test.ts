@@ -52,10 +52,12 @@ afterEach(() => {
 function setup({
     withoutHeld = false,
     reconcileIntervalMs,
+    vtxoReadMaxAgeMs,
     phaseLogger,
 }: {
     withoutHeld?: boolean;
     reconcileIntervalMs?: number;
+    vtxoReadMaxAgeMs?: number;
     phaseLogger?: OperatorRuntimeOptions["phaseLogger"];
 } = {}) {
     const db = openDatabase(":memory:");
@@ -73,6 +75,9 @@ function setup({
     let disposed = 0;
     let providerReads = 0;
     let inventoryReads = 0;
+    let inventorySyncs = 0;
+    let syncedAt: number | undefined;
+    const inventoryFilters: unknown[] = [];
     let coins: Partial<ExtendedVirtualCoin>[] = [{}];
     let taxiReserved: { txid: string; vout: number }[] = [];
     let held: { txid: string; vout: number }[] = [];
@@ -115,8 +120,15 @@ function setup({
                 return manager;
             },
             getAddress: async () => address,
-            getSpendableVtxos: async () => {
+            getSpendableVtxos: async (filter?: { maxSyncAgeMs?: number }) => {
                 inventoryReads++;
+                inventoryFilters.push(filter);
+                // ContractManager.syncedWithin: 0 or less always syncs.
+                const window2 = filter?.maxSyncAgeMs ?? 0;
+                if (window2 <= 0 || syncedAt === undefined || now - syncedAt >= window2) {
+                    inventorySyncs++;
+                    syncedAt = now;
+                }
                 await pause;
                 return coins.map((overrides) => ({
                     txid: "aa".repeat(32),
@@ -142,7 +154,11 @@ function setup({
         };
         return self;
     };
-    const cfg = config({ addressHrp: "tark", ...(reconcileIntervalMs && { reconcileIntervalMs }) });
+    const cfg = config({
+        addressHrp: "tark",
+        ...(reconcileIntervalMs && { reconcileIntervalMs }),
+        ...(vtxoReadMaxAgeMs !== undefined && { vtxoReadMaxAgeMs }),
+    });
     const runtime = createOperatorRuntime(cfg, db, {
         phaseLogger,
         now: () => now,
@@ -246,6 +262,8 @@ function setup({
         },
         counts: () => ({ created, disposed }),
         ioCounts: () => ({ providerReads, inventoryReads }),
+        syncCount: () => inventorySyncs,
+        inventoryFilters: () => inventoryFilters,
         pause: () => {
             pause = new Promise<void>((resolve) => {
                 release = resolve;
@@ -369,6 +387,37 @@ describe("persistent operator runtime safety", () => {
             expect(inventory).toHaveBeenCalledTimes(synchronous ? 0 : 1);
         },
     );
+
+    it.each([
+        { window: 5_000, at: 1_000 + 4_999, syncs: 1 },
+        { window: 5_000, at: 1_000 + 5_000, syncs: 2 },
+        { window: 0, at: 1_000, syncs: 2 },
+    ])(
+        "reuses a sync within a $window ms inventory window ($syncs sync(s))",
+        async ({ window, at, syncs }) => {
+            const s = setup({ vtxoReadMaxAgeMs: window });
+            expect((await s.runtime.refresh()).blockers).toEqual([]);
+            s.setNow(at);
+            expect((await s.runtime.refresh()).blockers).toEqual([]);
+            expect(s.ioCounts()).toEqual({ providerReads: 2, inventoryReads: 2 });
+            expect(s.syncCount()).toBe(syncs);
+            expect(s.inventoryFilters()).toEqual(
+                Array(2).fill({
+                    withRecoverable: true,
+                    withUnrolled: false,
+                    maxSyncAgeMs: window,
+                }),
+            );
+        },
+    );
+
+    it("never lets the inventory window outlive the snapshot staleness bound", async () => {
+        const s = setup({ reconcileIntervalMs: 1_000, vtxoReadMaxAgeMs: 60_000 });
+        await s.runtime.refresh();
+        expect(s.inventoryFilters()).toEqual([
+            { withRecoverable: true, withUnrolled: false, maxSyncAgeMs: 1_000 },
+        ]);
+    });
 
     it("keeps runtime safety checks working when the diagnostic logger throws", async () => {
         const debug = vi.fn(() => {
