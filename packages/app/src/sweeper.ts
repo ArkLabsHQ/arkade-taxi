@@ -1,5 +1,6 @@
 import { advanceKind, type Advance, type ExpiryDeadline } from "@arkade-taxi/core";
 import type { RuntimeConfig } from "./config.js";
+import type { ObservedCovenant } from "./watcher.js";
 import type { AdvanceStore } from "./quotes.js";
 import { RecoveryArtifactError, type RecoverySubmission } from "./arkade/recovery.js";
 import { sanitizeOperationalError } from "./errors.js";
@@ -26,6 +27,12 @@ export interface SweeperDeps {
     };
     onError?: (advanceId: string, error: unknown) => void;
     canRecover?: (advance: Advance) => boolean;
+    /** The watcher's last read of the covenant coin. A v2 advance stores no
+     * batch expiry, so this is the only source for the one it races. */
+    observed?: (advance: Advance) => ObservedCovenant | undefined;
+    /** A v2 renewal fell behind. Fired on change, not per tick: an alarm that
+     * repeats at tick rate is one an operator learns to skip. */
+    onRenewalWarning?: (warning: { delegation: string; deadline: RecoveryDeadline }) => void;
 }
 
 export interface SweepResult {
@@ -114,6 +121,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     let stopped = false;
     const inFlight = new Map<string, Promise<void>>();
     const completed: SweepResult[] = [];
+    const warned = new Map<string, string>();
 
     const threshold = (kind: "height" | "time", critical: boolean): bigint => {
         if (!deps.config) return 0n;
@@ -132,11 +140,14 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         time: bigint | null,
     ): RecoveryDeadline => {
         const recovery = advance.recoveryLocktime;
-        // No stored expiry on v2: the countdown runs to the CLTV itself.
-        const expiry = advance.batchExpiry;
+        const v2 = advance.covenantVersion === 2;
+        // v2 stores no expiry, and races batch expiry alone: the remedy is
+        // "renew", not "reclaim", so the clock is the coin's current one.
+        const seen = v2 ? deps.observed?.(advance) : undefined;
+        const expiry = advance.batchExpiry ?? seen?.expiry;
         if (
             !recovery ||
-            recovery.kind !== (expiry?.kind ?? "time") ||
+            (!v2 && recovery.kind !== (expiry?.kind ?? "time")) ||
             recovery.value !== advance.locktime
         )
             return {
@@ -148,41 +159,60 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 severity: "expired",
                 code: "recovery_locktime_invalid",
             };
-        const chainClock = recovery.kind === "height" ? height : time;
-        if (chainClock === null)
-            return {
-                advanceId: advance.id,
-                kind: recovery.kind,
-                locktime: recovery.value,
-                batchExpiry: expiry?.value ?? null,
-                remaining: null,
-                severity: "eligible",
-                code: `chain_${recovery.kind}_unavailable`,
-            };
-        const remaining = (expiry?.value ?? recovery.value) - chainClock;
-        const severity =
-            remaining <= 0n
-                ? "expired"
-                : remaining <= threshold(recovery.kind, true)
-                  ? "critical"
-                  : remaining <= threshold(recovery.kind, false)
-                    ? "warning"
-                    : "eligible";
-        return {
+        // `kind` stays the CLTV's domain, which decides eligibility; only on v2
+        // can the expiry raced sit in the other one.
+        const racing = expiry ?? recovery;
+        const chainClock = racing.kind === "height" ? height : time;
+        const at = {
             advanceId: advance.id,
             kind: recovery.kind,
             locktime: recovery.value,
             batchExpiry: expiry?.value ?? null,
+        };
+        if (chainClock === null)
+            return {
+                ...at,
+                remaining: null,
+                severity: "eligible",
+                code: `chain_${racing.kind}_unavailable`,
+            };
+        const remaining = racing.value - chainClock;
+        const severity =
+            remaining <= 0n
+                ? "expired"
+                : remaining <= threshold(racing.kind, true)
+                  ? "critical"
+                  : remaining <= threshold(racing.kind, false)
+                    ? "warning"
+                    : "eligible";
+        // Swept with the CLTV still locked: anyone may take the reclaim leaf and
+        // nothing on-chain closes that window, so custody is the net from here.
+        // Sweeping follows expiry, so this escalates and never downgrades.
+        const cltvClock = recovery.kind === "height" ? height : time;
+        const swept = seen?.swept === true && cltvClock !== null && recovery.value > cltvClock;
+        // A renewal lands far outside the alarm window, so reaching it at all
+        // means renewal is overdue; `renewals` says whether it ever ran.
+        const renewal =
+            (advance.renewals ?? 0) > 0 || advance.lastRenewedAt !== undefined
+                ? "covenant_renewal_stopped"
+                : "covenant_renewal_missing";
+        return {
+            ...at,
             remaining,
-            severity,
-            code:
-                severity === "expired"
-                    ? "covenant_unspent_at_expiry"
-                    : severity === "critical"
-                      ? "recovery_deadline_critical"
-                      : severity === "warning"
-                        ? "recovery_deadline_warning"
-                        : "recovery_eligible",
+            severity: swept && severity !== "expired" ? "critical" : severity,
+            code: swept
+                ? "covenant_swept_before_deadline"
+                : severity === "expired"
+                  ? "covenant_unspent_at_expiry"
+                  : severity === "critical"
+                    ? v2
+                        ? renewal
+                        : "recovery_deadline_critical"
+                    : severity === "warning"
+                      ? v2
+                          ? renewal
+                          : "recovery_deadline_warning"
+                      : "recovery_eligible",
         };
     };
 
@@ -320,6 +350,17 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                     deadlines.filter((item) => item.kind === "time").sort(compareDeadline)[0] ??
                     null,
             };
+            for (const id of warned.keys()) if (!byId.has(id)) warned.delete(id);
+            for (const item of deadlines) {
+                const renewal = item.code.startsWith("covenant_renewal_");
+                if (renewal && warned.get(item.advanceId) !== item.code)
+                    deps.onRenewalWarning?.({
+                        delegation: byId.get(item.advanceId)!.covenantAddress,
+                        deadline: item,
+                    });
+                if (renewal) warned.set(item.advanceId, item.code);
+                else warned.delete(item.advanceId);
+            }
             blockers = deadlines.filter(
                 (item) =>
                     item.severity === "critical" ||

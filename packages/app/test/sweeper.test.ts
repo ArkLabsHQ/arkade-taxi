@@ -372,6 +372,130 @@ describe("tick", () => {
     });
 });
 
+describe("v2 renewal race", () => {
+    const v2 = (over: Partial<Advance> = {}) =>
+        advances.insert(advance({ id: "v2", covenantVersion: 2, ...over }));
+
+    it("raises a blocker and pauses for a swept covenant whose CLTV is still future", async () => {
+        v2();
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: () => ({
+                swept: true,
+                expiry: { kind: "time", value: BigInt(NOW) + 100_000n },
+            }),
+        });
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({
+                advanceId: "v2",
+                severity: "critical",
+                code: "covenant_swept_before_deadline",
+            }),
+        ]);
+        expect(paused).toBe(true);
+    });
+
+    // Sweeping follows expiry, so this is the shape the swept case really
+    // arrives in: naming it must not cost the expired rank.
+    it("keeps the expired rank for a swept covenant already past its batch expiry", async () => {
+        v2();
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: () => ({ swept: true, expiry: { kind: "time", value: BigInt(NOW) - 1n } }),
+        });
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({
+                advanceId: "v2",
+                severity: "expired",
+                code: "covenant_swept_before_deadline",
+            }),
+        ]);
+        expect(paused).toBe(true);
+    });
+
+    it("clears the blocker once the delegatee renews inside the alarm window", async () => {
+        v2();
+        let expiry = BigInt(NOW) + config().recoveryCriticalSeconds;
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: () => ({ swept: false, expiry: { kind: "time", value: expiry } }),
+        });
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(paused).toBe(true);
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: "v2", severity: "critical" }),
+        ]);
+
+        const renewed = advances.get("v2")!;
+        advances.update({ ...renewed, renewals: 1, lastRenewedAt: NOW });
+        expiry = BigInt(NOW) + 100_000n;
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+
+        expect(sweeper.status().blockers).toEqual([]);
+        expect(sweeper.status().deadlines).toEqual([
+            expect.objectContaining({ advanceId: "v2", severity: "eligible" }),
+        ]);
+    });
+
+    it.each([
+        [undefined, "covenant_renewal_missing"],
+        [1, "covenant_renewal_stopped"],
+    ] as const)(
+        "names a %s renewal history as %s in the warning window",
+        async (renewals, code) => {
+            v2(renewals === undefined ? {} : { renewals, lastRenewedAt: NOW });
+            const onRenewalWarning = vi.fn();
+            const sweeper = createSweeper({
+                ...deps(),
+                onRenewalWarning,
+                observed: () => ({
+                    swept: false,
+                    expiry: {
+                        kind: "time",
+                        value: BigInt(NOW) + config().recoveryBroadcastSeconds,
+                    },
+                }),
+            });
+
+            await sweeper.tick(HEIGHT, BigInt(NOW));
+
+            expect(sweeper.status().deadlines).toEqual([
+                expect.objectContaining({ advanceId: "v2", severity: "warning", code }),
+            ]);
+            // A warning stops lending for nobody; it only has to reach the operator.
+            expect(paused).toBe(false);
+            expect(onRenewalWarning).toHaveBeenCalledWith({
+                delegation: advances.get("v2")!.covenantAddress,
+                deadline: expect.objectContaining({ code }),
+            });
+
+            await sweeper.tick(HEIGHT, BigInt(NOW));
+            expect(onRenewalWarning).toHaveBeenCalledTimes(1);
+        },
+    );
+
+    it("never consults the observed coin for a v1 advance", async () => {
+        locked("v1", 850_000n);
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: () => ({ swept: true, expiry: { kind: "time", value: BigInt(NOW) } }),
+        });
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+
+        expect(sweeper.status().blockers).toEqual([]);
+        expect(paused).toBe(false);
+        expect(recovery.seen).toEqual(["v1"]);
+    });
+});
+
 describe("resilience", () => {
     it("preserves expiry severity when recovery fails during the same tick", async () => {
         advances.insert(

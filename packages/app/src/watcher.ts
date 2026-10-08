@@ -8,7 +8,7 @@ import {
     recycleFare,
     refundTopup,
 } from "@arkade-taxi/covenant";
-import type { Advance } from "@arkade-taxi/core";
+import type { Advance, ExpiryDeadline } from "@arkade-taxi/core";
 import { advanceKind, covenantParamsOf } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import {
@@ -38,6 +38,7 @@ import { createHash } from "node:crypto";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
+import { normalizeExpiry } from "./arkade/providers.js";
 import { sameTapTree } from "./arkade/tapTree.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
@@ -50,6 +51,23 @@ const UNROLLED = "covenant outpoint was unrolled; no off-chain claim or recovery
 type SignatureCheck = (tx: Transaction, index: number, signers: string[]) => void;
 const verifySignatures: SignatureCheck = (tx, index, signers) =>
     verifyTapscriptSignatures(tx, index, signers, [], [DEFAULT_SIGHASH]);
+
+/** What this scan's own coin read knows that the row cannot: a v2 advance stores
+ * no batch expiry, and a renewal re-dates the one it races. */
+export interface ObservedCovenant {
+    expiry?: ExpiryDeadline;
+    swept: boolean;
+}
+
+const observedCoin = (coin: VirtualCoin): ObservedCovenant => {
+    let expiry: ExpiryDeadline | undefined;
+    try {
+        expiry = normalizeExpiry(coin);
+    } catch {
+        expiry = undefined;
+    }
+    return { ...(expiry ? { expiry } : {}), swept: coin.isSwept === true };
+};
 
 export type ObservedSpend =
     | { kind: "recycled"; txid: string }
@@ -79,6 +97,7 @@ export interface SpendWatcher {
     stop(): Promise<void>;
     status(): SpendWatcherStatus;
     isRecoverable(id: string): boolean;
+    observedCovenant(id: string): ObservedCovenant | undefined;
 }
 
 export interface SpendWatcherDeps {
@@ -1158,6 +1177,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         | undefined;
     const label = "taxi-covenant";
     const recoverable = new Set<string>();
+    const observedCoins = new Map<string, ObservedCovenant>();
     const signatureChecks = new Set<string>();
     const verify: SignatureCheck = (tx, index, signers) => {
         const key = [
@@ -1223,6 +1243,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 ...counts,
             });
         recoverable.clear();
+        observedCoins.clear();
         const at = deps.now();
         const current = covenantRows(activeStates);
         const settled = covenantRows(terminalStates);
@@ -1342,6 +1363,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
                             fail("renewal successor could not be adopted");
                         recoverable.add(advance.id);
+                        observedCoins.set(advance.id, observedCoin(successor));
                         settledHandled = true;
                     }
                 } catch (error) {
@@ -1364,6 +1386,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                         continue;
                     }
+                    // Ahead of the evidence gate below, which a swept coin fails:
+                    // that observation is the one the v2 alarm exists for.
+                    observedCoins.set(advance.id, observedCoin(coin));
                     try {
                         const facts = covenantFacts(observedAdvance, deps.config);
                         const assets = holdings(coin, "covenant outpoint");
@@ -1715,6 +1740,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     return {
         catchUp,
         isRecoverable: (id) => recoverable.has(id),
+        observedCovenant: (id) => observedCoins.get(id),
         async start() {
             if (stopping) await stopping;
             // Without a wallet, repeated starts preserve the polling-only prompt.

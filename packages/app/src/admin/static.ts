@@ -2013,6 +2013,19 @@ const BLOCKER_GROUPS = [
         "recovery_deadline_critical",
     ],
     ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
+    [
+        "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
+        "covenant_renewal_missing",
+    ],
+    [
+        "The renewal service has stopped renewing a payment's coin, so that coin is heading for expiry.",
+        "covenant_renewal_stopped",
+    ],
+    [
+        "A payment's coin expired and was swept while the Taxi still cannot reclaim it, so anyone may take it." +
+            ATTENTION,
+        "covenant_swept_before_deadline",
+    ],
     ["A payment's lent sats can now be recovered.", "recovery_eligible"],
     [
         "A payment's recovery time is invalid, so the Taxi cannot recover its sats on its own.",
