@@ -133,7 +133,9 @@ export function listReceiverClaims(
                         fare: fareToWire(advance.fare),
                         batchExpiry: {
                             kind: advance.batchExpiry?.kind ?? recoveryLocktime.kind,
-                            value: (advance.batchExpiry?.value ?? 0n).toString(),
+                            value: (
+                                advance.batchExpiry?.value ?? recoveryLocktime.value
+                            ).toString(),
                         },
                         recoveryLocktime: {
                             kind: recoveryLocktime.kind,

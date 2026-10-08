@@ -492,12 +492,7 @@ function recoveryDeadline(
 ): ExpiryDeadline {
     if (config.covenantVersion === 2) {
         const value = BigInt(now) + config.covenantDeadlineSeconds;
-        if (
-            value < 500_000_000n ||
-            value > 0xffff_ffffn ||
-            value <= safety.chainTime! ||
-            value <= BigInt(now)
-        )
+        if (value < 500_000_000n || value > 0xffff_ffffn || value <= safety.chainTime!)
             throw new ServiceError(
                 ErrorCode.NoLocktimeHeadroom,
                 503,

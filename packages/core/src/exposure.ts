@@ -58,8 +58,8 @@ export function sweepable(
                       ? -1
                       : 1;
             if (kind) return kind;
-            const xe = x.batchExpiry?.value ?? 0n;
-            const ye = y.batchExpiry?.value ?? 0n;
+            const xe = x.batchExpiry?.value ?? x.locktime;
+            const ye = y.batchExpiry?.value ?? y.locktime;
             if (xe !== ye) return xe < ye ? -1 : 1;
             if (x.locktime !== y.locktime) return x.locktime < y.locktime ? -1 : 1;
             return x.id < y.id ? -1 : x.id > y.id ? 1 : 0;

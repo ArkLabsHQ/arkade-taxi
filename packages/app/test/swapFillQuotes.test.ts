@@ -415,6 +415,30 @@ describe("createSwapFillQuote", () => {
         v1.db.close();
     });
 
+    // The delegatee is idempotent on the watch, so registering on a replay is what
+    // repairs a first attempt that committed the advance and then failed to register.
+    it("registers a v2 renewal watch again when the same operation is replayed", async () => {
+        const probe = insertReceiveQuote({ wantAmount: 5n, covenantVersion: 2 });
+        const expected = probe.covenant
+            .address(probe.cfg.addressHrp, probe.cfg.serverPubkey)
+            .encode();
+        probe.db.close();
+        const delegate = vi.fn(async () => expected);
+        const bound = await createBoundJointFill({
+            covenantVersion: 2,
+            delegatee: {
+                client: { delegate },
+                registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
+            },
+        });
+        try {
+            await createSwapFillQuote(bound.deps, bound.request);
+            expect(delegate).toHaveBeenCalledTimes(2);
+        } finally {
+            bound.close();
+        }
+    });
+
     it("quotes a sponsored fill, persists the reservation and replays identical retries", async () => {
         const d = deps();
         const first = await createSwapFillQuote(d, body());
