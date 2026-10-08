@@ -73,7 +73,8 @@ by re-proving transactions whose bytes cannot change — on start, on a dropped
 contract subscription, when an event names its covenant script, and otherwise at
 this interval; a coin that contradicts the record earns one full
 re-classification of that advance alone, while evidence that is merely
-unavailable is reported as a warning and retried.
+unavailable is reported as a warning and retried at the next review, so the
+warning can outlast the outage by up to this interval.
 `TAXI_VTXO_READ_MAX_AGE_MS=5000` is how old an indexer sync the SDK may reuse for
 the runtime's own wallet re-check and the custody coverage report — the two reads
 that gate nothing and whose figures already travel beside a snapshot up to

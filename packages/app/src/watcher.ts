@@ -1367,6 +1367,8 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     tip,
                 );
             }
+            // No `continue` after a tip disagreement: an agreeing coin below records the
+            // first stable observation, which is what starts the two-observation clear.
             let facts: ReturnType<typeof covenantFacts> | undefined;
             try {
                 facts = covenantFacts(advance, deps.config);
