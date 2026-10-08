@@ -29,7 +29,6 @@ import {
 import { base64, hex } from "@scure/base";
 import {
     AdvanceRepository,
-    DEFAULT_POLICY,
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
@@ -98,15 +97,11 @@ const injectedSignaturesOnly = (session: SignerSession): Identity => ({
     xOnlyPublicKey: async () => new Uint8Array(32),
 });
 
-const senderSignedEnvelope = async (
-    encoded: string,
-    identity: Identity,
-    senderInputCount: number,
-): Promise<string> => {
+const senderSignedEnvelope = async (encoded: string, identity: Identity): Promise<string> => {
     const envelope = decodeLockupEnvelope(encoded);
-    // lockupPlan orders the joint inputs sender-first, so the sender owns
-    // exactly the leading indexes and the checkpoints that mirror them.
-    const indexes = Array.from({ length: senderInputCount }, (_, index) => index);
+    // Read the ownership the envelope commits to rather than assuming the
+    // sender-first order; `verifyOnlyOwner` checks these exact indexes.
+    const indexes = envelope.senderInputIndexes;
     const ark = await identity.sign(Transaction.fromPSBT(base64.decode(envelope.arkTx)), indexes);
     const checkpoints: string[] = [];
     for (const [index, encodedCheckpoint] of envelope.checkpoints.entries()) {
@@ -242,8 +237,11 @@ liveScenario("v2-covenant-batch-renewal", async () => {
     const covenantAddress = covenant.address(config.addressHrp, config.serverPubkey).encode();
     const covenantScript = hex.encode(covenant.pkScript);
     const covenantValue = lockupSats(params);
+    const senderInput = fundingOf(senderCoin);
     const request: LockupBuildRequest = {
-        senderInputs: [fundingOf(senderCoin)],
+        // assertPersistedGraph rebuilds these from the inputs themselves, so
+        // they are derived rather than restated from the funding constants.
+        senderInputs: [senderInput],
         funding: {
             inputs: [operatorCoin],
             totalValue: BigInt(operatorCoin.value),
@@ -253,20 +251,38 @@ liveScenario("v2-covenant-batch-renewal", async () => {
         params,
         covenantAddress,
         fare: { currency: "sats", units: 0n },
-        senderSats: BigInt(SENDER_FUNDING_SATS),
+        senderSats: senderInput.value,
     };
     const funding = await new ProductionLockupBuilder(
         config,
         runtime.getServerUnroll,
     ).buildUnsigned(request);
 
-    policy.update(
+    // The same repository call the container's admin PATCH ends in, carrying the
+    // rule the harness seeds for bitcoin: a zero sats fare, because a bitcoin
+    // transfer's payment is its sender sats and has no fare to come out of.
+    const seeded = policy.update(
         {
-            ...DEFAULT_POLICY,
             paused: false,
             maxOutstandingSats: 10_000_000n,
             maxPerPaymentTopupSats: 100_000n,
             maxConcurrentAdvances: 20,
+            quoteTtlSeconds: 600,
+            assetRules: [
+                {
+                    assetId: null,
+                    enabled: true,
+                    fares: [
+                        {
+                            id: "sats",
+                            currency: { kind: "sats" },
+                            pricing: { kind: "flat", units: 0n },
+                        },
+                    ],
+                    claim: "either",
+                    maxTopupSats: null,
+                },
+            ],
         },
         "renewal-e2e",
     );
@@ -282,7 +298,7 @@ liveScenario("v2-covenant-batch-renewal", async () => {
         fare: request.fare,
         createdAt: now,
         updatedAt: now,
-        expiresAt: now + 600,
+        expiresAt: now + seeded.quoteTtlSeconds,
     };
     reservations.reserveQuote({
         advance,
@@ -292,7 +308,6 @@ liveScenario("v2-covenant-batch-renewal", async () => {
     const signedEnvelope = await senderSignedEnvelope(
         funding.unsignedLockupTx,
         actors.sender!.identity,
-        request.senderInputs.length,
     );
     reservations.claimLockup(
         advance.id,
