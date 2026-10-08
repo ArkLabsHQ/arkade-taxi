@@ -787,6 +787,7 @@ async function main(isolated = false) {
         "boundary-diagnostics.jsonl",
         "proxy-events.json",
         "cltv-evidence.json",
+        "renewal-r2.json",
         "failure.log",
         "stack.log",
         "taxi.log",
