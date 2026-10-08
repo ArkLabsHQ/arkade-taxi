@@ -45,9 +45,11 @@ the run before any stack starts.
 ### The v2 renewal scenario
 
 `v2-covenant-batch-renewal` is the only scenario that builds a v2 covenant, and
-it needs **no emulator bump**: `OP_TUNNEL` and `OP_INSPECTINTENTMESSAGE` are both
-in the pinned `v0.0.8-rc.0`, and the rev-2 covenant uses no other new opcode. Do
-not re-introduce an `--emulator-image` requirement for it by reflex.
+it needs **no emulator bump**: `OP_TUNNEL` and `OP_INSPECTINTENTMESSAGE` have
+both been in the emulator since `v0.0.8-rc.0`, and the rev-2 covenant uses no
+other new opcode. Read the version a run actually resolved from `stack.json`'s
+`images.emulator` rather than trusting this line, and do not re-introduce an
+`--emulator-image` requirement for the scenario by reflex.
 
 `TAXI_COVENANT_VERSION=2` is still refused at startup, so the scenario does not
 run v2 through the production Taxi container. It stands up its own in-process
