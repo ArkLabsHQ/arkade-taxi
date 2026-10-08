@@ -305,27 +305,26 @@ describe("listReceiverClaims", () => {
             expect(claim?.claim?.params.receiverFare).toEqual({ currency: "asset", units: "9" });
         });
 
+        const settle = (bound: Awaited<ReturnType<typeof createBoundJointFill>>) => {
+            bound.db
+                .prepare(
+                    "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = ?",
+                )
+                .run(bound.fill.id);
+            const txid = Transaction.fromPSBT(
+                base64.decode(bound.fill.graph.arkTx),
+            ).id.toLowerCase();
+            expect(
+                bound.swapFills.reconcileSettled(bound.fill.id, txid, { txid, vout: 0 }, NOW + 1),
+            ).toBe(true);
+        };
+
         it("binds a non-zero receiver fare through the real quote path, and publishes it on the claim", async () => {
             const bound = await createBoundJointFill({
                 receiverFare: { currency: "sats", units: 4n },
             });
             try {
-                bound.db
-                    .prepare(
-                        "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = ?",
-                    )
-                    .run(bound.fill.id);
-                const txid = Transaction.fromPSBT(
-                    base64.decode(bound.fill.graph.arkTx),
-                ).id.toLowerCase();
-                expect(
-                    bound.swapFills.reconcileSettled(
-                        bound.fill.id,
-                        txid,
-                        { txid, vout: 0 },
-                        NOW + 1,
-                    ),
-                ).toBe(true);
+                settle(bound);
 
                 const locked = bound.advances.get(bound.advance.id)!;
                 expect(locked.state).toBe("locked");
@@ -338,6 +337,21 @@ describe("listReceiverClaims", () => {
                 );
                 expect(claim?.claim?.params.receiverFare).toEqual({ currency: "sats", units: "4" });
                 expect(claim?.claim?.unclaimedMode).toBe("reclaim");
+            } finally {
+                bound.close();
+            }
+        });
+
+        it("reports a v2 claim's batch expiry as the deadline it counts down to, not zero", async () => {
+            const bound = await createBoundJointFill({ covenantVersion: 2 });
+            try {
+                settle(bound);
+                const [claim] = listReceiverClaims(
+                    { config: bound.config, advances: bound.advances },
+                    { addresses: [bob.encode()], receiverKeys: [receiverKey] },
+                    ACTIVE_CLAIM_STATES,
+                );
+                expect(claim?.claim?.batchExpiry).toEqual(claim?.claim?.recoveryLocktime);
             } finally {
                 bound.close();
             }

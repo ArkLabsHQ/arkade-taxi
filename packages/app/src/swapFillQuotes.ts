@@ -308,6 +308,24 @@ async function createAdmittedSwapFillQuote(
     const existing = deps.swapFills.getByOperation(req.operationId);
     const { policy, revision } = deps.policy.getSnapshot();
     const { config } = deps;
+    // Every exit registers, outside the transaction and before the lockup is offered:
+    // the watch is idempotent, so a replay repairs a first attempt that committed the
+    // advance and then failed to register.
+    const watchRenewal = async (fill: { receiveQuoteId?: string }, bound?: Advance) => {
+        const advance =
+            bound ??
+            (fill.receiveQuoteId === undefined
+                ? undefined
+                : deps.advances.get(fill.receiveQuoteId));
+        if (advance?.covenantVersion !== 2 || !deps.delegatee) return;
+        await registerRenewal(deps.delegatee.client, deps.delegatee.registration, {
+            params: covenantParamsOf(advance),
+            serverKey: config.serverPubkey,
+            covenantAddress: advance.covenantAddress,
+            renewalBeforeExpirySeconds: config.renewalBeforeExpirySeconds,
+            expiresAt: Number(advance.locktime),
+        });
+    };
     const taxiScript = new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp)
         .pkScript;
     const offerOf = (offerHex: string) =>
@@ -319,6 +337,7 @@ async function createAdmittedSwapFillQuote(
                 409,
                 "operation id was already quoted with different terms",
             );
+        await watchRenewal(existing);
         return fillToResponse(existing, {
             receiverScript: offerOf(existing.offerHex).makerProceedsScript,
             solverScript: existing.solverProceedsScript,
@@ -835,22 +854,14 @@ async function createAdmittedSwapFillQuote(
                 409,
                 "operation id was already quoted with different terms",
             );
+        await watchRenewal(raced);
         return fillToResponse(raced, {
             receiverScript: offer.makerProceedsScript,
             solverScript: raced.solverProceedsScript,
             sponsorScript: raced.sponsorScript,
         });
     }
-    // After bind, the commit, and before the lockup is offered: a network call
-    // has no place in the transaction, and the row makes a failure diagnosable.
-    if (renewal?.covenantVersion === 2 && deps.delegatee)
-        await registerRenewal(deps.delegatee.client, deps.delegatee.registration, {
-            params: covenantParamsOf(renewal),
-            serverKey: deps.config.serverPubkey,
-            covenantAddress: renewal.covenantAddress,
-            renewalBeforeExpirySeconds: deps.config.renewalBeforeExpirySeconds,
-            expiresAt: Number(renewal.locktime),
-        });
+    await watchRenewal(fill, renewal);
     return fillToResponse(fill, {
         receiverScript: offer.makerProceedsScript,
         solverScript: req.solverProceedsScript,

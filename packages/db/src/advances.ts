@@ -514,7 +514,7 @@ export class AdvanceRepository {
              ((recovery_locktime_kind = 'height' AND locktime <= ?) OR
               (recovery_locktime_kind = 'time' AND locktime <= ?))
              ORDER BY CASE recovery_locktime_kind WHEN 'height' THEN 0 ELSE 1 END,
-                      coalesce(batch_expiry_value, 0) ASC, locktime ASC, id ASC`,
+                      coalesce(batch_expiry_value, locktime) ASC, locktime ASC, id ASC`,
         );
         this.#sumTopup = read("SELECT sum(topup) AS total FROM advances WHERE state = ?");
         this.#missingFunding = read(`SELECT id FROM advances WHERE

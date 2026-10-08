@@ -143,6 +143,27 @@ describe("sweepable", () => {
         ).toEqual([heightEarlierExpiry, heightLaterLock, timed]);
     });
 
+    it("ranks a v2 deadline by its own locktime, not ahead of every v1 expiry", () => {
+        const v1 = {
+            ...advance("locked", 1n, 1_757_000_000n),
+            id: "v1",
+            recoveryLocktime: { kind: "time" as const, value: 1_757_000_000n },
+            batchExpiry: { kind: "time" as const, value: 1_757_050_000n },
+        };
+        const { batchExpiry: _, ...v2Base } = v1;
+        const v2 = {
+            ...v2Base,
+            id: "v2",
+            locktime: 1_757_080_000n,
+            recoveryLocktime: { kind: "time" as const, value: 1_757_080_000n },
+            covenantVersion: 2 as const,
+        };
+        expect(sweepable([v2, v1], 900_000n, 1_757_100_000n).map((a) => a.id)).toEqual([
+            "v1",
+            "v2",
+        ]);
+    });
+
     it("uses id as the final deterministic tie breaker", () => {
         const b = {
             ...advance("locked", 1n, 800_000n),

@@ -420,7 +420,7 @@ function safetyUrgency(
     const bDomain = (b.batchExpiry?.kind ?? "time") === "height" ? 0 : 1;
     return (
         aDomain - bDomain ||
-        compareBigint(a.batchExpiry?.value ?? 0n, b.batchExpiry?.value ?? 0n) ||
+        compareBigint(a.batchExpiry?.value ?? a.locktime, b.batchExpiry?.value ?? b.locktime) ||
         compareBigint(
             a.recoveryLocktime?.value ?? a.locktime,
             b.recoveryLocktime?.value ?? b.locktime,

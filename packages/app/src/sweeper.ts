@@ -191,7 +191,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         if (severity) return severity;
         if (a.kind !== b.kind) return a.kind === "height" ? -1 : 1;
         return (
-            compareBig(a.batchExpiry ?? 0n, b.batchExpiry ?? 0n) ||
+            compareBig(a.batchExpiry ?? a.locktime, b.batchExpiry ?? b.locktime) ||
             compareBig(a.locktime, b.locktime) ||
             a.advanceId.localeCompare(b.advanceId)
         );

@@ -55,6 +55,8 @@ export interface BoundJointFill {
     config: RuntimeConfig;
     /** The deps that quoted the fill, so a test can revalidate it with another runtime. */
     deps: SwapFillQuoteDeps;
+    /** The body that quoted it, so a test can replay the same operation. */
+    request: Parameters<typeof createSwapFillQuote>[1];
     quote: SwapFillQuoteResponse;
     fill: SwapFill;
     advance: Advance;
@@ -301,7 +303,7 @@ export async function createBoundJointFill(
             getServerUnroll: () => serverUnroll,
             ...(over.delegatee === undefined ? {} : { delegatee: over.delegatee }),
         };
-        const quote = await createSwapFillQuote(deps, {
+        const request = {
             operationId: "op-1",
             offerHex: "ab12",
             receiveQuoteId: quoteId,
@@ -329,11 +331,13 @@ export async function createBoundJointFill(
             fundingTxid: BOUND_DEPOSIT.txid,
             fundingVout: BOUND_DEPOSIT.vout,
             ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),
-        });
+        };
+        const quote = await createSwapFillQuote(deps, request);
         return {
             db,
             config: cfg,
             deps,
+            request,
             quote,
             fill: swapFills.get(quote.fillId)!,
             advance: advances.get(quoteId)!,
