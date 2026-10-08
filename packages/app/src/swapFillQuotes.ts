@@ -798,7 +798,9 @@ async function createAdmittedSwapFillQuote(
                 createdAt: now,
                 updatedAt: now,
                 expiresAt: fill.expiresAt,
-                batchExpiry,
+                // A v2 advance stores no batch expiry: a renewal re-dates the
+                // coins, so a creation-time snapshot would go stale.
+                ...(receiveQuote.covenantVersion === 2 ? {} : { batchExpiry }),
                 recoveryLocktime: receiveQuote.recoveryLocktime,
                 operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),
                 unsignedLockupTx: encodeJointFillSource(source),

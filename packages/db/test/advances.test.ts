@@ -12,6 +12,8 @@ import { PolicyRepository } from "../src/policy.js";
 const ABOVE_MAX_SAFE = 9_007_199_254_740_993n; // 2^53 + 1
 const INT64_MAX = 9_223_372_036_854_775_807n;
 
+const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+
 function advance(overrides: Partial<Advance> = {}): Advance {
     const result: Advance = {
         id: "adv-1",
@@ -35,7 +37,17 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
+    // move together: a fixture cannot pick one without the other.
+    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
+        result.locktime = V2_DEADLINE;
+        delete result.batchExpiry;
+        delete result.recoveryLocktime;
+    }
+    result.recoveryLocktime ??= {
+        kind: result.batchExpiry?.kind ?? "time",
+        value: result.locktime,
+    };
     return result;
 }
 
@@ -631,6 +643,31 @@ describe("queries", () => {
 
         expect(repo.listSweepable(800n).map((a) => a.id)).toEqual(["early", "due"]);
         expect(repo.listSweepable(699n)).toEqual([]);
+    });
+
+    // D2: a v2 advance stores no batch expiry, so the sweep picks it on its own
+    // time-domain deadline. Without this it never sweeps and the Taxi never
+    // reclaims its lent dust.
+    it("sweeps a matured v2 deadline, which stores no batch expiry to agree with", () => {
+        repo.insert(advance({ id: "v2-due", state: "locked", covenantVersion: 2 }));
+        repo.insert(advance({ id: "v1-height", state: "locked", locktime: 700n }));
+
+        const row = repo.get("v2-due")!;
+        expect(row.batchExpiry).toBeUndefined();
+        expect(row.recoveryLocktime).toEqual({ kind: "time", value: V2_DEADLINE });
+        expect(repo.listSweepable(0n, V2_DEADLINE).map((a) => a.id)).toEqual(["v2-due"]);
+        expect(repo.listSweepable(0n, V2_DEADLINE - 1n)).toEqual([]);
+    });
+
+    it("quarantines a v2 row that stored a batch expiry, and not one that did not", () => {
+        repo.insert(advance({ id: "v2-ok", state: "locked", covenantVersion: 2 }));
+        repo.insert(advance({ id: "v1-ok", state: "locked" }));
+        expect(repo.listMissingFundingSnapshotIds()).toEqual([]);
+
+        db.prepare(
+            "UPDATE advances SET batch_expiry_kind = 'time', batch_expiry_value = ? WHERE id = 'v2-ok'",
+        ).run(V2_DEADLINE + 1n);
+        expect(repo.listMissingFundingSnapshotIds()).toEqual(["v2-ok"]);
     });
 
     it("orders each tagged domain by expiry then locktime with a fixed kind tie order", () => {

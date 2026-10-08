@@ -17,6 +17,8 @@ import {
 } from "../src/index.js";
 
 const input = (vout = 0) => ({ txid: "aa".repeat(32), vout });
+const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+
 const quote = (overrides: Partial<Advance> = {}): Advance => {
     const result: Advance = {
         id: "quote-1",
@@ -40,7 +42,17 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         expiresAt: 60,
         ...overrides,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
+    // move together: a fixture cannot pick one without the other.
+    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
+        result.locktime = V2_DEADLINE;
+        delete result.batchExpiry;
+        delete result.recoveryLocktime;
+    }
+    result.recoveryLocktime ??= {
+        kind: result.batchExpiry?.kind ?? "time",
+        value: result.locktime,
+    };
     return result;
 };
 let db: Database;
@@ -72,7 +84,7 @@ const reserve = (advance = quote()) =>
     reservations.reserveQuote({
         advance,
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: advance.batchExpiry.kind, value: 1n },
+        recoveryExecutionBudget: { kind: advance.batchExpiry!.kind, value: 1n },
     });
 
 describe("durable reservations", () => {
@@ -754,7 +766,7 @@ describe("sponsored reservations", () => {
         reservations.reserveQuote({
             advance,
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: advance.batchExpiry.kind, value: 1n },
+            recoveryExecutionBudget: { kind: advance.batchExpiry!.kind, value: 1n },
         });
 
     it("reserves without recovery facts and round-trips the kind", () => {

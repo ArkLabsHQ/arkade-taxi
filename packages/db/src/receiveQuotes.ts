@@ -657,8 +657,12 @@ export class ReceiveQuoteRepository {
                     advance.fare.units !== quote.fare.units ||
                     advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
                     advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||
-                    advance.batchExpiry.kind !== quote.batchExpiry.kind ||
-                    advance.batchExpiry.value < quote.inputExpiryFloor.value ||
+                    // A v2 advance keeps no batch expiry, so there is nothing to
+                    // hold the quote's funding snapshot against.
+                    (advance.batchExpiry !== undefined &&
+                        (advance.batchExpiry.kind !== quote.batchExpiry.kind ||
+                            advance.batchExpiry.value < quote.inputExpiryFloor.value)) ||
+                    (advance.batchExpiry === undefined) !== (advance.covenantVersion === 2) ||
                     advance.expiresAt !== fill.expiresAt ||
                     !sameOutpoints(fill.taxiInputs) ||
                     !sameOutpoints(advance.operatorInputs)

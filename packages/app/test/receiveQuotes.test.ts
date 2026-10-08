@@ -263,6 +263,32 @@ describe("createReceiveQuote", () => {
         );
     });
 
+    // D2: the v2 CLTV bounds how long the Taxi lends, measured from the quote,
+    // so it ignores the funding floor and may outlive it.
+    it("anchors a v2 deadline to now plus the configured window, past the floor", async () => {
+        const cfg = config({ covenantVersion: 2, vtxoMinAmount: 330n });
+        const { params } = await createReceiveQuote(deps({ config: cfg }), body());
+        const stored = quotes.get("receive-1")!;
+        const deadline = BigInt(clock) + cfg.covenantDeadlineSeconds;
+
+        expect(stored.recoveryLocktime).toEqual({ kind: "time", value: deadline });
+        expect(params.locktime).toBe(deadline.toString());
+        expect(deadline).toBeGreaterThan(stored.inputExpiryFloor.value);
+        expect(deadline).toBeGreaterThanOrEqual(500_000_000n);
+        expect(stored.createdAt).toBe(clock);
+    });
+
+    it("refuses a v2 deadline the window pushes past a uint32 locktime", async () => {
+        const cfg = config({
+            covenantVersion: 2,
+            vtxoMinAmount: 330n,
+            covenantDeadlineSeconds: 4_294_967_295n,
+        });
+        await expect(createReceiveQuote(deps({ config: cfg }), body())).rejects.toThrow(
+            /not a future time-domain locktime/,
+        );
+    });
+
     it("rejects an insufficient two-output split before inventory", async () => {
         const inventory = vi.fn(async () => [fundingCoin()]);
         await expect(

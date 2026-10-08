@@ -108,7 +108,7 @@ export function listReceiverClaims(
                         !jointScriptMatches ||
                         outpoint.vout !== covenantOutputIndex ||
                         !recoveryLocktime ||
-                        recoveryLocktime.kind !== advance.batchExpiry.kind ||
+                        recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time") ||
                         recoveryLocktime.value !== advance.locktime ||
                         (source.kind === "joint-fill"
                             ? source.assetUnits
@@ -132,8 +132,8 @@ export function listReceiverClaims(
                             : { assetUnits: advance.assetUnits.toString() }),
                         fare: fareToWire(advance.fare),
                         batchExpiry: {
-                            kind: advance.batchExpiry.kind,
-                            value: advance.batchExpiry.value.toString(),
+                            kind: advance.batchExpiry?.kind ?? recoveryLocktime.kind,
+                            value: (advance.batchExpiry?.value ?? 0n).toString(),
                         },
                         recoveryLocktime: {
                             kind: recoveryLocktime.kind,

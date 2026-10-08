@@ -57,7 +57,10 @@ const advance = (overrides: Partial<Advance> = {}): Advance => {
         expiresAt: 2_000,
         ...overrides,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    result.recoveryLocktime ??= {
+        kind: result.batchExpiry?.kind ?? "time",
+        value: result.locktime,
+    };
     return result;
 };
 
@@ -100,6 +103,51 @@ describe("canTransition", () => {
         expect(() => transition(a, "locked", 6_000)).toThrow();
         expect(isExpired(a, 99_999)).toBe(false);
         expect(transition(a, "recovered", 7_000).state).toBe("recovered");
+    });
+
+    // D2: a v2 deadline is wall-clock, measured from the lockup it bounds, and
+    // deliberately outlives the funding coins, so it stores no batch expiry.
+    describe("a v2 deadline", () => {
+        const DEADLINE = 1_800_000_000n;
+        const v2 = (over: Partial<Advance> = {}) =>
+            advance({
+                covenantVersion: 2,
+                locktime: DEADLINE,
+                recoveryLocktime: { kind: "time", value: DEADLINE },
+                batchExpiry: undefined,
+                ...over,
+            });
+
+        it("validates without a batch expiry, and refuses one", () => {
+            expect(() => transition(v2(), "locking", 5_000)).not.toThrow();
+            expect(() =>
+                transition(
+                    v2({ batchExpiry: { kind: "time", value: DEADLINE + 1n } }),
+                    "locking",
+                    5_000,
+                ),
+            ).toThrow(/batch expiry must be a tagged deadline/);
+        });
+
+        it("must be time-domain and strictly after the lockup", () => {
+            expect(() =>
+                transition(
+                    v2({
+                        locktime: 800_000n,
+                        recoveryLocktime: { kind: "height", value: 800_000n },
+                    }),
+                    "locking",
+                    5_000,
+                ),
+            ).toThrow(/agree with batch expiry/);
+            expect(() =>
+                transition(
+                    v2({ createdAt: Number(DEADLINE), expiresAt: Number(DEADLINE) + 10 }),
+                    "locking",
+                    5_000,
+                ),
+            ).toThrow(/agree with batch expiry/);
+        });
     });
 
     it.each([799_999n, 800_000n])("rejects unsafe batch expiry %s", (batchExpiryHeight) => {

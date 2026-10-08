@@ -241,7 +241,8 @@ async function setup(
         state: "quoted",
         ...request.params,
         ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
-        batchExpiry: request.funding.batchExpiry,
+        // A v2 advance keeps no batch expiry; its deadline is its own clock.
+        ...(covenantVersion === 2 ? {} : { batchExpiry: request.funding.batchExpiry }),
         recoveryLocktime: {
             kind: covenantVersion === 2 ? "time" : request.funding.batchExpiry.kind,
             value: request.params.locktime,
@@ -283,7 +284,7 @@ async function setup(
     reservations.reserveQuote({
         advance,
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: advance.batchExpiry.kind, value: 1n },
+        recoveryExecutionBudget: { kind: advance.recoveryLocktime!.kind, value: 1n },
     });
     reservations.claimLockup(
         advance.id,

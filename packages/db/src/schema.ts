@@ -512,7 +512,25 @@ export const MIGRATIONS: readonly Migration[] = [
         INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
             SELECT outpoint_txid, outpoint_vout, quote_id, created_at
             FROM receive_quote_reservations_v15;
-        DROP TABLE receive_quote_reservations_v15;`,
+        DROP TABLE receive_quote_reservations_v15;
+        CREATE TABLE operator_input_reservations_v15 (
+            outpoint_txid TEXT NOT NULL,
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            advance_id TEXT NOT NULL REFERENCES advances(id),
+            batch_expiry_kind TEXT CHECK (batch_expiry_kind IS NULL OR batch_expiry_kind IN ('height', 'time')),
+            batch_expiry_value INTEGER,
+            created_at INTEGER NOT NULL,
+            CHECK ((batch_expiry_kind IS NULL) = (batch_expiry_value IS NULL)),
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        INSERT INTO operator_input_reservations_v15 (
+            outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at
+        ) SELECT
+            outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at
+        FROM operator_input_reservations;
+        DROP TABLE operator_input_reservations;
+        ALTER TABLE operator_input_reservations_v15 RENAME TO operator_input_reservations;
+        CREATE INDEX operator_input_reservations_advance ON operator_input_reservations (advance_id);`,
     },
 ];
 

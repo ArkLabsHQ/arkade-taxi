@@ -51,6 +51,13 @@ function shape(db: Database): Record<string, Record<string, string>> {
     );
 }
 
+/** The only column shape migration 15 relaxes: both are write-only, so nothing
+ * reads them, and a v2 advance stores no batch expiry to put there. */
+const RELAXED_BY_15 = new Set([
+    "operator_input_reservations.batch_expiry_kind",
+    "operator_input_reservations.batch_expiry_value",
+]);
+
 function at(upto: number): Database {
     const db = fresh();
     applyMigrations(
@@ -178,7 +185,8 @@ describe("migration 13", () => {
 
         for (const [table, columns] of Object.entries(before))
             for (const [column, declared] of Object.entries(columns))
-                expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+                if (!RELAXED_BY_15.has(`${table}.${column}`))
+                    expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         expect(
             Object.entries(after).flatMap(([table, columns]) =>
                 Object.keys(columns)
@@ -284,7 +292,8 @@ describe("migration 15", () => {
         const after = shape(fourteen);
         for (const [table, columns] of Object.entries(before.shape))
             for (const [column, declared] of Object.entries(columns))
-                expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+                if (!RELAXED_BY_15.has(`${table}.${column}`))
+                    expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         expect(
             fourteen
                 .prepare<[], { name: string }>(
@@ -294,6 +303,21 @@ describe("migration 15", () => {
                 .map((r) => r.name),
         ).toContain("receive_quotes_state_expiry");
         fourteen.close();
+    });
+
+    it("makes the write-only reservation expiry nullable, and nothing else", () => {
+        const fourteen = at(14);
+        const before = shape(fourteen);
+        fourteen.close();
+        const db = migrated();
+        const after = shape(db);
+        db.close();
+        const changed = Object.entries(before).flatMap(([table, columns]) =>
+            Object.entries(columns)
+                .filter(([column, declared]) => after[table]?.[column] !== declared)
+                .map(([column]) => `${table}.${column}`),
+        );
+        expect(changed.sort()).toEqual([...RELAXED_BY_15].sort());
     });
 
     it("admits a v2 deadline past the input floor, which v14 refused", () => {
@@ -370,7 +394,8 @@ describe("migration 14", () => {
 
         for (const [table, columns] of Object.entries(before))
             for (const [column, declared] of Object.entries(columns))
-                expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+                if (!RELAXED_BY_15.has(`${table}.${column}`))
+                    expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         expect(
             Object.keys(after)
                 .filter((table) => !(table in before))
@@ -1024,7 +1049,8 @@ describe("rollback onto a newer schema", () => {
             const after = shape(db);
             for (const [table, columns] of Object.entries(before))
                 for (const [column, declared] of Object.entries(columns))
-                    expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
+                    if (!RELAXED_BY_15.has(`${table}.${column}`))
+                        expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         } finally {
             db.close();
         }

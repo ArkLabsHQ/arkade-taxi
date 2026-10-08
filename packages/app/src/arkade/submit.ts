@@ -241,16 +241,20 @@ function assertPersistedFacts(advance: Advance, envelope: LockupEnvelope): void 
     if (!isDeepStrictEqual(outpoints, advance.operatorInputs))
         throw new LockupShapeError("persisted operator funding mismatch");
     const expiries = [...envelope.senderInputs, ...operatorInputs].map((input) => input.expiry);
+    // A v2 advance stores no batch expiry, and its deadline outlives the coins
+    // on purpose, so only the inputs' agreement with each other is checkable.
+    const snapshot = advance.batchExpiry;
     if (
         expiries.some(
             (expiry) =>
-                expiry.kind !== advance.batchExpiry.kind ||
-                BigInt(expiry.value) <= advance.locktime,
+                expiry.kind !== (snapshot?.kind ?? expiries[0]!.kind) ||
+                (snapshot !== undefined && BigInt(expiry.value) <= advance.locktime),
         ) ||
-        expiries.reduce(
-            (minimum, input) => (BigInt(input.value) < minimum ? BigInt(input.value) : minimum),
-            BigInt(expiries[0]!.value),
-        ) !== advance.batchExpiry.value
+        (snapshot !== undefined &&
+            expiries.reduce(
+                (minimum, input) => (BigInt(input.value) < minimum ? BigInt(input.value) : minimum),
+                BigInt(expiries[0]!.value),
+            ) !== snapshot.value)
     )
         throw new LockupShapeError("persisted funding expiry mismatch");
 }
@@ -289,7 +293,7 @@ function assertPersistedGraph(
             inputs: funding,
             totalValue: operatorInputs.reduce((sum, input) => sum + input.value, 0n),
             batchExpiry: {
-                kind: advance.batchExpiry.kind,
+                kind: advance.batchExpiry?.kind ?? operatorInputs[0]!.expiry.kind,
                 value: operatorInputs.reduce(
                     (minimum, input) =>
                         input.expiry.value < minimum ? input.expiry.value : minimum,

@@ -251,7 +251,7 @@ describe("createQuote", () => {
         expect(stored.topup).toBe(330n);
         expect(stored.fare).toEqual({ currency: "sats", units: 0n });
         expect(stored.locktime).toBe(LOCKTIME);
-        expect(stored.batchExpiry.value).toBe(EXPIRY_HEIGHT);
+        expect(stored.batchExpiry!.value).toBe(EXPIRY_HEIGHT);
         expect(stored.operatorInputs).toEqual([{ txid: "bb".repeat(32), vout: 0 }]);
         expect(stored.unsignedLockupId).toBe(lockupBuilder.unsignedId);
         expect(stored.unsignedLockupTx).toBe(lockupBuilder.unsignedTx);

@@ -43,7 +43,7 @@ export function advance(over: Partial<Advance> = {}): Advance {
         expiresAt: 1_700_000_060_000 + seq,
         ...over,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry.kind, value: result.locktime };
+    result.recoveryLocktime ??= { kind: result.batchExpiry!.kind, value: result.locktime };
     return result;
 }
 

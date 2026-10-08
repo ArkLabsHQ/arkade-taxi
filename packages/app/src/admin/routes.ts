@@ -237,7 +237,8 @@ interface AdvanceWire {
     spentTxid?: string;
     arkTxid?: string;
     recoveryTxid?: string;
-    batchExpiry: { kind: "height" | "time"; value: string };
+    /** Absent on v2, which stores none: the deadline is measured from lockup. */
+    batchExpiry?: { kind: "height" | "time"; value: string };
     recoveryLocktime?: { kind: "height" | "time"; value: string };
     ageSeconds: number;
     submissionPhase?: Advance["submissionPhase"];
@@ -266,7 +267,14 @@ function toAdvanceWire(a: Advance, now: number): AdvanceWire {
         createdAt: a.createdAt,
         updatedAt: a.updatedAt,
         expiresAt: a.expiresAt,
-        batchExpiry: { kind: a.batchExpiry.kind, value: a.batchExpiry.value.toString() },
+        ...(a.batchExpiry === undefined
+            ? {}
+            : {
+                  batchExpiry: {
+                      kind: a.batchExpiry.kind,
+                      value: a.batchExpiry.value.toString(),
+                  },
+              }),
         ageSeconds: Math.max(0, now - a.updatedAt),
     };
     if (a.assetId !== undefined) {
@@ -408,11 +416,11 @@ function safetyUrgency(
         (deadlines.has(a.id) ? severityRank[deadlines.get(a.id)!.severity] : 3) -
         (deadlines.has(b.id) ? severityRank[deadlines.get(b.id)!.severity] : 3);
     if (severity) return severity;
-    const aDomain = a.batchExpiry.kind === "height" ? 0 : 1;
-    const bDomain = b.batchExpiry.kind === "height" ? 0 : 1;
+    const aDomain = (a.batchExpiry?.kind ?? "time") === "height" ? 0 : 1;
+    const bDomain = (b.batchExpiry?.kind ?? "time") === "height" ? 0 : 1;
     return (
         aDomain - bDomain ||
-        compareBigint(a.batchExpiry.value, b.batchExpiry.value) ||
+        compareBigint(a.batchExpiry?.value ?? 0n, b.batchExpiry?.value ?? 0n) ||
         compareBigint(
             a.recoveryLocktime?.value ?? a.locktime,
             b.recoveryLocktime?.value ?? b.locktime,
@@ -436,14 +444,14 @@ function advanceSnapshotToken(
                 row.state,
                 row.updatedAt,
                 row.createdAt,
-                row.batchExpiry.kind,
-                row.batchExpiry.value.toString(),
+                row.batchExpiry?.kind ?? null,
+                row.batchExpiry?.value.toString() ?? null,
                 row.recoveryLocktime?.kind ?? null,
                 row.recoveryLocktime?.value.toString() ?? null,
                 row.locktime.toString(),
                 deadline?.severity ?? null,
                 deadline?.kind ?? null,
-                deadline?.batchExpiry.toString() ?? null,
+                deadline?.batchExpiry?.toString() ?? null,
                 deadline?.locktime.toString() ?? null,
             ]),
         );
@@ -517,7 +525,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             // unswept computation.
             if (row.kind === "sponsored") continue;
             const deadline = row.recoveryLocktime ?? {
-                kind: row.batchExpiry.kind,
+                kind: row.batchExpiry?.kind ?? "time",
                 value: row.locktime,
             };
             if (oldest[deadline.kind] === null || deadline.value < oldest[deadline.kind]!)
