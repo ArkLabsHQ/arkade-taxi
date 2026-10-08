@@ -1476,7 +1476,8 @@ describe("inventory split safety", () => {
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
         expect(s.settle).not.toHaveBeenCalled();
     });
-    it.each(["fee", "maximum", "expiry", "reservation", "stopped"])(
+    // Expiry belongs to the aged-inputs block below: that refusal releases the job.
+    it.each(["fee", "maximum", "reservation", "stopped"])(
         "revalidates %s at registration",
         async (change) => {
             const s = splitSetup();
@@ -1484,11 +1485,6 @@ describe("inventory split safety", () => {
             s.beforeSubmit(() => {
                 if (change === "fee") s.info.fees!.intentFee.offchainOutput = "1.0";
                 if (change === "maximum") s.info.vtxoMaxAmount = 10000n;
-                if (change === "expiry")
-                    s.setTip({
-                        height: singleton.expiresAtHeight! - 1,
-                        time: Math.floor(clock.timestamp.getTime() / 1000),
-                    });
                 if (change === "reservation")
                     s.deps.receiveQuotes = { listReservedOutpoints: () => [singleton] } as any;
                 if (change === "stopped") collector.stop();
@@ -1890,6 +1886,22 @@ describe("a plan whose inputs age out of their reserve headroom", () => {
         expect(collector.status().blocker).toBeNull();
     });
 
+    it("cancels when the tip ages the inputs between the two guards", async () => {
+        const s = splitSetup();
+        // Aging here refuses inside the intent callback, past rememberLocalIntent.
+        s.beforeSubmit(() => s.setTip(aged));
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(collector.status()).toMatchObject({ jobId: null, state: "idle", blocker: null });
+        expect(s.jobs.get("job")).toBeUndefined();
+        expect(held(s)).toEqual([]);
+        expect(
+            s.db.prepare("SELECT count(*) AS rows FROM proceeds_local_intents").get(),
+        ).toMatchObject({ rows: 0n });
+    });
+
     it("keeps quarantining an input whose own facts no longer hold", async () => {
         const s = splitSetup();
         s.setOutputs([{ ...singleton, script: bytesToHex(senderTree.pkScript) }]);
@@ -1904,36 +1916,36 @@ describe("a plan whose inputs age out of their reserve headroom", () => {
         expect(held(s)).toEqual([{ txid: singleton.txid, vout: singleton.vout }]);
     });
 
-    it.each([
-        [
-            "an entered submission",
-            (db: Database) =>
-                db
-                    .prepare("UPDATE proceeds_jobs SET submission_state = 'entered' WHERE id = ?")
-                    .run("job"),
-            // Refused before the guard: an entered submission with no matching intent
-            // is already ambiguous, which is the stronger reason to hold the job.
-            "proceeds_submission_ambiguous",
-        ],
-        [
-            "a remembered local intent",
-            (db: Database) =>
-                db
-                    .prepare("INSERT INTO proceeds_local_intents (job_id, digest) VALUES (?, ?)")
-                    .run("job", "ab".repeat(32)),
-            "proceeds_inputs_aged",
-        ],
-    ])("quarantines rather than cancelling once there is %s", async (_, poke, blocker) => {
+    it("quarantines rather than cancelling once there is an entered submission", async () => {
         const s = splitSetup();
-        poke(s.db);
+        s.db
+            .prepare("UPDATE proceeds_jobs SET submission_state = 'entered' WHERE id = ?")
+            .run("job");
         s.setTip(aged);
         const collector = createProceedsCollector(s.deps);
         await collector.tick();
 
         expect(s.settle).not.toHaveBeenCalled();
         expect(s.jobs.active()).toMatchObject({ id: "job", state: "quarantined" });
-        expect(collector.status().blocker).toBe(blocker);
+        // Refused before the guard: an entered submission with no matching intent
+        // is already ambiguous, which is the stronger reason to hold the job.
+        expect(collector.status().blocker).toBe("proceeds_submission_ambiguous");
         expect(held(s)).toEqual([{ txid: singleton.txid, vout: singleton.vout }]);
+    });
+
+    it("cancels a restarted job carrying a local intent that never entered", async () => {
+        const s = splitSetup();
+        s.db
+            .prepare("INSERT INTO proceeds_local_intents (job_id, digest) VALUES (?, ?)")
+            .run("job", "ab".repeat(32));
+        s.setTip(aged);
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(collector.status()).toMatchObject({ jobId: null, state: "idle", blocker: null });
+        expect(s.jobs.get("job")).toBeUndefined();
+        expect(held(s)).toEqual([]);
     });
 
     it("leaves no persisted blocker for a restarted collector to report", async () => {
