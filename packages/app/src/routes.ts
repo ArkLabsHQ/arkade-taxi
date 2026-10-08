@@ -109,6 +109,7 @@ export interface HealthResponse {
         blockers: string[];
         lastWatcherScanAt: number | null;
         watching: number;
+        activelyScanned: number;
         swapFills?: {
             lastTickAt: number | null;
             submitting: number;
@@ -326,6 +327,7 @@ export function operationalSnapshot(
                 blockers: reconciler.blockers.map((code) => safeCode(code, "reconciler_blocked")),
                 lastWatcherScanAt: reconciler.lastWatcherScanAt ?? null,
                 watching: reconciler.watching ?? 0,
+                activelyScanned: reconciler.activelyScanned ?? 0,
                 ...(swapFills
                     ? {
                           swapFills: {

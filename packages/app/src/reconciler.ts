@@ -36,6 +36,7 @@ export interface ReconcilerStatus {
     blockers: string[];
     lastWatcherScanAt?: number | null;
     watching?: number;
+    activelyScanned?: number;
     blockerDetails?: WatcherBlocker[];
     warnings?: WatcherBlocker[];
     custody?: CustodyCoverage;
@@ -327,6 +328,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                     ? {
                           lastWatcherScanAt: watcher.lastScanAt,
                           watching: watcher.watching,
+                          activelyScanned: watcher.activelyScanned,
                           blockerDetails: details,
                           warnings,
                       }

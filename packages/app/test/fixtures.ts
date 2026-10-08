@@ -218,6 +218,7 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     recoveryCriticalSeconds: 7200n,
     vtxoRenewalThresholdSeconds: 259200n,
     reconcileIntervalMs: 30000,
+    terminalReviewSeconds: 3600n,
     operatorMinReserveSats: 10000n,
     proceedsMaxFeeSats: 0n,
     operatorPrivkey,

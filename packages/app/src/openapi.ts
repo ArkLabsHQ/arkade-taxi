@@ -645,6 +645,8 @@ const schemas: Record<string, Schema> = {
                     blockers: strings,
                     lastWatcherScanAt: nullable(unixSeconds),
                     watching: count,
+                    /** The live subset of `watching` the per-tick scan classifies. */
+                    activelyScanned: count,
                 },
                 {
                     swapFills: object({
@@ -1154,6 +1156,7 @@ const examples = {
             blockers: [],
             lastWatcherScanAt: null,
             watching: 0,
+            activelyScanned: 0,
             swapFills: {
                 lastTickAt: 1757000000,
                 submitting: 0,

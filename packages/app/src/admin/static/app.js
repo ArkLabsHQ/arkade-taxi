@@ -182,6 +182,10 @@ const BLOCKER_GROUPS = [
         "The Taxi saw conflicting chain data about a payment." + ATTENTION,
         "covenant_observation_disagreement",
     ],
+    [
+        "The Taxi could not re-read the coin of a payment it already settled, so it will try again. Nothing is paused.",
+        "covenant_terminal_evidence_unavailable",
+    ],
     ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
     ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
     [
@@ -1669,6 +1673,8 @@ const CONFIG_MEANINGS = {
         "This close to expiry, in seconds, the wallet renews a coin, and the Taxi lends none; keep it 12 hours below the network's VTXO lifetime.",
     reconcileIntervalMs:
         "How often, in milliseconds, the Taxi re-checks its wallet and the Arkade server and runs recovery; an older check stops new quotes.",
+    terminalReviewSeconds:
+        "How often, in seconds, the Taxi re-reads the coin of a payment it already settled, as a safety net; it also does so on start and whenever its chain subscription drops.",
     proceedsMaxFeeSats:
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
     covenantVersion:

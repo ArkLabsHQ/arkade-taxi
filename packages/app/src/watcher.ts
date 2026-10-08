@@ -66,6 +66,8 @@ export interface WatcherBlocker {
 export interface SpendWatcherStatus {
     lastScanAt: number | null;
     watching: number;
+    /** The live subset the per-tick scan classifies; `watching` stays the total. */
+    activelyScanned: number;
     blockers: WatcherBlocker[];
     warnings: WatcherBlocker[];
 }
@@ -98,6 +100,7 @@ export interface SpendWatcherDeps {
     onPrompt?: () => Promise<void>;
     onScanMetrics?: (metrics: {
         watching: number;
+        activelyScanned: number;
         elapsedMs: number;
         getVtxos: number;
         getVirtualTxs: number;
@@ -428,6 +431,29 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         unroll: CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)),
         expectedHoldings: expectedAsset ? [{ id: expectedAsset, amount: units! }] : [],
     };
+};
+
+/**
+ * Whether a coin still carries the recorded terminal verdict. `spentTxid` is the
+ * arkTx id — never `coin.spentBy`, the checkpoint, which the classifier requires
+ * to differ from it; comparing that pair would disagree on every row at once.
+ */
+const agrees = (
+    advance: Advance,
+    coin: VirtualCoin,
+    facts: ReturnType<typeof covenantFacts>,
+): boolean => {
+    try {
+        return (
+            coin.isSpent === true &&
+            coin.arkTxId === advance.spentTxid &&
+            coin.value === Number(facts.value) &&
+            coin.script === hex.encode(facts.script.pkScript) &&
+            !holdingsDiffer(holdings(coin, "covenant outpoint"), facts.expectedHoldings)
+        );
+    } catch {
+        return false;
+    }
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
@@ -876,7 +902,11 @@ const outpointKey = ({ txid, vout }: { txid: string; vout: number }): string => 
 const prefetch = async (
     provider: SpendWatcherDeps["indexer"],
     outpoints: readonly { txid: string; vout: number }[],
-): Promise<SpendWatcherDeps["indexer"]> => {
+    coinOnly: readonly { txid: string; vout: number }[] = [],
+): Promise<{
+    indexer: SpendWatcherDeps["indexer"];
+    cached(outpoint: { txid: string; vout: number }): boolean;
+}> => {
     const coins = new Map<string, VirtualCoin[]>();
     const resolved = new Set<string>();
     const txs = new Map<string, string>();
@@ -948,10 +978,13 @@ const prefetch = async (
         }
     };
 
-    await loadCoins(outpoints);
-    const spent = [...coins.values()]
-        .filter((hits) => hits.length === 1 && hits[0]!.isSpent)
-        .map((hits) => hits[0]!);
+    await loadCoins([...outpoints, ...coinOnly]);
+    // Only the classified rows pull the transaction waves; a coin-only row rides
+    // wave A and stops there.
+    const spent = outpoints.flatMap((outpoint) => {
+        const hits = coins.get(outpointKey(outpoint)) ?? [];
+        return hits.length === 1 && hits[0]!.isSpent ? [hits[0]!] : [];
+    });
     await loadTxs(spent.flatMap(({ arkTxId, spentBy }) => [arkTxId ?? "", spentBy ?? ""]));
     const checkpoints = spent.flatMap(({ arkTxId }) => {
         try {
@@ -974,25 +1007,38 @@ const prefetch = async (
     );
 
     return {
-        getVtxos: (options) => {
-            const keys = (
-                options && Object.keys(options).length === 1 ? options.outpoints : undefined
-            )?.map(outpointKey);
-            return keys?.every((key) => resolved.has(key))
-                ? Promise.resolve({ vtxos: keys.flatMap((key) => coins.get(key) ?? []) })
-                : provider.getVtxos(options);
+        cached: (outpoint) => resolved.has(outpointKey(outpoint)),
+        indexer: {
+            getVtxos: (options) => {
+                const keys = (
+                    options && Object.keys(options).length === 1 ? options.outpoints : undefined
+                )?.map(outpointKey);
+                return keys?.every((key) => resolved.has(key))
+                    ? Promise.resolve({ vtxos: keys.flatMap((key) => coins.get(key) ?? []) })
+                    : provider.getVtxos(options);
+            },
+            getVirtualTxs: (ids, options) =>
+                !options && ids.every((id) => txs.has(id))
+                    ? Promise.resolve({ txs: ids.map((id) => txs.get(id)!) })
+                    : provider.getVirtualTxs(ids, options),
         },
-        getVirtualTxs: (ids, options) =>
-            !options && ids.every((id) => txs.has(id))
-                ? Promise.resolve({ txs: ids.map((id) => txs.get(id)!) })
-                : provider.getVirtualTxs(ids, options),
     };
 };
+
+type WatchedState = (typeof activeStates | typeof terminalStates)[number];
 
 export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     let lastScanAt: number | null = null;
     let watching = 0;
+    let activelyScanned = 0;
     let scanBlockers: WatcherBlocker[] = [];
+    let persistedBlockers: WatcherBlocker[] = [];
+    let persistedWarnings: WatcherBlocker[] = [];
+    let reviewWarnings: WatcherBlocker[] = [];
+    let lastReviewAt: number | null = null;
+    let reviewRequested = false;
+    let terminalScripts = new Map<string, string>();
+    const reclassify = new Set<string>();
     let subscriptionBlockers: WatcherBlocker[] = [];
     let pending: Promise<void> | undefined;
     let started = false;
@@ -1026,14 +1072,13 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         signatureChecks.add(key);
     };
 
-    const rows = () =>
-        [
-            ...activeStates.flatMap((state) => deps.advances.byState(state)),
-            ...terminalStates.flatMap((state) => deps.advances.byState(state)),
+    const covenantRows = (states: readonly WatchedState[]) =>
+        states
+            .flatMap((state) => deps.advances.byState(state))
             // Sponsored direct sends are covenant-spend evidence this watcher
             // cannot classify; the reconciler settles them on exact-outpoint
             // observation instead.
-        ].filter((advance) => advanceKind(advance) === "covenant");
+            .filter((advance) => advanceKind(advance) === "covenant");
     const persisted = (current: Advance[], codes: string[]): WatcherBlocker[] =>
         current
             .filter((advance) => codes.includes(advance.failureCode ?? ""))
@@ -1042,6 +1087,18 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 code: advance.failureCode!,
                 detail: advance.failureDetail ?? "canonical spend evidence requires attention",
             }));
+    // status() answers from here, so the readiness snapshot a quote reads nine
+    // times does not re-hydrate every advance that ever settled.
+    const cache = (active: Advance[], terminal: Advance[]) => {
+        watching = active.length + terminal.length;
+        activelyScanned = active.length;
+        const all = [...active, ...terminal];
+        persistedBlockers = persisted(all, [
+            "covenant_spend_unknown",
+            "covenant_observation_disagreement",
+        ]);
+        persistedWarnings = persisted(all, ["covenant_unrolled"]);
+    };
 
     const scan = async (): Promise<void> => {
         const startedAt = performance.now();
@@ -1061,12 +1118,21 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         const report = () =>
             deps.onScanMetrics?.({
                 watching,
+                activelyScanned,
                 elapsedMs: performance.now() - startedAt,
                 ...counts,
             });
         recoverable.clear();
-        const current = rows();
-        watching = current.length;
+        const at = deps.now();
+        const current = covenantRows(activeStates);
+        const settled = covenantRows(terminalStates);
+        // A confirmed transaction's bytes cannot change, so a terminal verdict is
+        // re-examined from its coin and only when a window could have been missed.
+        const reviewing =
+            lastReviewAt === null ||
+            reviewRequested ||
+            at - lastReviewAt >= Number(deps.config.terminalReviewSeconds);
+        cache(current, settled);
         scanBlockers = [];
         let tip: Awaited<ReturnType<SpendWatcherDeps["tip"]>>;
         try {
@@ -1104,11 +1170,11 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     return [];
                 }
             }),
+            reviewing
+                ? settled.flatMap((advance) => (advance.outpoint ? [advance.outpoint] : []))
+                : [],
         );
         for (const advance of current) {
-            const terminal = terminalStates.includes(
-                advance.state as (typeof terminalStates)[number],
-            );
             let observedAdvance = advance;
             if (!observedAdvance.outpoint && observedAdvance.state === "locking") {
                 try {
@@ -1130,90 +1196,32 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 }
             }
             if (!observedAdvance.outpoint) {
-                if (terminal)
-                    deps.advances.recordSpendDisagreement(
-                        advance.id,
-                        "persisted terminal covenant outpoint is missing",
-                        deps.now(),
-                        tip,
-                    );
-                else
-                    deps.advances.recordSpendUnknown(
-                        advance.id,
-                        undefined,
-                        "persisted covenant outpoint is missing",
-                        deps.now(),
-                        tip,
-                    );
+                deps.advances.recordSpendUnknown(
+                    advance.id,
+                    undefined,
+                    "persisted covenant outpoint is missing",
+                    deps.now(),
+                    tip,
+                );
                 continue;
-            }
-            if (
-                terminal &&
-                (advance.observationTipHeight === undefined ||
-                    advance.observationTipHash === undefined)
-            ) {
-                deps.advances.recordSpendDisagreement(
-                    advance.id,
-                    "persisted terminal observation tip identity is missing",
-                    deps.now(),
-                    tip,
-                );
-            } else if (terminal && tip.height < advance.observationTipHeight!) {
-                deps.advances.recordSpendDisagreement(
-                    advance.id,
-                    `canonical tip height ${tip.height} is below persisted observation height ${advance.observationTipHeight}`,
-                    deps.now(),
-                    tip,
-                );
-            } else if (
-                terminal &&
-                advance.observationTipHeight === tip.height &&
-                advance.observationTipHash !== undefined &&
-                advance.observationTipHash !== tip.hash &&
-                !(
-                    advance.failureCode === "covenant_observation_disagreement" &&
-                    advance.observationStableTipHash === tip.hash &&
-                    advance.observationStableTipHeight === tip.height
-                )
-            ) {
-                deps.advances.recordSpendDisagreement(
-                    advance.id,
-                    `same-height canonical tip changed from ${advance.observationTipHash} to ${tip.hash}`,
-                    deps.now(),
-                    tip,
-                );
             }
             let coin: VirtualCoin | undefined;
             try {
-                coin = await exactCoin(batched, observedAdvance.outpoint);
+                coin = await exactCoin(batched.indexer, observedAdvance.outpoint);
             } catch (error) {
-                const reason =
+                deps.advances.recordSpendUnknown(
+                    advance.id,
+                    undefined,
                     error instanceof EvidenceError
                         ? error.message
-                        : "canonical outpoint evidence is unavailable";
-                if (terminalStates.includes(advance.state as (typeof terminalStates)[number]))
-                    deps.advances.recordSpendDisagreement(advance.id, reason, deps.now(), tip);
-                else
-                    deps.advances.recordSpendUnknown(
-                        advance.id,
-                        undefined,
-                        reason,
-                        deps.now(),
-                        tip,
-                    );
+                        : "canonical outpoint evidence is unavailable",
+                    deps.now(),
+                    tip,
+                );
                 continue;
             }
             if (!coin || !coin.isSpent) {
-                if (terminal)
-                    deps.advances.recordSpendDisagreement(
-                        advance.id,
-                        coin
-                            ? "persisted terminal spend disappeared from the canonical outpoint"
-                            : "persisted terminal outpoint disappeared from the canonical indexer",
-                        deps.now(),
-                        tip,
-                    );
-                else if (coin) {
+                if (coin) {
                     if (coin.isUnrolled) {
                         deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                         continue;
@@ -1256,44 +1264,19 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             const observed = await classifySpend(
                 observedAdvance,
                 coin,
-                { ...deps, indexer: batched },
+                { ...deps, indexer: batched.indexer },
                 tip,
                 verify,
             );
             if (observed.kind === "unknown") {
-                if (terminal)
-                    deps.advances.recordSpendDisagreement(
-                        advance.id,
-                        `persisted terminal spend no longer validates: ${observed.reason}`,
-                        deps.now(),
-                        tip,
-                    );
                 // Spent on-chain, as arkd's IsOnchainSpent reads it: the covenant's own exit.
-                else if (coin.isUnrolled && !coin.arkTxId && !coin.settledBy)
+                if (coin.isUnrolled && !coin.arkTxId && !coin.settledBy)
                     deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                 else
                     deps.advances.recordSpendUnknown(
                         advance.id,
                         observed.txid === "unknown" ? undefined : observed.txid,
                         observed.reason,
-                        deps.now(),
-                        tip,
-                    );
-                continue;
-            }
-            if (terminal) {
-                if (advance.state !== observed.kind || advance.spentTxid !== observed.txid)
-                    deps.advances.recordSpendDisagreement(
-                        advance.id,
-                        `canonical ${observed.kind}/${observed.txid} conflicts with persisted ${advance.state}/${advance.spentTxid ?? "none"}`,
-                        deps.now(),
-                        tip,
-                    );
-                else
-                    deps.advances.recordStableSpendObservation(
-                        advance.id,
-                        observed.kind,
-                        observed.txid,
                         deps.now(),
                         tip,
                     );
@@ -1308,8 +1291,147 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 tip,
             );
         }
+        if (reviewing) await review(settled, batched, tip, at);
+        cache(covenantRows(activeStates), reviewing ? covenantRows(terminalStates) : settled);
         report();
         lastScanAt = deps.now();
+    };
+
+    /**
+     * Terminal rows, from the coin alone. Evidence that is merely unavailable is
+     * a warning and retried; a coin that contradicts the recorded verdict earns
+     * the full classification, for that one row.
+     */
+    const review = async (
+        rows: Advance[],
+        batched: Awaited<ReturnType<typeof prefetch>>,
+        tip: Awaited<ReturnType<SpendWatcherDeps["tip"]>>,
+        at: number,
+    ): Promise<void> => {
+        const warnings: WatcherBlocker[] = [];
+        const scripts = new Map<string, string>();
+        const unavailable = (advance: Advance, detail: string) =>
+            void warnings.push({
+                advanceId: advance.id,
+                code: "covenant_terminal_evidence_unavailable",
+                detail,
+            });
+        for (const advance of rows) {
+            const terminalState = advance.state as (typeof terminalStates)[number];
+            if (!advance.outpoint) {
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    "persisted terminal covenant outpoint is missing",
+                    deps.now(),
+                    tip,
+                );
+                continue;
+            }
+            if (
+                advance.observationTipHeight === undefined ||
+                advance.observationTipHash === undefined
+            ) {
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    "persisted terminal observation tip identity is missing",
+                    deps.now(),
+                    tip,
+                );
+            } else if (tip.height < advance.observationTipHeight) {
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    `canonical tip height ${tip.height} is below persisted observation height ${advance.observationTipHeight}`,
+                    deps.now(),
+                    tip,
+                );
+            } else if (
+                advance.observationTipHeight === tip.height &&
+                advance.observationTipHash !== tip.hash &&
+                !(
+                    advance.failureCode === "covenant_observation_disagreement" &&
+                    advance.observationStableTipHash === tip.hash &&
+                    advance.observationStableTipHeight === tip.height
+                )
+            ) {
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    `same-height canonical tip changed from ${advance.observationTipHash} to ${tip.hash}`,
+                    deps.now(),
+                    tip,
+                );
+            }
+            let facts: ReturnType<typeof covenantFacts> | undefined;
+            try {
+                facts = covenantFacts(advance, deps.config);
+                scripts.set(hex.encode(facts.script.pkScript), advance.id);
+            } catch {
+                facts = undefined;
+            }
+            if (!batched.cached(advance.outpoint)) {
+                unavailable(advance, "canonical outpoint evidence is unavailable");
+                continue;
+            }
+            let coin: VirtualCoin | undefined;
+            try {
+                coin = await exactCoin(batched.indexer, advance.outpoint);
+            } catch (error) {
+                unavailable(
+                    advance,
+                    error instanceof EvidenceError
+                        ? error.message
+                        : "canonical outpoint evidence is unavailable",
+                );
+                continue;
+            }
+            if (!coin) {
+                unavailable(advance, "persisted terminal outpoint is absent from the indexer");
+                continue;
+            }
+            const named = reclassify.delete(advance.id);
+            if (!named && facts && agrees(advance, coin, facts)) {
+                deps.advances.recordStableSpendObservation(
+                    advance.id,
+                    terminalState,
+                    advance.spentTxid!,
+                    deps.now(),
+                    tip,
+                );
+                continue;
+            }
+            const observed = await classifySpend(
+                advance,
+                coin,
+                { ...deps, indexer: batched.indexer },
+                tip,
+                verify,
+            );
+            if (observed.kind === "unknown")
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    `persisted terminal spend no longer validates: ${observed.reason}`,
+                    deps.now(),
+                    tip,
+                );
+            else if (advance.state !== observed.kind || advance.spentTxid !== observed.txid)
+                deps.advances.recordSpendDisagreement(
+                    advance.id,
+                    `canonical ${observed.kind}/${observed.txid} conflicts with persisted ${advance.state}/${advance.spentTxid ?? "none"}`,
+                    deps.now(),
+                    tip,
+                );
+            else
+                deps.advances.recordStableSpendObservation(
+                    advance.id,
+                    observed.kind,
+                    observed.txid,
+                    deps.now(),
+                    tip,
+                );
+        }
+        reviewWarnings = warnings;
+        terminalScripts = scripts;
+        reviewRequested = false;
+        lastReviewAt = at;
     };
 
     const removeOwned = async (current: NonNullable<typeof binding>, scripts: string[]) => {
@@ -1349,12 +1471,17 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 };
                 binding = current;
                 current.unsubscribe = manager.onContractEvent((event) => {
-                    if (
-                        !started ||
-                        binding !== current ||
-                        ("contractScript" in event && !current.scripts.has(event.contractScript))
-                    )
-                        return;
+                    if (!started || binding !== current) return;
+                    if (event.type === "connection_reset") reviewRequested = true;
+                    else {
+                        // A terminal row leaves the watch set, so its script is
+                        // matched against the last review's own map.
+                        const named = terminalScripts.get(event.contractScript);
+                        if (named !== undefined) {
+                            reclassify.add(named);
+                            reviewRequested = true;
+                        } else if (!current.scripts.has(event.contractScript)) return;
+                    }
                     void Promise.resolve()
                         .then(prompt)
                         .catch(() => {
@@ -1466,6 +1593,8 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 ]);
                 const [cleanup] = await Promise.allSettled([detach()]);
                 signatureChecks.clear();
+                // The next start is a catch-up: it owes the terminal rows a read.
+                lastReviewAt = null;
                 const failure = [...results, cleanup].find(
                     (result) => result.status === "rejected",
                 );
@@ -1475,22 +1604,14 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             });
             return stopping;
         },
-        status: () => {
-            const current = rows();
-            return {
-                lastScanAt,
-                watching,
-                blockers: [
-                    ...scanBlockers,
-                    ...subscriptionBlockers,
-                    ...persisted(current, [
-                        "covenant_spend_unknown",
-                        "covenant_observation_disagreement",
-                    ]),
-                ],
-                // Its funds can only leave on-chain through the exit leaf; it costs one advance.
-                warnings: persisted(current, ["covenant_unrolled"]),
-            };
-        },
+        status: () => ({
+            lastScanAt,
+            watching,
+            activelyScanned,
+            blockers: [...scanBlockers, ...subscriptionBlockers, ...persistedBlockers],
+            // Unrolled: its funds can only leave on-chain through the exit leaf,
+            // and it costs one advance. Missing terminal evidence: retried.
+            warnings: [...persistedWarnings, ...reviewWarnings],
+        }),
     };
 }

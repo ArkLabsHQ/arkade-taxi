@@ -98,6 +98,17 @@ describe("loadConfig", () => {
         expect(cfg.logLevel).toBe("info");
     });
 
+    it("defaults the terminal coin review to an hour", () => {
+        expect(loadConfig(env()).terminalReviewSeconds).toBe(3600n);
+        expect(loadConfig(env({ TAXI_TERMINAL_REVIEW_SECONDS: "60" })).terminalReviewSeconds).toBe(
+            60n,
+        );
+        for (const value of ["0", "-1", "x"])
+            expect(() => loadConfig(env({ TAXI_TERMINAL_REVIEW_SECONDS: value }))).toThrow(
+                /TAXI_TERMINAL_REVIEW_SECONDS/,
+            );
+    });
+
     it("takes an optional admin port that must differ from the HTTP port", () => {
         expect(loadConfig(env()).adminPort).toBeUndefined();
         expect(loadConfig(env({ TAXI_ADMIN_PORT: "9090" })).adminPort).toBe(9090);
