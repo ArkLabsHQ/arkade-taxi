@@ -97,18 +97,13 @@ export const SCENARIOS = [
         timeout: 600_000,
     },
     {
-        id: "v2-covenant-batch-reclaim",
-        title: "a third party reclaims a matured v2 covenant in a batch and the Taxi records it",
-        timeout: 600_000,
-    },
-    {
         id: "covenant-unilateral-exit-with-arkd-down",
         title: "sender and Taxi exit an unrolled covenant on-chain with arkd and the emulator down",
         timeout: 600_000,
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 26;
+export const EXPECTED_TOTAL = 25;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

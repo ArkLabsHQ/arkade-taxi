@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-five live scenarios in the main run, one isolated scenario, and two
+Twenty-four live scenarios in the main run, one isolated scenario, and two
 integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
@@ -37,7 +37,7 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-21 named scenarios and both integrity assertions plus the isolated run below,
+20 named scenarios and both integrity assertions plus the isolated run below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
 The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
@@ -64,23 +64,6 @@ records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator
 depends on.
-
-### The batch reclaim scenario
-
-`v2-covenant-batch-reclaim` is the measurement for a batch-settled spend that is
-not a renewal. It stands up its own in-process Taxi with a 20-second
-`covenantDeadlineSeconds`, moves canonical median time past that deadline, then
-registers a `reclaimWhole` intent paying the whole lockup to the operator's
-payout script. Its `batch-reclaim-r2.json` artifact is written even when the
-batch fails, and records the consumed coin, the forfeit `spentBy` names and the
-leaf its input 0 selected, and every coin at the operator's payout script —
-exactly the evidence the watcher classifies a batch reclaim from.
-
-That deadline is anchored to canonical median time, not the wall clock, so the
-jump only ever moves time forward whatever an earlier scenario left behind. It
-therefore adds to however far chain time already leads the wall clock, where the
-stack's own `TAXI_COVENANT_DEADLINE_SECONDS` jumps reset that lead; keep it well
-under the wall-clock gap to the next scenario that quotes.
 
 ### Isolated scenarios
 
@@ -142,7 +125,7 @@ having asserted nothing is worse than no suite.
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
 - `assert-ran.mjs` validates Vitest's JSON report independently: the shared
-  run's twenty-five scenarios and both integrity assertions, and the isolated
+  run's twenty-four scenarios and both integrity assertions, and the isolated
   run's scenario, must pass with zero failures, skips, or todos.
 
 ## What the scenarios prove
@@ -164,8 +147,7 @@ It also covers lost submit responses, duplicate requests, stale provider
 identity, the warning and critical alarms a covenant raises as the coin it sits
 on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
 sponsor each sign only their own inputs while the offer covenant is co-signed by
-nobody but the emulator and the Arkade Service. With arkd and the emulator
-paused, the SDK's pre-signed exit
+nobody but the emulator and the Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
 once the exit delay matures on median time past. The package skips the 330-sat
 covenant as uneconomic, so it reaches the chain only because the Taxi's change

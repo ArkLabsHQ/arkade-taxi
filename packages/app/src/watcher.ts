@@ -464,7 +464,6 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
  * Whether a coin still carries the recorded terminal verdict. `spentTxid` is the
  * arkTx id — never `coin.spentBy`, the checkpoint, which the classifier requires
  * to differ from it; comparing that pair would disagree on every row at once.
- * A batch settlement has no arkTx, so there the commitment is what was recorded.
  */
 const agrees = (
     advance: Advance,
@@ -474,7 +473,7 @@ const agrees = (
     try {
         return (
             coin.isSpent === true &&
-            (coin.arkTxId === advance.spentTxid || batchCommitment(coin) === advance.spentTxid) &&
+            coin.arkTxId === advance.spentTxid &&
             coin.value === Number(facts.value) &&
             coin.script === hex.encode(facts.script.pkScript) &&
             !holdingsDiffer(holdings(coin, "covenant outpoint"), facts.expectedHoldings)
@@ -486,84 +485,8 @@ const agrees = (
 
 /** A batch settlement: arkd carries a forfeit in `spentBy` beside the
  * commitment, so an absent `arkTxId` is what separates it from a spend. */
-const batchCommitment = (coin: VirtualCoin): string | undefined =>
+const renewalCommitment = (coin: VirtualCoin): string | undefined =>
     /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.arkTxId ? coin.settledBy : undefined;
-
-/** Shared by the prefetch wave and the classifier, so they cannot disagree. */
-const payoutScriptOf = (advance: Advance): string =>
-    hex.encode(
-        payoutPkScript(advance.operatorKey, lockupSats(covenantParamsOf(advance)), advance.dust),
-    );
-
-/** The leaf a batch settlement spent, off the forfeit arkd stored under
- * `spentBy`. A swept coin requires no forfeit, so it names no leaf at all. */
-const forfeitedLeaf = async (
-    provider: SpendWatcherDeps["indexer"],
-    coin: VirtualCoin,
-    outpoint: { txid: string; vout: number },
-    facts: ReturnType<typeof covenantFacts>,
-): Promise<Leaf> => {
-    if (!/^[0-9a-f]{64}$/.test(coin.spentBy ?? ""))
-        fail("batch-settled spend carries no forfeit naming a covenant leaf");
-    const forfeit = (await rawTransactions(provider, [coin.spentBy!])).get(coin.spentBy!)!;
-    if (!forfeit.inputsLength) fail("forfeit spends nothing");
-    const input = forfeit.getInput(0);
-    if (
-        txid(input) !== outpoint.txid ||
-        input.index !== outpoint.vout ||
-        input.witnessUtxo?.amount !== facts.value ||
-        !input.witnessUtxo.script ||
-        !sameBytes(input.witnessUtxo.script, facts.script.pkScript)
-    )
-        fail("forfeit does not spend the exact persisted covenant outpoint");
-    const leaves = input.tapLeafScript;
-    if (!leaves || leaves.length !== 1) fail("forfeit must select exactly one leaf");
-    const body = scriptFromTapLeafScript(leaves![0]!);
-    const matched = facts.script.scripts.flatMap((script, index) =>
-        sameBytes(script, body) ? [index] : [],
-    );
-    if (matched.length !== 1) fail("forfeit selects no recognized covenant leaf");
-    exactLeaf(leaves![0]!, facts.script.findLeaf(hex.encode(body)), "forfeit");
-    return matched[0] as Leaf;
-};
-
-/** Where a batch reclaim's money went, beside the leaf's own evidence: the
- * operator's coin in that one commitment, at the lockup's exact value and
- * assets. An ambiguous pair is refused rather than guessed at. */
-const reclaimPayout = async (
-    provider: SpendWatcherDeps["indexer"],
-    advance: Advance,
-    commitment: string,
-    facts: ReturnType<typeof covenantFacts>,
-): Promise<void> => {
-    const script = payoutScriptOf(advance);
-    let response: Awaited<ReturnType<IndexerProvider["getVtxos"]>>;
-    try {
-        response = await provider.getVtxos({ scripts: [script] });
-    } catch {
-        return fail("canonical reclaim payout evidence is unavailable");
-    }
-    if (!response || !Array.isArray(response.vtxos))
-        fail("indexer returned no reclaim payout evidence");
-    const paid = response.vtxos.filter((coin) => {
-        try {
-            return (
-                coin.script === script &&
-                coin.value === Number(facts.value) &&
-                (coin.commitmentTxIds ?? []).includes(commitment) &&
-                !holdingsDiffer(holdings(coin, "reclaim payout"), facts.expectedHoldings)
-            );
-        } catch {
-            return false;
-        }
-    });
-    if (paid.length !== 1)
-        fail(
-            paid.length
-                ? "reclaim payout is ambiguous"
-                : "batch settlement paid the operator no reclaim payout",
-        );
-};
 
 /** Script, value and assets: the only facts a renewal preserves. */
 const sameCovenant = (coin: VirtualCoin, facts: ReturnType<typeof covenantFacts>): boolean => {
@@ -778,31 +701,12 @@ async function classifySpend(
     tip: Pick<Awaited<ReturnType<SpendWatcherDeps["tip"]>>, "height" | "time">,
     verify: SignatureCheck,
 ): Promise<ObservedSpend> {
-    const candidate = /^[0-9a-f]{64}$/.test(coin.arkTxId ?? "")
-        ? coin.arkTxId!
-        : (batchCommitment(coin) ?? "unknown");
+    const candidate = /^[0-9a-f]{64}$/.test(coin.arkTxId ?? "") ? coin.arkTxId! : "unknown";
     try {
         if (!advance.outpoint || !sameOutpoint(coin, advance.outpoint))
             fail("spent coin is not the persisted covenant outpoint");
         const outpoint = advance.outpoint!;
         const facts = covenantFacts(advance, deps.config);
-        const commitment = batchCommitment(coin);
-        if (commitment) {
-            if (!coin.isSpent || !sameCovenant(coin, facts))
-                fail("batch-settled covenant evidence differs from the persisted lockup");
-            const leaf = await forfeitedLeaf(deps.indexer, coin, outpoint, facts);
-            // Only the reclaim pays a script the row already names; the other
-            // leaves split across receivers a commitment cannot attribute.
-            if (leaf !== Leaf.Recovery)
-                fail(`batch-settled spend through covenant leaf ${leaf} could not be classified`);
-            if (
-                advance.recoveryLocktime?.kind !== "time" ||
-                advance.recoveryLocktime.value !== advance.locktime
-            )
-                fail("recovery locktime tag is missing or inconsistent");
-            await reclaimPayout(deps.indexer, advance, commitment, facts);
-            return { kind: "recovered", txid: commitment };
-        }
         if (
             coin.value !== Number(facts.value) ||
             coin.script !== hex.encode(facts.script.pkScript) ||
@@ -1040,8 +944,7 @@ const prefetch = async (
     provider: SpendWatcherDeps["indexer"],
     outpoints: readonly { txid: string; vout: number }[],
     coinOnly: readonly { txid: string; vout: number }[] = [],
-    /** Outpoint key to that row's reclaim payout script. */
-    batchable: ReadonlyMap<string, string> = new Map(),
+    renewable: ReadonlySet<string> = new Set(),
 ): Promise<{
     indexer: SpendWatcherDeps["indexer"];
     cached(outpoint: { txid: string; vout: number }): boolean;
@@ -1142,16 +1045,15 @@ const prefetch = async (
     };
 
     await loadCoins([...outpoints, ...coinOnly]);
-    // One scan-wide wave off wave A's own coins; nothing settled in a batch
-    // reads nothing. Renewal successor and reclaim payout ride the same read.
+    // One scan-wide wave off wave A's own coins; nothing renewed reads nothing.
     await loadScripts(
         outpoints.flatMap((outpoint) => {
-            const key = outpointKey(outpoint);
-            const hits = coins.get(key) ?? [];
-            const payout = batchable.get(key);
-            return payout === undefined || hits.length !== 1 || !batchCommitment(hits[0]!)
-                ? []
-                : [hits[0]!.script, payout];
+            const hits = coins.get(outpointKey(outpoint)) ?? [];
+            return renewable.has(outpointKey(outpoint)) &&
+                hits.length === 1 &&
+                renewalCommitment(hits[0]!)
+                ? [hits[0]!.script]
+                : [];
         }),
     );
     // Only the classified rows pull the transaction waves; a coin-only row rides
@@ -1357,11 +1259,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             reviewing
                 ? settled.flatMap((advance) => (advance.outpoint ? [advance.outpoint] : []))
                 : [],
-            new Map(
+            new Set(
                 current.flatMap((advance) =>
-                    advance.outpoint
-                        ? [[outpointKey(advance.outpoint), payoutScriptOf(advance)] as const]
-                        : [],
+                    advance.outpoint ? [outpointKey(advance.outpoint)] : [],
                 ),
             ),
         );
@@ -1411,9 +1311,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 );
                 continue;
             }
-            // Ahead of the spend paths: a renewal is adopted, never classified.
+            // Ahead of the spend paths: classifySpend refuses an empty arkTxId.
             let settledHandled = false;
-            if (coin && batchCommitment(coin)) {
+            if (coin && renewalCommitment(coin)) {
                 try {
                     const facts = covenantFacts(observedAdvance, deps.config);
                     if (!sameCovenant(coin, facts))
