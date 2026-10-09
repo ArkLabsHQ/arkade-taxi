@@ -245,9 +245,9 @@ outpoint before recovery; do not blindly rebuild and resubmit. Apply the same
 discipline to an uncertain lockup submission. Capability replay guards are
 in-memory and do not replace the wallet's durable operation store.
 
-If Bob stays offline, Taxi's persisted worker uses the permissionless recovery
-leaf after the tagged locktime and before batch expiry. `recovering` means an
-intent or submission exists; `recovered` requires canonical observation.
+If Bob stays offline, Taxi's persisted worker takes the reclaim leaf once the
+wall-clock locktime matures, which outlives the funding coins. `recovering` means
+an intent exists; `recovered` needs observation and opens a custody row.
 Alice can also verify her retained quote and lockup with `verifyTransfer`
 and use `refund(transfer, aliceIdentity)`. There are no Taxi claim/refund
 HTTP endpoints; covenant spends go directly through the public SDK providers.
@@ -299,8 +299,8 @@ and `submitLockup` remain public. The combined helper returns
 Wire amounts are decimal strings and byte fields are lowercase hex.
 `verified.params` contains decoded values; `verified.quote` remains wire-shaped.
 Quote `expiresAt` and verification `now` use Unix seconds. Quote validity,
-covenant recovery locktime and funding batch expiry are separate deadlines;
-height and time locks use different chain clocks.
+the recovery locktime and the funding batch expiry are separate deadlines; the
+first two are wall-clock, a funding expiry may be a height.
 
 ### Complete graph validation and submission
 

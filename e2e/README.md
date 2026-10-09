@@ -43,24 +43,23 @@ The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
 the run before any stack starts.
 
-### The v2 renewal scenario
+### The renewal scenario
 
-`v2-covenant-batch-renewal` is the only scenario that builds a v2 covenant, and
-it needs **no emulator bump**: `OP_TUNNEL` and `OP_INSPECTINTENTMESSAGE` have
-both been in the emulator since `v0.0.8-rc.0`, and the rev-2 covenant uses no
-other new opcode. Read the version a run actually resolved from `stack.json`'s
-`images.emulator` rather than trusting this line, and do not re-introduce an
-`--emulator-image` requirement for the scenario by reflex.
+`covenant-batch-renewal` needs **no emulator bump**: `OP_TUNNEL` and
+`OP_INSPECTINTENTMESSAGE` have both been in the emulator since `v0.0.8-rc.0`,
+and the covenant uses no other new opcode. Read the version a run actually
+resolved from `stack.json`'s `images.emulator` rather than trusting this line,
+and do not re-introduce an `--emulator-image` requirement for the scenario by
+reflex.
 
-`TAXI_COVENANT_VERSION=2` is still refused at startup, so the scenario does not
-run v2 through the production Taxi container. It stands up its own in-process
-Taxi — a fresh operator key, its own SQLite ledger, the production lockup builder,
-submitter and spend watcher — and sets `covenantVersion` on the resolved config
-rather than in the environment `loadConfig` validates. Lifting that gate is a
-separate change; nothing here weakens it.
+Every scenario now builds the same covenant through the production config path:
+there is one covenant and no version to select. The renewal scenario still
+stands up its own in-process Taxi — a fresh operator key, its own SQLite ledger,
+the production lockup builder, submitter and spend watcher — because it drives
+the renewal directly rather than through a delegatee.
 
-The scenario renews the covenant itself through leaf 5 with a `register` intent
-the emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
+It renews the covenant itself through leaf 5 with a `register` intent the
+emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
 records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator

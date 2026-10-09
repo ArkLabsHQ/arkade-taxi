@@ -6,12 +6,7 @@
  *   node scripts/probe-live.mjs [arkdUrl] [emulatorUrl]
  */
 
-import {
-    DustCovenantScript,
-    buildScripts,
-    emitArtifact,
-    exitTimelock,
-} from "../packages/covenant/dist/index.js";
+import { DustCovenantScript, V2_ARTIFACT, exitTimelock } from "../packages/covenant/dist/index.js";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
@@ -55,7 +50,8 @@ const params = {
     exitDelay: exitTimelock(BigInt(info.unilateralExitDelay)),
     dust,
     topup: dust,
-    locktime: 800_000n,
+    // Wall-clock: the reclaim CLTV is a deadline, not a height.
+    locktime: BigInt(Math.floor(Date.now() / 1000)) + 8_640_000n,
 };
 
 for (const [label, p] of [
@@ -63,21 +59,19 @@ for (const [label, p] of [
     ["asset", { ...params, assetId: { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 } }],
 ]) {
     const script = new DustCovenantScript({ serverKey, emulatorKey, params: p, vtxoMinAmount });
-    const scripts = buildScripts(p, vtxoMinAmount);
-    const artifact = emitArtifact(p, vtxoMinAmount);
+    const { covenant } = script;
 
     console.log(`--- ${label} variant ---`);
     console.log(`  leaves       ${script.scripts.length}`);
     console.log(`  address      ${script.address("tark", serverKey).encode()}`);
     console.log(`  pkScript     ${hex.encode(script.pkScript)}`);
-    console.log(`  recycle      ${scripts.recycle.length} bytes`);
-    console.log(`  purchase     ${scripts.purchase.length} bytes`);
-    console.log(`  refund       ${scripts.refund.length} bytes`);
-    console.log(`  artifact fns ${Object.keys(artifact.functions).join(", ")}`);
+    for (const name of ["recycle", "purchase", "refund", "reclaim", "renew"])
+        console.log(`  ${name.padEnd(12)} ${covenant[name].length} bytes`);
+    console.log(`  artifact fns ${V2_ARTIFACT.functions.map((f) => f.name).join(", ")}`);
 
     // Decoding proves the bytes are a well-formed Arkade script under the same
     // opcode table the emulator runs, not merely a buffer we produced.
-    const decoded = arkade.ArkadeScript.decode(scripts.recycle);
+    const decoded = arkade.ArkadeScript.decode(covenant.recycle);
     console.log(`  recycle asm  ${decoded.length} tokens, first=${decoded[0]}\n`);
 }
 
