@@ -41,7 +41,6 @@ export interface TaxiConfig {
      * under it is terminal, or those exits become unspendable. */
     operatorPrivkey: Uint8Array;
     /** Covenant version new quotes are built at. Only 1 starts; see SCHEMA. */
-    covenantVersion: 1 | 2;
     /** How long the Taxi lends its dust before the v2 reclaim CLTV matures. A
      * different clock from `custodyWindowSeconds`, the post-reclaim grace. */
     covenantDeadlineSeconds: bigint;
@@ -94,7 +93,6 @@ export const SHOWN_CONFIG = {
     terminalReviewSeconds: "TAXI_TERMINAL_REVIEW_SECONDS",
     vtxoReadMaxAgeMs: "TAXI_VTXO_READ_MAX_AGE_MS",
     proceedsMaxFeeSats: "TAXI_PROCEEDS_MAX_FEE_SATS",
-    covenantVersion: "TAXI_COVENANT_VERSION",
     covenantDeadlineSeconds: "TAXI_COVENANT_DEADLINE_SECONDS",
     custodyWindowSeconds: "TAXI_CUSTODY_WINDOW_SECONDS",
     delegateeUrl: "TAXI_DELEGATEE_URL",
@@ -243,10 +241,6 @@ const SCHEMA = z
             .transform(BigInt)
             .default("0"),
         TAXI_OPERATOR_PRIVKEY: hexKey,
-        TAXI_COVENANT_VERSION: z
-            .enum(["1", "2"])
-            .default("1")
-            .transform((s) => Number(s) as 1 | 2),
         // 100 days (decision 7). The producer checks the sum fits a uint32.
         TAXI_COVENANT_DEADLINE_SECONDS: positiveSats
             .refine((v) => v <= 4_294_967_295n, "must fit a uint32")
@@ -262,18 +256,6 @@ const SCHEMA = z
         TAXI_LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     })
     .superRefine((v, ctx) => {
-        // Recovery and the watcher now handle v2, but a reclaim moves the whole
-        // covenant to the operator and there is no custody ledger to hand it back
-        // from. Lift this with that, not before — the flip is one-way for as long
-        // as a v2 advance is live.
-        if (v.TAXI_COVENANT_VERSION === 2) {
-            ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: ["TAXI_COVENANT_VERSION"],
-                message:
-                    "must be 1: v2 quote terms and the custody ledger are not built, so a reclaimed v2 delivery could never be recovered by its receiver",
-            });
-        }
         if (v.TAXI_ADMIN_PORT === v.TAXI_HTTP_PORT) {
             ctx.addIssue({
                 code: z.ZodIssueCode.custom,
@@ -355,7 +337,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): TaxiConfig {
         operatorMinReserveSats: v.TAXI_OPERATOR_MIN_RESERVE_SATS,
         proceedsMaxFeeSats: v.TAXI_PROCEEDS_MAX_FEE_SATS,
         operatorPrivkey: v.TAXI_OPERATOR_PRIVKEY,
-        covenantVersion: v.TAXI_COVENANT_VERSION,
         covenantDeadlineSeconds: v.TAXI_COVENANT_DEADLINE_SECONDS,
         custodyWindowSeconds: v.TAXI_CUSTODY_WINDOW_SECONDS,
         ...(v.TAXI_DELEGATEE_URL ? { delegateeUrl: v.TAXI_DELEGATEE_URL } : {}),

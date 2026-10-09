@@ -317,7 +317,7 @@ async function createAdmittedSwapFillQuote(
             (fill.receiveQuoteId === undefined
                 ? undefined
                 : deps.advances.get(fill.receiveQuoteId));
-        if (advance?.covenantVersion !== 2 || !deps.delegatee) return;
+        if (!advance || !deps.delegatee) return;
         await registerRenewal(deps.delegatee.client, deps.delegatee.registration, {
             params: covenantParamsOf(advance),
             serverKey: config.serverPubkey,
@@ -815,9 +815,6 @@ async function createAdmittedSwapFillQuote(
                 id: receiveQuote.id,
                 state: "locking",
                 ...receiveQuote.params,
-                ...(receiveQuote.covenantVersion === undefined
-                    ? {}
-                    : { covenantVersion: receiveQuote.covenantVersion }),
                 assetUnits: offer.wantAmount,
                 covenantAddress: receiveQuote.covenantAddress,
                 fare: receiveQuote.fare,
@@ -825,7 +822,6 @@ async function createAdmittedSwapFillQuote(
                 updatedAt: now,
                 expiresAt: fill.expiresAt,
                 // A renewal re-dates the coins, so a snapshot would go stale.
-                ...(receiveQuote.covenantVersion === 2 ? {} : { batchExpiry }),
                 recoveryLocktime: receiveQuote.recoveryLocktime,
                 operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),
                 unsignedLockupTx: encodeJointFillSource(source),

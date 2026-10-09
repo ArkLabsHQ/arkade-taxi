@@ -138,22 +138,15 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
     const inputs = [...req.senderInputs, ...operatorInputs];
     if (!req.senderInputs.length || !operatorInputs.length)
         throw new LockupShapeError("both funding owners required");
-    // A v2 deadline neither shares the funding expiry's domain nor falls before
+    // The deadline neither shares the funding expiry's domain nor falls before
     // it; the inputs must still agree with each other and with the selection.
-    const deadline = req.params.covenantVersion === 2;
     if (
-        inputs.some(
-            (input) =>
-                input.expiry.kind !== req.funding.batchExpiry.kind ||
-                (!deadline && input.expiry.value <= req.params.locktime),
-        ) ||
+        inputs.some((input) => input.expiry.kind !== req.funding.batchExpiry.kind) ||
         operatorInputs.reduce(
             (minimum, input) => (input.expiry.value < minimum ? input.expiry.value : minimum),
             operatorInputs[0].expiry.value,
         ) !== req.funding.batchExpiry.value ||
-        (deadline
-            ? req.params.locktime < 500_000_000n
-            : (req.funding.batchExpiry.kind === "time") !== req.params.locktime >= 500_000_000n)
+        req.params.locktime < 500_000_000n
     )
         throw new LockupShapeError("inconsistent funding expiry evidence");
     if (new Set(inputs.map((i) => `${i.txid}:${i.vout}`)).size !== inputs.length)
@@ -187,10 +180,7 @@ type JointRequest = Pick<
     LockupBuildRequest,
     "senderInputs" | "senderSats" | "funding" | "fare" | "satsFarePayer" | "assetUnits"
 > & {
-    params: Pick<
-        LockupBuildRequest["params"],
-        "operatorKey" | "senderKey" | "dust" | "assetId" | "covenantVersion"
-    >;
+    params: Pick<LockupBuildRequest["params"], "operatorKey" | "senderKey" | "dust" | "assetId">;
 };
 
 export function jointPlan(
@@ -211,14 +201,16 @@ export function jointPlan(
     const totals = new Map<string, bigint>();
     for (const holdings of assets)
         for (const [id, amount] of holdings) totals.set(id, (totals.get(id) ?? 0n) + amount);
-    const v2 = req.params.covenantVersion === 2;
     const outputs: JointPlan["valueOutputs"] = [graph.first];
+    // Under a covenant an asset fare's hosting output is a whole dust unit: the
+    // covenant pins the payout by its witness program, which a sub-dust output
+    // cannot carry. A sponsored payment has no covenant and hosts at the minimum.
     const fareHosting =
         req.fare.units === 0n
             ? 0n
             : req.fare.currency === "sats"
               ? req.fare.units
-              : v2
+              : graph.kind === "lockup"
                 ? config.dust
                 : config.vtxoMinAmount;
     if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
@@ -287,10 +279,12 @@ export function jointPlan(
                 config,
             ),
         });
-    // v2 commits to dust-or-above everywhere, so no payout of its can land on
-    // payoutPkScript's sub-dust RETURN branch and need collecting in a batch.
-    const floor = v2 ? config.dust : config.vtxoMinAmount;
-    const floorName = v2 ? "covenant v2 dust floor" : "Arkade Service minimum";
+    // The covenant commits to dust-or-above everywhere, so no payout of its can
+    // land on payoutPkScript's sub-dust RETURN branch and need collecting in a
+    // batch. A sponsored payment has no covenant and keeps the service minimum.
+    const covenant = graph.kind === "lockup";
+    const floor = covenant ? config.dust : config.vtxoMinAmount;
+    const floorName = covenant ? "covenant dust floor" : "Arkade Service minimum";
     for (const output of outputs) {
         if (output.amount < floor)
             throw new LockupShapeError(`${output.role} output is below the ${floorName} ${floor}`);

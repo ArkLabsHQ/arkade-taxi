@@ -27,10 +27,10 @@ export interface SweeperDeps {
     };
     onError?: (advanceId: string, error: unknown) => void;
     canRecover?: (advance: Advance) => boolean;
-    /** The watcher's last read of the covenant coin. A v2 advance stores no
+    /** The watcher's last read of the covenant coin. An advance stores no
      * batch expiry, so this is the only source for the one it races. */
     observed?: (advance: Advance) => ObservedCovenant | undefined;
-    /** A v2 renewal fell behind. Fired on change, not per tick: an alarm that
+    /** A renewal fell behind. Fired on change, not per tick: an alarm that
      * repeats at tick rate is one an operator learns to skip. */
     onRenewalWarning?: (warning: { delegation: string; deadline: RecoveryDeadline }) => void;
 }
@@ -60,7 +60,7 @@ export interface RecoveryDeadline {
     advanceId: string;
     kind: ExpiryDeadline["kind"];
     locktime: bigint;
-    /** Null on v2, which stores none: its clock is the deadline itself. */
+    /** Null: an advance stores none, so its clock is the deadline itself. */
     batchExpiry: bigint | null;
     remaining: bigint | null;
     severity: DeadlineSeverity;
@@ -140,16 +140,11 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         time: bigint | null,
     ): RecoveryDeadline => {
         const recovery = advance.recoveryLocktime;
-        const v2 = advance.covenantVersion === 2;
-        // v2 stores no expiry, and races batch expiry alone: the remedy is
-        // "renew", not "reclaim", so the clock is the coin's current one.
-        const seen = v2 ? deps.observed?.(advance) : undefined;
+        // A covenant advance stores no expiry and races batch expiry alone: the
+        // remedy is "renew", not "reclaim", so the clock is the coin's current one.
+        const seen = deps.observed?.(advance);
         const expiry = advance.batchExpiry ?? seen?.expiry;
-        if (
-            !recovery ||
-            (!v2 && recovery.kind !== (expiry?.kind ?? "time")) ||
-            recovery.value !== advance.locktime
-        )
+        if (!recovery || recovery.kind !== "time" || recovery.value !== advance.locktime)
             return {
                 advanceId: advance.id,
                 kind: expiry?.kind ?? "time",
@@ -159,8 +154,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 severity: "expired",
                 code: "recovery_locktime_invalid",
             };
-        // `kind` stays the CLTV's domain, which decides eligibility; only on v2
-        // can the expiry raced sit in the other one.
+        // `kind` stays the CLTV's domain, which decides eligibility; the expiry
+        // it races may sit in the other one.
         const racing = expiry ?? recovery;
         const chainClock = racing.kind === "height" ? height : time;
         const at = {
@@ -187,8 +182,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                     : "eligible";
         // Swept with the CLTV still locked: custody is the net from here.
         // Sweeping follows expiry, so this escalates and never downgrades.
-        const cltvClock = recovery.kind === "height" ? height : time;
-        const swept = seen?.swept === true && cltvClock !== null && recovery.value > cltvClock;
+        const swept = seen?.swept === true && time !== null && recovery.value > time;
         // A renewal lands far outside the alarm window, so reaching it at all
         // means renewal is overdue; `renewals` says whether it ever ran.
         const renewal =
@@ -199,16 +193,18 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             ...at,
             remaining,
             severity: swept && severity !== "expired" ? "critical" : severity,
+            // Which clock is being raced decides the remedy: an observed coin
+            // expiry calls for a renewal, the deadline itself for a reclaim.
             code: swept
                 ? "covenant_swept_before_deadline"
                 : severity === "expired"
                   ? "covenant_unspent_at_expiry"
                   : severity === "critical"
-                    ? v2
+                    ? expiry
                         ? renewal
                         : "recovery_deadline_critical"
                     : severity === "warning"
-                      ? v2
+                      ? expiry
                           ? renewal
                           : "recovery_deadline_warning"
                       : "recovery_eligible",

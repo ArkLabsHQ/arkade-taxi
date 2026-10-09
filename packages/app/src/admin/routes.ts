@@ -737,7 +737,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
             return c.json({ code: "not_found", error: "advance not found" }, 404, {
                 "cache-control": "no-store",
             });
-        if (row.covenantVersion !== 2 || !deps.delegation)
+        if (!deps.delegation)
             return conflict(c, "no_delegation", "advance has no renewal delegation");
         try {
             return ok(c, { delegation: await deps.delegation(row.covenantAddress) });

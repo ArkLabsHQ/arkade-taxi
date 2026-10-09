@@ -5,6 +5,9 @@ import { RecoveryArtifactError } from "../src/arkade/recovery.js";
 import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures.js";
 
 const HEIGHT = 900_000n;
+/** Every fixture's deadline sits at the tick's median time, so the headroom a
+ * case adds to it is exactly the `remaining` the sweeper reports. */
+const DEADLINE = BigInt(NOW);
 
 class FakeRecovery implements RecoveryRunner {
     readonly seen: string[] = [];
@@ -45,8 +48,7 @@ const locked = (id: string, locktime: bigint) =>
             id,
             state: "locked",
             locktime,
-            recoveryLocktime: { kind: "height", value: locktime },
-            batchExpiry: { kind: "height", value: locktime + 100_000n },
+            recoveryLocktime: { kind: "time", value: locktime },
         }),
     );
 
@@ -75,37 +77,31 @@ describe("tick", () => {
         expect(recovery.seen).toEqual(["time"]);
     });
 
-    it("orders critical before warning before eligible with a fixed kind tie order", async () => {
+    it("orders critical before warning before eligible", async () => {
         const cfg = config();
-        const rows = [
-            advance({
-                id: "eligible",
-                locktime: HEIGHT,
-                recoveryLocktime: { kind: "height", value: HEIGHT },
-                batchExpiry: { kind: "height", value: HEIGHT + cfg.recoveryBroadcastBlocks + 1n },
+        const headroom = new Map<string, bigint>([
+            ["eligible", cfg.recoveryBroadcastSeconds + 1n],
+            ["warning", cfg.recoveryBroadcastSeconds],
+            ["critical-late", cfg.recoveryCriticalSeconds],
+            ["critical-early", cfg.recoveryCriticalSeconds - 1n],
+        ]);
+        let age = 0n;
+        for (const id of headroom.keys())
+            advances.insert(
+                advance({
+                    id,
+                    locktime: DEADLINE - 10n + age++,
+                    recoveryLocktime: { kind: "time", value: DEADLINE - 10n + age },
+                }),
+            );
+        await createSweeper({
+            ...deps(),
+            observed: (a) => ({
+                swept: false,
+                expiry: { kind: "time", value: DEADLINE + headroom.get(a.id)! },
             }),
-            advance({
-                id: "warning",
-                locktime: HEIGHT,
-                recoveryLocktime: { kind: "height", value: HEIGHT },
-                batchExpiry: { kind: "height", value: HEIGHT + cfg.recoveryBroadcastBlocks },
-            }),
-            advance({
-                id: "time-critical",
-                locktime: BigInt(NOW),
-                recoveryLocktime: { kind: "time", value: BigInt(NOW) },
-                batchExpiry: { kind: "time", value: BigInt(NOW) + cfg.recoveryCriticalSeconds },
-            }),
-            advance({
-                id: "height-critical",
-                locktime: HEIGHT,
-                recoveryLocktime: { kind: "height", value: HEIGHT },
-                batchExpiry: { kind: "height", value: HEIGHT + cfg.recoveryCriticalBlocks },
-            }),
-        ];
-        rows.forEach((row) => advances.insert(row));
-        await createSweeper(deps()).tick(HEIGHT, BigInt(NOW));
-        expect(recovery.seen).toEqual(["height-critical", "time-critical", "warning", "eligible"]);
+        }).tick(HEIGHT, DEADLINE);
+        expect(recovery.seen).toEqual(["critical-early", "critical-late", "warning", "eligible"]);
     });
 
     it("pauses quotes and blocks readiness at critical headroom and after expiry", async () => {
@@ -113,18 +109,16 @@ describe("tick", () => {
         advances.insert(
             advance({
                 id: "critical",
-                locktime: HEIGHT,
-                recoveryLocktime: { kind: "height", value: HEIGHT },
-                batchExpiry: { kind: "height", value: HEIGHT + cfg.recoveryCriticalBlocks },
+                locktime: DEADLINE + cfg.recoveryCriticalBlocks,
+                recoveryLocktime: { kind: "time", value: DEADLINE + cfg.recoveryCriticalBlocks },
             }),
         );
         advances.insert(
             advance({
                 id: "expired",
                 state: "recovering",
-                locktime: HEIGHT - 100n,
-                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
-                batchExpiry: { kind: "height", value: HEIGHT },
+                locktime: DEADLINE - 100n,
+                recoveryLocktime: { kind: "time", value: DEADLINE - 100n },
                 recoveryPhase: "submitted",
             }),
         );
@@ -144,9 +138,8 @@ describe("tick", () => {
             advance({
                 id,
                 state: "locked",
-                locktime: HEIGHT - 100n,
-                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
-                batchExpiry: { kind: "height", value: HEIGHT },
+                locktime: DEADLINE - 100n,
+                recoveryLocktime: { kind: "time", value: DEADLINE - 100n },
                 failureCode,
             });
         advances.insert(pastDeadline("unrolled", "covenant_unrolled"));
@@ -172,9 +165,8 @@ describe("tick", () => {
             advance({
                 id: "quarantined",
                 state: "recovering",
-                locktime: HEIGHT,
-                recoveryLocktime: { kind: "height", value: HEIGHT },
-                batchExpiry: { kind: "height", value: HEIGHT + 100_000n },
+                locktime: DEADLINE + 100_000n,
+                recoveryLocktime: { kind: "time", value: DEADLINE + 100_000n },
                 recoveryPhase: "failed",
                 failureCode: "recovery_artifact_invalid",
             }),
@@ -199,20 +191,19 @@ describe("tick", () => {
     });
 
     it.each([
-        [HEIGHT, 100_000n, "eligible", "recovery_submission_ambiguous", false],
-        [HEIGHT, 2n, "critical", "recovery_deadline_critical", true],
-        [HEIGHT, 0n, "expired", "covenant_unspent_at_expiry", true],
-        [null, 100_000n, "eligible", "chain_height_unavailable", false],
+        [BigInt(NOW), 100_000n, "eligible", "recovery_submission_ambiguous", false],
+        [BigInt(NOW), 2n, "critical", "recovery_deadline_critical", true],
+        [BigInt(NOW), 0n, "expired", "covenant_unspent_at_expiry", true],
+        [null, 100_000n, "eligible", "chain_time_unavailable", false],
     ] as const)(
         "restores a persisted ambiguous recovery blocker with clock %s and headroom %s",
-        async (height, headroom, severity, code, expectedPause) => {
+        async (time, headroom, severity, code, expectedPause) => {
             advances.insert(
                 advance({
                     id: "retrying",
                     state: "recovering",
-                    locktime: HEIGHT,
-                    recoveryLocktime: { kind: "height", value: HEIGHT },
-                    batchExpiry: { kind: "height", value: HEIGHT + headroom },
+                    locktime: DEADLINE + headroom,
+                    recoveryLocktime: { kind: "time", value: DEADLINE + headroom },
                     recoveryPhase: "prepared",
                     failureCode: "recovery_submission_ambiguous",
                     failureDetail: "retained for retry",
@@ -225,7 +216,7 @@ describe("tick", () => {
                 recovery: { recover: async () => undefined },
             });
 
-            const result = await sweeper.tick(height, BigInt(NOW));
+            const result = await sweeper.tick(HEIGHT, time);
 
             expect(result.failed).toBe(0);
             expect(sweeper.status().failedTotal).toBe(0);
@@ -246,9 +237,8 @@ describe("tick", () => {
             advance({
                 id: "expired-failure",
                 state: "recovering",
-                locktime: HEIGHT - 100n,
-                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
-                batchExpiry: { kind: "height", value: HEIGHT },
+                locktime: DEADLINE - 100n,
+                recoveryLocktime: { kind: "time", value: DEADLINE - 100n },
                 recoveryPhase: "failed",
                 failureCode: "recovery_artifact_invalid",
                 recoveryLastAttemptAt: NOW - 1,
@@ -275,9 +265,8 @@ describe("tick", () => {
             advance({
                 id: "critical-failure",
                 state: "recovering",
-                locktime: HEIGHT - 100n,
-                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
-                batchExpiry: { kind: "height", value: HEIGHT + cfg.recoveryCriticalBlocks },
+                locktime: DEADLINE + cfg.recoveryCriticalBlocks,
+                recoveryLocktime: { kind: "time", value: DEADLINE + cfg.recoveryCriticalBlocks },
                 recoveryPhase: "failed",
                 failureCode: "recovery_artifact_invalid",
             }),
@@ -294,7 +283,7 @@ describe("tick", () => {
         expect(sweeper.status().lastRecoveryError?.code).toBe("recovery_artifact_invalid");
     });
     it("preserves a recovered observation while the recovery response is delayed", async () => {
-        locked("a", 800_000n);
+        locked("a", DEADLINE - 100_000n);
         let finish!: () => void;
         const response = new Promise<void>((resolve) => {
             finish = resolve;
@@ -308,7 +297,7 @@ describe("tick", () => {
                 },
             },
         });
-        const tick = sweeper.tick(HEIGHT);
+        const tick = sweeper.tick(HEIGHT, DEADLINE);
         const observed = {
             ...advances.get("a")!,
             state: "recovered" as const,
@@ -324,10 +313,10 @@ describe("tick", () => {
     });
 
     it("submits recovery for every advance whose locktime has passed", async () => {
-        locked("a", 800_000n);
-        locked("b", 900_000n);
+        locked("a", DEADLINE - 100_000n);
+        locked("b", DEADLINE);
 
-        const result = await createSweeper(deps()).tick(HEIGHT);
+        const result = await createSweeper(deps()).tick(HEIGHT, DEADLINE);
 
         expect(result.recoverySubmitted).toBe(2);
         expect(result.failed).toBe(0);
@@ -336,8 +325,8 @@ describe("tick", () => {
     });
 
     it("records a recovery submission without inventing an observed spend", async () => {
-        locked("a", 800_000n);
-        await createSweeper(deps()).tick(HEIGHT);
+        locked("a", DEADLINE - 100_000n);
+        await createSweeper(deps()).tick(HEIGHT, DEADLINE);
         expect(advances.get("a")!.spentTxid).toBeUndefined();
         expect(advances.get("a")!.recoveryTxid).toBe("tx-a");
         expect(advances.get("a")!.recoverySubmittedAt).toBe(NOW);
@@ -345,8 +334,8 @@ describe("tick", () => {
     });
 
     it("leaves an advance whose locktime has not passed alone", async () => {
-        locked("future", 900_001n);
-        const result = await createSweeper(deps()).tick(HEIGHT);
+        locked("future", DEADLINE + 1n);
+        const result = await createSweeper(deps()).tick(HEIGHT, DEADLINE);
 
         expect(result.considered).toBe(0);
         expect(recovery.seen).toEqual([]);
@@ -357,24 +346,23 @@ describe("tick", () => {
         "ignores a %s advance however old its locktime",
         async (state) => {
             advances.insert(advance({ id: "x", state, locktime: 1n }));
-            const result = await createSweeper(deps()).tick(HEIGHT);
+            const result = await createSweeper(deps()).tick(HEIGHT, DEADLINE);
             expect(result.considered).toBe(0);
         },
     );
 
     it("sweeps oldest locktime first", async () => {
-        locked("young", 899_000n);
-        locked("old", 700_000n);
-        locked("middle", 800_000n);
+        locked("young", DEADLINE - 1_000n);
+        locked("old", DEADLINE - 200_000n);
+        locked("middle", DEADLINE - 100_000n);
 
-        await createSweeper(deps()).tick(HEIGHT);
+        await createSweeper(deps()).tick(HEIGHT, DEADLINE);
         expect(recovery.seen).toEqual(["old", "middle", "young"]);
     });
 });
 
-describe("v2 renewal race", () => {
-    const v2 = (over: Partial<Advance> = {}) =>
-        advances.insert(advance({ id: "v2", covenantVersion: 2, ...over }));
+describe("renewal race", () => {
+    const v2 = (over: Partial<Advance> = {}) => advances.insert(advance({ id: "v2", ...over }));
 
     it("raises a blocker and pauses for a swept covenant whose CLTV is still future", async () => {
         v2();
@@ -481,8 +469,10 @@ describe("v2 renewal race", () => {
         },
     );
 
-    it("never consults the observed coin for a v1 advance", async () => {
-        locked("v1", 850_000n);
+    // A matured deadline is reclaimed rather than alarmed on, even where the
+    // coin was swept: the reclaim is the remedy and it is already available.
+    it("reclaims a matured advance whose coin was swept", async () => {
+        locked("matured", DEADLINE - 50_000n);
         const sweeper = createSweeper({
             ...deps(),
             observed: () => ({ swept: true, expiry: { kind: "time", value: BigInt(NOW) } }),
@@ -490,9 +480,10 @@ describe("v2 renewal race", () => {
 
         await sweeper.tick(HEIGHT, BigInt(NOW));
 
-        expect(sweeper.status().blockers).toEqual([]);
-        expect(paused).toBe(false);
-        expect(recovery.seen).toEqual(["v1"]);
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: "matured", severity: "expired" }),
+        ]);
+        expect(recovery.seen).toEqual(["matured"]);
     });
 });
 
@@ -502,9 +493,8 @@ describe("resilience", () => {
             advance({
                 id: "expired-now",
                 state: "locked",
-                locktime: HEIGHT - 100n,
-                recoveryLocktime: { kind: "height", value: HEIGHT - 100n },
-                batchExpiry: { kind: "height", value: HEIGHT },
+                locktime: DEADLINE,
+                recoveryLocktime: { kind: "time", value: DEADLINE },
             }),
         );
         const sweeper = createSweeper({
@@ -542,18 +532,8 @@ describe("resilience", () => {
     });
 
     it("does not let a never-settling first recovery starve later rows or deadline ticks", async () => {
-        locked("hung", HEIGHT - 100n);
-        const first = advances.get("hung")!;
-        advances.update({
-            ...first,
-            batchExpiry: { kind: "height", value: HEIGHT + 100n },
-        });
-        locked("later", HEIGHT - 100n);
-        const second = advances.get("later")!;
-        advances.update({
-            ...second,
-            batchExpiry: { kind: "height", value: HEIGHT + 100n },
-        });
+        locked("hung", DEADLINE - 100n);
+        locked("later", DEADLINE - 99n);
         const never = new Promise<never>(() => {});
         const stop = vi.fn();
         const recover = vi.fn((row: Advance) =>
@@ -561,11 +541,18 @@ describe("resilience", () => {
                 ? never
                 : Promise.resolve({ txid: `tx-${row.id}`, submittedAt: NOW, alreadyKnown: false }),
         );
-        const sweeper = createSweeper({ ...deps(), recovery: { recover, stop } });
+        const sweeper = createSweeper({
+            ...deps(),
+            recovery: { recover, stop },
+            observed: () => ({
+                swept: false,
+                expiry: { kind: "time", value: DEADLINE + config().recoveryCriticalSeconds },
+            }),
+        });
 
         await expect(
             Promise.race([
-                sweeper.tick(HEIGHT),
+                sweeper.tick(HEIGHT, DEADLINE),
                 new Promise((_, reject) =>
                     setTimeout(() => reject(new Error("tick remained blocked")), 100),
                 ),
@@ -574,7 +561,7 @@ describe("resilience", () => {
         expect(recover.mock.calls.map(([row]) => row.id)).toEqual(["hung", "later"]);
         expect(advances.get("later")?.state).toBe("recovering");
 
-        await sweeper.tick(HEIGHT + 90n);
+        await sweeper.tick(HEIGHT, DEADLINE + 90n);
         expect(recover.mock.calls.filter(([row]) => row.id === "hung")).toHaveLength(1);
         expect(paused).toBe(true);
         expect(sweeper.status().blockers).toEqual(
@@ -587,12 +574,12 @@ describe("resilience", () => {
     });
 
     it("processes the remainder after a mid-list failure", async () => {
-        locked("first", 700_000n);
-        locked("boom", 800_000n);
-        locked("last", 890_000n);
+        locked("first", DEADLINE - 200_000n);
+        locked("boom", DEADLINE - 100_000n);
+        locked("last", DEADLINE - 10_000n);
         recovery.failFor.add("boom");
 
-        const result = await createSweeper(deps()).tick(HEIGHT);
+        const result = await createSweeper(deps()).tick(HEIGHT, DEADLINE);
 
         expect(recovery.seen).toEqual(["first", "boom", "last"]);
         expect(result.recoverySubmitted).toBe(2);
@@ -602,26 +589,26 @@ describe("resilience", () => {
     });
 
     it("retries an ambiguous recovery attempt on a later tick", async () => {
-        locked("boom", 800_000n);
+        locked("boom", DEADLINE - 100_000n);
         recovery.failFor.add("boom");
         const sweeper = createSweeper(deps());
 
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         expect(advances.get("boom")!.state).toBe("locked");
 
         recovery.failFor.clear();
-        const second = await sweeper.tick(HEIGHT);
+        const second = await sweeper.tick(HEIGHT, DEADLINE);
         expect(second.considered).toBe(1);
         expect(recovery.seen).toEqual(["boom", "boom"]);
         expect(advances.get("boom")!.state).toBe("recovering");
     });
 
     it("reports a per-advance result summary", async () => {
-        locked("ok", 700_000n);
-        locked("bad", 800_000n);
+        locked("ok", DEADLINE - 200_000n);
+        locked("bad", DEADLINE - 100_000n);
         recovery.failFor.add("bad");
 
-        const { results } = await createSweeper(deps()).tick(HEIGHT);
+        const { results } = await createSweeper(deps()).tick(HEIGHT, DEADLINE);
 
         expect(results).toEqual([
             { id: "ok", ok: true, txid: "tx-ok" },
@@ -636,23 +623,15 @@ describe("resilience", () => {
 });
 
 describe("liveness", () => {
-    it("reports oldest unswept locktimes per domain and unknown remaining clocks", async () => {
-        locked("height", 800_000n);
-        advances.insert(
-            advance({
-                id: "time",
-                locktime: BigInt(NOW - 10),
-                recoveryLocktime: { kind: "time", value: BigInt(NOW - 10) },
-                batchExpiry: { kind: "time", value: BigInt(NOW + 100_000) },
-            }),
-        );
+    it("reports the oldest unswept locktime and an unknown remaining clock", async () => {
+        locked("older", DEADLINE - 100_000n);
+        locked("newer", DEADLINE - 10n);
         const sweeper = createSweeper(deps());
         await sweeper.tick(null, null);
         expect(sweeper.status().oldestUnsweptLocktime).toEqual({
-            height: 800_000n,
-            time: BigInt(NOW - 10),
+            height: null,
+            time: DEADLINE - 100_000n,
         });
-        expect(sweeper.status().nearestDeadline.height?.remaining).toBeNull();
         expect(sweeper.status().nearestDeadline.time?.remaining).toBeNull();
     });
 
@@ -662,7 +641,7 @@ describe("liveness", () => {
 
     it("stamps the last successful tick", async () => {
         const sweeper = createSweeper(deps());
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
 
         expect(sweeper.status().lastTickAt).toBe(NOW);
         expect(sweeper.status().lastTickHeight).toBe(HEIGHT);
@@ -672,16 +651,16 @@ describe("liveness", () => {
     // is what the container healthcheck asks about.
     it("stamps an empty tick", async () => {
         const sweeper = createSweeper(deps());
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         expect(sweeper.status().lastTickAt).toBe(NOW);
     });
 
     it("still stamps a tick in which an advance failed", async () => {
-        locked("bad", 700_000n);
+        locked("bad", DEADLINE - 200_000n);
         recovery.failFor.add("bad");
         const sweeper = createSweeper(deps());
 
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         expect(sweeper.status().lastTickAt).toBe(NOW);
     });
 
@@ -698,19 +677,19 @@ describe("liveness", () => {
             } as unknown as MemoryAdvances,
         });
 
-        await expect(sweeper.tick(HEIGHT)).rejects.toThrow(/database is locked/);
+        await expect(sweeper.tick(HEIGHT, DEADLINE)).rejects.toThrow(/database is locked/);
         expect(sweeper.status().lastTickAt).toBeNull();
     });
 
     it("counts recoveries and failures across ticks", async () => {
-        locked("a", 700_000n);
-        locked("bad", 800_000n);
+        locked("a", DEADLINE - 200_000n);
+        locked("bad", DEADLINE - 100_000n);
         recovery.failFor.add("bad");
         const sweeper = createSweeper(deps());
 
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         clock = NOW + 60;
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
 
         expect(sweeper.status().recoverySubmittedTotal).toBe(1);
         expect(sweeper.status().failedTotal).toBe(2);
@@ -718,30 +697,30 @@ describe("liveness", () => {
     });
 
     it("remembers the last failure and clears it on a clean tick", async () => {
-        locked("bad", 700_000n);
+        locked("bad", DEADLINE - 200_000n);
         recovery.failFor.add("bad");
         const sweeper = createSweeper(deps());
 
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         expect(sweeper.status().lastError).toMatch(/recovery failed for bad/);
 
         recovery.failFor.clear();
-        await sweeper.tick(HEIGHT);
+        await sweeper.tick(HEIGHT, DEADLINE);
         expect(sweeper.status().lastError).toBeNull();
     });
 
     it("reports each failure to the logger without aborting", async () => {
-        locked("bad", 700_000n);
+        locked("bad", DEADLINE - 200_000n);
         recovery.failFor.add("bad");
         const onError = vi.fn();
 
-        await createSweeper({ ...deps(), onError }).tick(HEIGHT);
+        await createSweeper({ ...deps(), onError }).tick(HEIGHT, DEADLINE);
         expect(onError).toHaveBeenCalledTimes(1);
         expect(onError.mock.calls[0]![0]).toBe("bad");
     });
 
     it("redacts qualified credentials before the logging boundary", async () => {
-        locked("bad", 700_000n);
+        locked("bad", DEADLINE - 200_000n);
         const onError = vi.fn();
         const unsafeRecovery: RecoveryRunner = {
             recover: async () => {
@@ -749,7 +728,10 @@ describe("liveness", () => {
             },
         };
 
-        await createSweeper({ ...deps(), recovery: unsafeRecovery, onError }).tick(HEIGHT);
+        await createSweeper({ ...deps(), recovery: unsafeRecovery, onError }).tick(
+            HEIGHT,
+            DEADLINE,
+        );
 
         const logged = onError.mock.calls[0]![1] as Error;
         expect(logged.message).toContain("[redacted]");

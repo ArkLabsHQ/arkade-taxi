@@ -1155,24 +1155,23 @@ describe("durable proceeds collector", () => {
         expect(changed.settle).not.toHaveBeenCalled();
         expect(changed.jobs.submissionEvidence("job").state).toBe("unsubmitted");
     });
-    it("scans a legacy terminal advance and skips a v2 one", async () => {
+    it("fails closed on a terminal advance whose payout key moved", async () => {
         const s = setup();
-        const row = advance({
-            state: "refunded",
-            operatorKey: receiverKey,
-            arkTxid: receipt.txid,
-            spentTxid: "cd".repeat(32),
-            outpoint: { txid: receipt.txid, vout: 0 },
-        });
-        let rows = [row];
+        const rows = [
+            advance({
+                state: "refunded",
+                operatorKey: receiverKey,
+                arkTxid: receipt.txid,
+                spentTxid: "cd".repeat(32),
+                outpoint: { txid: receipt.txid, vout: 0 },
+            }),
+        ];
         s.deps.advances = {
             byState: (state: string) => (state === "refunded" ? rows : []),
         } as never;
         await expect(discoverProceeds(s.deps, [receipt])).rejects.toThrow(
             "proceeds_payout_key_changed",
         );
-        rows = [{ ...row, covenantVersion: 2 }];
-        expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
     });
 
     it("discovers only the unspent fare from a verified sponsored lockup", async () => {
@@ -1635,7 +1634,7 @@ describe("inventory split database fencing", () => {
                 expiresAt: 160,
             }),
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: "height", value: 0n },
+            recoveryExecutionBudget: { kind: "time", value: 0n },
         });
     };
     it("prevents a quote from acquiring an input owned by a durable split job", () => {

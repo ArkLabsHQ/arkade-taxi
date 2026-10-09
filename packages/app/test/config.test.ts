@@ -206,18 +206,12 @@ describe("aggregated validation", () => {
         expect(() => loadConfig(env({ TAXI_LOG_LEVEL: "chatty" }))).toThrow(/TAXI_LOG_LEVEL/);
     });
 
-    // The refusal is the safety property, not the default: a reclaim moves the
-    // whole covenant to the operator, and no custody ledger exists to release it.
-    it("defaults the covenant version to legacy and refuses to start on 2", () => {
-        expect(loadConfig(env()).covenantVersion).toBe(1);
-        expect(loadConfig(env({ TAXI_COVENANT_VERSION: "1" })).covenantVersion).toBe(1);
-        expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: "2" }))).toThrow(
-            /TAXI_COVENANT_VERSION[\s\S]*custody ledger[\s\S]*recovered/i,
-        );
-        for (const value of ["0", "3", "", "two"])
-            expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: value }))).toThrow(
-                /TAXI_COVENANT_VERSION/,
-            );
+    // One covenant, so there is nothing to select and nothing to refuse:
+    // TAXI_COVENANT_VERSION is an unknown variable like any other.
+    it("carries no covenant version and ignores the retired variable", () => {
+        expect(loadConfig(env())).not.toHaveProperty("covenantVersion");
+        for (const value of ["1", "2", "0", "3", "", "two"])
+            expect(() => loadConfig(env({ TAXI_COVENANT_VERSION: value }))).not.toThrow();
     });
 
     // Read from loadConfig, not a literal: the shipped default is the guarantee
@@ -275,7 +269,7 @@ describe("aggregated validation", () => {
                 return sanitizeOperationalError(e, "startup failed");
             }
         };
-        expect(refused({ TAXI_COVENANT_VERSION: "2" })).toContain("TAXI_COVENANT_VERSION");
+        expect(refused({ TAXI_LOG_LEVEL: "chatty" })).toContain("TAXI_LOG_LEVEL");
         expect(refused({ TAXI_ARKD_URL: "not-a-url", TAXI_HTTP_PORT: "99999" })).toContain(
             "TAXI_ARKD_URL, TAXI_HTTP_PORT",
         );

@@ -108,7 +108,7 @@ export function listReceiverClaims(
                         !jointScriptMatches ||
                         outpoint.vout !== covenantOutputIndex ||
                         !recoveryLocktime ||
-                        recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time") ||
+                        recoveryLocktime.kind !== "time" ||
                         recoveryLocktime.value !== advance.locktime ||
                         (source.kind === "joint-fill"
                             ? source.assetUnits

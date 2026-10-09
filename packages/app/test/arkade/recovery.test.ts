@@ -20,8 +20,8 @@ import { hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
     DustCovenantScript,
+    lockupSats,
     payoutPkScript,
-    refundTopup,
     type DustCovenantParams,
 } from "@arkade-taxi/covenant";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
@@ -78,14 +78,14 @@ const sourceAdvance = (
             | "exitDelay"
             | "topup"
             | "paymentSats"
-            | "covenantVersion"
         >
     > = {},
-    fareSats = 10n,
+    fareSats = 330n,
 ) => {
-    // A time-domain fixture doubles as the v2 deadline shape: NOW + 100 days, so
+    // The covenant locktime is always a wall-clock deadline, NOW + 100 days, so
     // it is strictly after the createdAt the startup invariant compares it with.
-    const locktime = kind === "height" ? 850_000n : 1_757_000_000n + 8_640_000n;
+    // `kind` now picks only the domain of the funding coins it outlives.
+    const locktime = 1_757_000_000n + 8_640_000n;
     const cfg = config();
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
     const assetId = sdkAsset
@@ -115,7 +115,7 @@ const sourceAdvance = (
     });
     // The time gap must clear recoveryBroadcastSeconds, or a startup invariant
     // run on a time-domain row refuses it.
-    const expiry = locktime + (kind === "height" ? 100n : 86_401n);
+    const expiry = kind === "height" ? 900_000n : locktime + 86_401n;
     const expiryFields =
         kind === "height"
             ? { expiresAtHeight: Number(expiry), expiresAt: undefined }
@@ -123,7 +123,9 @@ const sourceAdvance = (
     const senderInput = operatorFundingInput(
         fundingCoin({
             txid: "11".repeat(32),
-            value: 20,
+            // The sender's change is pure change here, so it must clear the
+            // covenant dust floor rather than ride as a sub-dust OP_RETURN.
+            value: 330 + Number(terms.paymentSats ?? 0n),
             script: hex.encode(senderTree.pkScript),
             tapTree: senderTree.encode(),
             forfeitTapLeafScript: senderTree.leaves[0],
@@ -220,11 +222,7 @@ const sourceAdvance = (
         fare: base.fare,
         ...terms,
         locktime,
-        recoveryLocktime: { kind, value: locktime },
-        batchExpiry: {
-            kind,
-            value: expiry,
-        },
+        recoveryLocktime: { kind: "time", value: locktime },
         covenantAddress: script.address(cfg.addressHrp, cfg.serverPubkey).encode(),
         unsignedLockupTx,
         unsignedLockupId: envelope.unsignedTxId,
@@ -341,54 +339,34 @@ const startupError = (row: Advance): string | undefined => {
 };
 
 describe("recovery graph", () => {
-    it.each([
-        ["height", 850_000n],
-        ["time", 1_757_000_000n + 8_640_000n],
-    ] as const)("builds the exact %s recovery leaf graph", (kind, locktime) => {
-        const row = sourceAdvance(kind);
-        const intent = buildRecoveryIntent(row, config());
-        const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
-        const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
-        const topup = refundTopup(row, config().vtxoMinAmount);
+    it.each(["height", "time"] as const)(
+        "builds the exact recovery leaf graph over %s funding",
+        (kind) => {
+            const row = sourceAdvance(kind);
+            const intent = buildRecoveryIntent(row, config());
+            const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
+            const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
+            const lockup = lockupSats(row);
 
-        expect(arkTx.lockTime).toBe(Number(locktime));
-        expect(checkpoint.lockTime).toBe(Number(locktime));
-        expect(arkTx.getInput(0).sequence).toBe(0xfffffffe);
-        expect(arkTx.getOutput(0)).toEqual({
-            amount: topup,
-            script: payoutPkScript(row.operatorKey, topup, row.dust),
-        });
-        expect(arkTx.getOutput(1)).toEqual({
-            amount: row.dust - topup,
-            script: payoutPkScript(row.senderKey, row.dust - topup, row.dust),
-        });
-        expect(Extension.fromTx(arkTx).getEmulatorPacket()?.entries).toMatchObject([{ vin: 0 }]);
-        expect(arkTx.getOutput(3)).toEqual(P2A);
-        expect(getArkPsbtFields(arkTx, 0, PrevArkTxField)).toHaveLength(1);
-        expect(intent.expectedTxid).toBe(arkTx.id);
-        expect(intent.digest).toBe(digest(intent));
-    });
+            expect(arkTx.lockTime).toBe(Number(row.locktime));
+            expect(checkpoint.lockTime).toBe(Number(row.locktime));
+            expect(arkTx.getInput(0).sequence).toBe(0xfffffffe);
+            expect(arkTx.getOutput(0)).toEqual({
+                amount: lockup,
+                script: payoutPkScript(row.operatorKey, lockup, row.dust),
+            });
+            expect(Extension.fromTx(arkTx).getEmulatorPacket()?.entries).toMatchObject([
+                { vin: 0 },
+            ]);
+            expect(arkTx.getOutput(2)).toEqual(P2A);
+            expect(getArkPsbtFields(arkTx, 0, PrevArkTxField)).toHaveLength(1);
+            expect(intent.expectedTxid).toBe(arkTx.id);
+            expect(intent.digest).toBe(digest(intent));
+        },
+    );
 
-    it("recovers a whole-dust advance in full and returns the payment to the sender", () => {
-        const row = sourceAdvance("height", false, { topup: 330n, paymentSats: 20n });
-        const arkTx = Transaction.fromPSBT(base64.decode(buildRecoveryIntent(row, config()).arkTx));
-        expect(arkTx.getOutput(0)).toEqual({
-            amount: 330n,
-            script: payoutPkScript(row.operatorKey, 330n, row.dust),
-        });
-        expect(arkTx.getOutput(1)).toEqual({
-            amount: 20n,
-            script: payoutPkScript(row.senderKey, 20n, row.dust),
-        });
-    });
-
-    it("reclaims a v2 covenant whole to the operator through the reclaim leaf", () => {
-        const row = sourceAdvance(
-            "time",
-            false,
-            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
-            330n,
-        );
+    it("reclaims the covenant whole to the operator through the reclaim leaf", () => {
+        const row = sourceAdvance("time", false, { topup: 330n, paymentSats: 20n });
         const intent = buildRecoveryIntent(row, config());
         const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
         const covenant = new DustCovenantScript({
@@ -415,13 +393,8 @@ describe("recovery graph", () => {
         expect(intent.expectedTxid).toBe(arkTx.id);
     });
 
-    it("round-trips a prepared v2 reclaim through startup without quarantine", () => {
-        const row = sourceAdvance(
-            "time",
-            false,
-            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
-            330n,
-        );
+    it("round-trips a prepared reclaim through startup without quarantine", () => {
+        const row = sourceAdvance("time", false, { topup: 330n, paymentSats: 20n });
         expect(() => assertRecoveryStartupInvariants([row], config())).not.toThrow();
         expect(() =>
             assertRecoveryStartupInvariants([preparedRecovery(row)], config()),
@@ -429,32 +402,34 @@ describe("recovery graph", () => {
         expect(startupError(preparedRecovery(row))).toBeUndefined();
     });
 
-    // D2 gives v2 its own startup invariant: the deadline is a time-domain CLTV,
-    // strictly after the lockup, and bounded by neither the funding coins'
-    // domain nor their expiry.
-    it("holds a v2 deadline to its own invariant, not the funding coins'", () => {
-        const row = sourceAdvance(
-            "time",
-            false,
-            { topup: 330n, paymentSats: 20n, covenantVersion: 2 },
-            330n,
-        );
-        const v2 = { ...row, batchExpiry: undefined };
-        expect(() => assertRecoveryStartupInvariants([v2], config())).not.toThrow();
+    // The deadline is a time-domain CLTV, strictly after the lockup, and bounded
+    // by neither the funding coins' domain nor their expiry.
+    it("holds the deadline to its own invariant, not the funding coins'", () => {
+        const row = sourceAdvance("time", false, { topup: 330n, paymentSats: 20n });
+        expect(() => assertRecoveryStartupInvariants([row], config())).not.toThrow();
 
         expect(() =>
             assertRecoveryStartupInvariants(
-                [{ ...v2, recoveryLocktime: { kind: "height", value: v2.locktime } }],
+                [{ ...row, recoveryLocktime: { kind: "height", value: row.locktime } }],
                 config(),
             ),
-        ).toThrow(/a v2 recovery locktime must be time-domain/);
+        ).toThrow(/a recovery locktime must be time-domain/);
         expect(() =>
-            assertRecoveryStartupInvariants([{ ...v2, createdAt: Number(v2.locktime) }], config()),
-        ).toThrow(/a v2 deadline must fall after the lockup/);
+            assertRecoveryStartupInvariants(
+                [{ ...row, createdAt: Number(row.locktime) }],
+                config(),
+            ),
+        ).toThrow(/the deadline must fall after the lockup/);
+        expect(() =>
+            assertRecoveryStartupInvariants(
+                [{ ...row, batchExpiry: { kind: "time", value: row.locktime + 1n } }],
+                config(),
+            ),
+        ).toThrow(/stores no batch expiry/);
     });
 
-    it("moves a v2 reclaim's whole asset holding to the operator output", () => {
-        const row = sourceAdvance("time", true, { topup: 330n, covenantVersion: 2 });
+    it("moves a reclaim's whole asset holding to the operator output", () => {
+        const row = sourceAdvance("time", true, { topup: 330n });
         const packet = Extension.fromTx(
             Transaction.fromPSBT(base64.decode(buildRecoveryIntent(row, config()).arkTx)),
         ).getAssetPacket()!.groups[0]!;
@@ -467,7 +442,7 @@ describe("recovery graph", () => {
         ]);
     });
 
-    it("moves the exact persisted asset units to the sender receipt", () => {
+    it("moves the exact persisted asset units to the reclaim output", () => {
         const intent = buildRecoveryIntent(sourceAdvance("height", true), config());
         const packet = Extension.fromTx(
             Transaction.fromPSBT(base64.decode(intent.arkTx)),
@@ -477,7 +452,7 @@ describe("recovery graph", () => {
             [0, 9_007_199_254_740_993n],
         ]);
         expect(packet.outputs.map((output) => [output.vout, output.amount])).toEqual([
-            [1, 9_007_199_254_740_993n],
+            [0, 9_007_199_254_740_993n],
         ]);
     });
 
@@ -517,21 +492,22 @@ describe("recovery graph", () => {
 
         const intent = buildRecoveryIntent(persisted, config());
         const tx = Transaction.fromPSBT(base64.decode(intent.arkTx));
-        const topup = refundTopup(persisted, config().vtxoMinAmount);
-        const returned = persisted.dust - topup;
-        expect(tx.getOutput(1)).toEqual({
-            amount: returned,
-            script: payoutPkScript(persisted.receiverKey, returned, persisted.dust),
+        const lockup = lockupSats(persisted);
+        // reclaimWhole carries the asset to its single operator output; the
+        // receiver's claim on it lives in the custody ledger instead.
+        expect(tx.getOutput(0)).toEqual({
+            amount: lockup,
+            script: payoutPkScript(persisted.operatorKey, lockup, persisted.dust),
         });
-        expect(tx.getOutput(1).script).not.toEqual(
-            payoutPkScript(persisted.senderKey, returned, persisted.dust),
+        expect(tx.getOutput(0).script).not.toEqual(
+            payoutPkScript(persisted.senderKey, lockup, persisted.dust),
         );
         expect(Extension.fromTx(tx).getAssetPacket()!.groups[0]!.outputs[0]).toMatchObject({
-            vout: 1,
+            vout: 0,
             amount: 9_007_199_254_740_993n,
         });
         expect(Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script).toEqual(
-            expected.covenant.refund,
+            expected.covenant.reclaim,
         );
     });
 
@@ -1120,20 +1096,19 @@ describe("startup recovery invariant", () => {
             recoveryLocktime: { kind: "time" as const, value: 850_000n },
         };
         expect(() => assertRecoveryStartupInvariants([mismatch], config())).toThrow(
-            /recovery-height.*kind/,
+            /recovery-height.*value differs/,
         );
     });
 
-    it.each([
-        ["height", 12n],
-        ["time", 7_200n],
-    ] as const)(
-        "requires the %s execution budget to fit strictly before expiry",
-        (kind, budget) => {
+    // The budget races the lockup, not a funding expiry the advance no longer
+    // stores, so a stored expiry is itself the refusal.
+    it.each(["height", "time"] as const)(
+        "refuses a covenant advance that stored a %s batch expiry",
+        (kind) => {
             const row = sourceAdvance(kind);
-            const exact = { ...row, batchExpiry: { kind, value: row.locktime + budget } };
-            expect(() => assertRecoveryStartupInvariants([exact], config())).toThrow(
-                new RegExp(`${row.id}.*strictly before batch expiry`),
+            const stored = { ...row, batchExpiry: { kind, value: row.locktime + 7_200n } };
+            expect(() => assertRecoveryStartupInvariants([stored], config())).toThrow(
+                new RegExp(`${row.id}.*stores no batch expiry`),
             );
         },
     );
@@ -1411,7 +1386,7 @@ describe("durable recovery runner", () => {
                  (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind,
                   batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
             )
-            .run("aa".repeat(32), 0, row.id, row.batchExpiry!.kind, row.batchExpiry!.value, 1);
+            .run("aa".repeat(32), 0, row.id, null, null, 1);
         const malformed = {
             submitTx: vi.fn(async (arkTx: string, checkpoints: string[]) => ({
                 signedArkTx: arkTx,

@@ -989,7 +989,7 @@ describe("receive quote routes", () => {
             state: "quoted",
             batchExpiry: { kind: "height", value: "900000" },
             inputExpiryFloor: { kind: "height", value: "850000" },
-            recoveryLocktime: { kind: "height", value: "849856" },
+            recoveryLocktime: { kind: "time", value: String(BigInt(clock) + 8_640_000n) },
         });
         expect(advances.rows.size).toBe(0);
 
@@ -2154,9 +2154,9 @@ describe("exposure cap across flows", () => {
             operatorSignerKey: config().operatorSignerKey,
             exitDelay: config().exitDelay,
             dust: 330n,
-            topup: 329n,
+            topup: 330n,
             assetId: ASSET,
-            locktime: 849_856n,
+            locktime: BigInt(NOW) + 8_640_000n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
         },
@@ -2164,8 +2164,8 @@ describe("exposure cap across flows", () => {
         fare: { currency: "sats", units: 0n },
         batchExpiry: { kind: "height", value: 850_000n },
         inputExpiryFloor: { kind: "height", value: 850_000n },
-        recoveryLocktime: { kind: "height", value: 849_856n },
-        loanSats: 329n,
+        recoveryLocktime: { kind: "time", value: BigInt(NOW) + 8_640_000n },
+        loanSats: 330n,
         createdAt: NOW,
         expiresAt: NOW + 600,
         policyRevision,
@@ -2209,7 +2209,7 @@ describe("exposure cap across flows", () => {
         quotes.insert({
             quote: receiveRow(revision),
             expectedPolicyRevision: revision,
-            recoveryExecutionBudget: { kind: "height", value: config().recoveryBroadcastBlocks },
+            recoveryExecutionBudget: { kind: "time", value: config().recoveryBroadcastSeconds },
         });
     };
 
@@ -2282,7 +2282,7 @@ describe("exposure cap across flows", () => {
             };
             const fence = totalExposure(db);
 
-            expect(fence.total).toBe(329n);
+            expect(fence.total).toBe(330n);
             expect(exposure.outstandingSats).toBe(String(fence.total));
             expect(exposure.activeCount).toBe(Number(fence.count));
         } finally {

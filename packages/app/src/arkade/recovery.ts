@@ -8,7 +8,6 @@ import {
     covenantSpendInput,
     lockupSats,
     payoutPkScript,
-    refundTopup,
 } from "@arkade-taxi/covenant";
 import {
     CLTVMultisigTapscript,
@@ -82,21 +81,15 @@ function covenantScript(advance: Advance, config: RuntimeConfig): DustCovenantSc
 function assertTaggedLocktime(advance: Advance): NonNullable<Advance["recoveryLocktime"]> {
     const locktime = advance.recoveryLocktime;
     if (!locktime) fail(`advance ${advance.id}: missing tagged recovery locktime`);
-    // A v2 deadline stores no batch expiry to agree with, so it carries its own.
-    if (advance.batchExpiry === undefined) {
-        if (locktime.kind !== "time")
-            fail(`advance ${advance.id}: a v2 recovery locktime must be time-domain`);
-    } else if (locktime.kind !== advance.batchExpiry.kind)
-        fail(`advance ${advance.id}: recovery locktime kind differs from batch expiry`);
+    // The deadline stores no batch expiry to agree with, so it carries its own.
+    if (locktime.kind !== "time")
+        fail(`advance ${advance.id}: a recovery locktime must be time-domain`);
+    if (advance.batchExpiry !== undefined)
+        fail(`advance ${advance.id}: a covenant advance stores no batch expiry`);
     if (locktime.value !== advance.locktime)
         fail(`advance ${advance.id}: recovery locktime value differs from covenant locktime`);
-    if (
-        locktime.value < 0n ||
-        locktime.value > 0xffff_ffffn ||
-        (locktime.kind === "height" && locktime.value >= 500_000_000n) ||
-        (locktime.kind === "time" && locktime.value < 500_000_000n)
-    )
-        fail(`advance ${advance.id}: recovery locktime is invalid for ${locktime.kind}`);
+    if (locktime.value < 500_000_000n || locktime.value > 0xffff_ffffn)
+        fail(`advance ${advance.id}: recovery locktime is outside the time domain`);
     return locktime;
 }
 
@@ -252,18 +245,9 @@ export function assertRecoveryStartupInvariants(
     for (const advance of advances) {
         if (!["locking", "locked", "recovering"].includes(advance.state)) continue;
         const locktime = assertTaggedLocktime(advance);
-        const budget =
-            locktime.kind === "height"
-                ? config.recoveryBroadcastBlocks
-                : config.recoveryBroadcastSeconds;
-        // The race a v2 deadline must win is the lockup, not the funding coins.
-        if (advance.batchExpiry === undefined) {
-            if (locktime.value <= BigInt(advance.createdAt))
-                fail(`advance ${advance.id}: a v2 deadline must fall after the lockup`);
-        } else if (locktime.value + budget >= advance.batchExpiry.value)
-            fail(
-                `advance ${advance.id}: recovery locktime plus execution budget must be strictly before batch expiry`,
-            );
+        // The race the deadline must win is the lockup, not the funding coins.
+        if (locktime.value <= BigInt(advance.createdAt))
+            fail(`advance ${advance.id}: the deadline must fall after the lockup`);
         try {
             const source = readFundingSource(advance.unsignedLockupTx);
             if (source.kind === "legacy") validatePersistedLockupGraph(advance, config);
@@ -389,9 +373,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
             ? 0n
             : advance.fare.currency === "sats"
               ? advance.fare.units
-              : advance.covenantVersion === 2
-                ? config.dust
-                : config.vtxoMinAmount;
+              : config.dust;
     if (advance.fare.units < 0n) fail(`advance ${advance.id}: persisted fare is negative`);
     if (tagged.kind === "legacy" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;
@@ -462,7 +444,6 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                   ),
               ])
             : undefined;
-    const v2 = script.options.params.covenantVersion === 2;
     const transferAssets =
         id && units
             ? Packet.create([
@@ -470,7 +451,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                       AssetId.fromString(id),
                       null,
                       [AssetInput.create(0, units)],
-                      [AssetOutput.create(v2 ? 0 : 1, units)],
+                      [AssetOutput.create(0, units)],
                       [],
                   ),
               ])
@@ -482,34 +463,16 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         lockup,
         sourceAssets?.serialize(),
     );
-    const topup = refundTopup(script.options.params, config.vtxoMinAmount);
-    const recoveryKey =
-        advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey;
     const extension = Extension.create([
         ...(transferAssets ? [transferAssets] : []),
-        EmulatorPacket.create([
-            { vin: 0, script: script.covenant.reclaim ?? script.covenant.refund },
-        ]),
+        EmulatorPacket.create([{ vin: 0, script: script.covenant.reclaim }]),
     ]).txOut();
-    const outputs = v2
-        ? [
-              {
-                  amount: lockup,
-                  script: payoutPkScript(advance.operatorKey, lockup, advance.dust),
-              },
-              extension,
-          ]
-        : [
-              {
-                  amount: topup,
-                  script: payoutPkScript(advance.operatorKey, topup, advance.dust),
-              },
-              {
-                  amount: lockup - topup,
-                  script: payoutPkScript(recoveryKey, lockup - topup, advance.dust),
-              },
-              extension,
-          ];
+    // reclaimWhole pays the whole lockup to the operator; what is owed back to
+    // the recovery owner is recorded in custody, not in an output here.
+    const outputs = [
+        { amount: lockup, script: payoutPkScript(advance.operatorKey, lockup, advance.dust) },
+        extension,
+    ];
     let unroll: CSVMultisigTapscript.Type;
     try {
         unroll = CSVMultisigTapscript.decode(hex.decode(serverUnrollScript));

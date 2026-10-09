@@ -90,11 +90,7 @@ const advance = (): Advance => {
         claimMode: request.params.claimMode,
         covenantAddress: request.covenantAddress,
         fare: request.fare,
-        batchExpiry: request.funding.batchExpiry,
-        recoveryLocktime: {
-            kind: request.funding.batchExpiry.kind,
-            value: request.params.locktime,
-        },
+        recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx: encoded,
         unsignedLockupId: decodeLockupEnvelope(encoded).unsignedTxId,
@@ -221,6 +217,10 @@ describe("persisted-fact submission validation", () => {
         const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
         const request = buildRequest();
         request.params.operatorKey = cfg.operatorKey;
+        // Fare and change would otherwise share the payout script: both clear
+        // dust now, so neither takes the distinguishing sub-dust form.
+        request.funding.totalValue = request.params.topup + request.fare.units;
+        request.funding.inputs[0]!.value = Number(request.funding.totalValue);
         request.covenantAddress = new DustCovenantScript({
             params: request.params,
             serverKey: cfg.serverPubkey,
@@ -299,14 +299,14 @@ describe("persisted-fact submission validation", () => {
 
     it("accepts the exact persisted earliest expiry when the sender expires first", async () => {
         const request = buildRequest();
-        request.senderInputs[0]!.expiry.value = 900000n;
-        request.funding.inputs[0]!.expiresAtHeight = 910000;
-        request.funding.batchExpiry.value = 910000n;
+        const earliest = request.funding.batchExpiry.value;
+        request.senderInputs[0]!.expiry.value = earliest;
+        request.funding.inputs[0]!.expiresAt = new Date(Number(earliest + 10_000n) * 1000);
+        request.funding.batchExpiry.value = earliest + 10_000n;
         const encoded = buildLockupEnvelope(request, config(), unroll);
         const persisted = advance();
         persisted.unsignedLockupTx = encoded;
         persisted.unsignedLockupId = decodeLockupEnvelope(encoded).unsignedTxId;
-        persisted.batchExpiry = { kind: "height", value: 900000n };
         const signed = await signedEnvelope(encoded);
 
         expect(() => validateLockupSubmission(persisted, signed, config())).not.toThrow();
@@ -1150,7 +1150,7 @@ describe("durable submission resumption", () => {
                 reservations.reserveQuote({
                     advance: persisted,
                     expectedPolicyRevision: policy.getSnapshot().revision,
-                    recoveryExecutionBudget: { kind: "height", value: 1n },
+                    recoveryExecutionBudget: { kind: "time", value: 1n },
                 });
                 const validated = validateLockupSubmission(
                     persisted,

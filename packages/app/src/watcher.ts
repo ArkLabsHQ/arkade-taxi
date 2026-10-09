@@ -6,7 +6,6 @@ import {
     lockupSats,
     payoutPkScript,
     recycleFare,
-    refundTopup,
 } from "@arkade-taxi/covenant";
 import type { Advance, ExpiryDeadline } from "@arkade-taxi/core";
 import { advanceKind, covenantParamsOf } from "@arkade-taxi/core";
@@ -734,21 +733,18 @@ async function classifySpend(
         );
         if (leafIndex === undefined) fail("checkpoint selects no recognized covenant leaf");
         const leaf = leafIndex as Leaf;
-        const v2Reclaim = advance.covenantVersion === 2 && leaf === Leaf.Recovery;
+        const reclaim = leaf === Leaf.Recovery;
         const recoveryLocktime = advance.recoveryLocktime;
         if (
-            leaf === Leaf.Recovery &&
+            reclaim &&
             (!recoveryLocktime ||
-                // v1 only: a v2 advance keeps no batch expiry at all, and D2
-                // makes its deadline wall-clock where an expiry may be a height.
-                (advance.covenantVersion !== 2 &&
-                    recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time")) ||
+                recoveryLocktime.kind !== "time" ||
                 recoveryLocktime.value !== advance.locktime)
         )
             fail("recovery locktime tag is missing or inconsistent");
-        const expectedLockTime = leaf === Leaf.Recovery ? Number(recoveryLocktime!.value) : 0;
-        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint", v2Reclaim);
-        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction", v2Reclaim);
+        const expectedLockTime = reclaim ? Number(recoveryLocktime!.value) : 0;
+        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint", reclaim);
+        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction", reclaim);
         const expectedLeaf = covenantSpendInput(
             facts.script,
             leaf,
@@ -851,7 +847,7 @@ async function classifySpend(
         }
 
         const params = covenantParamsOf(advance);
-        if (params.covenantVersion === 2 && leaf === Leaf.Recovery) {
+        if (leaf === Leaf.Recovery) {
             // A reclaim is permissionless and the leaf pins only out[0] against
             // in[0], so a stranger's own input and change must still classify. Read
             // as a disagreement it would pause the Taxi, and clearing never unpauses.
@@ -864,7 +860,7 @@ async function classifySpend(
             );
             exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 0);
             exactAnchor(arkTx, anchorIndex(arkTx));
-        } else if (params.covenantVersion === 2) {
+        } else {
             // The leaf pins INSPECTNUMINPUTS 2 and no output count, so neither do we.
             if (arkTx.inputsLength !== 2) fail("refund input count mismatch");
             const refunderCoin = await secondInput(arkTx, facts.unroll, deps, verify, "refunder");
@@ -892,49 +888,15 @@ async function classifySpend(
                 1,
             );
             exactAnchor(arkTx, anchorIndex(arkTx));
-        } else {
-            // buildRefund pins no input count on either v1 leaf, so a spender who
-            // brings their own coin is script-valid; out[0] and out[1] stay pinned.
-            const topup = refundTopup(params, deps.config.vtxoMinAmount);
-            exactOutput(
-                arkTx,
-                0,
-                topup,
-                payoutPkScript(advance.operatorKey, topup, advance.dust),
-                "refund repayment",
-            );
-            exactOutput(
-                arkTx,
-                1,
-                facts.value - topup,
-                payoutPkScript(
-                    advance.recoveryRecipient === "receiver"
-                        ? advance.receiverKey
-                        : advance.senderKey,
-                    facts.value - topup,
-                    advance.dust,
-                ),
-                "refund recovery output",
-            );
-            exactExtension(arkTx, extensionIndex(arkTx), covenantProgram, [covenantHoldings], 1);
-            exactAnchor(arkTx, anchorIndex(arkTx));
         }
         if (leaf === Leaf.Recovery) {
             const ceiling = Number(recoveryLocktime!.value);
-            if (
-                arkTx.lockTime !== checkpoint.lockTime ||
-                (v2Reclaim ? arkTx.lockTime > ceiling : arkTx.lockTime !== ceiling)
-            )
+            if (arkTx.lockTime !== checkpoint.lockTime || arkTx.lockTime > ceiling)
                 fail("recovery does not carry the exact persisted CLTV");
-            // An early reclaim matures against its own CLTV, not the ceiling.
-            const matured = v2Reclaim ? BigInt(arkTx.lockTime) : recoveryLocktime!.value;
-            const chainClock = recoveryLocktime!.kind === "height" ? tip.height : tip.time;
-            if (!Number.isSafeInteger(chainClock) || BigInt(chainClock) < matured)
-                fail(
-                    recoveryLocktime!.kind === "height"
-                        ? "recovery height CLTV is not mature at the canonical tip"
-                        : "recovery time CLTV is not mature at canonical median time",
-                );
+            // A reclaim carrying an earlier locktime matures against that
+            // locktime rather than against the ceiling.
+            if (!Number.isSafeInteger(tip.time) || BigInt(tip.time) < BigInt(arkTx.lockTime))
+                fail("recovery time CLTV is not mature at canonical median time");
             return { kind: "recovered", txid: arkTx.id };
         }
         if (arkTx.lockTime !== 0 || checkpoint.lockTime !== 0)
@@ -1299,9 +1261,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 : [],
             new Set(
                 current.flatMap((advance) =>
-                    advance.covenantVersion === 2 && advance.outpoint
-                        ? [outpointKey(advance.outpoint)]
-                        : [],
+                    advance.outpoint ? [outpointKey(advance.outpoint)] : [],
                 ),
             ),
         );
@@ -1353,7 +1313,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             }
             // Ahead of the spend paths: classifySpend refuses an empty arkTxId.
             let settledHandled = false;
-            if (coin && observedAdvance.covenantVersion === 2 && renewalCommitment(coin)) {
+            if (coin && renewalCommitment(coin)) {
                 try {
                     const facts = covenantFacts(observedAdvance, deps.config);
                     if (!sameCovenant(coin, facts))

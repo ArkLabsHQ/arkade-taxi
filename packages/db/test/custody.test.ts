@@ -62,8 +62,13 @@ const v2 = (overrides: Partial<Advance> = {}): Advance =>
         assetId: ASSET,
         assetUnits: 7n,
         receiverFare: { currency: "asset", units: 2n },
+        recoveryRecipient: "receiver",
         ...overrides,
     });
+
+/** The sender-paid transfer rail: no receiver fare, so no receiver-owned recovery. */
+const senderPaid = (overrides: Partial<Advance> = {}): Advance =>
+    advance({ id: "sender-paid", paymentSats: 1_000n, ...overrides });
 
 let db: Database;
 let advances: AdvanceRepository;
@@ -107,6 +112,22 @@ describe("a reclaim opens the liability", () => {
             expiresAt: DUE,
             releaseInputs: [],
         });
+    });
+
+    // The covenant pays a reclaim to the recovery owner, so the ledger has to owe
+    // it to the same party. On the sender-paid rail that is the payer, whose sats
+    // these are; naming the payee would credit someone who never paid.
+    it("owes a reclaimed sender-paid payment to the payer, not the payee", () => {
+        reclaim(senderPaid());
+        expect(custody.get("sender-paid")).toMatchObject({
+            ownerKey: new Uint8Array(32).fill(0xb2),
+            owedSats: 1_000n,
+        });
+    });
+
+    it("still owes a receiver-owned recovery to the receiver", () => {
+        reclaim();
+        expect(custody.get("adv-1")?.ownerKey).toEqual(new Uint8Array(32).fill(0xa1));
     });
 
     it("owes nothing in sats for a dust-unit covenant", () => {

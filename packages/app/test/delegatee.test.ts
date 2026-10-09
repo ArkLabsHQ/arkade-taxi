@@ -21,7 +21,6 @@ const v2Params = (): DustCovenantParams => ({
     topup: 330n,
     locktime: DEADLINE,
     claimMode: "recycle",
-    covenantVersion: 2,
 });
 
 const covenantAddress = (params: DustCovenantParams): string =>

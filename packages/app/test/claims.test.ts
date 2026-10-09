@@ -53,8 +53,7 @@ function persisted(
         ...(withAsset ? { assetUnits } : {}),
         covenantAddress: request.covenantAddress,
         fare: request.fare,
-        batchExpiry: request.funding.batchExpiry,
-        recoveryLocktime: { kind: "height", value: request.params.locktime },
+        recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,
         unsignedLockupId: envelope.unsignedTxId,
@@ -161,16 +160,18 @@ describe("listReceiverClaims", () => {
                         operatorKey: bytesToHex(cfg.operatorKey),
                         operatorSignerKey: bytesToHex(cfg.operatorSignerKey),
                         dust: "330",
-                        topup: "230",
-                        locktime: "899856",
+                        topup: "330",
+                        locktime: row.locktime.toString(),
                         exitDelay: { value: "5", type: "blocks" },
                         claimMode: "recycle",
                     },
                     covenantAddress: row.covenantAddress,
                     outpoint: { txid: "cd".repeat(32), vout: 0 },
-                    fare: { currency: "sats", units: "10" },
-                    batchExpiry: { kind: "height", value: "900000" },
-                    recoveryLocktime: { kind: "height", value: "899856" },
+                    fare: { currency: "sats", units: "330" },
+                    // No batch expiry is stored, so the claim counts down to the
+                    // deadline itself.
+                    batchExpiry: { kind: "time", value: row.locktime.toString() },
+                    recoveryLocktime: { kind: "time", value: row.locktime.toString() },
                 },
             },
         ]);
@@ -343,7 +344,7 @@ describe("listReceiverClaims", () => {
         });
 
         it("reports a v2 claim's batch expiry as the deadline it counts down to, not zero", async () => {
-            const bound = await createBoundJointFill({ covenantVersion: 2 });
+            const bound = await createBoundJointFill();
             try {
                 settle(bound);
                 const [claim] = listReceiverClaims(

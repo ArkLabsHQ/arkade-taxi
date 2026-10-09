@@ -49,6 +49,8 @@ export const operatorSignerKey = await xonly(7);
 export const HRP = "ark";
 export const VTXO_MIN = 10n;
 export const NOW = 1_000_000_000;
+/** The covenant's wall-clock deadline: NOW + 100 days, in the time domain. */
+export const DEADLINE = BigInt(NOW) + 8_640_000n;
 export const senderIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(2));
 export const operatorIdentity = SingleKey.fromPrivateKey(new Uint8Array(32).fill(3));
 export const senderTree = new VtxoScript([
@@ -62,7 +64,8 @@ export const fundingInputs = (): FundingInputValue[] => [
     {
         txid: "aa".repeat(32),
         vout: 2,
-        value: 10n,
+        // Clears the covenant dust floor: every payout of its must.
+        value: 660n,
         tapTree: senderTree.encode(),
         spendLeaf: senderTree.scripts[0],
         expiry: { kind: "height", value: 900_000n },
@@ -76,7 +79,7 @@ export const params = (): CovenantParamsValue => ({
     operatorSignerKey,
     dust: 330n,
     topup: 330n,
-    locktime: 800_000n,
+    locktime: DEADLINE,
     exitDelay: { value: 86_016n, type: "seconds" },
 });
 
@@ -111,18 +114,23 @@ interface QuoteFixtureOptions {
     serverUnrollScript?: CSVMultisigTapscript.Type;
 }
 
+const fareSats = (fare: FareSpec): bigint => (fare.currency === "sats" ? fare.units : 330n);
+
 export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteResponse => {
     const senderInputs = opts.senderInputs ?? fundingInputs();
     const senderSats =
         opts.senderSats ?? senderInputs.reduce((sum, input) => sum + input.value, 0n);
-    const fare = opts.fare ?? { currency: "sats", units: 10n };
+    const fare = opts.fare ?? { currency: "sats", units: 330n };
     const unsignedLockupTx = buildLockupEnvelope(
         {
             senderInputs,
             senderSats,
+            // The operator funds exactly the loan and the fare: a change output
+            // would share the payout script with the fare now that neither can
+            // take the distinguishing sub-dust form.
             funding: {
-                inputs: [fundingCoin()],
-                totalValue: 20_000n,
+                inputs: [fundingCoin({ value: Number(p.topup + fareSats(fare)) })],
+                totalValue: p.topup + fareSats(fare),
                 batchExpiry: { kind: "height", value: 900_000n },
             },
             params: p,
@@ -169,8 +177,8 @@ export const args = (): VerifyQuoteArgs => ({
         receiverKey,
         senderKey,
         maxTopupSats: 330n,
-        maxFare: { currency: "sats" as const, units: 10n },
-        minLocktime: 700_000n,
+        maxFare: { currency: "sats" as const, units: 330n },
+        minLocktime: BigInt(NOW),
     },
     trustedServerKey: serverKey,
     trustedEmulatorKey: emulatorKey,
@@ -178,7 +186,7 @@ export const args = (): VerifyQuoteArgs => ({
     hrp: HRP,
     now: NOW,
     senderInputs: fundingInputs(),
-    senderSats: 10n,
+    senderSats: 660n,
     trustedServerUnrollScript: unroll.script,
 });
 

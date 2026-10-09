@@ -7,6 +7,7 @@ import {
     receiverKey,
     senderKey,
     serverKey,
+    V2_DEADLINE,
 } from "../fixtures.js";
 import type { LockupBuildRequest } from "../../src/quotes.js";
 
@@ -28,8 +29,8 @@ export function buildRequest(): LockupBuildRequest {
         operatorSignerKey: config().operatorSignerKey,
         exitDelay: config().exitDelay,
         dust: 330n,
-        topup: 230n,
-        locktime: 899856n,
+        topup: 330n,
+        locktime: V2_DEADLINE,
         claimMode: "recycle" as const,
     };
     const covenant = new DustCovenantScript({
@@ -38,26 +39,31 @@ export function buildRequest(): LockupBuildRequest {
         emulatorKey: config().emulatorPubkey,
         vtxoMinAmount: 10n,
     });
+    // The covenant deadline is wall-clock, so the funding evidence it is checked
+    // against lives in the time domain too.
+    const expiry = V2_DEADLINE + 86_401n;
     return {
         advanceId: "golden",
         params,
         covenantAddress: covenant.address("ark", serverKey).encode(),
-        fare: { currency: "sats", units: 10n },
-        senderSats: 100n,
+        fare: { currency: "sats", units: 330n },
+        senderSats: 660n,
         senderInputs: [
             {
                 txid: "ab".repeat(32),
                 vout: 2,
-                value: 100n,
+                value: 660n,
                 tapTree: senderTree.encode(),
                 spendLeaf: senderTree.scripts[0],
-                expiry: { kind: "height", value: 910000n },
+                expiry: { kind: "time", value: expiry + 10_000n },
             },
         ],
         funding: {
             inputs: [
                 fundingCoin({
                     value: 1000,
+                    expiresAtHeight: undefined,
+                    expiresAt: new Date(Number(expiry) * 1000),
                     script: Buffer.from(operatorTree.pkScript).toString("hex"),
                     tapTree: operatorTree.encode(),
                     forfeitTapLeafScript: operatorTree.leaves[0],
@@ -65,15 +71,14 @@ export function buildRequest(): LockupBuildRequest {
                 }),
             ],
             totalValue: 1000n,
-            batchExpiry: { kind: "height", value: 900000n },
+            batchExpiry: { kind: "time", value: expiry },
         },
     };
 }
 
-/** The operator funds the whole dust. The sender's sats return as change, which
- * must reach dust: a sub-dust change would be the lockup's third OP_RETURN. */
+/** The sender's sats return as change, which must reach dust: a sub-dust change
+ * would be the lockup's third OP_RETURN. */
 export function receiverPays(request: LockupBuildRequest, receiverFare: ReceiverFare): void {
-    request.params.topup = request.params.dust;
     request.params.receiverFare = receiverFare;
     request.senderInputs[0]!.value = request.senderSats = request.params.dust;
 }

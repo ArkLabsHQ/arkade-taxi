@@ -444,6 +444,26 @@ function deriveCovenant(
     }
 }
 
+/**
+ * The reclaim CLTV, shared by both covenant producers. Wall-clock and measured
+ * from the quote, so it outlives the funding coins on purpose: a renewer must
+ * not be able to push the Taxi's own claim out.
+ */
+export function covenantDeadline(
+    safety: { chainTime: bigint | null },
+    config: Pick<RuntimeConfig, "covenantDeadlineSeconds">,
+    now: number,
+): { kind: "time"; value: bigint } {
+    const value = BigInt(now) + config.covenantDeadlineSeconds;
+    if (value < 500_000_000n || value > 0xffff_ffffn || value <= safety.chainTime!)
+        throw new ServiceError(
+            ErrorCode.NoLocktimeHeadroom,
+            503,
+            `covenant deadline ${value} is not a future time-domain locktime`,
+        );
+    return { kind: "time", value };
+}
+
 export function withQuoteAdmission<D extends { runtime: RuntimeGate }, T>(
     deps: D,
     assertReady: (() => void) | undefined,
@@ -604,13 +624,15 @@ async function createReservedQuote(
     const selectionOptions = {
         spendable,
         reserved: [...reserved, ...intentLocks],
+        // An asset fare's hosting output is a whole dust unit under the covenant,
+        // so the selection must budget what the builder will actually pin.
         requiredSats:
             decision.topup +
             (senderPaysFare || decision.fare.units === 0n
                 ? 0n
                 : decision.fare.currency === "sats"
                   ? decision.fare.units
-                  : config.vtxoMinAmount),
+                  : config.dust),
         safety: deps.runtime.safety(),
         nowMs: deps.nowMs(),
         maxSnapshotAgeMs: config.reconcileIntervalMs,
@@ -628,20 +650,7 @@ async function createReservedQuote(
             throw badRequest("sender and operator expiry domains differ");
         if (input.expiry.value < expiry.value) expiry.value = input.expiry.value;
     }
-    const margin =
-        expiry.kind === "height" ? policy.locktimeMarginBlocks : policy.locktimeMarginSeconds;
-    const locktime = expiry.value - BigInt(margin);
-    const chainClock =
-        expiry.kind === "height"
-            ? deps.runtime.safety().chainHeight!
-            : deps.runtime.safety().chainTime!;
-    if (locktime <= chainClock || (expiry.kind === "time") !== locktime >= 500_000_000n) {
-        throw new ServiceError(
-            ErrorCode.NoLocktimeHeadroom,
-            503,
-            `covenant ${expiry.kind} expiry ${expiry.value} leaves no room for margin ${margin}`,
-        );
-    }
+    const locktime = covenantDeadline(deps.runtime.safety(), config, deps.now()).value;
 
     const params: DustCovenantParams = {
         receiverKey: req.receiverKey,
@@ -732,9 +741,8 @@ async function createReservedQuote(
         ...(params.paymentSats !== undefined ? { paymentSats: params.paymentSats } : {}),
         locktime: params.locktime,
         claimMode: decision.claim,
-        recoveryLocktime: { kind: expiry.kind, value: params.locktime },
+        recoveryLocktime: { kind: "time", value: params.locktime },
         ...funding,
-        batchExpiry: expiry,
         covenantAddress: covenant.address,
         fare: decision.fare,
         createdAt: now,
@@ -821,13 +829,9 @@ async function createReservedQuote(
     deps.reservations.reserveQuote({
         advance,
         expectedPolicyRevision: revision,
-        recoveryExecutionBudget: {
-            kind: expiry.kind,
-            value:
-                expiry.kind === "height"
-                    ? deps.config.recoveryBroadcastBlocks
-                    : deps.config.recoveryBroadcastSeconds,
-        },
+        // The budget is measured on the deadline's own wall clock rather than
+        // the funding expiry's.
+        recoveryExecutionBudget: { kind: "time", value: deps.config.recoveryBroadcastSeconds },
         expectedReservedOutpoints: reserved,
     });
     trace?.observe("quote.persist", "ok");
