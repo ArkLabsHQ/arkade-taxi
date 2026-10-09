@@ -1177,7 +1177,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         | undefined;
     const label = "taxi-covenant";
     const recoverable = new Set<string>();
-    const observedCoins = new Map<string, ObservedCovenant>();
+    // Swapped in whole when a scan completes, so a sweeper tick mid-scan still
+    // reads the previous observation rather than an empty map.
+    let observedCoins = new Map<string, ObservedCovenant>();
     const signatureChecks = new Set<string>();
     const verify: SignatureCheck = (tx, index, signers) => {
         const key = [
@@ -1243,7 +1245,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 ...counts,
             });
         recoverable.clear();
-        observedCoins.clear();
+        const observing = new Map<string, ObservedCovenant>();
         const at = deps.now();
         const current = covenantRows(activeStates);
         const settled = covenantRows(terminalStates);
@@ -1363,7 +1365,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
                             fail("renewal successor could not be adopted");
                         recoverable.add(advance.id);
-                        observedCoins.set(advance.id, observedCoin(successor));
+                        observing.set(advance.id, observedCoin(successor));
                         settledHandled = true;
                     }
                 } catch (error) {
@@ -1388,7 +1390,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                     }
                     // Ahead of the evidence gate below, which a swept coin fails:
                     // that observation is the one the v2 alarm exists for.
-                    observedCoins.set(advance.id, observedCoin(coin));
+                    observing.set(advance.id, observedCoin(coin));
                     try {
                         const facts = covenantFacts(observedAdvance, deps.config);
                         const assets = holdings(coin, "covenant outpoint");
@@ -1463,6 +1465,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             reviewing || advanced ? covenantRows(terminalStates) : settled,
         );
         report();
+        observedCoins = observing;
         lastScanAt = deps.now();
     };
 

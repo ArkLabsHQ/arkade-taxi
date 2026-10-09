@@ -1187,6 +1187,46 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    // Mid-batch the consumed coin can carry settledBy before it reads spent, and the
+    // adoption guard skips its own row; isVtxoSpent counting settledBy is what holds.
+    it("never adopts the predecessor as its own successor", async () => {
+        const state = await setupV2(undefined);
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.set(key, { ...state.coins.get(key)!, settledBy: COMMITMENT, arkTxId: "" });
+        await state.watcher.catchUp();
+        const advance = state.advances.get(state.advance.id)!;
+        expect(advance.outpoint).toEqual(state.outpoint);
+        expect(advance.renewals ?? 0).toBe(0);
+        state.db.close();
+    });
+
+    it("keeps the last coin observation while a scan is in flight", async () => {
+        const state = await setupV2(undefined);
+        let gate: Promise<void> | undefined;
+        let release = () => {};
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer: state.indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => {
+                await gate;
+                return canonicalTip;
+            },
+        });
+        await watcher.catchUp();
+        const seen = watcher.observedCovenant(state.advance.id);
+        expect(seen).toBeDefined();
+        gate = new Promise((resolve) => (release = resolve));
+        const scan = watcher.catchUp();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(watcher.observedCovenant(state.advance.id)).toEqual(seen);
+        release();
+        await scan;
+        state.db.close();
+    });
+
     // D5 is the net for exactly what D2 makes possible: arkd may accept leaf 3
     // early off a swept coin, and the exact header check would refuse it.
     it("opens a custody row for an early third-party reclaim", async () => {
