@@ -181,8 +181,9 @@ it.each([false, true])(
                     submitTx: async (arkTx, checkpoints) => {
                         const tx = Transaction.fromPSBT(base64.decode(arkTx));
                         const group = Extension.fromTx(tx).getAssetPacket()!.groups[0]!;
+                        // The reclaim pays the whole lockup as one output.
                         expect(group.outputs.map((output) => [output.vout, output.amount])).toEqual(
-                            [[1, expected]],
+                            [[0, expected]],
                         );
                         const script = Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script;
                         const number = (bytes: Uint8Array) => BigInt(`0x${hex.encode(bytes)}`);

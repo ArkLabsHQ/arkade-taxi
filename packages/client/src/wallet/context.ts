@@ -56,9 +56,14 @@ const FUNDING_WINDOW: Record<LocktimeDomain, bigint> = { time: 900n, height: 30n
 // Bob's least time to claim after funding before the Taxi may recover: an hour, or six blocks.
 const CLAIM_WINDOW: Record<LocktimeDomain, bigint> = { time: 3_600n, height: 6n };
 
-/** The earliest floor and recovery locktime a receive quote may carry. */
+/** The earliest input expiry floor a receive quote may carry, in `locktimeDomain`. */
 export const callerMinimum = async (ctx: ArkadeContext): Promise<bigint> =>
     (await ctx.clock()) + FUNDING_WINDOW[ctx.locktimeDomain] + CLAIM_WINDOW[ctx.locktimeDomain];
+
+/** The earliest recovery locktime a quote may carry, on the same local clock
+ * `verifyReceiveQuote` already trusts for quote expiry. */
+export const callerRecoveryMinimum = (now = Math.floor(Date.now() / 1000)): bigint =>
+    BigInt(now) + CLAIM_WINDOW.time;
 
 export interface TaxiProbeContext extends ArkadeContext {
     assetId: string;
@@ -335,6 +340,7 @@ export const receiverPaidCarrier = async (
     const fare = taxi.fareId ? { fareId: taxi.fareId } : {};
     const fundingExpiry = { kind: ctx.locktimeDomain, value: payer.fundingExpiry };
     const minimum = { kind: ctx.locktimeDomain, value: payer.minimum };
+    const recoveryMinimum = { kind: "time" as const, value: callerRecoveryMinimum() };
     const quote = await taxiClient(taxi.url, ctx.fetch).requestReceiveQuote({
         receiverAddress: ctx.receiverAddress,
         makerPublicKey,
@@ -359,7 +365,7 @@ export const receiverPaidCarrier = async (
             fundingExpiry,
             ...fare,
             maxServiceFareSats: 0n,
-            minRecoveryLocktime: minimum,
+            minRecoveryLocktime: recoveryMinimum,
             minInputExpiryFloor: minimum,
         },
     });

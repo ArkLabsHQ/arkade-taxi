@@ -34,7 +34,8 @@ import {
 const coin = (): ExtendedVirtualCoin => ({
     txid: "aa".repeat(32),
     vout: 2,
-    value: 10,
+    // Matches the shared sender funding fixture.
+    value: 660,
     status: { confirmed: true },
     createdAt: new Date(0),
     script: bytesToHex(senderTree.pkScript),

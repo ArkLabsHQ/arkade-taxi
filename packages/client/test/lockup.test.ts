@@ -366,8 +366,8 @@ describe("sender-only lockup signing", () => {
         const senderInputs = fundingInputs();
         senderInputs.push({ ...senderInputs[0], txid: "bb".repeat(32) });
         a.senderInputs = senderInputs;
-        a.senderSats = 20n;
-        a.quote = quote(params(), { senderInputs, senderSats: 20n });
+        a.senderSats = 1_320n;
+        a.quote = quote(params(), { senderInputs, senderSats: 1_320n });
         const verified = verifyQuote(a);
         const { identity, sign } = signSpy();
         const signed = decodeLockupEnvelope(await signLockup({ verified, identity }));
@@ -473,8 +473,8 @@ describe("sender-paid sats fare", () => {
         const a = senderPaidAssetArgs();
         const verified = verifyQuote(a);
         expect(verified.envelope.satsFarePayer).toBe("sender");
-        expect(amounts(a.quote.unsignedLockupTx)).toEqual([330n, 10n, 690n, 19_670n]);
-        expect(amounts(assetArgs().quote.unsignedLockupTx)).toEqual([330n, 10n, 700n, 19_660n]);
+        expect(amounts(a.quote.unsignedLockupTx)).toEqual([330n, 330n, 660n, 0n]);
+        expect(amounts(assetArgs().quote.unsignedLockupTx)).toEqual([330n, 330n, 990n, 0n]);
     });
 
     it("keeps the discriminator across signing", async () => {
@@ -493,7 +493,7 @@ describe("sender-paid sats fare", () => {
             true,
         );
         a.quote.lockup.unsignedTxId = decodeLockupEnvelope(a.quote.unsignedLockupTx).unsignedTxId;
-        expect(() => verifyQuote(a)).toThrow(/Arkade transaction/);
+        expect(() => verifyQuote(a)).toThrow(/Arkade transaction|share a script/);
     });
 
     it("refuses an unrecognised fare payer", () => {
@@ -502,6 +502,23 @@ describe("sender-paid sats fare", () => {
             (wire as { satsFarePayer?: string }).satsFarePayer = "operator";
         });
         expect(() => verifyQuote(a)).toThrow(/satsFarePayer/);
+    });
+
+    it("hosts an asset fare at the covenant dust floor, not the operator minimum", () => {
+        const a = assetArgs();
+        const fare = { currency: "asset" as const, assetId: a.expect.assetId!, units: 22n };
+        a.quote = quote(
+            { ...params(), assetId: a.expect.assetId },
+            {
+                senderInputs: a.senderInputs,
+                senderSats: a.senderSats,
+                assetUnits: a.assetUnits,
+                fare,
+            },
+        );
+        a.expect.maxFare = fare;
+        expect(amounts(a.quote.unsignedLockupTx)).toEqual([330n, 330n, 990n, 0n]);
+        expect(verifyQuote(a).quote.fare.units).toBe("22");
     });
 
     it("refuses a fare payer named against no positive sats fare", () => {

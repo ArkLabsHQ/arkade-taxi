@@ -153,6 +153,8 @@ export interface QuoteParams {
     dust: string;
     topup: string;
     assetId?: AssetIdWire;
+    /** The recovery deadline as a wall-clock CLTV, measured from the quote: not a
+     * margin inside the funding coins' batch expiry, and it may outlive it. */
     locktime: string;
     /** CSV on the exit leaf; `value` below 512 is blocks, otherwise seconds. */
     exitDelay: { value: string; type: "blocks" | "seconds" };

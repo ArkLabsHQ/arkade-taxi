@@ -6,7 +6,7 @@ import {
     lockupSats,
     payoutPkScript,
     recycleFare,
-    refundTopup,
+    loanSats,
     signerTransaction,
     type CovenantSpendInput,
     type DustCovenantParams,
@@ -765,15 +765,15 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
         kind: descriptor.batchExpiry.kind,
         value: BigInt(descriptor.batchExpiry.value),
     };
+    // Unrelated clocks, so neither domain nor order is shared; what must still
+    // bind is the covenant's own locktime to the tag.
     if (
-        params.locktime <= 0n ||
+        params.locktime < 500_000_000n ||
         params.locktime > 0xffff_ffffn ||
-        descriptor.recoveryLocktime.kind !== (params.locktime < 500_000_000n ? "height" : "time") ||
-        descriptor.recoveryLocktime.kind !== batchExpiry.kind ||
-        BigInt(descriptor.recoveryLocktime.value) !== params.locktime ||
-        batchExpiry.value <= params.locktime
+        descriptor.recoveryLocktime.kind !== "time" ||
+        BigInt(descriptor.recoveryLocktime.value) !== params.locktime
     )
-        reject("incoming tagged recovery locktime or batch expiry mismatch");
+        reject("incoming tagged recovery locktime mismatch");
     const script = new DustCovenantScript({
         serverKey: trusted.serverKey,
         emulatorKey: trusted.emulatorKey,
@@ -1105,6 +1105,8 @@ const identityKey = async (identity: Identity, expected: Uint8Array, label: stri
 const exactFundingInput = async (
     funding: ReceiverWalletInput,
     state: CapabilityState & { script: DustCovenantScript },
+    /** The script the covenant pins this coin to, where it pins one at all. */
+    pinnedTo?: Uint8Array,
 ): Promise<{ tree: VtxoScript; key: Uint8Array; holdings: Holding[] }> => {
     const key = copyByteView(
         await funding.identity.xOnlyPublicKey(),
@@ -1120,11 +1122,10 @@ const exactFundingInput = async (
         );
     }
     exactBytes(tree.encode(), funding.input.tapTree, "receiver input tree encoding");
-    exactBytes(
-        tree.pkScript,
-        new Uint8Array([0x51, 0x20, ...state.params.receiverKey]),
-        "receiver input script",
-    );
+    if (pinnedTo) exactBytes(tree.pkScript, pinnedTo, "receiver input script");
+    // Both leaves require `tx.inputs[1].witnessVersion == 1`.
+    if (tree.pkScript.length !== 34 || tree.pkScript[0] !== 0x51 || tree.pkScript[1] !== 0x20)
+        reject("funding input script is not a witness version 1 program");
     const body = scriptFromTapLeafScript(funding.input.tapLeafScript);
     const exactLeaf = tree.findLeaf(hex.encode(body));
     exactTapLeaf(funding.input.tapLeafScript, exactLeaf, "receiver selected leaf");
@@ -1508,7 +1509,11 @@ export async function recycle(
     const state = activeState(transfer, Leaf.Recycle);
     receiverWalletInput = receiverInputSnapshot(receiverWalletInput);
     const output = exactDestination(destination, state);
-    const funding = await exactFundingInput(receiverWalletInput, state);
+    const funding = await exactFundingInput(
+        receiverWalletInput,
+        state,
+        new Uint8Array([0x51, 0x20, ...state.params.receiverKey]),
+    );
     const { operatorSats, assetFare } = recycleFare(state.params);
     const lockup = lockupSats(state.params);
     const merged = lockup + receiverWalletInput.input.value - operatorSats;
@@ -1550,19 +1555,28 @@ export async function recycle(
     );
 }
 
+/**
+ * Leaf 2, `repayRefund`: two inputs, the covenant and a coin the sender brings.
+ * `out[1]` returns the rest to `in[1]`'s own script, not to `senderKey`, which
+ * on this leaf is the signing identity rather than a wallet address. The leaf's
+ * tapscript admits only the sender, so one identity signs both inputs.
+ */
 export async function refund(
     transfer: CovenantTransfer,
     senderIdentity: Identity,
+    senderWalletInput: ReceiverWalletInput,
 ): Promise<string> {
     const state = activeState(transfer, Leaf.RefundSender);
     const sender = await identityKey(senderIdentity, state.params.senderKey, "sender");
-    const topup = refundTopup(state.params, state.vtxoMinAmount);
+    senderWalletInput = receiverInputSnapshot(senderWalletInput);
+    if (senderWalletInput.identity !== senderIdentity)
+        reject("refund funding coin must be owned by the signing sender identity");
+    const funding = await exactFundingInput(senderWalletInput, state);
+    const loan = loanSats(state.params);
     const lockup = lockupSats(state.params);
-    const returned = lockup - topup;
-    const recoveryKey =
-        state.params.recoveryRecipient === "receiver"
-            ? state.params.receiverKey
-            : state.params.senderKey;
+    const returned = lockup + senderWalletInput.input.value - loan;
+    if (returned < state.params.dust || returned < state.vtxoMinAmount)
+        reject("refund return output is below dust or the Ark operator minimum");
     const input = covenantSpendInput(
         state.script,
         Leaf.RefundSender,
@@ -1570,20 +1584,21 @@ export async function refund(
         lockup,
         holdingsPacket(state.holdings, state.outpoint.vout),
     );
-    return execute(state, {
-        leaf: Leaf.RefundSender,
-        inputs: [input],
-        outputs: [
-            {
-                script: payoutPkScript(state.params.operatorKey, topup, state.params.dust),
-                amount: topup,
-            },
-            {
-                script: payoutPkScript(recoveryKey, returned, state.params.dust),
-                amount: returned,
-            },
-        ],
-        assetPacket: packetForSpend([state.holdings], 1),
-        human: { identity: senderIdentity, key: sender, indexes: [0] },
-    });
+    return execute(
+        state,
+        {
+            leaf: Leaf.RefundSender,
+            inputs: [input, senderWalletInput.input],
+            outputs: [
+                {
+                    script: payoutPkScript(state.params.operatorKey, loan, state.params.dust),
+                    amount: loan,
+                },
+                { script: funding.tree.pkScript, amount: returned },
+            ],
+            assetPacket: packetForSpend([state.holdings, funding.holdings], 1),
+            human: { identity: senderIdentity, key: sender, indexes: [0, 1] },
+        },
+        senderWalletInput,
+    );
 }

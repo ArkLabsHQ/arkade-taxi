@@ -694,15 +694,12 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     const allInputs = [...senderInputs, ...operatorInputs];
     if (new Set(allInputs.map((input) => `${input.txid}:${input.vout}`)).size !== allInputs.length)
         reject("funding outpoints are duplicated");
-    if (
-        allInputs.some(
-            (input) =>
-                input.expiry.kind !== allInputs[0].expiry.kind ||
-                input.expiry.value <= context.params.locktime,
-        ) ||
-        (allInputs[0].expiry.kind === "time") !== context.params.locktime >= 500_000_000n
-    )
+    // The deadline shares neither domain nor ordering with the funding coins.
+    // What the inputs still owe is agreement with each other.
+    if (allInputs.some((input) => input.expiry.kind !== allInputs[0].expiry.kind))
         reject("funding expiry evidence is inconsistent");
+    if (context.params.locktime < 500_000_000n)
+        reject("covenant locktime is not a wall-clock deadline");
 
     const expectedSenderIndexes = senderInputs.map((_, index) => index);
     const expectedOperatorIndexes = operatorInputs.map((_, index) => senderInputs.length + index);
@@ -729,12 +726,14 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     const outputs: { amount: bigint; script: Uint8Array }[] = [
         { amount: lockup, script: context.covenantScript },
     ];
+    // A whole dust unit: the covenant pins payouts by witness program, which a
+    // sub-dust output cannot carry.
     const fareHosting =
         context.fare.units === 0n
             ? 0n
             : context.fare.currency === "sats"
               ? context.fare.units
-              : context.vtxoMinAmount;
+              : context.params.dust;
     if (fareHosting > 0n)
         outputs.push({
             amount: fareHosting,
@@ -823,8 +822,8 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
                 context.hrp,
             ),
         });
-    if (outputs.some((output) => output.amount < context.vtxoMinAmount))
-        reject("lockup output is below the Arkade operator minimum");
+    if (outputs.some((output) => output.amount < context.params.dust))
+        reject("lockup output is below the covenant dust floor");
     for (let i = 0; i < outputs.length; i++)
         for (let j = i + 1; j < outputs.length; j++)
             if (sameBytes(outputs[i].script, outputs[j].script))

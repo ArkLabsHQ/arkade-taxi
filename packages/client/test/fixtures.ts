@@ -116,6 +116,9 @@ interface QuoteFixtureOptions {
 
 const fareSats = (fare: FareSpec): bigint => (fare.currency === "sats" ? fare.units : 330n);
 
+const operatorOwes = (p: CovenantParamsValue, fare: FareSpec, opts: QuoteFixtureOptions): bigint =>
+    p.topup + (opts.satsFarePayer === "sender" ? 0n : fareSats(fare));
+
 export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteResponse => {
     const senderInputs = opts.senderInputs ?? fundingInputs();
     const senderSats =
@@ -125,12 +128,11 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
         {
             senderInputs,
             senderSats,
-            // The operator funds exactly the loan and the fare: a change output
-            // would share the payout script with the fare now that neither can
-            // take the distinguishing sub-dust form.
+            // Exactly what it owes: operator change would now share the payout
+            // script with the fare, neither being able to take a sub-dust form.
             funding: {
-                inputs: [fundingCoin({ value: Number(p.topup + fareSats(fare)) })],
-                totalValue: p.topup + fareSats(fare),
+                inputs: [fundingCoin({ value: Number(operatorOwes(p, fare, opts)) })],
+                totalValue: operatorOwes(p, fare, opts),
                 batchExpiry: { kind: "height", value: 900_000n },
             },
             params: p,
@@ -197,7 +199,7 @@ export const assetArgs = (): VerifyQuoteArgs => {
     const senderInputs = fundingInputs();
     senderInputs[0] = {
         ...senderInputs[0],
-        value: 700n,
+        value: 990n,
         assetPacket: asset.Packet.create([
             asset.AssetGroup.create(
                 id,
@@ -212,10 +214,10 @@ export const assetArgs = (): VerifyQuoteArgs => {
     const a = args();
     return {
         ...a,
-        quote: quote(p, { senderInputs, senderSats: 700n, assetUnits }),
+        quote: quote(p, { senderInputs, senderSats: 990n, assetUnits }),
         expect: { ...a.expect, assetId },
         senderInputs,
-        senderSats: 700n,
+        senderSats: 990n,
         assetUnits,
     };
 };
@@ -333,7 +335,7 @@ export const sponsoredArgs = (): VerifySponsoredQuoteArgs => ({
     hrp: HRP,
     now: NOW,
     senderInputs: fundingInputs(),
-    senderSats: 10n,
+    senderSats: 660n,
     trustedServerUnrollScript: unroll.script,
 });
 
