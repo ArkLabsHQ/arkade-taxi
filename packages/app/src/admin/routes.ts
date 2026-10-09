@@ -240,7 +240,7 @@ interface AdvanceWire {
     spentTxid?: string;
     arkTxid?: string;
     recoveryTxid?: string;
-    /** Absent on v2, which stores none: the deadline is measured from lockup. */
+    /** Absent on a covenant advance: its deadline is measured from the lockup. */
     batchExpiry?: { kind: "height" | "time"; value: string };
     recoveryLocktime?: { kind: "height" | "time"; value: string };
     ageSeconds: number;

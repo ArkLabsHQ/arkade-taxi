@@ -131,17 +131,7 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
 /** The covenant output's value: the dust unit, plus any payment locked beside it. */
 export const lockupSats = (p: DustCovenantParams): bigint => p.dust + (p.paymentSats ?? 0n);
 
-/**
- * Falls below topup only when the operator funded the whole lockup, where one
- * vtxoMinAmount must stay behind to host the recovery owner's returned asset: an asset
- * cannot occupy an output on its own.
- */
-export function refundTopup(p: DustCovenantParams, vtxoMinAmount: bigint): bigint {
-    const capped = lockupSats(p) - vtxoMinAmount;
-    return p.topup > capped ? capped : p.topup;
-}
-
-/** What a refund repays; there is no refundTopup cap because no receipt stays behind. */
+/** What a refund repays: the whole loan, since no receipt stays behind. */
 export const loanSats = (p: DustCovenantParams): bigint => p.topup;
 
 export type RecycleFare = { operatorSats: bigint; assetFare: bigint };

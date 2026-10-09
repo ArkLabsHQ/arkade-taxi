@@ -4,7 +4,6 @@ export {
     loanSats,
     lockupSats,
     recycleFare,
-    refundTopup,
     validateParams,
     type AssetIdRef,
     type DustCovenantParams,

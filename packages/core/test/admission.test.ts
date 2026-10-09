@@ -249,6 +249,16 @@ describe("caps", () => {
         expect(reasonOf(d)).toBe("exceeds_max_outstanding");
     });
 
+    it("warns while exposure nears the cap and stays silent with headroom", () => {
+        const near = policy({ maxOutstandingSats: 1_000n });
+        expect(
+            okOf(admit(request(), near, exposure({ outstandingSats: 600n }), DUST, MIN)).warnings,
+        ).toEqual([{ code: "exposure_nearing_cap", headroomSats: 70n }]);
+        expect(
+            okOf(admit(request(), near, exposure({ outstandingSats: 500n }), DUST, MIN)).warnings,
+        ).toBeUndefined();
+    });
+
     it("refuses at the concurrency limit", () => {
         const d = admit(request(), policy({ maxConcurrentAdvances: 0 }), exposure(), DUST, MIN);
         expect(reasonOf(d)).toBe("max_concurrent_advances");

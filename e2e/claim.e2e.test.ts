@@ -331,7 +331,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                   ]
                 : [[0, 200_000_000n]],
         );
-        if (mode === "purchase") expectReceipt(unsigned, 1, 1n, live.info.operatorKey);
+        if (mode === "purchase") expectReceipt(unsigned, 1, 330n, live.info.operatorKey);
         expect(unsigned.getOutput(mode === "purchase" ? 2 : 1).amount).toBe(1000n);
         await control("configure", {
             target: "arkd",
@@ -384,7 +384,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
         expect(assetOutputs(lockTx, minted.assetId)).toEqual(
             assetOutputs(unsigned, minted.assetId),
         );
-        if (mode === "purchase") expectReceipt(lockTx, 1, 1n, live.info.operatorKey);
+        if (mode === "purchase") expectReceipt(lockTx, 1, 330n, live.info.operatorKey);
         let receiverInput;
         let txid: string;
         if (mode === "recycle") {

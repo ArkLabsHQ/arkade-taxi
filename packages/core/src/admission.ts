@@ -93,6 +93,9 @@ export function admit(
     // Lend anyway and say so: refusing here would strand a payer over a
     // liability the operator chose to take on. One line flips it to a refusal.
     const warnings: AdmissionWarning[] = [];
+    const headroomSats = policy.maxOutstandingSats - (exposure.outstandingSats + topup);
+    if (headroomSats * 10n < policy.maxOutstandingSats)
+        warnings.push({ code: "exposure_nearing_cap", headroomSats });
     if (lending) {
         const coverageSats = lending.solvency.coverageSats - topup;
         if (coverageSats < 0n)

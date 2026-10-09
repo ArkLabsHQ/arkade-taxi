@@ -141,13 +141,9 @@ liveScenario("v2-covenant-batch-renewal", async () => {
     const emulatorUrl = required("TAXI_E2E_EMULATOR_URL");
     const esploraUrl = required("ARKADE_ESPLORA_URL");
     const cli = required("ARKADE_REGTEST_CLI");
-    const resolved = await resolveRuntimeConfig(
+    const config: RuntimeConfig = await resolveRuntimeConfig(
         loadConfig({ ...process.env, TAXI_OPERATOR_PRIVKEY: randomBytes(32).toString("hex") }),
     );
-    // `loadConfig` refuses TAXI_COVENANT_VERSION=2 and lifting that is Phase 6,
-    // so the version is set on the resolved object: the production gate is
-    // untouched and this Taxi exists only inside the scenario.
-    const config: RuntimeConfig = { ...resolved, covenantVersion: 2 };
 
     const root = mkdtempSync(join(tmpdir(), "taxi-v2-renewal-"));
     const db = openDatabase(join(root, "taxi.sqlite"));
@@ -226,7 +222,6 @@ liveScenario("v2-covenant-batch-renewal", async () => {
         dust: config.dust,
         topup: config.dust,
         locktime: BigInt(now) + config.covenantDeadlineSeconds,
-        covenantVersion: 2,
     };
     const covenant = new DustCovenantScript({
         serverKey: config.serverPubkey,

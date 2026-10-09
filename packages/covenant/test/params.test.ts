@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
     exitDelayEncodable,
     exitTimelock,
+    loanSats,
     lockupSats,
-    refundTopup,
     validateParams,
     type DustCovenantParams,
 } from "../src/params.js";
@@ -189,17 +189,7 @@ describe("paymentSats", () => {
     });
 
     it("refunds the whole advance to the operator", () => {
-        expect(refundTopup({ ...base(), paymentSats: 100n }, MIN)).toBe(330n);
-    });
-});
-
-describe("refundTopup", () => {
-    it("returns topup unchanged when a vtxoMinAmount remains for the sender", () => {
-        expect(refundTopup({ ...base(), dust: 330n, topup: 300n }, 10n)).toBe(300n);
-    });
-
-    it("caps at dust minus vtxoMinAmount when the operator funded the whole unit", () => {
-        expect(refundTopup({ ...base(), dust: 330n, topup: 330n }, 10n)).toBe(320n);
+        expect(loanSats({ ...base(), paymentSats: 100n })).toBe(330n);
     });
 });
 

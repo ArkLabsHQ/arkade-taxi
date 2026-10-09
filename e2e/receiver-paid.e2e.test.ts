@@ -523,7 +523,8 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
     const bound: { release?: () => Promise<void> } = {};
     try {
         const carried = await receiverPaidCarrier(live, SATS_FARE, bound, RECLAIM_AFTER_SECONDS);
-        const { minted, dust, vtxoMinAmount } = carried;
+        const { minted, dust } = carried;
+        const custodyBefore = (await health()).custody?.rows ?? 0;
         await jumpPast(carried.locktime);
         const recovered = await poll(
             "the sweeper reclaims the unclaimed covenant",
@@ -532,27 +533,34 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
             120_000,
         );
         const { tx } = await terminal(live, carried.covenant, "recovered", recovered.spentTxid!);
-        const bobKey = hex.encode(ArkAddress.decode(carried.bobAddress).vtxoTaprootKey);
-        expectReceipt(tx, 0, dust - vtxoMinAmount, live.info.operatorKey);
-        expectReceipt(tx, 1, vtxoMinAmount, bobKey);
-        expect(assetOutputs(tx, minted.assetId)).toEqual([[1, DELIVERED]]);
+        expect(tx.outputsLength).toBe(2);
+        expectReceipt(tx, 0, dust, live.info.operatorKey);
+        expect(assetOutputs(tx, minted.assetId)).toEqual([[0, DELIVERED]]);
         const { vtxos } = await live.indexer.getVtxos({
-            outpoints: [{ txid: recovered.spentTxid!, vout: 1 }],
+            outpoints: [{ txid: recovered.spentTxid!, vout: 0 }],
         });
         expect(vtxos).toHaveLength(1);
         expect(vtxos[0]).toMatchObject({
-            value: Number(vtxoMinAmount),
+            value: Number(dust),
             assets: [{ assetId: minted.assetId, amount: DELIVERED }],
         });
-        const operatorAfter = { sats: carried.operatorBefore.sats - vtxoMinAmount, units: 0n };
+        const operatorAfter = { sats: carried.operatorBefore.sats, units: DELIVERED };
         const operatorObserved = await poll(
-            "Taxi recovers its loan less Bob's receipt, and no fare",
+            "Taxi recovers its whole loan and holds Bob's asset",
             () => walletBalance(live.actors.operator, minted.assetId),
             (value) => value.sats === operatorAfter.sats && value.units === operatorAfter.units,
             120_000,
         );
         expect(operatorObserved).toEqual(operatorAfter);
         expect((await admin("status")).exposure.outstandingSats).toBe("0");
+        const custody = await poll(
+            "custody row for Bob's asset",
+            async () => (await health()).custody,
+            (value) => value?.rows === custodyBefore + 1,
+        );
+        expect(custody.coverageAssets.map((item: { units: string }) => item.units)).toContain(
+            DELIVERED.toString(),
+        );
         evidence("receiver-paid-mode1-reclaim", {
             assetId: minted.assetId,
             transferId: carried.covenant.quote.transferId,
@@ -560,9 +568,9 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
             recoveryTxid: recovered.spentTxid,
             locktime: carried.locktime,
             descriptorFare: carried.descriptorFare,
-            recoveryOutputs: [0, 1].map((vout) => tx.getOutput(vout).amount),
+            recoveryOutputs: [0].map((vout) => tx.getOutput(vout).amount),
             recoveryAssets: assetOutputs(tx, minted.assetId),
-            bobReceipt: { value: vtxos[0]!.value, assets: vtxos[0]!.assets },
+            custodyRow: { value: vtxos[0]!.value, assets: vtxos[0]!.assets },
             operatorBefore: carried.operatorBefore,
             operatorObserved,
             submitAttempts: carried.submitAttempts,

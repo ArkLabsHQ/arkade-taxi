@@ -31,7 +31,6 @@ import {
     lockupSats,
     payoutPkScript,
     loanSats,
-    refundTopup,
     type DustCovenantParams,
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
