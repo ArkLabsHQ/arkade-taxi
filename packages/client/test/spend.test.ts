@@ -372,7 +372,8 @@ const incomingFixture = async (
             covenantAddress: state.authorization.quote.covenantAddress,
             outpoint: { ...base.status.outpoint },
             fare: structuredClone(state.authorization.quote.fare),
-            batchExpiry: { kind: "height", value: "900000" },
+            // What claims.ts sends: the deadline, not the coin's own expiry.
+            batchExpiry: { kind: "time", value: state.context.params.locktime.toString() },
             recoveryLocktime: { kind: "time", value: state.context.params.locktime.toString() },
             ...(withAsset ? { assetUnits: authorization.assetUnits!.toString() } : {}),
         },
@@ -730,7 +731,6 @@ describe("incoming claim verification", () => {
         ["value", { value: 331 }],
         ["script", { script: "5120" + "00".repeat(32) }],
         ["outpoint", { txid: "ab".repeat(32) }],
-        ["expiry", { expiresAtHeight: 899999 }],
         ["spent", { isSpent: true }],
         [
             "asset units",
@@ -2282,7 +2282,7 @@ describe("claim round trips", () => {
                 covenantAddress: authorization.quote.covenantAddress,
                 outpoint: { ...base.status.outpoint },
                 fare: structuredClone(authorization.quote.fare),
-                batchExpiry: { kind: "height", value: "900000" },
+                batchExpiry: { kind: "time", value: context.params.locktime.toString() },
                 recoveryLocktime: { kind: "time", value: context.params.locktime.toString() },
             },
         };

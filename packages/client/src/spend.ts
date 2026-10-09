@@ -761,10 +761,6 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
         )
             reject("incoming asset quantity mismatch");
     }
-    const batchExpiry = {
-        kind: descriptor.batchExpiry.kind,
-        value: BigInt(descriptor.batchExpiry.value),
-    };
     // Unrelated clocks, so neither domain nor order is shared; what must still
     // bind is the covenant's own locktime to the tag.
     if (
@@ -790,7 +786,6 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
         emulatorKey: trusted.emulatorKey,
         vtxoMinAmount: trusted.vtxoMinAmount,
         hrp: trusted.hrp,
-        batchExpiry,
         ...(expect.assetUnits === undefined ? {} : { contextAssetUnits: expect.assetUnits }),
     };
 };
@@ -817,7 +812,6 @@ const assertIncomingStatus = (
 
 type ObservedClaimBase = Omit<CoinExpectation, "dependencies" | "arkdUrl" | "emulatorUrl"> & {
     trustedServerUnrollScript?: Uint8Array;
-    batchExpiry?: CapabilityState["expiry"];
 };
 
 async function verifyObservedClaim(
@@ -933,13 +927,9 @@ async function verifyObservedClaim(
         emulatorUrl,
     };
     // Not alongside the info reads: the outpoint goes only to a provider proven to be the trusted one.
+    // The claim's batchExpiry is the deadline (claims.ts), not the coin's expiry,
+    // which renewals re-date; the live expiry is read from the indexer instead.
     const observed = await observe(base);
-    if (
-        facts.batchExpiry !== undefined &&
-        (observed.expiry.kind !== facts.batchExpiry.kind ||
-            observed.expiry.value !== facts.batchExpiry.value)
-    )
-        reject("observed batch expiry mismatch");
     if (readStatus !== undefined) assertIncomingStatus(await readStatus(facts.transferId), facts);
     const lifecycleKey = [
         boundDependencies.network,
