@@ -1204,6 +1204,7 @@ describe("canonical covenant observation", () => {
         const state = await setupV2(undefined);
         let gate: Promise<void> | undefined;
         let release = () => {};
+        let parked = () => {};
         const watcher = createSpendWatcher({
             advances: state.advances,
             policy: state.policy,
@@ -1211,6 +1212,7 @@ describe("canonical covenant observation", () => {
             config: config(),
             now: () => NOW + 10,
             tip: async () => {
+                parked();
                 await gate;
                 return canonicalTip;
             },
@@ -1219,16 +1221,15 @@ describe("canonical covenant observation", () => {
         const seen = watcher.observedCovenant(state.advance.id);
         expect(seen).toBeDefined();
         gate = new Promise((resolve) => (release = resolve));
+        const reached = new Promise<void>((resolve) => (parked = resolve));
         const scan = watcher.catchUp();
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await reached;
         expect(watcher.observedCovenant(state.advance.id)).toEqual(seen);
         release();
         await scan;
         state.db.close();
     });
 
-    // D5 is the net for exactly what D2 makes possible: arkd may accept leaf 3
-    // early off a swept coin, and the exact header check would refuse it.
     it("opens a custody row for an early third-party reclaim", async () => {
         const early = Number(BigInt(NOW) + 8_640_000n) - 86_400;
         const state = await setupV2(

@@ -348,8 +348,8 @@ const exactTransactionHeader = (
     tx: Transaction,
     lockTime: number,
     label: string,
-    /** A v2 reclaim can be taken early off a swept coin, so its CLTV is a
-     * ceiling, not an equality: refusing it would open no custody row. */
+    /** A v2 reclaim's CLTV is a ceiling, not an equality: refusing an earlier
+     * one would open no custody row. */
     atMost = false,
 ): void => {
     if (tx.version !== 3 || (atMost ? tx.lockTime > lockTime : tx.lockTime !== lockTime))

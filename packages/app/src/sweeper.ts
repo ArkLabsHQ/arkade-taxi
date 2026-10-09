@@ -185,8 +185,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                   : remaining <= threshold(racing.kind, false)
                     ? "warning"
                     : "eligible";
-        // Swept with the CLTV still locked: anyone may take the reclaim leaf and
-        // nothing on-chain closes that window, so custody is the net from here.
+        // Swept with the CLTV still locked: custody is the net from here.
         // Sweeping follows expiry, so this escalates and never downgrades.
         const cltvClock = recovery.kind === "height" ? height : time;
         const swept = seen?.swept === true && cltvClock !== null && recovery.value > cltvClock;
@@ -329,6 +328,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             oldestUnsweptLocktime = active.reduce<SweeperStatus["oldestUnsweptLocktime"]>(
                 (oldest, advance) => {
                     const recovery = advance.recoveryLocktime;
+                    // "time" is exact for v2: validateParams refuses a height-domain v2 locktime.
                     if (
                         !recovery ||
                         recovery.kind !== (advance.batchExpiry?.kind ?? "time") ||

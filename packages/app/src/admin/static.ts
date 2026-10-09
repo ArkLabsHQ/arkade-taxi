@@ -2022,7 +2022,7 @@ const BLOCKER_GROUPS = [
         "covenant_renewal_stopped",
     ],
     [
-        "A payment's coin expired and was swept while the Taxi still cannot reclaim it, so anyone may take it." +
+        "A payment's coin expired and was swept while the Taxi still cannot reclaim it." +
             ATTENTION,
         "covenant_swept_before_deadline",
     ],
