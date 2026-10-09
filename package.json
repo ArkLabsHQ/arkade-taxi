@@ -16,7 +16,6 @@
         "e2e:stack": "node scripts/e2e-stack.mjs",
         "format": "prettier --write .",
         "format:check": "prettier --check .",
-        "vectors": "node scripts/gen-vectors.mjs",
         "artifact": "node scripts/gen-artifact.mjs",
         "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs",
         "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs",

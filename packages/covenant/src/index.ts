@@ -5,7 +5,6 @@ export {
     lockupSats,
     recycleFare,
     refundTopup,
-    unrecoveredTopup,
     validateParams,
     type AssetIdRef,
     type DustCovenantParams,
@@ -13,23 +12,14 @@ export {
     type ReceiverFare,
     type RelativeTimelock,
 } from "./params.js";
-export { payoutPkScript, pinOutput, subDustScript } from "./pin.js";
-export { appendAssetLookup } from "./asset.js";
-export { artifactArgs, emitArtifact } from "./artifact.js";
-export {
-    buildPurchase,
-    buildReclaim,
-    buildRecycle,
-    buildRefund,
-    buildScripts,
-    type CovenantScripts,
-} from "./scripts.js";
+export { payoutPkScript } from "./pin.js";
 export { compileV2, v2Args, V2_ARTIFACT } from "./v2-artifact.js";
 export {
     claimLeafDisabled,
     DISABLED_CLAIM_SCRIPT,
     DustCovenantScript,
     Leaf,
+    type CovenantScripts,
     type DustCovenantOptions,
 } from "./vtxo.js";
 export { covenantSpendInput, type CovenantSpendInput } from "./spend.js";

@@ -23,8 +23,8 @@ const covenant = () =>
             operatorSignerKey: key(6),
             exitDelay: { value: 86_016n, type: "seconds" },
             dust: 330n,
-            topup: 320n,
-            locktime: 800_000n,
+            topup: 330n,
+            locktime: 1_800_000_000n,
         },
         vtxoMinAmount: 10n,
     });
@@ -82,16 +82,17 @@ describe("covenant spend leaves", () => {
         expect(purchase.params.pubkeys).toHaveLength(2);
         expect(refund.params.pubkeys).toHaveLength(3);
         expect(refund.params.pubkeys).toContainEqual(script.options.params.senderKey);
-        expect(recovery.params.absoluteTimelock).toBe(800_000n);
+        expect(recovery.params.absoluteTimelock).toBe(1_800_000_000n);
         expect(recovery.params.pubkeys).toHaveLength(2);
     });
 
-    it("materializes the exit leaf and still rejects the index above it", () => {
+    // Renew is spent through the tunnel, not here, so this helper stops at Exit.
+    it("materializes the exit leaf and still refuses renew", () => {
         const s = covenant();
         const input = covenantSpendInput(s, Leaf.Exit, { txid: "12".repeat(32), vout: 0 }, 330n);
         expect(scriptFromTapLeafScript(input.tapLeafScript)).toEqual(s.scripts[Leaf.Exit]);
         expect(() =>
-            covenantSpendInput(s, 5 as Leaf, { txid: "12".repeat(32), vout: 0 }, 330n),
+            covenantSpendInput(s, Leaf.Renew, { txid: "12".repeat(32), vout: 0 }, 330n),
         ).toThrow(/invalid leaf/);
     });
 
@@ -154,8 +155,8 @@ describe("covenant spend modes", () => {
                 operatorSignerKey: key(6),
                 exitDelay: { value: 86_016n, type: "seconds" },
                 dust: 330n,
-                topup: 320n,
-                locktime: 800_000n,
+                topup: 330n,
+                locktime: 1_800_000_000n,
                 claimMode,
             },
             vtxoMinAmount: 10n,
