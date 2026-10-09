@@ -12,6 +12,16 @@ export interface DelegateeOptions {
     fetch?: typeof globalThis.fetch;
 }
 
+/** The renewal history an operator reads when the sweeper's alarm fires. */
+export interface DelegationView {
+    /** `active`, `cancelled`, `expired` or `done` upstream. */
+    status: string;
+    attempts: number;
+    succeeded: number;
+    lastAttemptAt?: number;
+    lastError?: string;
+}
+
 export class DelegateeError extends Error {}
 
 const TEMPLATE_FORMAT = "delegateed-template/v1";
@@ -118,14 +128,42 @@ export class DelegateeClient {
         return address;
     }
 
+    /** Read-only, and keyed by the address the covenant already stores: why a
+     * renewal was missed, never a renewal of our own (D6). */
+    async getDelegation(address: string): Promise<DelegationView> {
+        const body = await this.get<{
+            delegation?: { status?: string; expires_at?: number };
+            renewals?: { success?: boolean; error?: string; attempted_at?: number }[];
+        }>(`/v1/delegate/${encodeURIComponent(address)}`);
+        const renewals = body.renewals ?? [];
+        const failed = renewals.filter((r) => r.success !== true);
+        return {
+            status: body.delegation?.status ?? "unknown",
+            attempts: renewals.length,
+            succeeded: renewals.length - failed.length,
+            ...(renewals.length
+                ? { lastAttemptAt: renewals[renewals.length - 1]!.attempted_at }
+                : {}),
+            ...(failed.length ? { lastError: failed[failed.length - 1]!.error } : {}),
+        };
+    }
+
+    private async get<T>(path: string): Promise<T> {
+        return this.send<T>(path, { method: "GET" });
+    }
+
     private async post<T>(path: string, body: unknown): Promise<T> {
+        return this.send<T>(path, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+        });
+    }
+
+    private async send<T>(path: string, init: RequestInit): Promise<T> {
         let response: Response;
         try {
-            response = await this.fetch(`${this.baseUrl}${path}`, {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify(body),
-            });
+            response = await this.fetch(`${this.baseUrl}${path}`, init);
         } catch (cause) {
             throw new DelegateeError(`delegatee ${path} is unreachable`, { cause });
         }

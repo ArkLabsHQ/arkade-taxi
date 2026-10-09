@@ -8,7 +8,7 @@ import {
     recycleFare,
     refundTopup,
 } from "@arkade-taxi/covenant";
-import type { Advance } from "@arkade-taxi/core";
+import type { Advance, ExpiryDeadline } from "@arkade-taxi/core";
 import { advanceKind, covenantParamsOf } from "@arkade-taxi/core";
 import type { AdvanceRepository, PolicyRepository } from "@arkade-taxi/db";
 import {
@@ -24,6 +24,7 @@ import {
     arkade,
     assertAllowedSighashTypes,
     getArkPsbtFields,
+    isVtxoSpent,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
     type IContractManager,
@@ -37,6 +38,7 @@ import { createHash } from "node:crypto";
 import type { RuntimeConfig } from "./config.js";
 import { decodeLockupEnvelope } from "./arkade/psbt.js";
 import { readFundingSource } from "./arkade/fundingSource.js";
+import { normalizeExpiry } from "./arkade/providers.js";
 import { sameTapTree } from "./arkade/tapTree.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
@@ -49,6 +51,23 @@ const UNROLLED = "covenant outpoint was unrolled; no off-chain claim or recovery
 type SignatureCheck = (tx: Transaction, index: number, signers: string[]) => void;
 const verifySignatures: SignatureCheck = (tx, index, signers) =>
     verifyTapscriptSignatures(tx, index, signers, [], [DEFAULT_SIGHASH]);
+
+/** What this scan's own coin read knows that the row cannot: a v2 advance stores
+ * no batch expiry, and a renewal re-dates the one it races. */
+export interface ObservedCovenant {
+    expiry?: ExpiryDeadline;
+    swept: boolean;
+}
+
+const observedCoin = (coin: VirtualCoin): ObservedCovenant => {
+    let expiry: ExpiryDeadline | undefined;
+    try {
+        expiry = normalizeExpiry(coin);
+    } catch {
+        expiry = undefined;
+    }
+    return { ...(expiry ? { expiry } : {}), swept: coin.isSwept === true };
+};
 
 export type ObservedSpend =
     | { kind: "recycled"; txid: string }
@@ -78,6 +97,7 @@ export interface SpendWatcher {
     stop(): Promise<void>;
     status(): SpendWatcherStatus;
     isRecoverable(id: string): boolean;
+    observedCovenant(id: string): ObservedCovenant | undefined;
 }
 
 export interface SpendWatcherDeps {
@@ -87,6 +107,7 @@ export interface SpendWatcherDeps {
         | "recordSpendObservation"
         | "recordSpendUnknown"
         | "recordCovenantUnrolled"
+        | "recordCovenantRenewed"
         | "clearSpendUnknown"
         | "recordSpendDisagreement"
         | "recordStableSpendObservation"
@@ -323,10 +344,17 @@ const anchorIndex = (tx: Transaction): number =>
         "P2A anchor",
     );
 
-const exactTransactionHeader = (tx: Transaction, lockTime: number, label: string): void => {
-    const sequence = lockTime === 0 ? 0xffffffff : 0xfffffffe;
-    if (tx.version !== 3 || tx.lockTime !== lockTime)
+const exactTransactionHeader = (
+    tx: Transaction,
+    lockTime: number,
+    label: string,
+    /** A v2 reclaim's CLTV is a ceiling, not an equality: refusing an earlier
+     * one would open no custody row. */
+    atMost = false,
+): void => {
+    if (tx.version !== 3 || (atMost ? tx.lockTime > lockTime : tx.lockTime !== lockTime))
         fail(`${label} version or locktime differs from the SDK 0.4.72 graph`);
+    const sequence = tx.lockTime === 0 ? 0xffffffff : 0xfffffffe;
     for (let index = 0; index < tx.inputsLength; index++) {
         if (tx.getInput(index).sequence !== sequence)
             fail(`${label} input ${index} sequence differs from the SDK 0.4.72 graph`);
@@ -454,6 +482,50 @@ const agrees = (
     } catch {
         return false;
     }
+};
+
+/** A batch settlement: arkd carries a forfeit in `spentBy` beside the
+ * commitment, so an absent `arkTxId` is what separates it from a spend. */
+const renewalCommitment = (coin: VirtualCoin): string | undefined =>
+    /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.arkTxId ? coin.settledBy : undefined;
+
+/** Script, value and assets: the only facts a renewal preserves. */
+const sameCovenant = (coin: VirtualCoin, facts: ReturnType<typeof covenantFacts>): boolean => {
+    try {
+        return (
+            coin.value === Number(facts.value) &&
+            coin.script === hex.encode(facts.script.pkScript) &&
+            !holdingsDiffer(holdings(coin, "covenant outpoint"), facts.expectedHoldings)
+        );
+    } catch {
+        return false;
+    }
+};
+
+const exactSuccessor = async (
+    provider: SpendWatcherDeps["indexer"],
+    predecessor: VirtualCoin,
+    facts: ReturnType<typeof covenantFacts>,
+): Promise<VirtualCoin | undefined> => {
+    let response: Awaited<ReturnType<IndexerProvider["getVtxos"]>>;
+    try {
+        response = await provider.getVtxos({ scripts: [predecessor.script] });
+    } catch {
+        return fail("canonical renewal successor evidence is unavailable");
+    }
+    if (!response || !Array.isArray(response.vtxos))
+        fail("indexer returned no renewal successor evidence");
+    const live = response.vtxos.filter(
+        (coin) =>
+            !isVtxoSpent(coin) &&
+            coin.isSwept === false &&
+            coin.isUnrolled === false &&
+            sameCovenant(coin, facts),
+    );
+    // Two v2 covenants differing only in paymentSats share one address, so an
+    // ambiguous pair is refused rather than guessed at. None is not a renewal.
+    if (live.length > 1) fail("renewal successor is ambiguous");
+    return live[0];
 };
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
@@ -662,17 +734,21 @@ async function classifySpend(
         );
         if (leafIndex === undefined) fail("checkpoint selects no recognized covenant leaf");
         const leaf = leafIndex as Leaf;
+        const v2Reclaim = advance.covenantVersion === 2 && leaf === Leaf.Recovery;
         const recoveryLocktime = advance.recoveryLocktime;
         if (
             leaf === Leaf.Recovery &&
             (!recoveryLocktime ||
-                recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time") ||
+                // v1 only: a v2 advance keeps no batch expiry at all, and D2
+                // makes its deadline wall-clock where an expiry may be a height.
+                (advance.covenantVersion !== 2 &&
+                    recoveryLocktime.kind !== (advance.batchExpiry?.kind ?? "time")) ||
                 recoveryLocktime.value !== advance.locktime)
         )
             fail("recovery locktime tag is missing or inconsistent");
         const expectedLockTime = leaf === Leaf.Recovery ? Number(recoveryLocktime!.value) : 0;
-        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint");
-        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction");
+        exactTransactionHeader(checkpoint, expectedLockTime, "covenant checkpoint", v2Reclaim);
+        exactTransactionHeader(arkTx, expectedLockTime, "covenant Arkade transaction", v2Reclaim);
         const expectedLeaf = covenantSpendInput(
             facts.script,
             leaf,
@@ -844,13 +920,16 @@ async function classifySpend(
             exactAnchor(arkTx, anchorIndex(arkTx));
         }
         if (leaf === Leaf.Recovery) {
+            const ceiling = Number(recoveryLocktime!.value);
             if (
-                arkTx.lockTime !== Number(recoveryLocktime!.value) ||
-                checkpoint.lockTime !== Number(recoveryLocktime!.value)
+                arkTx.lockTime !== checkpoint.lockTime ||
+                (v2Reclaim ? arkTx.lockTime > ceiling : arkTx.lockTime !== ceiling)
             )
                 fail("recovery does not carry the exact persisted CLTV");
+            // An early reclaim matures against its own CLTV, not the ceiling.
+            const matured = v2Reclaim ? BigInt(arkTx.lockTime) : recoveryLocktime!.value;
             const chainClock = recoveryLocktime!.kind === "height" ? tip.height : tip.time;
-            if (!Number.isSafeInteger(chainClock) || BigInt(chainClock) < recoveryLocktime!.value)
+            if (!Number.isSafeInteger(chainClock) || BigInt(chainClock) < matured)
                 fail(
                     recoveryLocktime!.kind === "height"
                         ? "recovery height CLTV is not mature at the canonical tip"
@@ -903,13 +982,38 @@ const prefetch = async (
     provider: SpendWatcherDeps["indexer"],
     outpoints: readonly { txid: string; vout: number }[],
     coinOnly: readonly { txid: string; vout: number }[] = [],
+    renewable: ReadonlySet<string> = new Set(),
 ): Promise<{
     indexer: SpendWatcherDeps["indexer"];
     cached(outpoint: { txid: string; vout: number }): boolean;
 }> => {
     const coins = new Map<string, VirtualCoin[]>();
     const resolved = new Set<string>();
+    const byScript = new Map<string, VirtualCoin[]>();
+    const resolvedScripts = new Set<string>();
     const txs = new Map<string, string>();
+
+    const loadScripts = async (wanted: readonly string[]) => {
+        for (const group of chunk([...new Set(wanted)], CHUNK_KEYS)) {
+            const keys = new Set(group);
+            const found = new Map<string, VirtualCoin[]>();
+            let usable = true;
+            try {
+                const response = await provider.getVtxos({ scripts: group });
+                if (!response || !Array.isArray(response.vtxos)) usable = false;
+                else
+                    for (const coin of response.vtxos) {
+                        if (!keys.has(coin.script)) usable = false;
+                        else found.set(coin.script, [...(found.get(coin.script) ?? []), coin]);
+                    }
+            } catch {
+                usable = false;
+            }
+            if (!usable) continue;
+            for (const [key, hits] of found) byScript.set(key, hits);
+            for (const key of keys) resolvedScripts.add(key);
+        }
+    };
 
     const loadCoins = async (wanted: readonly { txid: string; vout: number }[]) => {
         const unique = [...new Map(wanted.map((o) => [outpointKey(o), o])).values()];
@@ -979,6 +1083,17 @@ const prefetch = async (
     };
 
     await loadCoins([...outpoints, ...coinOnly]);
+    // One scan-wide wave off wave A's own coins; nothing renewed reads nothing.
+    await loadScripts(
+        outpoints.flatMap((outpoint) => {
+            const hits = coins.get(outpointKey(outpoint)) ?? [];
+            return renewable.has(outpointKey(outpoint)) &&
+                hits.length === 1 &&
+                renewalCommitment(hits[0]!)
+                ? [hits[0]!.script]
+                : [];
+        }),
+    );
     // Only the classified rows pull the transaction waves; a coin-only row rides
     // wave A and stops there.
     const spent = outpoints.flatMap((outpoint) => {
@@ -1010,9 +1125,13 @@ const prefetch = async (
         cached: (outpoint) => resolved.has(outpointKey(outpoint)),
         indexer: {
             getVtxos: (options) => {
-                const keys = (
-                    options && Object.keys(options).length === 1 ? options.outpoints : undefined
-                )?.map(outpointKey);
+                const narrow = options && Object.keys(options).length === 1;
+                const scripts = narrow ? options.scripts : undefined;
+                if (scripts?.every((script) => resolvedScripts.has(script)))
+                    return Promise.resolve({
+                        vtxos: scripts.flatMap((script) => byScript.get(script) ?? []),
+                    });
+                const keys = (narrow ? options.outpoints : undefined)?.map(outpointKey);
                 return keys?.every((key) => resolved.has(key))
                     ? Promise.resolve({ vtxos: keys.flatMap((key) => coins.get(key) ?? []) })
                     : provider.getVtxos(options);
@@ -1058,6 +1177,9 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
         | undefined;
     const label = "taxi-covenant";
     const recoverable = new Set<string>();
+    // Swapped in whole when a scan completes, so a sweeper tick mid-scan still
+    // reads the previous observation rather than an empty map.
+    let observedCoins = new Map<string, ObservedCovenant>();
     const signatureChecks = new Set<string>();
     const verify: SignatureCheck = (tx, index, signers) => {
         const key = [
@@ -1123,6 +1245,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 ...counts,
             });
         recoverable.clear();
+        const observing = new Map<string, ObservedCovenant>();
         const at = deps.now();
         const current = covenantRows(activeStates);
         const settled = covenantRows(terminalStates);
@@ -1174,6 +1297,13 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             reviewing
                 ? settled.flatMap((advance) => (advance.outpoint ? [advance.outpoint] : []))
                 : [],
+            new Set(
+                current.flatMap((advance) =>
+                    advance.covenantVersion === 2 && advance.outpoint
+                        ? [outpointKey(advance.outpoint)]
+                        : [],
+                ),
+            ),
         );
         for (const advance of current) {
             let observedAdvance = advance;
@@ -1221,12 +1351,46 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                 );
                 continue;
             }
+            // Ahead of the spend paths: classifySpend refuses an empty arkTxId.
+            let settledHandled = false;
+            if (coin && observedAdvance.covenantVersion === 2 && renewalCommitment(coin)) {
+                try {
+                    const facts = covenantFacts(observedAdvance, deps.config);
+                    if (!sameCovenant(coin, facts))
+                        fail("renewed covenant evidence differs from persisted facts");
+                    // No live coin at this script is a batch spend through some
+                    // other leaf, so it takes the ordinary classification below.
+                    const successor = await exactSuccessor(batched.indexer, coin, facts);
+                    if (successor) {
+                        if (!deps.advances.recordCovenantRenewed(advance.id, successor, deps.now()))
+                            fail("renewal successor could not be adopted");
+                        recoverable.add(advance.id);
+                        observing.set(advance.id, observedCoin(successor));
+                        settledHandled = true;
+                    }
+                } catch (error) {
+                    deps.advances.recordSpendUnknown(
+                        advance.id,
+                        undefined,
+                        error instanceof EvidenceError
+                            ? error.message
+                            : "covenant renewal evidence could not be validated",
+                        deps.now(),
+                        tip,
+                    );
+                    settledHandled = true;
+                }
+            }
+            if (settledHandled) continue;
             if (!coin || !coin.isSpent) {
                 if (coin) {
                     if (coin.isUnrolled) {
                         deps.advances.recordCovenantUnrolled(advance.id, UNROLLED, deps.now(), tip);
                         continue;
                     }
+                    // Ahead of the evidence gate below, which a swept coin fails:
+                    // that observation is the one the v2 alarm exists for.
+                    observing.set(advance.id, observedCoin(coin));
                     try {
                         const facts = covenantFacts(observedAdvance, deps.config);
                         const assets = holdings(coin, "covenant outpoint");
@@ -1301,6 +1465,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             reviewing || advanced ? covenantRows(terminalStates) : settled,
         );
         report();
+        observedCoins = observing;
         lastScanAt = deps.now();
     };
 
@@ -1578,6 +1743,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
     return {
         catchUp,
         isRecoverable: (id) => recoverable.has(id),
+        observedCovenant: (id) => observedCoins.get(id),
         async start() {
             if (stopping) await stopping;
             // Without a wallet, repeated starts preserve the polling-only prompt.

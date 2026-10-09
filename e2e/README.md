@@ -3,7 +3,8 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-three live scenarios and two integrity assertions must all pass. Skips,
+Twenty-four live scenarios in the main run, one isolated scenario, and two
+integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
@@ -36,11 +37,34 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-18 named scenarios and both integrity assertions plus the isolated run below,
+20 named scenarios and both integrity assertions plus the isolated run below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
 The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
 the run before any stack starts.
+
+### The v2 renewal scenario
+
+`v2-covenant-batch-renewal` is the only scenario that builds a v2 covenant, and
+it needs **no emulator bump**: `OP_TUNNEL` and `OP_INSPECTINTENTMESSAGE` have
+both been in the emulator since `v0.0.8-rc.0`, and the rev-2 covenant uses no
+other new opcode. Read the version a run actually resolved from `stack.json`'s
+`images.emulator` rather than trusting this line, and do not re-introduce an
+`--emulator-image` requirement for the scenario by reflex.
+
+`TAXI_COVENANT_VERSION=2` is still refused at startup, so the scenario does not
+run v2 through the production Taxi container. It stands up its own in-process
+Taxi — a fresh operator key, its own SQLite ledger, the production lockup builder,
+submitter and spend watcher — and sets `covenantVersion` on the resolved config
+rather than in the environment `loadConfig` validates. Lifting that gate is a
+separate change; nothing here weakens it.
+
+The scenario renews the covenant itself through leaf 5 with a `register` intent
+the emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
+records what the indexer reports for the coin a renewal batch consumed —
+`isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
+the batch fails, because that record is the answer the watcher's discriminator
+depends on.
 
 ### Isolated scenarios
 
@@ -102,7 +126,7 @@ having asserted nothing is worse than no suite.
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
 - `assert-ran.mjs` validates Vitest's JSON report independently: the shared
-  run's twenty-two scenarios and both integrity assertions, and the isolated
+  run's twenty-four scenarios and both integrity assertions, and the isolated
   run's scenario, must pass with zero failures, skips, or todos.
 
 ## What the scenarios prove
@@ -182,7 +206,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The harness always clones master afresh; read the tested SHA from the current
-`stack.json` and retain it with all 24 passing assertions. Capture the existing
+`stack.json` and retain it with all 27 passing assertions. Capture the existing
 default project's container, volume and network inventory before and after, and
 verify that no resources with the run's exact ownership labels remain after
 successful cleanup.

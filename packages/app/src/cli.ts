@@ -168,10 +168,21 @@ async function runServe(): Promise<void> {
         config,
         policy,
         canRecover: (advance) => watcher.isRecoverable(advance.id),
+        observed: (advance) => watcher.observedCovenant(advance.id),
         onError: (id, error) =>
             log.error(
                 { advanceId: id, error: sanitizeOperationalError(error, "recovery failed") },
                 "recovery failed",
+            ),
+        onRenewalWarning: ({ delegation, deadline }) =>
+            log.warn(
+                {
+                    advanceId: deadline.advanceId,
+                    delegation,
+                    code: deadline.code,
+                    remaining: deadline.remaining?.toString(),
+                },
+                "v2 covenant renewal is overdue",
             ),
     });
     reconciler = createLockupReconciler({

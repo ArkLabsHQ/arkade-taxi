@@ -14,6 +14,9 @@ class LiveSequencer extends BaseSequencer {
             "receiver-paid",
             "exposure",
             "verify-quote",
+            // Its own operator key and ledger, but it settles a batch, so it
+            // stays ahead of the scenarios that move chain time.
+            "renewal",
             "refund-recovery",
             "resilience",
             "suite-integrity",

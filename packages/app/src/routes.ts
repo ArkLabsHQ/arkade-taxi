@@ -22,6 +22,7 @@ import {
     type SwapFillStore,
 } from "./swapFillQuotes.js";
 import { submitSwapFill, type SwapFillSubmitDeps } from "./swapFillSubmit.js";
+import type { DelegateeClient } from "./delegatee.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
@@ -37,7 +38,11 @@ export interface RouteDeps extends QuoteDeps {
     sponsoredBuilder: SponsoredLockupBuilder;
     swapFills: SwapFillStore;
     swapFillBuilder: SwapFillGraphBuilder;
-    delegatee?: SwapFillQuoteDeps["delegatee"];
+    /** The server holds the whole client: the admin view reads the renewal
+     * history the quote path has no use for. */
+    delegatee?: SwapFillQuoteDeps["delegatee"] & {
+        client: Pick<DelegateeClient, "getDelegation">;
+    };
     swapFillSubmit: SwapFillSubmitDeps;
     offerCodec: OfferCodec;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;

@@ -532,6 +532,15 @@ export const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE operator_input_reservations_v15 RENAME TO operator_input_reservations;
         CREATE INDEX operator_input_reservations_advance ON operator_input_reservations (advance_id);`,
     },
+    {
+        id: 16,
+        compat: "additive",
+        // Separates "never renewed" (registration failed) from "renewal stopped"
+        // (the delegatee gave up). An older build omits both from its INSERT.
+        up: `ALTER TABLE advances ADD COLUMN renewals INTEGER NOT NULL DEFAULT 0
+                CHECK (renewals >= 0);
+             ALTER TABLE advances ADD COLUMN last_renewed_at INTEGER`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */
@@ -561,6 +570,8 @@ const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; 
     { since: 14, table: "custody", column: "owed_sats", type: "INTEGER" },
     { since: 14, table: "custody", column: "swept_actor", type: "TEXT" },
     { since: 14, table: "custody_release_inputs", column: "advance_id", type: "TEXT" },
+    { since: 16, table: "advances", column: "renewals", type: "INTEGER" },
+    { since: 16, table: "advances", column: "last_renewed_at", type: "INTEGER" },
 ];
 
 function missingSchema(db: Database, upto: number): string[] {
