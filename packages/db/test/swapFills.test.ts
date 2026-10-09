@@ -59,7 +59,7 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
         asset_txid: null,
         asset_group_index: null,
         asset_units: null,
-        locktime: 850_000n,
+        locktime: 1_800_000_000n,
         covenant_address: "tark1qcovenantexample",
         fare_currency: "sats",
         fare_units: 25n,
@@ -71,8 +71,6 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
         created_at: 1n,
         updated_at: 1n,
         expires_at: 2n,
-        batch_expiry_kind: "height",
-        batch_expiry_value: 900_000n,
         operator_inputs_json: JSON.stringify([{ txid: "aa".repeat(32), vout: 0 }]),
         unsigned_lockup_tx: "unsigned",
         unsigned_lockup_id: "bb".repeat(32),
@@ -87,11 +85,11 @@ function insertLegacyAdvance(db: Database, over: Record<string, unknown> = {}): 
 describe("swap-fill migration", () => {
     it("adds swap-fill storage as a new migration without touching prior ones", () => {
         expect(MIGRATIONS.map(({ id }) => id)).toEqual([
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
         ]);
         const db = fresh();
         applyMigrations(db);
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(16);
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(17);
         expect(
             db
                 .prepare("SELECT name FROM pragma_table_info('swap_fills') WHERE name = ?")

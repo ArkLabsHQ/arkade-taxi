@@ -17,7 +17,7 @@ import {
 } from "../src/index.js";
 
 const input = (vout = 0) => ({ txid: "aa".repeat(32), vout });
-const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+const DEADLINE = 1_757_000_000n + 8_640_000n;
 
 const quote = (overrides: Partial<Advance> = {}): Advance => {
     const result: Advance = {
@@ -29,9 +29,8 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         operatorSignerKey: new Uint8Array(32).fill(4),
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
-        topup: 300n,
-        locktime: 100n,
-        batchExpiry: { kind: "height", value: 300n },
+        topup: 330n,
+        locktime: DEADLINE,
         operatorInputs: [input()],
         unsignedLockupTx: "unsigned",
         unsignedLockupId: "bb".repeat(32),
@@ -42,13 +41,7 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         expiresAt: 60,
         ...overrides,
     };
-    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
-    // move together: a fixture cannot pick one without the other.
-    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
-        result.locktime = V2_DEADLINE;
-        delete result.batchExpiry;
-        delete result.recoveryLocktime;
-    }
+    // A covenant advance keeps no batch expiry and its CLTV is wall-clock.
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -84,7 +77,7 @@ const reserve = (advance = quote()) =>
     reservations.reserveQuote({
         advance,
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: advance.batchExpiry!.kind, value: 1n },
+        recoveryExecutionBudget: { kind: "time", value: 1n },
     });
 
 describe("durable reservations", () => {
@@ -98,20 +91,20 @@ describe("durable reservations", () => {
         expect(() => jobs.create("next", { inputs: [input()] }, 2)).toThrow(/already reserved/);
         expect(jobs.get("next")).toBeUndefined();
     });
-    it("serializes simultaneous claims on separate workers at 300 sats and one advance", async () => {
+    it("serializes simultaneous claims on separate workers at 330 sats and one advance", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-worker-cap-"));
         const path = join(directory, "taxi.sqlite");
         const database = new DatabaseCtor(path);
         applyMigrations(database);
         const p = new PolicyRepository(database);
-        p.update({ ...policy.get(), maxOutstandingSats: 300n, maxConcurrentAdvances: 1 }, "test");
+        p.update({ ...policy.get(), maxOutstandingSats: 330n, maxConcurrentAdvances: 1 }, "test");
         const repository = new ReservationRepository(database);
         const quotes = [quote(), quote({ id: "quote-2", operatorInputs: [input(1)] })];
         for (const advance of quotes)
             repository.reserveQuote({
                 advance,
                 expectedPolicyRevision: p.getSnapshot().revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
             });
         const gate = new SharedArrayBuffer(4);
         const workers: Worker[] = [];
@@ -180,9 +173,9 @@ describe("durable reservations", () => {
         }
     });
     it.each([
-        [300n, 1, "exceeds_max_outstanding"],
-        [300n, 2, "exceeds_max_outstanding"],
-        [600n, 1, "max_concurrent_advances"],
+        [330n, 1, "exceeds_max_outstanding"],
+        [330n, 2, "exceeds_max_outstanding"],
+        [660n, 1, "max_concurrent_advances"],
     ] as const)(
         "atomically enforces claim capacity %s sats / %s advances",
         async (maxOutstandingSats, maxConcurrentAdvances, code) => {
@@ -202,7 +195,7 @@ describe("durable reservations", () => {
                     repositories[i]!.reserveQuote({
                         advance,
                         expectedPolicyRevision: p.getSnapshot().revision,
-                        recoveryExecutionBudget: { kind: "height", value: 1n },
+                        recoveryExecutionBudget: { kind: "time", value: 1n },
                     });
                 const results = await Promise.allSettled(
                     repositories.map(async (repository, i) =>
@@ -220,7 +213,7 @@ describe("durable reservations", () => {
                 const rows = new AdvanceRepository(first);
                 expect(rows.get("quote-2")).toEqual(quotes[1]);
                 expect(rows.byState("locking").reduce((sum, row) => sum + row.topup, 0n)).toBe(
-                    300n,
+                    330n,
                 );
                 expect(repositories[1]!.listForAdvance("quote-2")).toEqual([input(1)]);
                 expect(
@@ -239,71 +232,51 @@ describe("durable reservations", () => {
             }
         },
     );
-    it.each([
-        {
-            kind: "height" as const,
-            locktime: 100n,
-            budget: 72n,
-            equalExpiry: 172n,
-        },
-        {
-            kind: "time" as const,
-            locktime: 1_789_132_000n,
-            budget: 43_200n,
-            equalExpiry: 1_789_175_200n,
-        },
-    ])("atomically enforces the $kind recovery execution budget", (sample) => {
-        policy.update(
-            sample.kind === "height"
-                ? { locktimeMarginBlocks: Number(sample.budget + 1n) }
-                : { locktimeMarginSeconds: Number(sample.budget + 1n) },
-            "test",
-        );
-        const equal = quote({
-            id: `equal-${sample.kind}`,
-            locktime: sample.locktime,
-            recoveryLocktime: { kind: sample.kind, value: sample.locktime },
-            batchExpiry: { kind: sample.kind, value: sample.equalExpiry },
-        });
+    // The budget races the lockup, so it must be a wall-clock slice strictly
+    // under the policy margin; a deadline at or before the quote never passes.
+    it("atomically enforces the wall-clock recovery execution budget", () => {
+        policy.update({ locktimeMarginSeconds: 43_201 }, "test");
         expect(() =>
             reservations.reserveQuote({
-                advance: equal,
+                advance: quote({ id: "height-budget" }),
                 expectedPolicyRevision: policy.getSnapshot().revision,
-                recoveryExecutionBudget: { kind: sample.kind, value: sample.budget },
+                recoveryExecutionBudget: { kind: "height", value: 43_200n },
             }),
         ).toThrow(RecoveryBudgetConflictError);
-        expect(advances.get(equal.id)).toBeUndefined();
+        expect(advances.get("height-budget")).toBeUndefined();
 
-        const valid = quote({
-            id: `valid-${sample.kind}`,
-            operatorInputs: [input(1)],
-            locktime: sample.locktime,
-            recoveryLocktime: { kind: sample.kind, value: sample.locktime },
-            batchExpiry: { kind: sample.kind, value: sample.equalExpiry + 1n },
-        });
+        expect(() =>
+            reservations.reserveQuote({
+                advance: quote({ id: "over-margin", operatorInputs: [input(1)] }),
+                expectedPolicyRevision: policy.getSnapshot().revision,
+                recoveryExecutionBudget: { kind: "time", value: 43_201n },
+            }),
+        ).toThrow(RecoveryBudgetConflictError);
+
+        const valid = quote({ id: "valid", operatorInputs: [input(1)] });
         reservations.reserveQuote({
             advance: valid,
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: sample.kind, value: sample.budget },
+            recoveryExecutionBudget: { kind: "time", value: 43_200n },
         });
         expect(advances.get(valid.id)).toBeDefined();
     });
 
     it("fails closed when the policy margin changes beneath the execution budget", () => {
         const revision = policy.getSnapshot().revision;
-        policy.update({ locktimeMarginBlocks: 72 }, "racing-admin");
+        policy.update({ locktimeMarginSeconds: 72 }, "racing-admin");
         expect(() =>
             reservations.reserveQuote({
                 advance: quote(),
                 expectedPolicyRevision: revision,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
+                recoveryExecutionBudget: { kind: "time", value: 72n },
             }),
         ).toThrow(expect.objectContaining({ code: "policy_changed" }));
         expect(() =>
             reservations.reserveQuote({
                 advance: quote(),
                 expectedPolicyRevision: policy.getSnapshot().revision,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
+                recoveryExecutionBudget: { kind: "time", value: 72n },
             }),
         ).toThrow(RecoveryBudgetConflictError);
         expect(advances.get("quote-1")).toBeUndefined();
@@ -365,7 +338,7 @@ describe("durable reservations", () => {
                 owner.reserveQuote({
                     advance: quote(),
                     expectedPolicyRevision: terms.getSnapshot().revision,
-                    recoveryExecutionBudget: { kind: "height", value: 1n },
+                    recoveryExecutionBudget: { kind: "time", value: 1n },
                 });
                 second = new DatabaseCtor(join(dir, "taxi.sqlite"));
                 const cleaner = new ReservationRepository(second);
@@ -506,7 +479,7 @@ describe("durable reservations", () => {
             firstReservations.reserveQuote({
                 advance: quote(),
                 expectedPolicyRevision: firstPolicy.getSnapshot().revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
             });
             new AdvanceRepository(first).update(transition(quote(), "expired", 60));
             first.close();
@@ -528,7 +501,7 @@ describe("durable reservations", () => {
             reservations.reserveQuote({
                 advance: quote({ id: "disjoint", operatorInputs: [input(1)] }),
                 expectedPolicyRevision: policy.getSnapshot().revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
                 expectedReservedOutpoints,
             }),
         ).toThrow(/reservation/);
@@ -549,38 +522,23 @@ describe("durable reservations", () => {
             reservations.reserveQuote({
                 advance: quote({ id: "policy-changed", operatorInputs: [input(1)] }),
                 expectedPolicyRevision: revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
             });
             throw new Error("expected policy error");
         } catch (error) {
             expect((error as Error).name).not.toBe("ReservationConflictError");
         }
     });
-    it("persists timestamp expiry and enforces only the seconds policy margin", () => {
-        policy.update({ locktimeMarginSeconds: 60 }, "test");
-        const timed = quote({
-            locktime: 1789132800n,
-            batchExpiry: { kind: "time", value: 1789132933n },
-        });
-        reserve(timed);
-        expect(advances.get(timed.id)?.batchExpiry).toEqual({ kind: "time", value: 1789132933n });
+    it("stores no reservation expiry for a covenant advance that carries none", () => {
+        reserve();
+        expect(advances.get("quote-1")?.batchExpiry).toBeUndefined();
         expect(
             db
                 .prepare(
                     "SELECT batch_expiry_kind, batch_expiry_value FROM operator_input_reservations",
                 )
                 .get(),
-        ).toEqual({ batch_expiry_kind: "time", batch_expiry_value: 1789132933 });
-        expect(() =>
-            reserve(
-                quote({
-                    id: "too-late",
-                    locktime: 1789132900n,
-                    batchExpiry: { kind: "time", value: 1789132933n },
-                    operatorInputs: [input(1)],
-                }),
-            ),
-        ).toThrow(/margin/);
+        ).toEqual({ batch_expiry_kind: null, batch_expiry_value: null });
     });
     it("keeps reservations and revision across reopen and rejects conflicts from another connection", () => {
         const dir = mkdtempSync(join(tmpdir(), "taxi-reservations-"));
@@ -595,7 +553,7 @@ describe("durable reservations", () => {
             new ReservationRepository(first).reserveQuote({
                 advance: quote(),
                 expectedPolicyRevision: revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
             });
             second = new DatabaseCtor(path);
             applyMigrations(second);
@@ -606,7 +564,7 @@ describe("durable reservations", () => {
                 other.reserveQuote({
                     advance: quote({ id: "quote-2" }),
                     expectedPolicyRevision: revision,
-                    recoveryExecutionBudget: { kind: "height", value: 1n },
+                    recoveryExecutionBudget: { kind: "time", value: 1n },
                 }),
             ).toThrow(/reserved/);
             new PolicyRepository(second).update({ paused: true }, "test");
@@ -614,7 +572,7 @@ describe("durable reservations", () => {
                 new ReservationRepository(first).reserveQuote({
                     advance: quote({ id: "quote-3", operatorInputs: [input(3)] }),
                     expectedPolicyRevision: revision,
-                    recoveryExecutionBudget: { kind: "height", value: 1n },
+                    recoveryExecutionBudget: { kind: "time", value: 1n },
                 }),
             ).toThrow(/policy.*changed/);
         } finally {
@@ -635,17 +593,20 @@ describe("durable reservations", () => {
 
     it("retains exact reservation heights and compares exposure above 2^53", () => {
         const large = 9_007_199_254_740_993n;
-        policy.update({ maxOutstandingSats: large + 300n }, "test");
+        policy.update(
+            { maxOutstandingSats: large + 330n, maxPerPaymentTopupSats: large + 1n },
+            "test",
+        );
         advances.insert(quote({ id: "existing", state: "locking", topup: large, dust: large }));
-        reserve(quote({ batchExpiry: { kind: "height", value: large } }));
+        reserve(quote({ locktime: DEADLINE + large }));
         expect(
             db
-                .prepare("SELECT batch_expiry_value FROM operator_input_reservations")
+                .prepare("SELECT locktime FROM advances WHERE id = 'quote-1'")
                 .safeIntegers(true)
                 .get(),
-        ).toEqual({ batch_expiry_value: large });
+        ).toEqual({ locktime: DEADLINE + large });
         expect(() =>
-            reserve(quote({ id: "too-much", topup: 301n, operatorInputs: [input(1)] })),
+            reserve(quote({ id: "too-much", topup: 331n, dust: 331n, operatorInputs: [input(1)] })),
         ).toThrow(/outstanding/);
     });
     it("persists the quote and its inputs together", () => {
@@ -662,7 +623,7 @@ describe("durable reservations", () => {
             reservations.reserveQuote({
                 advance: quote(),
                 expectedPolicyRevision: revision,
-                recoveryExecutionBudget: { kind: "height", value: 1n },
+                recoveryExecutionBudget: { kind: "time", value: 1n },
             }),
         ).toThrow(/policy.*changed/);
         expect(advances.get("quote-1")).toBeUndefined();
@@ -703,8 +664,8 @@ describe("durable reservations", () => {
     });
     it.each([
         { paused: true },
-        { maxPerPaymentTopupSats: 299n },
-        { locktimeMarginBlocks: 201 },
+        { maxPerPaymentTopupSats: 329n },
+        { locktimeMarginSeconds: 1 },
         { assetRules: [] },
     ])("rechecks policy limits %s", (patch) => {
         policy.update(patch, "test");
@@ -759,6 +720,7 @@ describe("sponsored reservations", () => {
         const advance = quote({ id: "sponsored-1", ...overrides });
         advance.kind = "sponsored";
         advance.locktime = 0n;
+        advance.batchExpiry ??= { kind: "height", value: 300n };
         delete advance.recoveryLocktime;
         return advance;
     };
@@ -766,7 +728,7 @@ describe("sponsored reservations", () => {
         reservations.reserveQuote({
             advance,
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: advance.batchExpiry!.kind, value: 1n },
+            recoveryExecutionBudget: { kind: "time", value: 1n },
         });
 
     it("reserves without recovery facts and round-trips the kind", () => {

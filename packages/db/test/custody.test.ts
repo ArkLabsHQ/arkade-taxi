@@ -36,8 +36,7 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 330n,
-        locktime: 850_000n,
-        batchExpiry: { kind: "height", value: INT64_MAX },
+        locktime: V2_DEADLINE,
         operatorInputs: [{ txid: "ab".repeat(32), vout: 7 }],
         unsignedLockupTx: "unsigned-lockup",
         unsignedLockupId: "cd".repeat(32),
@@ -49,13 +48,7 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
-    // move together: a fixture cannot pick one without the other.
-    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
-        result.locktime = V2_DEADLINE;
-        delete result.batchExpiry;
-        delete result.recoveryLocktime;
-    }
+    // A covenant advance keeps no batch expiry and its CLTV is wall-clock.
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -65,7 +58,6 @@ function advance(overrides: Partial<Advance> = {}): Advance {
 
 const v2 = (overrides: Partial<Advance> = {}): Advance =>
     advance({
-        covenantVersion: 2,
         paymentSats: 1_000n,
         assetId: ASSET,
         assetUnits: 7n,
@@ -122,12 +114,9 @@ describe("a reclaim opens the liability", () => {
         expect(custody.get("unit")?.owedSats).toBe(0n);
     });
 
-    it("opens no row for a legacy advance or a non-reclaim claim", () => {
-        advances.insert(advance({ id: "legacy" }));
-        advances.recordSpendObservation("legacy", "locked", "recovered", RECLAIM, 500, TIP);
+    it("opens no row for a claim, only for a reclaim", () => {
         advances.insert(v2({ id: "claimed", outpoint: { txid: "ef".repeat(32), vout: 1 } }));
         advances.recordSpendObservation("claimed", "locked", "recycled", RECLAIM, 500, TIP);
-        expect(custody.get("legacy")).toBeUndefined();
         expect(custody.get("claimed")).toBeUndefined();
         expect(custody.liabilities()).toEqual({ owedSats: 0n, assets: [], rows: 0 });
     });

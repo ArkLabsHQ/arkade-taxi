@@ -19,6 +19,7 @@ import type { Advance } from "@arkade-taxi/core";
 const NOW = 1_757_000_000;
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
 const INPUT = { txid: "aa".repeat(32), vout: 1 };
+const DEADLINE = 1_800_000_000n;
 
 const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
     id: "receive-1",
@@ -32,9 +33,9 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
         operatorSignerKey: new Uint8Array(32).fill(0x44),
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
-        topup: 329n,
+        topup: 330n,
         assetId: ASSET,
-        locktime: 899_856n,
+        locktime: DEADLINE,
         claimMode: "recycle",
         recoveryRecipient: "receiver",
     },
@@ -42,8 +43,8 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
     fare: { currency: "sats", units: 3n },
     batchExpiry: { kind: "height", value: 900_000n },
     inputExpiryFloor: { kind: "height", value: 900_000n },
-    recoveryLocktime: { kind: "height", value: 899_856n },
-    loanSats: 329n,
+    recoveryLocktime: { kind: "time", value: DEADLINE },
+    loanSats: 330n,
     createdAt: NOW,
     expiresAt: NOW + 60,
     policyRevision: 1n,
@@ -87,10 +88,7 @@ const insert = (repo: ReceiveQuoteRepository, policy: PolicyRepository, value = 
     repo.insert({
         quote: { ...value, policyRevision: policy.getSnapshot().revision },
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget:
-            value.covenantVersion === 2
-                ? { kind: "time", value: 43_200n }
-                : { kind: "height", value: 72n },
+        recoveryExecutionBudget: { kind: "time", value: 43_200n },
     });
 
 const graph = {
@@ -112,7 +110,7 @@ const boundFill = (over: Partial<SwapFill> = {}): SwapFill => ({
     solverProceedsScript: new Uint8Array([0x51]),
     solverKeys: ["44".repeat(32)],
     taxiInputs: [INPUT],
-    contributionSats: 329n,
+    contributionSats: 330n,
     sponsorScript: new Uint8Array([0x52]),
     fare: { currency: "sats", units: 3n },
     maxFare: { currency: "sats", units: 30n },
@@ -135,19 +133,18 @@ const boundAdvance = (over: Partial<Advance> = {}): Advance => ({
     operatorSignerKey: quote().params.operatorSignerKey,
     exitDelay: quote().params.exitDelay,
     dust: 330n,
-    topup: 329n,
+    topup: 330n,
     assetId: ASSET,
     assetUnits: 5n,
     claimMode: "recycle",
     recoveryRecipient: "receiver",
-    locktime: 899_856n,
+    locktime: DEADLINE,
     covenantAddress: quote().covenantAddress,
     fare: { currency: "sats", units: 3n },
     createdAt: NOW,
     updatedAt: NOW,
     expiresAt: NOW + 60,
-    batchExpiry: { kind: "height", value: 900_000n },
-    recoveryLocktime: { kind: "height", value: 899_856n },
+    recoveryLocktime: { kind: "time", value: DEADLINE },
     operatorInputs: [INPUT],
     unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":1}',
     unsignedLockupId: "ab".repeat(32),
@@ -169,9 +166,9 @@ describe("receive quote repository", () => {
         const policy = configure(first);
         const revision = policy.getSnapshot().revision;
         const lifetime = quote({
-            params: { ...quote().params, locktime: 849_856n },
+            params: { ...quote().params, locktime: DEADLINE + 10n },
             inputExpiryFloor: { kind: "height", value: 850_000n },
-            recoveryLocktime: { kind: "height", value: 849_856n },
+            recoveryLocktime: { kind: "time", value: DEADLINE + 10n },
         });
         insert(new ReceiveQuoteRepository(first), policy, lifetime);
         first.close();
@@ -226,28 +223,19 @@ describe("receive quote repository", () => {
 
     // The version rides in its own column, never in params_json: that decoder is
     // strict, so a v2 row inside it would be undecodable by a rolled-back build.
-    it("round-trips the covenant version beside an untouched params_json", () => {
+    it("round-trips a receiver-paid quote with no version in params_json", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);
         const repo = new ReceiveQuoteRepository(db);
         const fare = { currency: "asset" as const, units: 9n };
-        const v2 = quote({
-            params: {
-                ...quote().params,
-                topup: 330n,
-                receiverFare: fare,
-                locktime: 1_800_000_000n,
-            },
+        const paid = quote({
+            params: { ...quote().params, receiverFare: fare },
             payer: "receiver",
             receiverFare: { ...fare, assetId: ASSET },
-            loanSats: 330n,
-            covenantVersion: 2,
-            // Migration 15: a v2 deadline is wall-clock, not a margin off expiry.
-            recoveryLocktime: { kind: "time" as const, value: 1_800_000_000n },
         });
-        insert(repo, policy, v2);
+        insert(repo, policy, paid);
         expect(repo.get("receive-1")).toEqual({
-            ...v2,
+            ...paid,
             policyRevision: policy.getSnapshot().revision,
         });
         expect(
@@ -257,16 +245,6 @@ describe("receive quote repository", () => {
                     .get()!.params_json,
             ),
         ).not.toHaveProperty("covenantVersion");
-
-        insert(
-            repo,
-            policy,
-            quote({
-                id: "legacy",
-                operatorInputs: [{ ...quote().operatorInputs[0]!, vout: 2 }],
-            }),
-        );
-        expect(repo.get("legacy")?.covenantVersion).toBeUndefined();
         db.close();
     });
 
@@ -353,7 +331,7 @@ describe("receive quote repository", () => {
             repo.insert({
                 quote: quote({ id: "receive-2", policyRevision: stale }),
                 expectedPolicyRevision: stale,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
+                recoveryExecutionBudget: { kind: "time", value: 43_200n },
             }),
         ).toThrow(/policy snapshot changed/);
 
@@ -362,7 +340,7 @@ describe("receive quote repository", () => {
             repo.insert({
                 quote: quote({ id: "receive-2", policyRevision: current }),
                 expectedPolicyRevision: current,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
+                recoveryExecutionBudget: { kind: "time", value: 43_200n },
             }),
         ).toThrow(/max outstanding/);
         db.close();
@@ -383,7 +361,7 @@ describe("receive quote repository", () => {
                     ],
                 }),
                 expectedPolicyRevision: current,
-                recoveryExecutionBudget: { kind: "height", value: 72n },
+                recoveryExecutionBudget: { kind: "time", value: 43_200n },
                 expectedReservedOutpoints: [],
             }),
         ).toThrow(ReceiveQuoteReservationConflictError);
@@ -408,7 +386,7 @@ describe("receive quote repository", () => {
         expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("locking");
         expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
         expect(new AdvanceRepository(db).exposureTotals()).toEqual({
-            outstandingSats: 329n,
+            outstandingSats: 330n,
             lockedCount: 1,
         });
         expect(new SwapFillRepository(db).exposureTotals()).toEqual({

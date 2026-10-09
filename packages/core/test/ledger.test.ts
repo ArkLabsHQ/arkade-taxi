@@ -34,6 +34,8 @@ const LEGAL: ReadonlyArray<readonly [AdvanceState, AdvanceState]> = [
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 
+const DEADLINE = 1_800_000_000n;
+
 const advance = (overrides: Partial<Advance> = {}): Advance => {
     const result: Advance = {
         id: "adv-1",
@@ -45,8 +47,7 @@ const advance = (overrides: Partial<Advance> = {}): Advance => {
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 330n,
-        locktime: 800_000n,
-        batchExpiry: { kind: "height", value: 800_500n },
+        locktime: DEADLINE,
         operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
         unsignedLockupTx: "unsigned",
         unsignedLockupId: "bb".repeat(32),
@@ -105,24 +106,14 @@ describe("canTransition", () => {
         expect(transition(a, "recovered", 7_000).state).toBe("recovered");
     });
 
-    // D2: a v2 deadline is wall-clock, measured from the lockup it bounds, and
+    // The deadline is wall-clock, measured from the lockup it bounds, and
     // deliberately outlives the funding coins, so it stores no batch expiry.
-    describe("a v2 deadline", () => {
-        const DEADLINE = 1_800_000_000n;
-        const v2 = (over: Partial<Advance> = {}) =>
-            advance({
-                covenantVersion: 2,
-                locktime: DEADLINE,
-                recoveryLocktime: { kind: "time", value: DEADLINE },
-                batchExpiry: undefined,
-                ...over,
-            });
-
+    describe("the covenant deadline", () => {
         it("validates without a batch expiry, and refuses one", () => {
-            expect(() => transition(v2(), "locking", 5_000)).not.toThrow();
+            expect(() => transition(advance(), "locking", 5_000)).not.toThrow();
             expect(() =>
                 transition(
-                    v2({ batchExpiry: { kind: "time", value: DEADLINE + 1n } }),
+                    advance({ batchExpiry: { kind: "time", value: DEADLINE + 1n } }),
                     "locking",
                     5_000,
                 ),
@@ -132,53 +123,39 @@ describe("canTransition", () => {
         it("must be time-domain and strictly after the lockup", () => {
             expect(() =>
                 transition(
-                    v2({
+                    advance({
                         locktime: 800_000n,
                         recoveryLocktime: { kind: "height", value: 800_000n },
                     }),
                     "locking",
                     5_000,
                 ),
-            ).toThrow(/agree with batch expiry/);
+            ).toThrow(/future wall-clock deadline/);
             expect(() =>
                 transition(
-                    v2({ createdAt: Number(DEADLINE), expiresAt: Number(DEADLINE) + 10 }),
+                    advance({ createdAt: Number(DEADLINE), expiresAt: Number(DEADLINE) + 10 }),
                     "locking",
                     5_000,
                 ),
-            ).toThrow(/agree with batch expiry/);
+            ).toThrow(/future wall-clock deadline/);
         });
-    });
-
-    it.each([799_999n, 800_000n])("rejects unsafe batch expiry %s", (batchExpiryHeight) => {
-        expect(() =>
-            transition(
-                advance({ batchExpiry: { kind: "height", value: batchExpiryHeight } }),
-                "locking",
-                5_000,
-            ),
-        ).toThrow(/batch.*expiry/i);
     });
 });
 
 describe("transition", () => {
-    it("accepts timestamp deadlines only with timestamp CLTV", () => {
-        const timed = advance({
-            locktime: 1789132000n,
-            batchExpiry: { kind: "time", value: 1789132933n },
-        });
-        expect(transition(timed, "locking", 5000).batchExpiry).toEqual({
-            kind: "time",
-            value: 1789132933n,
-        });
-        expect(() => transition({ ...timed, locktime: 400n }, "locking", 5000)).toThrow(/expiry/);
+    it("accepts a timestamp CLTV and nothing else", () => {
+        const timed = advance();
+        expect(transition(timed, "locking", 5000).batchExpiry).toBeUndefined();
+        expect(() => transition({ ...timed, locktime: 400n }, "locking", 5000)).toThrow(
+            /wall-clock/,
+        );
         expect(() =>
             transition(
-                { ...timed, batchExpiry: { kind: "height", value: 1789132933n } },
+                { ...timed, recoveryLocktime: { kind: "height", value: DEADLINE } },
                 "locking",
                 5000,
             ),
-        ).toThrow(/expiry/);
+        ).toThrow(/wall-clock/);
     });
     it("returns a new object with the new state and updatedAt", () => {
         const before = advance();
@@ -276,7 +253,6 @@ describe("covenantParamsOf", () => {
         recoveryRecipient: true,
         assetId: true,
         receiverFare: true,
-        covenantVersion: true,
     };
 
     it("maps every covenant field of the advance", () => {
@@ -286,7 +262,6 @@ describe("covenantParamsOf", () => {
             recoveryRecipient: "receiver",
             assetId: { txid: key(9), groupIndex: 1 },
             receiverFare: { currency: "asset", units: 9n },
-            covenantVersion: 2,
         });
         const params = covenantParamsOf(full);
         expect(Object.keys(params).sort()).toEqual(Object.keys(FIELDS).sort());
@@ -303,7 +278,7 @@ describe("covenantParamsOf", () => {
             exitDelay: { value: 5n, type: "blocks" },
             dust: 330n,
             topup: 330n,
-            locktime: 800_000n,
+            locktime: DEADLINE,
         });
     });
 });

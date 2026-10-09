@@ -62,11 +62,11 @@ export function transition(a: Advance, to: AdvanceState, at: number): Advance {
 
 export function validateFundingSnapshot(a: Advance): void {
     const expiry = a.batchExpiry;
-    // A v2 advance keeps no batch expiry: its deadline is measured from lockup
-    // and a renewal re-dates the coins, so a snapshot would go stale.
-    const deadline = a.covenantVersion === 2;
+    // A covenant advance keeps no batch expiry: its deadline is measured from
+    // lockup and a renewal re-dates the coins, so a snapshot would go stale.
+    // A sponsored advance has no covenant, so its expiry is all it has.
     if (
-        deadline
+        advanceKind(a) !== "sponsored"
             ? expiry !== undefined
             : !expiry ||
               typeof expiry.value !== "bigint" ||
@@ -79,21 +79,19 @@ export function validateFundingSnapshot(a: Advance): void {
         return;
     }
     const recovery = a.recoveryLocktime;
-    // The v2 deadline is wall-clock and strictly after the lockup it is measured
-    // from; a v1 locktime is a margin inside batch expiry instead.
-    const agrees = deadline
-        ? recovery?.kind === "time" && recovery.value > BigInt(a.createdAt)
-        : recovery?.kind === expiry!.kind && expiry!.value > recovery.value;
+    // Only a covenant advance reaches here; the sponsored rail returned above.
+    // Its deadline is wall-clock and strictly after the lockup it is measured
+    // from, rather than a margin inside a batch expiry it no longer carries.
     if (
         !recovery ||
         typeof recovery.value !== "bigint" ||
         recovery.value !== a.locktime ||
-        !agrees ||
-        (recovery.kind === "height" && recovery.value >= 500_000_000n) ||
-        (recovery.kind === "time" && recovery.value < 500_000_000n)
+        recovery.kind !== "time" ||
+        recovery.value < 500_000_000n ||
+        recovery.value <= BigInt(a.createdAt)
     ) {
         throw new Error(
-            `advance ${a.id}: tagged recovery locktime must match and agree with batch expiry`,
+            `advance ${a.id}: tagged recovery locktime must be a future wall-clock deadline`,
         );
     }
     validateJointSnapshot(a);

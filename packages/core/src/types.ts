@@ -139,12 +139,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
      * Persisted because the claim feed and every recovery rebuild read the
      * advance, and the fare is part of the covenant address. */
     receiverFare?: ReceiverFare;
-    covenantVersion?: 2;
 
     outpoint?: Outpoint;
     spentTxid?: string;
 
-    /** v2 renewals: non-terminal, so the advance stays `locked` and `outpoint`
+    /** Renewals: non-terminal, so the advance stays `locked` and `outpoint`
      * moves to the successor. Absent is zero. */
     renewals?: number;
     lastRenewedAt?: number;
