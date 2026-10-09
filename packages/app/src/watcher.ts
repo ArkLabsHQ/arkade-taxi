@@ -963,6 +963,7 @@ const prefetch = async (
     provider: SpendWatcherDeps["indexer"],
     outpoints: readonly { txid: string; vout: number }[],
     coinOnly: readonly { txid: string; vout: number }[] = [],
+    renewable: ReadonlySet<string> = new Set(),
 ): Promise<{
     indexer: SpendWatcherDeps["indexer"];
     cached(outpoint: { txid: string; vout: number }): boolean;
@@ -1067,7 +1068,11 @@ const prefetch = async (
     await loadScripts(
         outpoints.flatMap((outpoint) => {
             const hits = coins.get(outpointKey(outpoint)) ?? [];
-            return hits.length === 1 && renewalCommitment(hits[0]!) ? [hits[0]!.script] : [];
+            return renewable.has(outpointKey(outpoint)) &&
+                hits.length === 1 &&
+                renewalCommitment(hits[0]!)
+                ? [hits[0]!.script]
+                : [];
         }),
     );
     // Only the classified rows pull the transaction waves; a coin-only row rides
@@ -1269,6 +1274,13 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
             reviewing
                 ? settled.flatMap((advance) => (advance.outpoint ? [advance.outpoint] : []))
                 : [],
+            new Set(
+                current.flatMap((advance) =>
+                    advance.covenantVersion === 2 && advance.outpoint
+                        ? [outpointKey(advance.outpoint)]
+                        : [],
+                ),
+            ),
         );
         for (const advance of current) {
             let observedAdvance = advance;

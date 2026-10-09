@@ -3292,6 +3292,31 @@ describe("canonical scan round trips", () => {
         state.db.close();
     });
 
+    // v1 has no renew leaf, so its batch-settled recovery must not buy the script wave.
+    it("reads no scripts for a v1 coin settled in a batch", async () => {
+        const state = await setup();
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.set(key, {
+            ...state.coins.get(key)!,
+            isSpent: true,
+            spentBy: "f6".repeat(32),
+            settledBy: "f7".repeat(32),
+            arkTxId: "",
+        });
+        const indexer = counting(state.indexer);
+        const watcher = createSpendWatcher({
+            advances: state.advances,
+            policy: state.policy,
+            indexer,
+            config: config(),
+            now: () => NOW + 10,
+            tip: async () => canonicalTip,
+        });
+        await watcher.catchUp();
+        expect(indexer.calls.getVtxos).toBe(1);
+        state.db.close();
+    });
+
     it("batches two distinct spent rows into one request per pass", async () => {
         const { a, b } = await twoRecycles();
         const { calls, advances } = recorder([
