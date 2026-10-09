@@ -15,6 +15,7 @@ import {
     networks,
     scriptFromTapLeafScript,
     type ExtendedVirtualCoin,
+    type Identity,
     type SingleKey,
     type Wallet,
 } from "@arkade-os/sdk";
@@ -167,6 +168,19 @@ export const fundingOf = (coin: ExtendedVirtualCoin): FundingInputValue => {
     };
 };
 
+/** The second input leaf 2 needs: a coin the signing identity still owns. */
+export const walletInputOf = (coin: ExtendedVirtualCoin, identity: Identity) => ({
+    input: {
+        txid: coin.txid,
+        vout: coin.vout,
+        value: BigInt(coin.value),
+        tapTree: coin.tapTree,
+        tapLeafScript: coin.forfeitTapLeafScript,
+    },
+    expiry: fundingOf(coin).expiry,
+    identity,
+});
+
 export const walletBalance = async (actor: any, assetId: string) => {
     const coins = await actor.wallet.getSpendableVtxos({ withRecoverable: false });
     return {
@@ -294,7 +308,17 @@ export async function openLive() {
                                         serverUnrollScript: hex.encode(unroll.script),
                                     },
                                 ));
-                            const txid = await client.refund(transfer, actors.sender.identity);
+                            const spare = (
+                                await actors.sender.wallet.getSpendableVtxos({
+                                    withRecoverable: false,
+                                })
+                            ).find((candidate: ExtendedVirtualCoin) => candidate.value > 0);
+                            if (!spare) throw new Error(`owned refund ${id}: no sender coin`);
+                            const txid = await client.refund(
+                                transfer,
+                                actors.sender.identity,
+                                walletInputOf(spare, actors.sender.identity),
+                            );
                             const final = await poll(
                                 `owned refund ${id}`,
                                 () => client.status(id),
@@ -364,7 +388,7 @@ export async function openLive() {
                     {
                         id: "sats",
                         currency: { kind: "sats" },
-                        pricing: { kind: "flat", units: id ? "1" : "0" },
+                        pricing: { kind: "flat", units: id ? "330" : "0" },
                     },
                 ],
                 claim: "either",
@@ -422,7 +446,7 @@ export async function quoteFor(
     // Taxi always fronts one whole dust unit; a bitcoin payment rides beside it.
     const topup = 330n;
     if (!withAsset) paymentSats ??= 329n;
-    const fareUnits = withAsset ? 1n : 0n;
+    const fareUnits = withAsset ? 330n : 0n;
     const senderInputs = [fundingOf(coin)];
     const receiver = live.actors[receiverName];
     const destination = ArkAddress.decode(await receiver.wallet.getAddress());

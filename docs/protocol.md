@@ -33,7 +33,10 @@ Response: `transferId`, the full covenant `params`, the derived
 `covenantAddress`, fare terms, `expiresAt`, and `unsignedLockupTx` — a base64
 versioned envelope containing the joint Arkade transaction, checkpoints and
 funding graph. It is not a single PSBT. `expiresAt` is the quote deadline in
-Unix seconds; the tagged VTXO batch expiry and recovery locktime are separate.
+Unix seconds; the recovery locktime is separate, and is a wall-clock deadline
+measured from the quote rather than a margin inside the funding coins' batch
+expiry. It deliberately outlives them: a renewal re-dates the coins, and must
+not be able to push the Taxi's own claim out.
 The `params` include `operatorSignerKey` and `exitDelay`, which fix the
 [exit leaf](#emergency-exit) and so the address.
 
@@ -164,19 +167,22 @@ those two.
 
 The service validates the canonical spending transaction, signatures, covenant
 leaf, pinned outputs, assets and repayment before reconciling. Its own recovery
-worker persists and submits the exact permissionless recovery graph after the
-tagged locktime and before batch expiry. Warning/critical deadlines close
-unsafe admission and remain visible through readiness and the admin API.
+worker persists and submits the exact reclaim graph once the tagged locktime has
+matured. That locktime outlives the funding coins, so what races batch expiry is
+the renewal, not the reclaim: warning/critical deadlines report a renewal that
+fell behind, close unsafe admission, and remain visible through readiness and
+the admin API.
 
-Taxi owns recovery before expiry. The deployed Arkade Service's special
+A reclaim pays the operator alone, so it opens a `custody` row naming the
+recovery owner and what is owed to them. The deployed Arkade Service's special
 covenant settlement remains an external assumption verified by the complete
 live deployment gate; Taxi does not implement an upstream forfeit mechanism.
 
 ## Emergency exit
 
-Leaf 4 is `CSV(exitDelay) + Multisig[sender, operatorSigner]`, appended after
-leaves 0-3 of the [README's leaf table](../README.md#the-covenant). It is for
-emergencies only: it needs neither the Arkade Service nor the emulator.
+Leaf 4 is `CSV(exitDelay) + Multisig[sender, operatorSigner]` in the
+[README's leaf table](../README.md#the-covenant). It is for emergencies only: it
+needs neither the Arkade Service nor the emulator.
 
 - It is a 2-of-2 between `senderKey` and `operatorSignerKey`, the Taxi's own
   signing key. That is not `operatorKey`, a payout destination nobody can sign

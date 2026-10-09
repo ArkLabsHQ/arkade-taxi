@@ -29,23 +29,27 @@ the ride ends.
 
 ## The covenant
 
-Five leaves: four over three scripts, from
-[arkade-os/emulator#150](https://github.com/arkade-os/emulator/pull/150), then an
-emergency exit.
+One covenant, six leaves, compiled from
+[`contracts/dust_covenant.ark`](packages/covenant/contracts/dust_covenant.ark).
+Leaf order fixes the merkle root, so it is part of the address.
 
-| #   | Leaf           | Closure                               | What it does                                                                         |
-| --- | -------------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
-| 0   | `recycle`      | `Multisig[server, ⊕recycle]`          | receiver merges the covenant into an account they own, repaying the operator in sats |
-| 1   | `purchase`     | `Multisig[server, ⊕purchase]`         | receiver keeps the whole covenant; the operator was paid at lockup                   |
-| 2   | `refundSender` | `Multisig[server, sender, ⊕refund]`   | sender cancels, operator repaid                                                      |
-| 3   | `recovery`     | `CLTV(L) + Multisig[server, ⊕refund]` | permissionless after timeout                                                         |
-| 4   | `exit`         | `CSV(E) + Multisig[sender, signer]`   | emergency only; no output constraint, and currently does not preserve an asset       |
+| #   | Leaf           | Closure                                     | What it does                                                                         |
+| --- | -------------- | ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| 0   | `recycle`      | `Multisig[server, ⊕recycle]`                | receiver merges the covenant into an account they own, repaying the operator in sats |
+| 1   | `purchase`     | `Multisig[server, ⊕purchase]`               | receiver keeps the whole covenant; the operator was paid at lockup                   |
+| 2   | `repayRefund`  | `Multisig[server, sender, ⊕repayRefund]`    | sender cancels: the loan is repaid and the rest returns to the coin they brought     |
+| 3   | `reclaimWhole` | `CLTV(L) + Multisig[server, ⊕reclaimWhole]` | after the deadline the whole lockup goes to the operator                             |
+| 4   | `exit`         | `CSV(E) + Multisig[sender, signer]`         | emergency only; no output constraint, and currently does not preserve an asset       |
+| 5   | `renew`        | `⊕renew`, intent-gated                      | re-dates the funding coins without moving the covenant                               |
 
 `⊕script` is the emulator's key tweaked by the Arkade Script it will only sign
 under. `E` is arkd's unilateral exit delay, counted from the unroll's
-confirmation; `signer` is the Taxi's own signing key, not its payout key.
+confirmation; `signer` is the Taxi's own signing key, not its payout key. `L` is
+a wall-clock deadline measured from the quote, not a margin inside the funding
+coins' batch expiry — it deliberately outlives them, so a renewal cannot push
+the Taxi's own claim out.
 
-### Three properties worth understanding before reading the code
+### Four properties worth understanding before reading the code
 
 **On leaves 0-3 the operator is a payout destination, never a signer.** None of
 them carries the operator's key in a multisig — it appears only inside
@@ -54,11 +58,19 @@ spends with the Arkade Service and emulator signatures alone. The operator must
 be reachable at lockup and is irrelevant afterwards, except to co-sign an
 emergency exit.
 
+**Leaf 3 pays the operator, and the custody ledger is what makes that safe.**
+Unlike leaves 0-2, `reclaimWhole` names the operator as the sole payee, so a
+delivery that is never claimed leaves the Taxi holding sats it does not own. The
+reclaim therefore opens a `custody` row naming the recovery owner — the payer on
+the sender-paid rail, the receiver on the receive rail — and what is owed to
+them. `packages/app/src/custody.ts` releases it.
+
 **Transfer principal stays with the receiver or sender.** The operator lends
 sats and receives the covenant's pinned sats repayment. A separately authorized
 fare at lockup can be denominated in sats or an allowed asset. A sats fare is
 paid from the sender's change, and an asset fare from sender asset funding;
-both are operator revenue.
+both are operator revenue. Every covenant payout is a whole dust unit or more,
+so a sub-dust fare is refused rather than paid to an `OP_RETURN` script.
 
 **No fee is expressible inside the covenant.** `recycle` pins the operator's
 output to _exactly_ `topup`, not a satoshi more. A sender-funded asset fare is
@@ -155,17 +167,24 @@ dependencies runs it before the install and again after it. Re-freezing the
 bundle is `node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout>`,
 then `pnpm install`, then `pnpm verify:artifacts`.
 
-Regenerate the golden vectors from the Go reference (requires Go):
+Recompile the covenant from its Arkade source and prove no byte moved:
 
 ```bash
-pnpm vectors
+pnpm artifact && git diff --exit-code packages/covenant/contracts packages/covenant/src/dust-covenant-artifact.ts
+node packages/covenant/test/engine/run.mjs
 ```
+
+The diff, not the compiler tag, is what pins the covenant's bytes: `arkadec`
+ships as a digest-pinned pre-release asset whose tag can move. The engine run
+executes the leaves against the emulator rather than comparing bytes, so it
+fails when a leaf's semantics change while its bytes still match a stale
+fixture.
 
 ## Release verification
 
-The TypeScript covenant produces byte-identical scripts to the Go
-reference at `49ae96d` across 10 parameter sets covering both the asset and
-bitcoin variants and both output-pinning branches. The mutation guards were each
+The covenant is compiled from `contracts/dust_covenant.ark` and its committed
+artifact is diffed on every CI run; `test/v2-vectors.json` pins the leaf bytes
+and addresses for every shape the covenant takes. The mutation guards were each
 observed to fail before being reverted.
 
 The production release gate additionally runs real joint lockups, all claim and

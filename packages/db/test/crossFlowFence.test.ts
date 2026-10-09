@@ -53,7 +53,7 @@ const fill = (over: Partial<SwapFill> = {}): SwapFill => ({
     ...over,
 });
 
-const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+const DEADLINE = 1_757_000_000n + 8_640_000n;
 
 const quote = (overrides: Partial<Advance> = {}): Advance => {
     const result: Advance = {
@@ -65,9 +65,8 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         operatorSignerKey: new Uint8Array(32).fill(4),
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
-        topup: 300n,
-        locktime: 100n,
-        batchExpiry: { kind: "height", value: 300n },
+        topup: 330n,
+        locktime: DEADLINE,
         operatorInputs: [{ ...COIN }],
         unsignedLockupTx: "unsigned",
         unsignedLockupId: "bb".repeat(32),
@@ -78,13 +77,6 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         expiresAt: 60,
         ...overrides,
     };
-    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
-    // move together: a fixture cannot pick one without the other.
-    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
-        result.locktime = V2_DEADLINE;
-        delete result.batchExpiry;
-        delete result.recoveryLocktime;
-    }
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -104,9 +96,9 @@ const receive = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
         operatorSignerKey: new Uint8Array(32).fill(0x44),
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
-        topup: 329n,
+        topup: 330n,
         assetId: ASSET,
-        locktime: 156n,
+        locktime: DEADLINE,
         claimMode: "recycle",
         recoveryRecipient: "receiver",
     },
@@ -114,8 +106,8 @@ const receive = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
     fare: { currency: "sats", units: 0n },
     batchExpiry: { kind: "height", value: 300n },
     inputExpiryFloor: { kind: "height", value: 300n },
-    recoveryLocktime: { kind: "height", value: 156n },
-    loanSats: 329n,
+    recoveryLocktime: { kind: "time", value: DEADLINE },
+    loanSats: 330n,
     createdAt: NOW,
     expiresAt: NOW + 60,
     policyRevision: 0n,
@@ -163,7 +155,7 @@ const reserve = (advance = quote()) =>
     reservations.reserveQuote({
         advance,
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: advance.batchExpiry!.kind, value: 1n },
+        recoveryExecutionBudget: { kind: "time", value: 1n },
     });
 
 const reserveReceive = (value = receive()) => {
@@ -171,7 +163,7 @@ const reserveReceive = (value = receive()) => {
     new ReceiveQuoteRepository(db).insert({
         quote: { ...value, policyRevision: revision },
         expectedPolicyRevision: revision,
-        recoveryExecutionBudget: { kind: "height", value: 1n },
+        recoveryExecutionBudget: { kind: "time", value: 1n },
     });
 };
 
@@ -230,9 +222,7 @@ describe("cross-flow reservation fence", () => {
     // and it binds them away from background settlement, not from quoting.
     it("fences nothing while a custody row is merely held", () => {
         const custodian = new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 });
-        custodian.insert(
-            quote({ id: "reclaimed", state: "locked", covenantVersion: 2, paymentSats: 1_000n }),
-        );
+        custodian.insert(quote({ id: "reclaimed", state: "locked", paymentSats: 1_000n }));
         custodian.recordSpendObservation("reclaimed", "locked", "recovered", COIN.txid, NOW, {
             hash: "34".repeat(32),
             height: 700_000,
@@ -288,7 +278,7 @@ describe("cross-flow reservation fence", () => {
                 receiveRepo.insert({
                     quote: { ...receive(), policyRevision: terms.getSnapshot().revision },
                     expectedPolicyRevision: terms.getSnapshot().revision,
-                    recoveryExecutionBudget: { kind: "height", value: 1n },
+                    recoveryExecutionBudget: { kind: "time", value: 1n },
                 });
             try {
                 if (winner === "receive") {
@@ -350,7 +340,7 @@ describe("cross-flow exposure fence", () => {
     });
 
     it("accepts the exact amount boundary and rejects the next count", () => {
-        policy.update({ maxOutstandingSats: 658n, maxConcurrentAdvances: 1 }, "test");
+        policy.update({ maxOutstandingSats: 660n, maxConcurrentAdvances: 1 }, "test");
         reserveReceive();
         expect(() =>
             reserveReceive(

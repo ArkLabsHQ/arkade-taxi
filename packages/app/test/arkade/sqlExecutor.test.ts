@@ -80,7 +80,7 @@ describe("SQLite SDK boundary", () => {
                     reservations.reserveQuote({
                         advance: a,
                         expectedPolicyRevision: 0n,
-                        recoveryExecutionBudget: { kind: "height", value: 1n },
+                        recoveryExecutionBudget: { kind: "time", value: 1n },
                     }),
                 () => reservations.releaseForAdvance(a.id),
                 () => new PolicyRepository(db),

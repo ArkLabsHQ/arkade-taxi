@@ -223,7 +223,6 @@ export const config = (over: Partial<RuntimeConfig> = {}): RuntimeConfig => ({
     operatorMinReserveSats: 10000n,
     proceedsMaxFeeSats: 0n,
     operatorPrivkey,
-    covenantVersion: 1,
     covenantDeadlineSeconds: 8_640_000n,
     custodyWindowSeconds: 8_640_000n,
     renewalBeforeExpirySeconds: 259_200n,
@@ -264,23 +263,14 @@ export const policy = (over: Partial<Policy> = {}): Policy => ({
     ...over,
 });
 
-/** The v2 deadline every fixture lends to: NOW + 100 days, in the time domain. */
+/** The deadline every fixture lends to: NOW + 100 days, in the time domain. */
 export const V2_DEADLINE = BigInt(NOW) + 8_640_000n;
 
 export const advance = (over: Partial<Advance> = {}): Advance => {
-    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
-    // move together: a fixture cannot pick one without the other.
-    const v2 = over.covenantVersion === 2;
-    const clock = v2
-        ? {
-              locktime: V2_DEADLINE,
-              recoveryLocktime: { kind: "time" as const, value: V2_DEADLINE },
-          }
-        : {
-              locktime: 850_000n,
-              recoveryLocktime: { kind: "height" as const, value: 850_000n },
-              batchExpiry: { kind: "height" as const, value: 1_000_000n },
-          };
+    const clock = {
+        locktime: V2_DEADLINE,
+        recoveryLocktime: { kind: "time" as const, value: V2_DEADLINE },
+    };
     return {
         id: "adv-1",
         state: "locked",

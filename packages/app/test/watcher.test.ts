@@ -35,7 +35,6 @@ import {
     lockupSats,
     payoutPkScript,
     recycleFare,
-    refundTopup,
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
 import {
@@ -62,6 +61,7 @@ import {
     providerEmulatorKey,
     senderKey,
     serverKey,
+    V2_DEADLINE,
 } from "./fixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import { buildRequest, receiverPays, unroll } from "./arkade/lockupFixtures.js";
@@ -157,7 +157,6 @@ async function setup(
     cfg = config(),
     receiverExtraLeaves: Uint8Array[] = [],
     paymentSats?: bigint,
-    covenantVersion?: 2,
     strangerInput = false,
 ) {
     const receiverOwner = await receiverIdentity.xOnlyPublicKey();
@@ -205,27 +204,15 @@ async function setup(
         request.params.topup = request.params.dust;
         request.params.paymentSats = paymentSats;
     }
-    if (covenantVersion === 2) {
-        request.params.topup = request.params.dust;
-        request.params.covenantVersion = 2;
-        // D2 anchors the v2 CLTV to a wall-clock deadline, so the covenant
-        // package refuses a height here. The funding expiry still follows it:
-        // inverting the order is what migration 15 has to unblock.
-        if (locktime === undefined) {
-            const deadline = BigInt(NOW) + 8_640_000n;
-            request.params.locktime = deadline;
-            const expiry = deadline + 86_401n;
-            request.senderInputs[0]!.expiry = { kind: "time", value: expiry };
-            delete request.funding.inputs[0]!.expiresAtHeight;
-            request.funding.inputs[0]!.expiresAt = new Date(Number(expiry) * 1000);
-            request.funding.batchExpiry = { kind: "time", value: expiry };
-        }
-        // Every v2 lockup output reaches dust, so the fixture's 10-sat fare and
-        // the sender change left by a whole-dust loan are both unbuildable.
+    // Every lockup output reaches dust, so the operator funds exactly the loan and
+    // the fare: a change output would share the fare's payout script.
+    if (request.fare.currency === "sats" && request.fare.units > 0n)
         request.fare.units = request.params.dust;
-        request.senderSats = request.senderInputs[0]!.value =
-            request.params.dust + (paymentSats ?? 0n);
-    }
+    request.senderSats = request.senderInputs[0]!.value = request.params.dust + (paymentSats ?? 0n);
+    request.funding.totalValue =
+        request.params.topup +
+        (request.fare.currency === "sats" ? request.fare.units : request.params.dust);
+    request.funding.inputs[0]!.value = Number(request.funding.totalValue);
     const lockupValue = lockupSats(request.params);
     const covenant = new DustCovenantScript({
         params: request.params,
@@ -242,12 +229,7 @@ async function setup(
         state: "quoted",
         ...request.params,
         ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
-        // A v2 advance keeps no batch expiry; its deadline is its own clock.
-        ...(covenantVersion === 2 ? {} : { batchExpiry: request.funding.batchExpiry }),
-        recoveryLocktime: {
-            kind: covenantVersion === 2 ? "time" : request.funding.batchExpiry.kind,
-            value: request.params.locktime,
-        },
+        recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,
         unsignedLockupId: envelope.unsignedTxId,
@@ -321,14 +303,14 @@ async function setup(
         const inputs = [covenantSpendInput(covenant, leaf, outpoint, lockupValue, covenantPacket)];
         const destination = new Uint8Array([0x51, 0x20, ...request.params.receiverKey]);
         const { operatorSats, assetFare } = recycleFare(request.params);
-        // v2 leaf 2 spends a second coin the covenant never names, so the harness
+        // Leaf 2 spends a second coin the covenant never names, so the harness
         // lends the recycle fixture's tree to the refunder.
-        const v2SecondInput = covenantVersion === 2 && kind === "refunded";
+        const v2SecondInput = kind === "refunded";
         let outputs: { script: Uint8Array; amount: bigint }[];
         let receiverSource: Transaction | undefined;
         if (kind === "purchased") {
             outputs = [{ script: destination, amount: lockupValue }];
-        } else if (covenantVersion === 2 && kind === "recovered") {
+        } else if (kind === "recovered") {
             outputs = [
                 {
                     script: payoutPkScript(
@@ -391,32 +373,7 @@ async function setup(
                 },
             ];
         } else {
-            const topup = refundTopup(request.params, cfg.vtxoMinAmount);
-            const recoveryKey =
-                request.params.recoveryRecipient === "receiver"
-                    ? request.params.receiverKey
-                    : request.params.senderKey;
-            outputs = [
-                {
-                    script: payoutPkScript(request.params.operatorKey, topup, request.params.dust),
-                    amount: topup,
-                },
-                {
-                    script: payoutPkScript(recoveryKey, lockupValue - topup, request.params.dust),
-                    amount: lockupValue - topup,
-                },
-            ];
-            if (strangerInput) {
-                receiverSource = source(receiverTree.pkScript, 500n, 0x31);
-                inputs.push({
-                    txid: receiverSource.id,
-                    vout: 0,
-                    value: 500n,
-                    tapTree: receiverTree.encode(),
-                    tapLeafScript: receiverTree.findLeaf(hex.encode(receiverTree.scripts[0])),
-                });
-                outputs.push({ script: receiverTree.pkScript, amount: 500n });
-            }
+            throw new Error(`watcher fixture: unhandled spend kind ${kind}`);
         }
         const emulatorScript =
             leaf === Leaf.Recovery
@@ -441,10 +398,7 @@ async function setup(
                             ]
                           : [
                                 asset.AssetOutput.create(
-                                    kind === "purchased" ||
-                                        (covenantVersion === 2 && kind === "recovered")
-                                        ? 0
-                                        : 1,
+                                    kind === "purchased" || kind === "recovered" ? 0 : 1,
                                     paymentUnits,
                                 ),
                             ],
@@ -958,13 +912,12 @@ describe("canonical covenant observation", () => {
             config(),
             [],
             payment,
-            2,
             strangerInput,
         );
 
     it("classifies a v2 refund repaying the whole loan to the operator", async () => {
         const state = await setupV2("refunded");
-        expect(state.advance).toMatchObject({ covenantVersion: 2, topup: 330n, paymentSats: 100n });
+        expect(state.advance).toMatchObject({ topup: 330n, paymentSats: 100n });
         await state.watcher.catchUp();
         expect(state.advances.get(state.advance.id)).toMatchObject({
             state: "refunded",
@@ -1079,7 +1032,7 @@ describe("canonical covenant observation", () => {
                 state.advances.get(state.advance.id)!,
                 state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
                 { indexer: state.indexer, config: config() },
-                { height: Number(state.advance.locktime), time: NOW },
+                { height: 700000, time: Number(state.advance.locktime) },
             ),
         ).resolves.toMatchObject({
             kind: "unknown",
@@ -1106,7 +1059,6 @@ describe("canonical covenant observation", () => {
                 config(),
                 [],
                 undefined,
-                2,
             );
             await state.watcher.catchUp();
             expect(state.advances.get(state.advance.id)).toMatchObject({
@@ -1575,7 +1527,7 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    const v1Stranger = (mutateGraph?: Parameters<typeof setup>[4], kind: SpendKind = "recovered") =>
+    const stranger = (mutateGraph?: Parameters<typeof setup>[4], kind: SpendKind = "recovered") =>
         setup(
             kind,
             ":memory:",
@@ -1591,46 +1543,14 @@ describe("canonical covenant observation", () => {
             config(),
             [],
             undefined,
-            undefined,
             true,
         );
-
-    // buildRefund has no INSPECTNUMINPUTS, so leaf 2 accepts a sender who brings
-    // their own coin. senderKey signing it makes the sender the only builder, not
-    // the shape the Taxi happens to emit.
-    it("classifies a sender-built v1 refund carrying their own input and change", async () => {
-        const state = await v1Stranger(undefined, "refunded");
-        const ark = state.finalArk!;
-        const topup = refundTopup(state.advance, config().vtxoMinAmount);
-
-        expect(ark.inputsLength).toBe(2);
-        expect(ark.getOutput(0)).toEqual({
-            amount: topup,
-            script: payoutPkScript(state.advance.operatorKey, topup, state.advance.dust),
-        });
-        expect(ark.getOutput(1)).toEqual({
-            amount: state.advance.dust - topup,
-            script: payoutPkScript(
-                state.advance.senderKey,
-                state.advance.dust - topup,
-                state.advance.dust,
-            ),
-        });
-        expect(ark.getOutput(2).amount).toBe(500n);
-
-        await state.watcher.catchUp();
-        const row = state.advances.get(state.advance.id)!;
-        expect(state.policy.get().paused).toBe(false);
-        expect(row.failureCode).toBeUndefined();
-        expect(row).toMatchObject({ state: "refunded", spentTxid: ark.id });
-        state.db.close();
-    });
 
     it.each([
         ["underpays the operator", 0, "refund repayment"],
         ["shorts the sender", 1, "refund recovery output"],
-    ] as const)("rejects a sender-built v1 refund that %s by a sat", async (_, vout, label) => {
-        const state = await v1Stranger((graph) => {
+    ] as const)("rejects a sender-built refund that %s by a sat", async (_, vout, label) => {
+        const state = await stranger((graph) => {
             const pinned = graph.arkTx.getOutput(vout);
             const change = graph.arkTx.getOutput(2);
             graph.arkTx.updateOutput(vout, { ...pinned, amount: pinned.amount! - 1n });
@@ -1673,56 +1593,6 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    // Leaf 3 is arkade-only on v1 too, and buildRefund pins no input count, so a
-    // stranger's broadcast is valid. Classified unknown it pauses the Taxi, and
-    // clearSpendUnknown never unpauses.
-    it("classifies a third party's v1 recovery carrying its own input and change", async () => {
-        const state = await v1Stranger();
-        const ark = state.finalArk!;
-        const topup = refundTopup(state.advance, config().vtxoMinAmount);
-
-        expect(ark.inputsLength).toBe(2);
-        expect(ark.getOutput(0)).toEqual({
-            amount: topup,
-            script: payoutPkScript(state.advance.operatorKey, topup, state.advance.dust),
-        });
-        expect(ark.getOutput(1)).toEqual({
-            amount: state.advance.dust - topup,
-            script: payoutPkScript(
-                state.advance.senderKey,
-                state.advance.dust - topup,
-                state.advance.dust,
-            ),
-        });
-        expect(ark.getOutput(2).amount).toBe(500n);
-
-        await state.watcher.catchUp();
-        const row = state.advances.get(state.advance.id)!;
-        expect(state.policy.get().paused).toBe(false);
-        expect(row.failureCode).toBeUndefined();
-        expect(row).toMatchObject({ state: "recovered", spentTxid: ark.id });
-        state.db.close();
-    });
-
-    // The v2 ceiling must not reach v1: here the CLTV is still an equality, so an
-    // early recovery is refused on the header rather than recorded.
-    it("refuses a v1 recovery carrying a locktime below the persisted CLTV", async () => {
-        const state = await v1Stranger((graph) => {
-            const early = 699_999;
-            setLockTime(graph.arkTx, early);
-            setLockTime(graph.checkpoints[0]!, early);
-        });
-        await state.watcher.catchUp();
-        expect(state.advances.get(state.advance.id)).toMatchObject({
-            state: "locked",
-            failureCode: "covenant_spend_unknown",
-            failureDetail: expect.stringContaining(
-                "covenant checkpoint version or locktime differs",
-            ),
-        });
-        state.db.close();
-    });
-
     // The renewal path is v2-only, so a v1 coin reporting settledBy keeps today's
     // behaviour exactly: healthy unspent evidence, no outpoint move, no renewal.
     it("leaves a v1 covenant reporting a settling commitment untouched", async () => {
@@ -1739,85 +1609,61 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    it.each([
-        [
-            "underpays the operator by a sat",
-            "refund repayment",
-            (ark: Transaction) => {
-                const operator = ark.getOutput(0);
-                const change = ark.getOutput(2);
-                ark.updateOutput(0, { ...operator, amount: operator.amount! - 1n });
-                ark.updateOutput(2, { ...change, amount: change.amount! + 1n });
-            },
-        ],
-        [
-            "pays the operator's share to the wrong key",
-            "refund repayment",
-            (ark: Transaction) => {
-                const operator = ark.getOutput(0);
-                ark.updateOutput(0, {
-                    ...operator,
-                    script: payoutPkScript(serverKey, operator.amount!, config().dust),
-                });
-            },
-        ],
-        [
-            "shorts the recovery output by a sat",
-            "refund recovery output",
-            (ark: Transaction) => {
-                const recovery = ark.getOutput(1);
-                const change = ark.getOutput(2);
-                ark.updateOutput(1, { ...recovery, amount: recovery.amount! - 1n });
-                ark.updateOutput(2, { ...change, amount: change.amount! + 1n });
-            },
-        ],
-    ] as const)("rejects a third party's v1 recovery that %s", async (_, label, mutate) => {
-        const state = await v1Stranger((graph) => mutate(graph.arkTx));
-        await expect(
-            classifyObservedSpend(
-                state.advances.get(state.advance.id)!,
-                state.coins.get(`${state.outpoint.txid}:${state.outpoint.vout}`)!,
-                { indexer: state.indexer, config: config() },
-                { height: Number(state.advance.locktime), time: NOW },
-            ),
-        ).resolves.toMatchObject({
-            kind: "unknown",
-            reason: `${label} differs from the exact covenant shape`,
+    it("proves a receiver-owned reclaim pays only the operator", async () => {
+        const state = await setup(
+            "recovered",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+        );
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({ state: "recovered" });
+        const lockup = lockupSats(state.advance);
+        expect(state.finalArk!.getOutput(0)).toEqual({
+            amount: lockup,
+            script: payoutPkScript(state.advance.operatorKey, lockup, state.advance.dust),
         });
+        for (const vout of [0, 1])
+            expect(state.finalArk!.getOutput(vout).script).not.toEqual(
+                payoutPkScript(state.advance.senderKey, lockup, state.advance.dust),
+            );
+        expect(
+            Extension.fromTx(state.finalArk!).getAssetPacket()!.groups[0]!.outputs[0],
+        ).toMatchObject({ vout: 0, amount: 9_007_199_254_740_993n });
         state.db.close();
     });
 
-    it.each(["refunded", "recovered"] as const)(
-        "proves receiver-owned %s without a sender output",
-        async (kind) => {
-            const state = await setup(
-                kind,
-                ":memory:",
-                true,
-                true,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                "recycle",
-                "receiver",
-            );
-            await state.watcher.catchUp();
-            expect(state.advances.get(state.advance.id)).toMatchObject({ state: kind });
-            const topup = refundTopup(state.advance, config().vtxoMinAmount);
-            const returned = state.advance.dust - topup;
-            expect(state.finalArk!.getOutput(1).script).toEqual(
-                payoutPkScript(state.advance.receiverKey, returned, state.advance.dust),
-            );
-            expect(state.finalArk!.getOutput(1).script).not.toEqual(
-                payoutPkScript(state.advance.senderKey, returned, state.advance.dust),
-            );
-            expect(
-                Extension.fromTx(state.finalArk!).getAssetPacket()!.groups[0]!.outputs[0],
-            ).toMatchObject({ vout: 1, amount: 9_007_199_254_740_993n });
-            state.db.close();
-        },
-    );
+    it("proves a receiver-owned refund pays the refunder's own script", async () => {
+        const state = await setup(
+            "refunded",
+            ":memory:",
+            true,
+            true,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            "recycle",
+            "receiver",
+        );
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({ state: "refunded" });
+        const loan = loanSats(state.advance);
+        expect(state.finalArk!.getOutput(0)).toEqual({
+            amount: loan,
+            script: payoutPkScript(state.advance.operatorKey, loan, state.advance.dust),
+        });
+        expect(state.finalArk!.getOutput(1).script).not.toEqual(
+            payoutPkScript(state.advance.senderKey, loan, state.advance.dust),
+        );
+        state.db.close();
+    });
 
     it.each([
         ["sender-paid", undefined],
@@ -1846,7 +1692,7 @@ describe("canonical covenant observation", () => {
                     stored,
                     coin,
                     { indexer: state.indexer, config: config() },
-                    { height: Number(stored.locktime), time: NOW },
+                    { height: 700000, time: Number(stored.locktime) },
                 ),
             ).resolves.toEqual({ kind: "recovered", txid: state.finalArk!.id });
         } finally {
@@ -1976,17 +1822,6 @@ describe("canonical covenant observation", () => {
         expect(state.reservations.listForAdvance(state.advance.id)).toEqual(
             state.advance.operatorInputs,
         );
-        state.db.close();
-    });
-
-    it("does not compare a height recovery locktime with tip time", async () => {
-        const state = await setup("recovered");
-        state.setTip({ hash: "4a".repeat(32), height: 899855, time: 2_000_000_000 });
-        await state.watcher.catchUp();
-        expect(state.advances.get(state.advance.id)).toMatchObject({
-            state: "locked",
-            failureCode: "covenant_spend_unknown",
-        });
         state.db.close();
     });
 
@@ -2388,7 +2223,7 @@ describe("canonical covenant observation", () => {
             expect(first.advances.get(first.advance.id)?.state).toBe("locking");
             first.db.close();
             const db: Database = openDatabase(path);
-            const advances = new AdvanceRepository(db);
+            const advances = new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 });
             const reservations = new ReservationRepository(db);
             const watcher = createSpendWatcher({
                 advances,
@@ -2396,7 +2231,7 @@ describe("canonical covenant observation", () => {
                 indexer: first.indexer,
                 config: config(),
                 now: () => NOW + 20,
-                tip: async () => ({ hash: "42".repeat(32), height: 900000, time: NOW + 1 }),
+                tip: async () => ({ hash: "42".repeat(32), height: 900000, time: NOW + 8_640_001 }),
             });
             let observed: Advance | undefined;
             let reserved: ReturnType<ReservationRepository["listForAdvance"]>;
@@ -2485,7 +2320,7 @@ describe("canonical covenant observation", () => {
                 indexer: state.indexer,
                 config: config(),
                 now: () => NOW + 10,
-                tip: async () => ({ hash: "49".repeat(32), height: 900000, time: NOW + 10 }),
+                tip: async () => ({ hash: "49".repeat(32), height: 900000, time: NOW + 8_640_001 }),
             });
             await watcher.catchUp();
             expect(state.advances.get(state.advance.id)).toMatchObject({ state: "recovering" });
@@ -2687,7 +2522,7 @@ describe("canonical covenant observation", () => {
 
     it("syncs live covenant registrations and rebinds without removing foreign watches", async () => {
         const state = await setup();
-        const other = await setup(undefined, ":memory:", false, true, undefined, 700011n);
+        const other = await setup(undefined, ":memory:", false, true, undefined, V2_DEADLINE + 11n);
         const first = await watcherWallet(state);
         const second = await watcherWallet(state);
         const initialScript = state.coins.get(`${state.outpoint.txid}:0`)!.script;
@@ -3293,7 +3128,6 @@ describe("canonical scan round trips", () => {
             config(),
             [],
             100n,
-            2,
         );
         const row = state.advances.byState("locked")[0]!;
         const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
@@ -3334,7 +3168,7 @@ describe("canonical scan round trips", () => {
     });
 
     // v1 has no renew leaf, so its batch-settled recovery must not buy the script wave.
-    it("reads no scripts for a v1 coin settled in a batch", async () => {
+    it("reads the renewal successor for a coin settled in a batch", async () => {
         const state = await setup();
         const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
         state.coins.set(key, {
@@ -3354,7 +3188,7 @@ describe("canonical scan round trips", () => {
             tip: async () => canonicalTip,
         });
         await watcher.catchUp();
-        expect(indexer.calls.getVtxos).toBe(1);
+        expect(indexer.calls.getVtxos).toBe(2);
         state.db.close();
     });
 

@@ -21,7 +21,6 @@ const params = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => (
     dust: 330n,
     topup: 330n,
     locktime: 1_800_000_000n,
-    covenantVersion: 2,
     ...over,
 });
 

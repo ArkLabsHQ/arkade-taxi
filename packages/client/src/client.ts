@@ -732,8 +732,12 @@ export class TaxiClient {
         return purchase(transfer, destination);
     }
 
-    async refund(transfer: CovenantTransfer, senderIdentity: Identity): Promise<string> {
-        return refund(transfer, senderIdentity);
+    async refund(
+        transfer: CovenantTransfer,
+        senderIdentity: Identity,
+        senderWalletInput: ReceiverWalletInput,
+    ): Promise<string> {
+        return refund(transfer, senderIdentity, senderWalletInput);
     }
 
     private claimsPath(path: string, addresses: readonly string[]): string {
@@ -842,12 +846,12 @@ async function preflightReceiveRequest(request: RequestVerifiedReceiveQuoteArgs)
         typeof request.vtxoMinAmount !== "bigint" ||
         request.dust <= 0n ||
         request.vtxoMinAmount <= 0n ||
-        request.dust - request.vtxoMinAmount < request.vtxoMinAmount ||
         typeof request.expect.maxServiceFareSats !== "bigint" ||
         request.expect.maxServiceFareSats < 0n ||
         !deadline(request.expect.minRecoveryLocktime) ||
         !deadline(request.expect.minInputExpiryFloor) ||
-        request.expect.minRecoveryLocktime.kind !== request.expect.minInputExpiryFloor.kind ||
+        // Unrelated clocks: the floor follows the funding coins' domain.
+        request.expect.minRecoveryLocktime.kind !== "time" ||
         (request.fundingExpiry !== undefined && !deadline(request.fundingExpiry))
     )
         throw new TaxiError(

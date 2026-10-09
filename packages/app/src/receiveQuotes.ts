@@ -30,7 +30,12 @@ import {
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "./config.js";
-import { sameFundingSnapshot, withQuoteAdmission, type AdvanceStore } from "./quotes.js";
+import {
+    covenantDeadline,
+    sameFundingSnapshot,
+    withQuoteAdmission,
+    type AdvanceStore,
+} from "./quotes.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
@@ -186,8 +191,6 @@ const toCovenantFare = (fare: FareSpec): DustCovenantParams["receiverFare"] =>
 
 /** Rides beside the persisted `params`, never inside them: that JSON has a
  * strict decoder a rolled-back build would choke on. */
-const covenantVersionOf = (config: RuntimeConfig) =>
-    config.covenantVersion === 2 ? { covenantVersion: 2 as const } : {};
 
 function deriveCovenant(config: RuntimeConfig, params: DustCovenantParams): string {
     try {
@@ -214,23 +217,16 @@ type Terms =
       };
 
 function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConfig): Terms {
-    const receipt = config.vtxoMinAmount;
-    const senderLoan = config.dust - receipt;
-    // v2 lends the whole dust on both payer paths, so there is no split to form
-    // and no sub-dust receipt to leave behind.
-    const v2 = config.covenantVersion === 2;
-    if (
-        receipt <= 0n ||
-        config.dust <= 0n ||
-        (!v2 && (senderLoan < receipt || senderLoan + receipt !== config.dust))
-    )
-        throw badRequest("server limits cannot form a positive two-output split");
+    // The covenant lends the whole dust on both payer paths, so there is no
+    // split to form and no sub-dust receipt to leave behind.
+    if (config.vtxoMinAmount <= 0n || config.dust <= 0n)
+        throw badRequest("server limits cannot form a positive loan");
     const rule = ruleFor(policy.assetRules, req.assetId);
     if (!rule) throw admissionError("asset_not_served");
     if (!rule.enabled) throw admissionError("asset_disabled");
     if (resolveClaimMode(rule.claim, "recycle") !== "recycle")
         throw badRequest("asset policy does not allow recycle claims");
-    const loan = v2 || req.payer === "receiver" ? config.dust : senderLoan;
+    const loan = config.dust;
     const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (loan > cap) throw admissionError("topup_exceeds_max_per_payment");
 
@@ -293,11 +289,10 @@ async function createAdmitted(
             dust: deps.config.dust,
             topup: terms.loan,
             assetId: req.assetId,
-            // Only proves the keys form a covenant; v2 refuses a height.
-            locktime: deps.config.covenantVersion === 2 ? 500_000_000n : 1n,
+            // Only proves the keys form a covenant; the domain is checked too.
+            locktime: 500_000_000n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
-            ...covenantVersionOf(deps.config),
             ...(terms.payer === "receiver"
                 ? { receiverFare: toCovenantFare(terms.receiverFare) }
                 : {}),
@@ -368,8 +363,9 @@ async function createReserved(
     };
     const selection = structuredClone(selectOperatorFunding(options));
     const floor = inputFloor(selection.batchExpiry, req.fundingExpiry);
+    assertFloorHeadroom(floor, firstSafety, deps.config);
     const quotedAt = deps.now();
-    const recovery = recoveryDeadline(floor, initial.policy, firstSafety, deps.config, quotedAt);
+    const recovery = covenantDeadline(firstSafety, deps.config, quotedAt);
     const params: ReceiveQuote["params"] = {
         receiverKey: req.receiverKey,
         senderKey: req.makerKey,
@@ -386,7 +382,6 @@ async function createReserved(
     };
     const covenantAddress = deriveCovenant(deps.config, {
         ...params,
-        ...covenantVersionOf(deps.config),
     });
     let latestSpendable: ExtendedVirtualCoin[];
     let latestLocks: Outpoint[];
@@ -415,10 +410,9 @@ async function createReserved(
         nowMs: deps.nowMs(),
     });
     const latestFloor = inputFloor(latest.batchExpiry, req.fundingExpiry);
-    const latestRecovery =
-        deps.config.covenantVersion === 2
-            ? recovery
-            : recoveryDeadline(latestFloor, initial.policy, latestSafety, deps.config, quotedAt);
+    // The deadline is measured from the quote, not from the funding, so a
+    // re-selection cannot move it.
+    const latestRecovery = recovery;
     if (
         !sameSelection(selection, latest) ||
         latestFloor.kind !== floor.kind ||
@@ -452,7 +446,6 @@ async function createReserved(
         expiresAt: now + initial.policy.quoteTtlSeconds,
         policyRevision: initial.revision,
         operatorInputs: selection.inputs.map(operatorFundingInput),
-        ...covenantVersionOf(deps.config),
         ...(terms.payer === "receiver"
             ? { payer: "receiver" as const, receiverFare: terms.receiverFare }
             : {}),
@@ -460,14 +453,9 @@ async function createReserved(
     deps.receiveQuotes.insert({
         quote,
         expectedPolicyRevision: initial.revision,
-        // The budget shares the recovery locktime's domain, which for v2 is its
-        // own wall clock rather than the funding floor's.
         recoveryExecutionBudget: {
-            kind: recovery.kind,
-            value:
-                recovery.kind === "height"
-                    ? deps.config.recoveryBroadcastBlocks
-                    : deps.config.recoveryBroadcastSeconds,
+            kind: "time",
+            value: deps.config.recoveryBroadcastSeconds,
         },
         expectedReservedOutpoints: reserved,
     });
@@ -481,44 +469,18 @@ function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadlin
     return { kind: batch.kind, value: hint.value < batch.value ? hint.value : batch.value };
 }
 
-/** v2's CLTV is wall-clock and outlives the funding coins on purpose: a renewer
- * must not push the Taxi's own claim out. v1 keeps its margin off expiry. */
-function recoveryDeadline(
+/** Funding liveness, independent of the deadline: the selection enforces this on
+ * the operator's own coins, so a requester-supplied ceiling owes it too. */
+function assertFloorHeadroom(
     floor: ExpiryDeadline,
-    policy: Policy,
     safety: RuntimeSafety,
     config: RuntimeConfig,
-    now: number,
-): ExpiryDeadline {
-    if (config.covenantVersion === 2) {
-        const value = BigInt(now) + config.covenantDeadlineSeconds;
-        if (value < 500_000_000n || value > 0xffff_ffffn || value <= safety.chainTime!)
-            throw new ServiceError(
-                ErrorCode.NoLocktimeHeadroom,
-                503,
-                `covenant deadline ${value} is not a future time-domain locktime`,
-            );
-        return { kind: "time", value };
-    }
+): void {
     const clock = floor.kind === "height" ? safety.chainHeight! : safety.chainTime!;
     const headroom =
         floor.kind === "height" ? config.minExpiryHeadroomBlocks : config.minExpiryHeadroomSeconds;
-    const margin = BigInt(
-        floor.kind === "height" ? policy.locktimeMarginBlocks : policy.locktimeMarginSeconds,
-    );
-    const execution =
-        floor.kind === "height" ? config.recoveryBroadcastBlocks : config.recoveryBroadcastSeconds;
     if (floor.value - clock < headroom)
         throw new ServiceError(ErrorCode.NoLocktimeHeadroom, 503, "funding expiry lacks headroom");
-    const value = floor.value - margin;
-    if (
-        margin <= execution ||
-        value <= clock ||
-        value + execution >= floor.value ||
-        (floor.kind === "time") !== value >= 500_000_000n
-    )
-        throw new ServiceError(ErrorCode.NoLocktimeHeadroom, 503, "recovery margin is unsafe");
-    return { kind: floor.kind, value };
 }
 
 function enforceExposure(deps: ReceiveQuoteDeps, policy: Policy, loan: bigint): void {

@@ -286,11 +286,18 @@ async function runServe(): Promise<void> {
         receiveQuotes,
         lending: () => lendingGate(),
         onLendingWarning: (warnings) => {
-            for (const w of warnings)
-                log.warn(
-                    { code: w.code, coverageSats: w.coverageSats.toString() },
-                    "lending dipped into custody liabilities",
-                );
+            for (const w of warnings) {
+                if (w.code === "exposure_nearing_cap")
+                    log.warn(
+                        { code: w.code, headroomSats: w.headroomSats.toString() },
+                        "outstanding lending is nearing its cap",
+                    );
+                else
+                    log.warn(
+                        { code: w.code, coverageSats: w.coverageSats.toString() },
+                        "lending dipped into custody liabilities",
+                    );
+            }
         },
         inventory,
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),

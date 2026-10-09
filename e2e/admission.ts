@@ -14,6 +14,13 @@ const readinessCodes = [
     "chain_time_unavailable",
 ];
 
+/** The collector holds an SDK intent lock while it settles and a quote built
+ * across that refuses; the send rail conflates it with an unreadable one. */
+const transientInventory = [
+    "wallet inventory or intent locks changed or unavailable",
+    "intent locks changed during construction",
+];
+
 export interface AdmissionTiming {
     operation: "quote" | "lockup";
     endpoint: "/v1/transfers" | "/v1/transfers/:id/lockup" | "/ready";
@@ -161,7 +168,9 @@ export async function preEffectRequest<T>(
                 !(
                     (error.code === "not_ready" && transientReadiness.includes(error.message)) ||
                     (error.code === "runtime_unsafe" &&
-                        ["runtime_checking", "runtime_stale"].includes(error.message))
+                        ["runtime_checking", "runtime_stale", ...transientInventory].includes(
+                            error.message,
+                        ))
                 )
             ) {
                 failed("attempt");

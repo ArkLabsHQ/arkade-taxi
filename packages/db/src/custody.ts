@@ -134,9 +134,14 @@ const point = (value: Outpoint, what: string): Outpoint => {
 };
 
 /**
- * Opens the ledger row for a reclaimed v2 advance. Called inside the transaction
+ * Opens the ledger row for a reclaimed advance. Called inside the transaction
  * that writes `recovered`, so the asset is never in the Taxi's wallet with no row
  * naming what is owed. `INSERT OR IGNORE`: a replayed reclaim is not a second row.
+ *
+ * The owner is the advance's recovery owner, the same key the refund leaf would
+ * have paid (`app/src/arkade/recovery.ts`, `app/src/watcher.ts`). On the
+ * sender-paid rail that is the payer, whose sats `owed_sats` holds: naming the
+ * payee would credit a party that never paid.
  */
 export function openCustodyRow(
     db: Database,
@@ -153,7 +158,7 @@ export function openCustodyRow(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'held', ?, ?)`,
     ).run(
         advance.id,
-        advance.receiverKey,
+        advance.recoveryRecipient === "receiver" ? advance.receiverKey : advance.senderKey,
         advance.assetId?.txid ?? null,
         advance.assetId?.groupIndex ?? null,
         advance.assetUnits ?? null,

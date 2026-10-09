@@ -30,7 +30,7 @@ import {
     covenantSpendInput,
     lockupSats,
     payoutPkScript,
-    refundTopup,
+    loanSats,
     type DustCovenantParams,
     type ReceiverFare,
 } from "@arkade-taxi/covenant";
@@ -372,8 +372,9 @@ const incomingFixture = async (
             covenantAddress: state.authorization.quote.covenantAddress,
             outpoint: { ...base.status.outpoint },
             fare: structuredClone(state.authorization.quote.fare),
-            batchExpiry: { kind: "height", value: "900000" },
-            recoveryLocktime: { kind: "height", value: state.context.params.locktime.toString() },
+            // What claims.ts sends: the deadline, not the coin's own expiry.
+            batchExpiry: { kind: "time", value: state.context.params.locktime.toString() },
+            recoveryLocktime: { kind: "time", value: state.context.params.locktime.toString() },
             ...(withAsset ? { assetUnits: authorization.assetUnits!.toString() } : {}),
         },
     };
@@ -616,27 +617,15 @@ describe("incoming claim verification", () => {
             },
         ],
         [
-            "batch expiry value",
-            (a) => {
-                a.claim.claim!.batchExpiry.value = "899999";
-            },
-        ],
-        [
-            "batch expiry kind",
-            (a) => {
-                a.claim.claim!.batchExpiry.kind = "time";
-            },
-        ],
-        [
             "recovery value",
             (a) => {
-                a.claim.claim!.recoveryLocktime.value = "799999";
+                a.claim.claim!.recoveryLocktime.value = "1799999999";
             },
         ],
         [
             "recovery kind",
             (a) => {
-                a.claim.claim!.recoveryLocktime.kind = "time";
+                a.claim.claim!.recoveryLocktime.kind = "height";
             },
         ],
         [
@@ -742,7 +731,6 @@ describe("incoming claim verification", () => {
         ["value", { value: 331 }],
         ["script", { script: "5120" + "00".repeat(32) }],
         ["outpoint", { txid: "ab".repeat(32) }],
-        ["expiry", { expiresAtHeight: 899999 }],
         ["spent", { isSpent: true }],
         [
             "asset units",
@@ -986,6 +974,49 @@ const receiverFunding = async (
     };
 };
 
+/** The coin the sender brings to leaf 2: unlike recycle's funding it is neither
+ * the receiver's nor pinned to a bare key. */
+let refunderSequence = 0x1a;
+const refunderFunding = async (identity: Identity = senderIdentity, value = 500n) => {
+    const owner = await identity.xOnlyPublicKey();
+    const tree = new VtxoScript([MultisigTapscript.encode({ pubkeys: [serverKey, owner] }).script]);
+    // source() is deterministic per fill, so each coin needs its own.
+    const previous = source(refunderSequence++);
+    const coin = {
+        txid: previous.id,
+        vout: 0,
+        value: Number(value),
+        script: hex.encode(tree.pkScript),
+        status: { confirmed: false },
+        createdAt: new Date(NOW * 1000),
+        isUnrolled: false,
+        isSpent: false,
+        isSwept: false,
+        isPreconfirmed: true,
+        spentBy: "",
+        commitmentTxIds: [],
+        expiresAtHeight: 900_000,
+        virtualStatus: { state: "preconfirmed" },
+        assets: [],
+    } as VirtualCoin;
+    return {
+        tree,
+        walletInput: {
+            input: {
+                txid: previous.id,
+                vout: 0,
+                value,
+                tapTree: tree.encode(),
+                tapLeafScript: tree.findLeaf(hex.encode(tree.scripts[0])),
+            },
+            expiry: { kind: "height" as const, value: 900_000n },
+            identity,
+        },
+        coin,
+        source: previous,
+    };
+};
+
 const crossRealmBytes = (value: Uint8Array): Uint8Array =>
     runInNewContext(`new Uint8Array([${[...value].join(",")}])`) as Uint8Array;
 
@@ -1148,7 +1179,6 @@ describe("covenant transfer capability", () => {
     });
 
     it("uses the pinned provider endpoint when public config changes during signing", async () => {
-        const { transfer, config, submissionUrls } = await setup();
         let release!: () => void;
         let signingStarted!: () => void;
         const gate = new Promise<void>((resolve) => (release = resolve));
@@ -1161,7 +1191,13 @@ describe("covenant transfer capability", () => {
                 return senderIdentity.sign(tx, indexes);
             },
         };
-        const pending = refund(transfer, delayedIdentity as unknown as Identity);
+        const delayedFunding = await refunderFunding(delayedIdentity as unknown as Identity);
+        const { transfer, config, submissionUrls } = await setup(args(), [], [delayedFunding]);
+        const pending = refund(
+            transfer,
+            delayedIdentity as unknown as Identity,
+            delayedFunding.walletInput,
+        );
         await started;
         config.emulatorUrl = "https://attacker.example";
         release();
@@ -1520,7 +1556,6 @@ describe("fresh provider authorization", () => {
     });
 
     it("rejects provider drift before requesting an owner signature", async () => {
-        const base = await setup();
         const sign = vi.fn(senderIdentity.sign.bind(senderIdentity));
         const trackedIdentity = new Proxy(senderIdentity, {
             get(target, property) {
@@ -1529,31 +1564,41 @@ describe("fresh provider authorization", () => {
                 return typeof value === "function" ? value.bind(target) : value;
             },
         });
+        const funding = await refunderFunding(trackedIdentity);
+        const base = await setup(args(), [], [funding]);
         vi.mocked(base.arkProvider.getInfo)
             .mockResolvedValueOnce({ ...base.arkInfo, maxOpReturnOutputs: 3n })
             .mockResolvedValueOnce({ ...base.arkInfo, network: "bitcoin" });
 
-        await expect(refund(base.transfer, trackedIdentity)).rejects.toThrow(/network/i);
+        await expect(refund(base.transfer, trackedIdentity, funding.walletInput)).rejects.toThrow(
+            /network/i,
+        );
 
         expect(sign).not.toHaveBeenCalled();
         expect(base.emulator.submitTx).not.toHaveBeenCalled();
     });
 
-    it("fails closed when refund capacity drops before build or before submission", async () => {
-        const beforeBuild = await setup();
+    it("fails closed when a refund loses its provider facts before build", async () => {
+        const first = await refunderFunding();
+        const beforeBuild = await setup(args(), [], [first]);
         vi.mocked(beforeBuild.arkProvider.getInfo).mockResolvedValueOnce({
             ...beforeBuild.arkInfo,
-            maxOpReturnOutputs: 2n,
+            network: "bitcoin",
         });
-        await expect(refund(beforeBuild.transfer, senderIdentity)).rejects.toThrow(/OP_RETURN/i);
+        await expect(
+            refund(beforeBuild.transfer, senderIdentity, first.walletInput),
+        ).rejects.toThrow(/network/i);
         expect(beforeBuild.emulator.submitTx).not.toHaveBeenCalled();
 
-        const beforeSubmit = await setup();
+        const second = await refunderFunding();
+        const beforeSubmit = await setup(args(), [], [second]);
         vi.mocked(beforeSubmit.arkProvider.getInfo)
-            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo, maxOpReturnOutputs: 3n })
-            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo, maxOpReturnOutputs: 3n })
-            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo, maxOpReturnOutputs: 2n });
-        await expect(refund(beforeSubmit.transfer, senderIdentity)).rejects.toThrow(/OP_RETURN/i);
+            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo })
+            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo })
+            .mockResolvedValueOnce({ ...beforeSubmit.arkInfo, network: "bitcoin" });
+        await expect(
+            refund(beforeSubmit.transfer, senderIdentity, second.walletInput),
+        ).rejects.toThrow(/network/i);
         expect(beforeSubmit.emulator.submitTx).not.toHaveBeenCalled();
     });
 });
@@ -1845,6 +1890,7 @@ const receiverPaidTransfer = async (
     coinValue = 1000n,
 ) => {
     const funding = await receiverFunding(undefined, undefined, coinValue);
+    const refunder = await refunderFunding();
     const a = assetArgs();
     const receiverFare: ReceiverFare | undefined =
         fare.fareSats !== undefined
@@ -1875,10 +1921,10 @@ const receiverPaidTransfer = async (
             assetUnits: DELIVERED,
         },
         [{ assetId: id.toString(), amount: DELIVERED }],
-        [funding],
+        [funding, refunder],
     );
     const destination = new Uint8Array([0x51, 0x20, ...funding.receiverKey]);
-    return { ...base, funding, destination, assetId: id };
+    return { ...base, funding, refunder, destination, assetId: id };
 };
 
 const assetUnitsAt = (tx: Transaction, vout: number): bigint =>
@@ -1924,9 +1970,9 @@ describe("receiver-paid recycle", () => {
         const amounts = (tx: Transaction) =>
             Array.from({ length: tx.outputsLength }, (_, index) => tx.getOutput(index).amount);
         const withFare = await receiverPaidTransfer({ fareSats: 7n });
-        await refund(withFare.transfer, senderIdentity);
+        await refund(withFare.transfer, senderIdentity, withFare.refunder.walletInput);
         const without = await receiverPaidTransfer({});
-        await refund(without.transfer, senderIdentity);
+        await refund(without.transfer, senderIdentity, without.refunder.walletInput);
         expect(amounts(withFare.submitted()!)).toEqual(amounts(without.submitted()!));
         expect(assetUnitsAt(withFare.submitted()!, 1)).toBe(DELIVERED);
     });
@@ -2073,7 +2119,42 @@ describe("a client-built claim, classified by the server watcher", () => {
 });
 
 describe("refund", () => {
-    it("returns receiver-owned asset recovery to the receiver output", async () => {
+    it("builds a two-input repayRefund paying out[1] to the refunder's own script", async () => {
+        const funding = await refunderFunding();
+        const { transfer, submitted } = await setup(args(), [], [funding]);
+        await refund(transfer, senderIdentity, funding.walletInput);
+        const tx = submitted()!;
+        const p = params();
+        const loan = loanSats(p);
+
+        expect(tx.inputsLength).toBe(2);
+        expect(tx.getOutput(0)).toEqual({
+            amount: loan,
+            script: payoutPkScript(p.operatorKey, loan, p.dust),
+        });
+        expect(tx.getOutput(1)).toEqual({
+            amount: lockupSats(p) + funding.walletInput.input.value - loan,
+            script: funding.tree.pkScript,
+        });
+        expect(tx.getOutput(1).script).not.toEqual(
+            payoutPkScript(p.senderKey, lockupSats(p) - loan, p.dust),
+        );
+        expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
+        expect(tx.getInput(1).tapScriptSig).toHaveLength(1);
+    });
+
+    it("refuses a refunder input the covenant cannot pay back to", async () => {
+        const funding = await refunderFunding();
+        const { transfer } = await setup(args(), [], [funding]);
+        const forged = {
+            ...funding.walletInput,
+            input: { ...funding.walletInput.input, value: 0n },
+        };
+        await expect(refund(transfer, senderIdentity, forged)).rejects.toThrow();
+    });
+
+    // recoveryRecipient steers the reclaim leaf and the custody row, not this one.
+    it("carries a receiver-owned covenant's asset to the refunder's own output", async () => {
         const authorization = authorizationWithTerms(true, {
             recoveryRecipient: "receiver",
         });
@@ -2081,19 +2162,21 @@ describe("refund", () => {
             hex.encode(Uint8Array.from(authorization.expect.assetId!.txid).reverse()),
             authorization.expect.assetId!.groupIndex,
         ).toString();
-        const { transfer, submitted } = await setup(authorization, [
-            { assetId: id, amount: authorization.assetUnits! },
-        ]);
-        await refund(transfer, senderIdentity);
+        const funding = await refunderFunding();
+        const { transfer, submitted } = await setup(
+            authorization,
+            [{ assetId: id, amount: authorization.assetUnits! }],
+            [funding],
+        );
+        await refund(transfer, senderIdentity, funding.walletInput);
         const tx = submitted()!;
         const p = quoteParamsFromWire(authorization.quote.params);
-        const topup = refundTopup(p, VTXO_MIN);
-        const returned = p.dust - topup;
+        const returned = lockupSats(p) + funding.walletInput.input.value - loanSats(p);
         expect(tx.getOutput(1)).toMatchObject({
             amount: returned,
-            script: payoutPkScript(receiverKey, returned, p.dust),
+            script: funding.tree.pkScript,
         });
-        expect(tx.getOutput(1).script).not.toEqual(payoutPkScript(p.senderKey, returned, p.dust));
+        expect(tx.getOutput(1).script).not.toEqual(payoutPkScript(receiverKey, returned, p.dust));
         expect(Extension.fromTx(tx).getAssetPacket()!.groups[0].outputs[0]).toMatchObject({
             vout: 1,
             amount: authorization.assetUnits,
@@ -2101,7 +2184,7 @@ describe("refund", () => {
         expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
     });
 
-    it("works around the SDK two-OP_RETURN guard without changing asset vouts", async () => {
+    it("keeps both refund payouts clear of the SDK two-OP_RETURN ceiling", async () => {
         const opReturn = { script: new Uint8Array([0x6a]), amount: 0n };
         expect(() => buildOffchainTx([], [opReturn, opReturn, opReturn], unroll)).toThrow(
             "too many OP_RETURN outputs: 3 > 2",
@@ -2112,16 +2195,18 @@ describe("refund", () => {
             hex.encode(Uint8Array.from(assetVerify.expect.assetId!.txid).reverse()),
             assetVerify.expect.assetId!.groupIndex,
         ).toString();
-        const { transfer, submitted } = await setup(assetVerify, [
-            { assetId: id, amount: assetVerify.assetUnits! },
-        ]);
-        await refund(transfer, senderIdentity);
+        const funding = await refunderFunding();
+        const { transfer, submitted } = await setup(
+            assetVerify,
+            [{ assetId: id, amount: assetVerify.assetUnits! }],
+            [funding],
+        );
+        await refund(transfer, senderIdentity, funding.walletInput);
         const tx = submitted()!;
-        const amount = refundTopup(params(), VTXO_MIN);
-        expect(tx.getOutput(0)).toMatchObject({ amount });
-        expect(tx.getOutput(1)).toMatchObject({ amount: 330n - amount });
-        expect(tx.getOutput(0).script?.[0]).toBe(0x6a);
-        expect(tx.getOutput(1).script?.[0]).toBe(0x6a);
+        const p = params();
+        expect(tx.getOutput(0)).toMatchObject({ amount: loanSats(p) });
+        expect(tx.getOutput(0).script?.[0]).toBe(0x51);
+        expect(tx.getOutput(1).script?.[0]).toBe(0x51);
         expect(Extension.isExtension(tx.getOutput(2).script!)).toBe(true);
         expect(tx.getOutput(3)).toMatchObject(P2A);
         expect(Extension.fromTx(tx).getAssetPacket()!.groups[0].outputs[0]).toMatchObject({
@@ -2131,21 +2216,25 @@ describe("refund", () => {
         expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
     });
 
-    it.each([
-        ["missing", {}],
-        ["insufficient", { maxOpReturnOutputs: 2n }],
-    ])("fails closed when provider capacity is %s", async (_label, providerLimits) => {
-        const { transfer, emulator } = await setup(args(), [], [], providerLimits);
-        await expect(refund(transfer, senderIdentity)).rejects.toThrow(/OP_RETURN|capacity/i);
-        expect(emulator.submitTx).not.toHaveBeenCalled();
+    it("refunds against a provider advertising only two OP_RETURN outputs", async () => {
+        const funding = await refunderFunding();
+        const { transfer, emulator } = await setup(args(), [], [funding], {
+            maxOpReturnOutputs: 2n,
+        });
+        await expect(refund(transfer, senderIdentity, funding.walletInput)).resolves.toBeTypeOf(
+            "string",
+        );
+        expect(emulator.submitTx).toHaveBeenCalledTimes(1);
     });
 
     it("rejects an emulator response that swaps the extension and P2A", async () => {
-        const { transfer, emulator } = await setup();
+        const funding = await refunderFunding();
+        const { transfer, emulator } = await setup(args(), [], [funding]);
         vi.mocked(emulator.submitTx).mockImplementationOnce(async (arkTx, checkpoints) => {
             const submitted = Transaction.fromPSBT(base64.decode(arkTx));
             const packet = Extension.fromTx(submitted).getEmulatorPacket()!;
-            submitted.updateInput(0, { tapScriptSig: undefined });
+            for (let index = 0; index < submitted.inputsLength; index++)
+                submitted.updateInput(index, { tapScriptSig: undefined });
             const extension = submitted.getOutput(2);
             submitted.updateOutput(2, P2A);
             submitted.updateOutput(3, extension);
@@ -2155,14 +2244,18 @@ describe("refund", () => {
                 packet.entries[0].script,
             );
         });
-        await expect(refund(transfer, senderIdentity)).rejects.toThrow(/unsigned transaction/i);
+        await expect(refund(transfer, senderIdentity, funding.walletInput)).rejects.toThrow(
+            /unsigned transaction/i,
+        );
     });
 
     it("rejects a wrong sender before the emulator effect", async () => {
-        const { transfer, emulator } = await setup();
-        await expect(
-            refund(transfer, SingleKey.fromPrivateKey(new Uint8Array(32).fill(6))),
-        ).rejects.toThrow(/sender identity/i);
+        const wrong = SingleKey.fromPrivateKey(new Uint8Array(32).fill(6));
+        const funding = await refunderFunding(wrong);
+        const { transfer, emulator } = await setup(args(), [], [funding]);
+        await expect(refund(transfer, wrong, funding.walletInput)).rejects.toThrow(
+            /sender identity/i,
+        );
         expect(emulator.submitTx).not.toHaveBeenCalled();
     });
 });
@@ -2189,8 +2282,8 @@ describe("claim round trips", () => {
                 covenantAddress: authorization.quote.covenantAddress,
                 outpoint: { ...base.status.outpoint },
                 fare: structuredClone(authorization.quote.fare),
-                batchExpiry: { kind: "height", value: "900000" },
-                recoveryLocktime: { kind: "height", value: context.params.locktime.toString() },
+                batchExpiry: { kind: "time", value: context.params.locktime.toString() },
+                recoveryLocktime: { kind: "time", value: context.params.locktime.toString() },
             },
         };
         const coin = {

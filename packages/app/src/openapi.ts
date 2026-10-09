@@ -265,7 +265,11 @@ const schemas: Record<string, Schema> = {
                 },
                 dust: decimal,
                 topup: decimal,
-                locktime: decimal,
+                locktime: {
+                    ...decimal,
+                    description:
+                        "The reclaim leaf's CLTV: a wall-clock Unix-seconds deadline measured from the quote. It deliberately outlives the funding coins' batch expiry, so a renewal cannot push the Taxi's own claim out.",
+                },
                 exitDelay: {
                     description:
                         "CSV on the exit leaf; a value below 512 is blocks, otherwise seconds.",
@@ -603,7 +607,9 @@ const schemas: Record<string, Schema> = {
         advanceId: str,
         kind: oneOfStrings("height", "time"),
         locktime: decimal,
-        batchExpiry: decimal,
+        // Null on a covenant advance, which stores no funding expiry: its clock
+        // is the deadline itself.
+        batchExpiry: nullable(decimal),
         remaining: nullable(decimal),
         severity: oneOfStrings("eligible", "warning", "critical", "expired"),
         code: str,
@@ -753,7 +759,7 @@ const examples = {
             operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
-            locktime: "899856",
+            locktime: "1765640000",
             exitDelay: { value: "86016", type: "seconds" },
             claimMode: "recycle",
         },
@@ -810,7 +816,7 @@ const examples = {
             operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "320",
-            locktime: "849856",
+            locktime: "1765640000",
             exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
@@ -834,8 +840,8 @@ const examples = {
             value: "850000",
         },
         recoveryLocktime: {
-            kind: "height",
-            value: "849856",
+            kind: "time",
+            value: "1765640000",
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
@@ -853,7 +859,7 @@ const examples = {
             operatorSignerKey: "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
             dust: "330",
             topup: "330",
-            locktime: "899856",
+            locktime: "1765640000",
             exitDelay: { value: "86016", type: "seconds" },
             assetId: {
                 txid: "bebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebebe",
@@ -881,8 +887,8 @@ const examples = {
             value: "900000",
         },
         recoveryLocktime: {
-            kind: "height",
-            value: "899856",
+            kind: "time",
+            value: "1765640000",
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
@@ -1042,7 +1048,7 @@ const examples = {
                             "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f",
                         dust: "330",
                         topup: "330",
-                        locktime: "899856",
+                        locktime: "1765640000",
                         exitDelay: { value: "86016", type: "seconds" },
                         claimMode: "recycle",
                     },
@@ -1057,12 +1063,12 @@ const examples = {
                         units: "0",
                     },
                     batchExpiry: {
-                        kind: "height",
-                        value: "900000",
+                        kind: "time",
+                        value: "1765640000",
                     },
                     recoveryLocktime: {
-                        kind: "height",
-                        value: "899856",
+                        kind: "time",
+                        value: "1765640000",
                     },
                 },
             },
@@ -1133,16 +1139,16 @@ const examples = {
             lastSuccessfulObservationAt: 1756999998,
             lastSuccessfulRecoveryAt: 1756999999,
             nearestDeadline: {
-                height: {
-                    advanceId: "adv-height",
-                    kind: "height",
-                    locktime: "850000",
-                    batchExpiry: "900000",
-                    remaining: "10000",
+                height: null,
+                time: {
+                    advanceId: "adv-1",
+                    kind: "time",
+                    locktime: "1765640000",
+                    batchExpiry: null,
+                    remaining: "8640000",
                     severity: "eligible",
                     code: "recovery_eligible",
                 },
-                time: null,
             },
             oldestUnsweptLocktime: {
                 height: "850000",

@@ -139,12 +139,11 @@ export interface Advance extends FundingSnapshot, SubmissionState {
      * Persisted because the claim feed and every recovery rebuild read the
      * advance, and the fare is part of the covenant address. */
     receiverFare?: ReceiverFare;
-    covenantVersion?: 2;
 
     outpoint?: Outpoint;
     spentTxid?: string;
 
-    /** v2 renewals: non-terminal, so the advance stays `locked` and `outpoint`
+    /** Renewals: non-terminal, so the advance stays `locked` and `outpoint`
      * moves to the successor. Absent is zero. */
     renewals?: number;
     lastRenewedAt?: number;
@@ -204,12 +203,13 @@ export interface QuoteRequest {
     fareId?: string;
 }
 
-/** Lending dipped into what the Taxi owes its custody receivers. Advisory: the
- * loan is admitted anyway, and `coverageSats` is what is left after it. */
-export interface AdmissionWarning {
-    code: "custody_funds_lent" | "custody_funds_lent_unrecoverable";
-    coverageSats: bigint;
-}
+/** Advisory: the quote is admitted anyway and the operator is told. */
+export type AdmissionWarning =
+    /** Lending dipped into custody; `coverageSats` is what is left after it. */
+    | { code: "custody_funds_lent" | "custody_funds_lent_unrecoverable"; coverageSats: bigint }
+    /** Near `maxOutstandingSats`; a loan is held to its deadline, so headroom
+     * returns slowly. */
+    | { code: "exposure_nearing_cap"; headroomSats: bigint };
 
 export type AdmissionDecision =
     | {

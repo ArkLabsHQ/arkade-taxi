@@ -131,10 +131,8 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     if (!sameBytes(quote.params.operatorKey, info.operatorKey))
         reject(VerificationErrorCode.OperatorKey, "receive quote substituted the operator key");
 
-    const receipt = args.vtxoMinAmount;
-    const senderLoan = args.dust - receipt;
-    if (receipt <= 0n || senderLoan < receipt || senderLoan + receipt !== args.dust)
-        reject(VerificationErrorCode.Topup, "trusted limits do not form a positive carrier split");
+    if (args.vtxoMinAmount <= 0n || args.dust <= 0n)
+        reject(VerificationErrorCode.Topup, "trusted limits do not form a positive loan");
     const receiverPaid = quote.payer === "receiver";
     const requestedReceiverPaid = expect.payer === "receiver";
     if (requestedReceiverPaid !== receiverPaid)
@@ -142,9 +140,9 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
             VerificationErrorCode.Fee,
             `receive quote payer is ${receiverPaid ? "receiver" : "sender"}, but the request named ${requestedReceiverPaid ? "receiver" : "sender"}`,
         );
-    const loan = receiverPaid ? args.dust : senderLoan;
+    const loan = args.dust;
     if (quote.params.dust !== args.dust || quote.params.topup !== loan)
-        reject(VerificationErrorCode.Topup, "receive quote substituted the carrier split");
+        reject(VerificationErrorCode.Topup, "receive quote substituted the whole-dust loan");
     if (quote.params.claimMode !== "recycle")
         reject(VerificationErrorCode.ClaimMode, "receive quote did not commit to recycle");
     if (quote.params.recoveryRecipient !== "receiver")
@@ -174,10 +172,17 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
     );
 
     const { batchExpiry: batch, inputExpiryFloor: floor, recoveryLocktime: recovery } = quote;
-    if (batch.kind !== floor.kind || floor.kind !== recovery.kind)
-        reject(VerificationErrorCode.Locktime, "receive quote expiry domains differ");
-    if (floor.value > batch.value || recovery.value >= floor.value)
-        reject(VerificationErrorCode.Locktime, "receive quote lifetime ordering is unsafe");
+    // Floor and batch expiry are one funding fact and must still agree; the
+    // recovery deadline is a separate clock that outlives them on purpose.
+    if (batch.kind !== floor.kind)
+        reject(VerificationErrorCode.Locktime, "receive quote funding expiry domains differ");
+    if (floor.value > batch.value)
+        reject(VerificationErrorCode.Locktime, "receive quote funding ordering is unsafe");
+    if (recovery.kind !== "time" || recovery.value <= BigInt(quote.createdAt))
+        reject(
+            VerificationErrorCode.Locktime,
+            "receive quote recovery locktime is not a future wall-clock deadline",
+        );
     const expectedFloor = expect.fundingExpiry
         ? {
               kind: batch.kind,
@@ -235,7 +240,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
             ).toString(),
             physicalSats: args.dust,
             loanSats: loan,
-            receiptSats: receiverPaid ? 0n : receipt,
+            receiptSats: 0n,
             serviceFareSats: receiverPaid ? 0n : quote.fare.units,
             expiresAt: quote.expiresAt,
         },

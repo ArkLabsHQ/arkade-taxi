@@ -46,14 +46,7 @@ const persistedQuote = (): Advance => {
         id: request.advanceId,
         state: "quoted",
         ...request.params,
-        // A v2 advance keeps no batch expiry; its deadline is its own clock.
-        ...(request.params.covenantVersion === 2
-            ? {}
-            : { batchExpiry: request.funding.batchExpiry }),
-        recoveryLocktime: {
-            kind: request.params.covenantVersion === 2 ? "time" : request.funding.batchExpiry.kind,
-            value: request.params.locktime,
-        },
+        recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,
         unsignedLockupId: envelope.unsignedTxId,
@@ -75,7 +68,7 @@ const setup = (path = ":memory:") => {
     reservations.reserveQuote({
         advance: quote,
         expectedPolicyRevision: policy.getSnapshot().revision,
-        recoveryExecutionBudget: { kind: quote.batchExpiry!.kind, value: 1n },
+        recoveryExecutionBudget: { kind: "time", value: 1n },
     });
     reservations.claimLockup(
         quote.id,
@@ -403,7 +396,7 @@ describe("sponsored settlement", () => {
         reservations.reserveQuote({
             advance: quote,
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: quote.batchExpiry!.kind, value: 0n },
+            recoveryExecutionBudget: { kind: "time", value: 0n },
         });
         reservations.claimLockup(
             quote.id,
@@ -546,7 +539,6 @@ describe("custody reconciliation", () => {
             ...state.advances.get(state.quote.id)!,
             id: "adv-custody",
             state: "locked",
-            covenantVersion: 2,
             // A v2 advance keeps no batch expiry; its CLTV is wall-clock.
             batchExpiry: undefined,
             locktime: V2_DEADLINE,
@@ -708,7 +700,6 @@ describe("custody reconciliation", () => {
             ...first.advances.get(first.quote.id)!,
             id: "adv-custody",
             state: "locked",
-            covenantVersion: 2,
             // A v2 advance keeps no batch expiry; its CLTV is wall-clock.
             batchExpiry: undefined,
             locktime: V2_DEADLINE,

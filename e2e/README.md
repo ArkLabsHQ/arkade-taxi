@@ -43,24 +43,23 @@ The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
 the run before any stack starts.
 
-### The v2 renewal scenario
+### The renewal scenario
 
-`v2-covenant-batch-renewal` is the only scenario that builds a v2 covenant, and
-it needs **no emulator bump**: `OP_TUNNEL` and `OP_INSPECTINTENTMESSAGE` have
-both been in the emulator since `v0.0.8-rc.0`, and the rev-2 covenant uses no
-other new opcode. Read the version a run actually resolved from `stack.json`'s
-`images.emulator` rather than trusting this line, and do not re-introduce an
-`--emulator-image` requirement for the scenario by reflex.
+`covenant-batch-renewal` needs **no emulator bump**: `OP_TUNNEL` and
+`OP_INSPECTINTENTMESSAGE` have both been in the emulator since `v0.0.8-rc.0`,
+and the covenant uses no other new opcode. Read the version a run actually
+resolved from `stack.json`'s `images.emulator` rather than trusting this line,
+and do not re-introduce an `--emulator-image` requirement for the scenario by
+reflex.
 
-`TAXI_COVENANT_VERSION=2` is still refused at startup, so the scenario does not
-run v2 through the production Taxi container. It stands up its own in-process
-Taxi — a fresh operator key, its own SQLite ledger, the production lockup builder,
-submitter and spend watcher — and sets `covenantVersion` on the resolved config
-rather than in the environment `loadConfig` validates. Lifting that gate is a
-separate change; nothing here weakens it.
+Every scenario now builds the same covenant through the production config path:
+there is one covenant and no version to select. The renewal scenario still
+stands up its own in-process Taxi — a fresh operator key, its own SQLite ledger,
+the production lockup builder, submitter and spend watcher — because it drives
+the renewal directly rather than through a delegatee.
 
-The scenario renews the covenant itself through leaf 5 with a `register` intent
-the emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
+It renews the covenant itself through leaf 5 with a `register` intent the
+emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
 records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator
@@ -139,12 +138,16 @@ the SDK's own background settlement, with no operator action, into usable
 inventory. The stack's VTXOs live two days, inside the SDK's three-day renewal
 default, so the harness sets `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to 30 hours:
 above the one-day expiry headroom, and at least 12 hours short of the lifetime,
-or the Taxi stops renewal and closes admission.
+or the Taxi stops renewal and closes admission. The reclaim deadline is
+wall-clock from the quote and owes the funding nothing, so the shipped 100-day
+default would expire every coin in the stack the first time a scenario mined
+past one: the harness sets `TAXI_COVENANT_DEADLINE_SECONDS` to four hours, which
+is how far ahead of the wall clock those scenarios leave chain time.
 It also covers lost submit responses, duplicate requests, stale provider
-identity, warning/critical recovery deadlines before VTXO expiry, and one
-two-owner offer fill in which a solver and a sponsor each sign only their own
-inputs while the offer covenant is co-signed by nobody but the emulator and the
-Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
+identity, the warning and critical alarms a covenant raises as the coin it sits
+on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
+sponsor each sign only their own inputs while the offer covenant is co-signed by
+nobody but the emulator and the Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
 once the exit delay matures on median time past. The package skips the 330-sat
 covenant as uneconomic, so it reaches the chain only because the Taxi's change
@@ -179,8 +182,12 @@ from a 1,000-sat coin whose remainder returns to the sender as change.
 
 Taxi's production proceeds collector consolidates canonical subdust receipts
 with an ordinary operator coin using the standard SDK wallet settlement path.
-The live test waits for that service-owned collection, checks the receipt's
-settlement commitment and its spendable wallet output. No test-only recovery
+The sponsored rail is what still hosts a fare below dust, so `sponsored-direct-send`
+is the scenario that waits for that service-owned collection and checks the
+receipt's settlement commitment and its spendable wallet output. A covenant
+hosts its asset fare at dust and merges the operator change onto it, so every
+payout on that rail is spendable as it lands and the claim scenarios assert the
+receipt rather than a collection. No test-only recovery
 or manual consolidation is performed. The zero-default collection fee cap is
 zero on regtest. The harness explicitly sets all four upstream intent fee
 programs to `0.0`, verifies the advertised values and records them in `stack.json`;

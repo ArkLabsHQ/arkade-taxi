@@ -191,25 +191,14 @@ export class ReservationRepository {
                 // to both kinds.
                 if (advanceKind(advance) === "covenant") {
                     const recovery = advance.recoveryLocktime;
-                    // A v2 deadline is wall-clock and outlives the funding coins
-                    // by design, so the budget is measured in its own domain and
-                    // the race it must win is the lockup, not the expiry.
-                    const expiry = advance.batchExpiry;
-                    const domain = expiry?.kind ?? "time";
-                    const policyMargin = BigInt(
-                        domain === "height"
-                            ? policy.locktimeMarginBlocks
-                            : policy.locktimeMarginSeconds,
-                    );
+                    const policyMargin = BigInt(policy.locktimeMarginSeconds);
                     if (
                         !recovery ||
-                        recovery.kind !== domain ||
-                        recoveryExecutionBudget?.kind !== recovery.kind ||
+                        recovery.kind !== "time" ||
+                        recoveryExecutionBudget?.kind !== "time" ||
                         recoveryExecutionBudget.value < 0n ||
                         policyMargin <= recoveryExecutionBudget.value ||
-                        (expiry
-                            ? recovery.value + recoveryExecutionBudget.value >= expiry.value
-                            : recovery.value <= BigInt(advance.createdAt))
+                        recovery.value <= BigInt(advance.createdAt)
                     )
                         throw new RecoveryBudgetConflictError(advance.id);
                 }

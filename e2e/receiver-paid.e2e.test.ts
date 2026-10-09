@@ -17,6 +17,7 @@ import {
     type JointGraph,
 } from "@arkade-taxi/client";
 import { hex } from "@scure/base";
+import { loadConfig } from "../packages/app/src/config.js";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
@@ -46,9 +47,8 @@ const DELIVERED = 1_000n;
 const ISSUED = 10_000n;
 const DEPOSIT_SATS = 5_000;
 const BOB_COIN_SATS = 1_000;
-const DEFAULT_MARGIN_SECONDS = 86_400n;
-const RECLAIM_AFTER_SECONDS = 300n;
 
+const deadlineSeconds = () => loadConfig(process.env).covenantDeadlineSeconds;
 const readyUrl = () => `${required("TAXI_E2E_BASE_URL")}/ready`;
 const expiryOf = (coin: ExtendedVirtualCoin): bigint => fundingOf(coin).expiry.value;
 const taxiAssetId = (id: string) => {
@@ -182,7 +182,7 @@ async function receiverPaidCarrier(
     live: Live,
     fare: Fare,
     bound: { release?: () => Promise<void> },
-    reclaimAfter?: bigint,
+    reclaims = false,
 ) {
     const maker = live.actors.receiverWithAsset;
     const solver = live.actors.sender;
@@ -211,17 +211,6 @@ async function receiverPaidCarrier(
             (coin) => !coin.assets?.length,
         ),
     ].reduce((min, coin) => (expiryOf(coin) < min ? expiryOf(coin) : min), 2n ** 53n);
-    const chainTime = await poll(
-        "Taxi reports a chain time between runtime checks",
-        health,
-        (body) => body.runtime?.chainTime != null,
-    ).then((body) => BigInt(body.runtime.chainTime));
-    const now = BigInt(Math.floor(Date.now() / 1000));
-    const margin =
-        reclaimAfter === undefined
-            ? DEFAULT_MARGIN_SECONDS
-            : floor - (chainTime > now ? chainTime : now) - reclaimAfter;
-    const locktime = floor - margin;
     const sdkAssetId = asset.AssetId.fromString(minted.assetId);
     const assetId = taxiAssetId(minted.assetId);
     const wireAssetId = { txid: hex.encode(assetId.txid), groupIndex: assetId.groupIndex };
@@ -233,7 +222,6 @@ async function receiverPaidCarrier(
         maxTopupSats: null,
     });
     await admin("policy", {
-        locktimeMarginSeconds: Number(margin),
         assetRules: [
             rule(null, {
                 id: "sats",
@@ -251,6 +239,8 @@ async function receiverPaidCarrier(
     const bobAddress = await bob.wallet.getAddress();
     const makerKey = await maker.identity.xOnlyPublicKey();
     await ready(Math.floor(Date.now() / 1000));
+    const deadline = deadlineSeconds();
+    const before = BigInt(Math.floor(Date.now() / 1000));
     const { verified } = await preEffectRequest(
         () =>
             live.client.requestVerifiedReceiveQuote({
@@ -267,12 +257,13 @@ async function receiverPaidCarrier(
                 hrp: "tark",
                 expect: {
                     maxServiceFareSats: 0n,
-                    minRecoveryLocktime: { kind: "time", value: locktime },
+                    minRecoveryLocktime: { kind: "time", value: before + deadline },
                     minInputExpiryFloor: { kind: "time", value: floor },
                 },
             }),
         { readyUrl: readyUrl(), expiresAt: Date.now() / 1000 + 10 },
     );
+    const after = BigInt(Math.floor(Date.now() / 1000));
     const quote = verified.quote;
     ownCleanup(() =>
         poll(
@@ -283,6 +274,9 @@ async function receiverPaidCarrier(
         ),
     );
     const covenantFare = { currency: fare.currency, units: fare.units.toString() };
+    expect(BigInt(quote.createdAt)).toBeGreaterThanOrEqual(before);
+    expect(BigInt(quote.createdAt)).toBeLessThanOrEqual(after);
+    const locktime = BigInt(quote.createdAt) + deadline;
     expect(quote).toMatchObject({
         payer: "receiver",
         fare: { currency: "sats", units: "0" },
@@ -350,7 +344,7 @@ async function receiverPaidCarrier(
     live.owned.set(quote.quoteId, {});
     bound.release = ownCleanup(() =>
         releaseBound(live, quote.quoteId, async () => {
-            if (reclaimAfter !== undefined) return jumpPast(locktime);
+            if (reclaims) return jumpPast(locktime);
             const { transfer } = await claimFromFeed(live, quote.quoteId, bobAddress, assetId);
             const coin = await freshCoin(live, "receiverSats", BOB_COIN_SATS);
             await recycleWith(live, transfer, coin, ArkAddress.decode(bobAddress).pkScript);
@@ -522,8 +516,9 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
     const live = await openLive();
     const bound: { release?: () => Promise<void> } = {};
     try {
-        const carried = await receiverPaidCarrier(live, SATS_FARE, bound, RECLAIM_AFTER_SECONDS);
-        const { minted, dust, vtxoMinAmount } = carried;
+        const carried = await receiverPaidCarrier(live, SATS_FARE, bound, true);
+        const { minted, dust } = carried;
+        const custodyBefore = (await health()).custody?.rows ?? 0;
         await jumpPast(carried.locktime);
         const recovered = await poll(
             "the sweeper reclaims the unclaimed covenant",
@@ -532,27 +527,38 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
             120_000,
         );
         const { tx } = await terminal(live, carried.covenant, "recovered", recovered.spentTxid!);
-        const bobKey = hex.encode(ArkAddress.decode(carried.bobAddress).vtxoTaprootKey);
-        expectReceipt(tx, 0, dust - vtxoMinAmount, live.info.operatorKey);
-        expectReceipt(tx, 1, vtxoMinAmount, bobKey);
-        expect(assetOutputs(tx, minted.assetId)).toEqual([[1, DELIVERED]]);
+        expect(tx.outputsLength).toBe(3);
+        expectReceipt(tx, 0, dust, live.info.operatorKey);
+        expect(assetOutputs(tx, minted.assetId)).toEqual([[0, DELIVERED]]);
         const { vtxos } = await live.indexer.getVtxos({
-            outpoints: [{ txid: recovered.spentTxid!, vout: 1 }],
+            outpoints: [{ txid: recovered.spentTxid!, vout: 0 }],
         });
         expect(vtxos).toHaveLength(1);
         expect(vtxos[0]).toMatchObject({
-            value: Number(vtxoMinAmount),
+            value: Number(dust),
             assets: [{ assetId: minted.assetId, amount: DELIVERED }],
         });
-        const operatorAfter = { sats: carried.operatorBefore.sats - vtxoMinAmount, units: 0n };
+        const operatorAfter = { sats: carried.operatorBefore.sats, units: DELIVERED };
         const operatorObserved = await poll(
-            "Taxi recovers its loan less Bob's receipt, and no fare",
+            "Taxi recovers its whole loan and holds Bob's asset",
             () => walletBalance(live.actors.operator, minted.assetId),
             (value) => value.sats === operatorAfter.sats && value.units === operatorAfter.units,
             120_000,
         );
         expect(operatorObserved).toEqual(operatorAfter);
         expect((await admin("status")).exposure.outstandingSats).toBe("0");
+        const custody = await poll(
+            "custody row for Bob's asset",
+            async () => (await health()).custody,
+            (value) => value?.rows === custodyBefore + 1,
+        );
+        // coverageAssets is held less owed: zero is owed in full and held in full.
+        const wire = taxiAssetId(minted.assetId);
+        expect(custody.coverageAssets).toContainEqual({
+            assetId: { txid: hex.encode(wire.txid), groupIndex: wire.groupIndex },
+            units: "0",
+        });
+        expect(custody.shortfall).toBe(false);
         evidence("receiver-paid-mode1-reclaim", {
             assetId: minted.assetId,
             transferId: carried.covenant.quote.transferId,
@@ -560,9 +566,9 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
             recoveryTxid: recovered.spentTxid,
             locktime: carried.locktime,
             descriptorFare: carried.descriptorFare,
-            recoveryOutputs: [0, 1].map((vout) => tx.getOutput(vout).amount),
+            recoveryOutputs: [0].map((vout) => tx.getOutput(vout).amount),
             recoveryAssets: assetOutputs(tx, minted.assetId),
-            bobReceipt: { value: vtxos[0]!.value, assets: vtxos[0]!.assets },
+            custodyRow: { value: vtxos[0]!.value, assets: vtxos[0]!.assets },
             operatorBefore: carried.operatorBefore,
             operatorObserved,
             submitAttempts: carried.submitAttempts,

@@ -331,7 +331,11 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
                   ]
                 : [[0, 200_000_000n]],
         );
-        if (mode === "purchase") expectReceipt(unsigned, 1, 1n, live.info.operatorKey);
+        // The fare output shares the operator's own script, so the change rides it.
+        const operatorPayout =
+            verified.envelope.operatorInputs.reduce((sum, input) => sum + BigInt(input.value), 0n) -
+            330n;
+        if (mode === "purchase") expectReceipt(unsigned, 1, operatorPayout, live.info.operatorKey);
         expect(unsigned.getOutput(mode === "purchase" ? 2 : 1).amount).toBe(1000n);
         await control("configure", {
             target: "arkd",
@@ -384,7 +388,7 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
         expect(assetOutputs(lockTx, minted.assetId)).toEqual(
             assetOutputs(unsigned, minted.assetId),
         );
-        if (mode === "purchase") expectReceipt(lockTx, 1, 1n, live.info.operatorKey);
+        if (mode === "purchase") expectReceipt(lockTx, 1, operatorPayout, live.info.operatorKey);
         let receiverInput;
         let txid: string;
         if (mode === "recycle") {
@@ -467,47 +471,18 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             live.info.operatorKey,
         );
         expect(operatorAssetsAfter).toEqual(expectedAssets);
-        // Only a sub-dust fare receipt needs the proceeds collector to be spendable.
+        // Both receipts clear dust now: no collection stands behind the balances.
         const repaid = mode === "recycle";
         const receiptPoint = repaid ? { txid, vout: 0 } : { txid: lockup.txid, vout: 1 };
         const receipt = (await live.indexer.getVtxos({ outpoints: [receiptPoint] })).vtxos.find(
             (coin) => coin.txid === receiptPoint.txid && coin.vout === receiptPoint.vout,
         );
         expect(receipt).toBeDefined();
-        expect(receipt!.value).toBe(repaid ? 330 : 1);
+        expect(receipt!.value).toBe(repaid ? 330 : Number(operatorPayout));
         expect(receipt!.script).toBe(`5120${live.info.operatorKey}`);
-        expect(receipt!.isSpent).toBe(!repaid);
-        if (!repaid) expect(receipt!.settledBy).toMatch(/^[0-9a-f]{64}$/);
         expect(receipt!.assets ?? []).toEqual(
             repaid ? [] : [{ assetId: minted.assetId, amount: 1_000_000n }],
         );
-        const collected = (
-            await live.actors.operator.wallet.getSpendableVtxos({ withRecoverable: false })
-        ).filter((coin) =>
-            repaid
-                ? coin.txid === receiptPoint.txid && coin.vout === receiptPoint.vout
-                : coin.commitmentTxIds?.includes(receipt!.settledBy!),
-        );
-        for (const coin of collected)
-            expect(hex.encode(VtxoScript.decode(coin.tapTree).tweakedPublicKey)).toBe(
-                live.info.operatorKey,
-            );
-        const payout = repaid
-            ? collected[0]
-            : collected.find((coin) =>
-                  coin.assets?.some((item) => item.assetId === minted.assetId),
-              );
-        expect(payout).toBeDefined();
-        if (repaid) expect(payout!.assets ?? []).toEqual([]);
-        const plainChange = repaid ? [] : collected.filter((coin) => !coin.assets?.length);
-        expect(collected).toHaveLength(plainChange.length ? 2 : 1);
-        if (plainChange.length) {
-            expect(plainChange).toHaveLength(1);
-            expect(payout!.value).toBe(330);
-            expect(BigInt(plainChange[0]!.value)).toBeGreaterThanOrEqual(
-                BigInt(required("TAXI_OPERATOR_MIN_RESERVE_SATS")),
-            );
-        }
         const collectionStatus = await poll(
             "service completes its proceeds job",
             () => admin("status"),
@@ -631,8 +606,8 @@ async function receiverSseClaim(mode: "recycle" | "purchase") {
             })),
             secondTransferId: second.quote.transferId,
             secondSpendTxid: secondTxid,
-            collectionCommitmentTxid: receipt!.settledBy,
-            collectedOutpoint: { txid: payout!.txid, vout: payout!.vout },
+            receiptOutpoint: receiptPoint,
+            receiptSats: receipt!.value,
         };
         assertArtifactSafe(evidence);
         writeFileSync(

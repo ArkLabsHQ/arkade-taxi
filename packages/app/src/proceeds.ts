@@ -15,7 +15,7 @@ import {
     type TimeHeight,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { recycleFare, refundTopup, type AssetIdRef } from "@arkade-taxi/covenant";
+import { loanSats, lockupSats, recycleFare, type AssetIdRef } from "@arkade-taxi/covenant";
 import { advanceKind, covenantParamsOf, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type {
     AdvanceRepository,
@@ -582,14 +582,12 @@ export async function discoverProceeds(
             fail("proceeds_receipt_mismatch");
         found.set(key(point), candidate);
     };
-    const checkFare = (advance: Advance) =>
+    // Operator change rides on the fare output when a separate one would repeat
+    // its script, so the sats come from the validated graph, not the fare alone.
+    const checkFare = (advance: Advance, lockup: Transaction) =>
         check(
             { txid: advance.arkTxid!, vout: 1 },
-            advance.fare.currency === "sats"
-                ? advance.fare.units
-                : advance.covenantVersion === 2
-                  ? config.dust
-                  : config.vtxoMinAmount,
+            lockup.getOutput(1).amount!,
             advance.fare.currency === "asset"
                 ? [
                       {
@@ -602,9 +600,6 @@ export async function discoverProceeds(
     for (const advance of (["recycled", "purchased", "refunded", "recovered"] as const).flatMap(
         (s) => advances.byState(s),
     )) {
-        // A v2 advance repays `loanSats`, not `refundTopup`, and every one of its
-        // payouts is already a spendable coin, so this scan has nothing to rescue.
-        if (advance.covenantVersion === 2) continue;
         if (!advance.outpoint || !advance.arkTxid || !advance.spentTxid) continue;
         if (hex.encode(advance.operatorKey) !== hex.encode(config.operatorKey))
             fail("proceeds_payout_key_changed");
@@ -633,7 +628,7 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance);
+        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance, tx);
         if (advance.state === "recycled") {
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
@@ -644,7 +639,12 @@ export async function discoverProceeds(
                     : [],
             );
         } else if (advance.state !== "purchased")
-            await check(repayment, refundTopup(advance, config.vtxoMinAmount), []);
+            // reclaimWhole pays the whole lockup; repayRefund pays only the loan.
+            await check(
+                repayment,
+                advance.state === "recovered" ? lockupSats(advance) : loanSats(advance),
+                [],
+            );
         if (found.size >= 32) break;
     }
     for (const advance of advances.byState("locked")) {
@@ -667,7 +667,7 @@ export async function discoverProceeds(
             advance.outpoint.vout !== envelope.covenantOutputIndex
         )
             fail("proceeds_lockup_mismatch");
-        await checkFare(advance);
+        await checkFare(advance, tx);
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
 }

@@ -2009,10 +2009,9 @@ const BLOCKER_GROUPS = [
         "covenant_unspent_at_expiry",
     ],
     [
-        "A payment's recovery deadline is very close, so the Taxi paused new payments.",
-        "recovery_deadline_critical",
+        "The Taxi has not yet read a payment's coin, so it cannot tell how close that coin is to expiry. Nothing is paused.",
+        "covenant_expiry_unobserved",
     ],
-    ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
     [
         "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
         "covenant_renewal_missing",
@@ -3508,14 +3507,12 @@ const CONFIG_MEANINGS = {
         "How old, in milliseconds, a coin reading may be when the Taxi re-checks its own wallet; it never reuses one to price or fund a payment. Capped by TAXI_RECONCILE_INTERVAL_MS; 0 re-reads every time.",
     proceedsMaxFeeSats:
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
-    covenantVersion:
-        "Which covenant new payments are built at. Only 1 starts: version 2 has no recovery path yet, so the Taxi refuses to run on it.",
     covenantDeadlineSeconds:
-        "How long, in seconds, the Taxi lends its dust on a version 2 payment before it may take the whole covenant back. Measured from the moment the payment is locked up, and fixed in the address, so a change only affects new payments.",
+        "How long, in seconds, the Taxi lends its dust before it may take the whole covenant back. Measured from the moment the payment is quoted, and fixed in the address, so a change only affects new payments.",
     custodyWindowSeconds:
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     delegateeUrl:
-        "The renewal service that keeps a version 2 covenant from expiring. Unset leaves those covenants unrenewed.",
+        "The renewal service that keeps a covenant from expiring. Unset leaves covenants unrenewed.",
     renewalBeforeExpirySeconds:
         "How long, in seconds, before a coin expires the renewal service is asked to renew it.",
     logLevel: "How much the Taxi writes to its logs.",

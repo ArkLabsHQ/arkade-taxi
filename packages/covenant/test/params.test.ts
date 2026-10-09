@@ -2,9 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
     exitDelayEncodable,
     exitTimelock,
+    loanSats,
     lockupSats,
-    refundTopup,
-    unrecoveredTopup,
     validateParams,
     type DustCovenantParams,
 } from "../src/params.js";
@@ -21,7 +20,7 @@ const base = (): DustCovenantParams => ({
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
-    locktime: 800_000n,
+    locktime: 1_800_000_000n,
 });
 
 const MIN = 1n;
@@ -51,6 +50,10 @@ describe("validateParams", () => {
 
     it("rejects topup above dust", () => {
         expect(() => validateParams({ ...base(), topup: 331n }, MIN)).toThrow(/outside/);
+    });
+
+    it("lends exactly one dust unit", () => {
+        expect(() => validateParams({ ...base(), topup: 329n }, MIN)).toThrow(/one dust unit/);
     });
 
     // Receiver == operator lets the operator satisfy recycle while paying the
@@ -94,6 +97,13 @@ describe("validateParams", () => {
         expect(() => validateParams({ ...base(), locktime: 0n }, MIN)).toThrow(/locktime/);
     });
 
+    it("requires a time-domain locktime", () => {
+        expect(() => validateParams({ ...base(), locktime: 499_999_999n }, MIN)).toThrow(
+            /must be time-domain/,
+        );
+        expect(() => validateParams({ ...base(), locktime: 500_000_000n }, MIN)).not.toThrow();
+    });
+
     it("rejects an unknown recovery recipient", () => {
         const params = {
             ...base(),
@@ -107,15 +117,8 @@ describe("validateParams", () => {
         expect(() => validateParams(params, MIN)).toThrow(/requires an asset id/);
     });
 
-    it("rejects receiver recovery without a positive two-way split", () => {
-        const params = {
-            ...base(),
-            dust: 10n,
-            topup: 6n,
-            assetId,
-            recoveryRecipient: "receiver",
-        } as DustCovenantParams;
-        expect(() => validateParams(params, 6n)).toThrow(/needs at least 6 sats/);
+    it("accepts receiver-owned recovery at dust = vtxoMinAmount", () => {
+        expect(() => validateParams(receiverPaid(), 330n)).not.toThrow();
     });
 });
 
@@ -125,11 +128,6 @@ describe("receiverFare", () => {
         expect(() =>
             validateParams(receiverPaid({ receiverFare: { currency: "asset", units: 9n } }), 1n),
         ).not.toThrow();
-    });
-    it("requires the operator to fund the whole dust", () => {
-        expect(() => validateParams(receiverPaid({ topup: 329n }), 1n)).toThrow(
-            /fund the whole dust/,
-        );
     });
     it("requires an asset id, and says so as a fare problem", () => {
         expect(() =>
@@ -175,83 +173,22 @@ describe("paymentSats", () => {
         expect(() => validateParams({ ...base(), paymentSats: 100n }, MIN)).not.toThrow();
     });
 
+    it("accepts a one-sat payment at dust = vtxoMinAmount", () => {
+        expect(() => validateParams({ ...base(), paymentSats: 1n }, 330n)).not.toThrow();
+    });
+
     it.each([
-        ["below vtxoMinAmount", { paymentSats: 0n }],
-        ["a whole dust unit", { paymentSats: 330n }],
-        ["a partial advance", { paymentSats: 100n, topup: 230n }],
-        ["an asset covenant", { paymentSats: 100n, assetId }],
-    ])("rejects %s", (_name, over) => {
+        ["a zero payment", { paymentSats: 0n }, /paymentSats/],
+        ["an asset covenant", { paymentSats: 100n, assetId }, /paymentSats/],
+        ["a partial advance", { paymentSats: 100n, topup: 230n }, /one dust unit/],
+    ] as const)("rejects %s", (_name, over, message) => {
         expect(() => validateParams({ ...base(), ...over } as DustCovenantParams, MIN)).toThrow(
-            /paymentSats/,
+            message,
         );
     });
 
     it("refunds the whole advance to the operator", () => {
-        expect(refundTopup({ ...base(), paymentSats: 100n }, MIN)).toBe(330n);
-        expect(unrecoveredTopup({ ...base(), paymentSats: 100n }, MIN)).toBe(0n);
-    });
-});
-
-describe("refundTopup", () => {
-    it("returns topup unchanged when a vtxoMinAmount remains for the sender", () => {
-        expect(refundTopup({ ...base(), dust: 330n, topup: 300n }, 10n)).toBe(300n);
-    });
-
-    it("caps at dust minus vtxoMinAmount when the operator funded the whole unit", () => {
-        expect(refundTopup({ ...base(), dust: 330n, topup: 330n }, 10n)).toBe(320n);
-    });
-
-    it("separates unrecovered operator allocation from the receipt value", () => {
-        const full = { ...base(), assetId, recoveryRecipient: "receiver" } as DustCovenantParams;
-        const precharged = { ...full, topup: 329n };
-
-        expect(unrecoveredTopup(full, 1n)).toBe(1n);
-        expect(unrecoveredTopup(precharged, 1n)).toBe(0n);
-        expect(precharged.dust - refundTopup(precharged, 1n)).toBe(1n);
-    });
-});
-
-describe("covenantVersion 2", () => {
-    const v2 = (over: Partial<DustCovenantParams> = {}): DustCovenantParams => ({
-        ...base(),
-        locktime: 1_800_000_000n,
-        covenantVersion: 2,
-        ...over,
-    });
-
-    it.each([1, 3])("refuses version %s", (covenantVersion) => {
-        const params = { ...base(), covenantVersion } as unknown as DustCovenantParams;
-        expect(() => validateParams(params, MIN)).toThrow(/unknown covenantVersion/);
-    });
-
-    it("lends exactly one dust unit", () => {
-        expect(() => validateParams(v2({ topup: 329n }), MIN)).toThrow(/one dust unit/);
-    });
-
-    it("accepts a one-sat payment at dust = vtxoMinAmount", () => {
-        expect(() => validateParams(v2({ paymentSats: 1n }), 330n)).not.toThrow();
-    });
-
-    it.each([
-        ["a zero payment", { paymentSats: 0n }],
-        ["an asset covenant", { paymentSats: 1n, assetId }],
-    ])("still refuses paymentSats on %s", (_name, over) => {
-        expect(() => validateParams(v2(over), 330n)).toThrow(/paymentSats/);
-    });
-
-    it("accepts receiver-owned recovery at dust = vtxoMinAmount, which legacy refuses", () => {
-        expect(() =>
-            validateParams(receiverPaid({ covenantVersion: 2, locktime: 1_800_000_000n }), 330n),
-        ).not.toThrow();
-        expect(() => validateParams(receiverPaid(), 330n)).toThrow(/host its receipt/);
-    });
-
-    it("requires a time-domain locktime, which legacy still accepts as a height", () => {
-        expect(() => validateParams(v2({ locktime: 499_999_999n }), MIN)).toThrow(
-            /must be time-domain/,
-        );
-        expect(() => validateParams(v2({ locktime: 500_000_000n }), MIN)).not.toThrow();
-        expect(() => validateParams(base(), MIN)).not.toThrow();
+        expect(loanSats({ ...base(), paymentSats: 100n })).toBe(330n);
     });
 });
 

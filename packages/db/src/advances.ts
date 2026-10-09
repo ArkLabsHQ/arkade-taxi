@@ -31,7 +31,6 @@ const COLUMNS = [
     "fare_asset_group_index",
     "receiver_fare_currency",
     "receiver_fare_units",
-    "covenant_version",
     "outpoint_txid",
     "outpoint_vout",
     "spent_txid",
@@ -116,7 +115,6 @@ interface AdvanceRow {
     fare_asset_group_index: bigint | null;
     receiver_fare_currency: string | null;
     receiver_fare_units: string | null;
-    covenant_version: bigint | null;
     outpoint_txid: string | null;
     outpoint_vout: bigint | null;
     spent_txid: string | null;
@@ -240,7 +238,6 @@ function toParams(a: Advance): AdvanceParams {
         receiver_fare_currency: a.receiverFare?.currency ?? null,
         receiver_fare_units:
             a.receiverFare === undefined ? null : a.receiverFare.units.toString(10),
-        covenant_version: a.covenantVersion ?? null,
         outpoint_txid: a.outpoint?.txid ?? null,
         outpoint_vout: a.outpoint?.vout ?? null,
         spent_txid: a.spentTxid ?? null,
@@ -310,12 +307,10 @@ function toParams(a: Advance): AdvanceParams {
 // says `undefined`. Timestamps and indices are narrowed back to `number`, which
 // safeIntegers would otherwise hand back as BigInt.
 function fromRow(r: AdvanceRow): Advance {
-    // A v2 row stores no batch expiry: its deadline is measured from lockup and
-    // a renewal re-dates the coins, so a creation-time snapshot would be stale.
-    const v2 = r.covenant_version !== null;
+    const sponsored = r.kind === "sponsored";
     if (
-        (!v2 && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||
-        (v2 && (r.batch_expiry_kind !== null || r.batch_expiry_value !== null)) ||
+        (sponsored && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||
+        (!sponsored && (r.batch_expiry_kind !== null || r.batch_expiry_value !== null)) ||
         r.operator_inputs_json === null ||
         r.unsigned_lockup_tx === null ||
         r.unsigned_lockup_id === null
@@ -397,12 +392,6 @@ function fromRow(r: AdvanceRow): Advance {
         else if (r.receiver_fare_currency === "asset")
             a.receiverFare = { currency: "asset", units };
         else throw new Error(`advance ${r.id}: unknown receiver fare currency`);
-    }
-    // Refused rather than narrowed: a newer build that widens the CHECK must not
-    // have its rows read back here as version 2 and rebuilt at the wrong address.
-    if (r.covenant_version !== null) {
-        if (r.covenant_version !== 2n) throw new Error(`advance ${r.id}: unknown covenant version`);
-        a.covenantVersion = 2;
     }
     if (r.claim_mode !== null) a.claimMode = r.claim_mode;
     if (r.recovery_recipient !== null) a.recoveryRecipient = r.recovery_recipient;
@@ -529,8 +518,8 @@ export class AdvanceRepository {
         );
         this.#sumTopup = read("SELECT sum(topup) AS total FROM advances WHERE state = ?");
         this.#missingFunding = read(`SELECT id FROM advances WHERE
-            (covenant_version IS NULL AND (batch_expiry_kind IS NULL OR batch_expiry_value IS NULL))
-            OR (covenant_version IS NOT NULL AND batch_expiry_kind IS NOT NULL)
+            (kind = 'sponsored' AND (batch_expiry_kind IS NULL OR batch_expiry_value IS NULL))
+            OR (kind IS NOT 'sponsored' AND batch_expiry_kind IS NOT NULL)
             OR operator_inputs_json IS NULL OR unsigned_lockup_tx IS NULL OR unsigned_lockup_id IS NULL ORDER BY id`);
         this.#missingExitParams = read(
             `SELECT count(*) AS total FROM advances WHERE exit_signer_key IS NULL
@@ -550,7 +539,7 @@ export class AdvanceRepository {
             db.prepare(`UPDATE advances SET outpoint_txid = ?, outpoint_vout = ?,
             renewals = renewals + 1, last_renewed_at = ?, last_observed_at = ?,
             updated_at = max(updated_at, ?), failure_code = NULL, failure_detail = NULL
-            WHERE id = ? AND state = 'locked' AND kind = 'covenant' AND covenant_version = 2
+            WHERE id = ? AND state = 'locked' AND kind = 'covenant'
             AND NOT EXISTS (
                 SELECT 1 FROM advances other WHERE other.id != advances.id
                 AND other.outpoint_txid = ? AND other.outpoint_vout = ?
@@ -1171,7 +1160,7 @@ export class AdvanceRepository {
                 // The reclaim moved the whole lockup into the operator's own
                 // inventory, so what remains is a liability — recorded here so
                 // it can never be observed without one.
-                if (terminalState === "recovered" && current.covenantVersion === 2)
+                if (terminalState === "recovered")
                     openCustodyRow(this.#db, current, at, this.#custodyWindowSeconds);
                 this.#db
                     .prepare("DELETE FROM operator_input_reservations WHERE advance_id = ?")

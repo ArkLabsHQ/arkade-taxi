@@ -59,10 +59,6 @@ export interface ReceiveQuote {
      * instead of the sender. These two appear together, never one alone. */
     payer?: "receiver";
     receiverFare?: FareSpec;
-    /** Absent is the legacy covenant. Kept out of `params` on purpose: that JSON
-     * has a strict decoder, so a v2 quote inside it would be undecodable by a
-     * build rolled back onto this schema. */
-    covenantVersion?: 2;
     batchExpiry: ExpiryDeadline;
     inputExpiryFloor: ExpiryDeadline;
     recoveryLocktime: ExpiryDeadline;
@@ -106,7 +102,6 @@ type Row = {
     fare_json: string;
     payer: string | null;
     receiver_fare_json: string | null;
-    covenant_version: bigint | null;
     batch_expiry_kind: string;
     batch_expiry_value: bigint;
     input_expiry_floor_kind: string;
@@ -380,7 +375,6 @@ const decodeRow = (row: Row): ReceiveQuote => {
         (receiverFare === undefined) !== (params.receiverFare === undefined)
     )
         fail("payer");
-    if (row.covenant_version !== null && row.covenant_version !== 2n) fail("covenant version");
     const batchExpiry = deadline(row.batch_expiry_kind, row.batch_expiry_value, "batch expiry");
     const inputExpiryFloor = deadline(
         row.input_expiry_floor_kind,
@@ -396,21 +390,15 @@ const decodeRow = (row: Row): ReceiveQuote => {
     if (
         hex(params.senderKey) !== row.maker_public_key ||
         params.topup !== row.loan_sats ||
-        // Only a legacy sender-paid quote splits the dust; v2 lends all of it.
-        (receiverFare === undefined && row.covenant_version === null
-            ? params.dust <= params.topup
-            : params.dust !== params.topup) ||
+        params.dust !== params.topup ||
         params.locktime !== recoveryLocktime.value ||
         batchExpiry.kind !== inputExpiryFloor.kind ||
         batchExpiry.value < inputExpiryFloor.value ||
-        // Migration 15: a v2 deadline is wall-clock and outlives the funding
-        // floor, so only its own domain and futureness are checkable here.
-        (row.covenant_version === null
-            ? inputExpiryFloor.kind !== recoveryLocktime.kind ||
-              inputExpiryFloor.value <= recoveryLocktime.value
-            : recoveryLocktime.kind !== "time" ||
-              recoveryLocktime.value < 500_000_000n ||
-              recoveryLocktime.value <= row.created_at) ||
+        // The deadline is wall-clock and outlives the funding floor on
+        // purpose, so only its own domain and futureness are checkable here.
+        recoveryLocktime.kind !== "time" ||
+        recoveryLocktime.value < 500_000_000n ||
+        recoveryLocktime.value <= row.created_at ||
         operatorInputs.some(
             (input) =>
                 input.assetPacket !== undefined ||
@@ -435,7 +423,6 @@ const decodeRow = (row: Row): ReceiveQuote => {
         fare,
         ...(row.payer === null ? {} : { payer: "receiver" as const }),
         ...(receiverFare === undefined ? {} : { receiverFare }),
-        ...(row.covenant_version === null ? {} : { covenantVersion: 2 as const }),
         batchExpiry,
         inputExpiryFloor,
         recoveryLocktime,
@@ -471,10 +458,6 @@ export class ReceiveQuoteRepository {
                 request.quote.receiverFare === undefined
                     ? null
                     : encodeReceiverFare(request.quote.receiverFare),
-            covenant_version:
-                request.quote.covenantVersion === undefined
-                    ? null
-                    : BigInt(request.quote.covenantVersion),
             batch_expiry_kind: request.quote.batchExpiry.kind,
             batch_expiry_value: request.quote.batchExpiry.value,
             input_expiry_floor_kind: request.quote.inputExpiryFloor.kind,
@@ -508,24 +491,15 @@ export class ReceiveQuoteRepository {
                 if (q.loanSats > cap)
                     throw new Error("receive quote: loan exceeds per-payment limit");
                 const budget = request.recoveryExecutionBudget;
-                // A v2 deadline is not a margin off the floor, so the budget is
-                // measured in its own domain and races the lockup, not the coins.
-                const deadline = q.covenantVersion === 2;
-                const domain = deadline ? "time" : q.batchExpiry.kind;
-                const margin = BigInt(
-                    domain === "height"
-                        ? policy.locktimeMarginBlocks
-                        : policy.locktimeMarginSeconds,
-                );
+                // The deadline is not a margin off the floor, so the budget is
+                // wall-clock and races the lockup, not the coins.
+                const margin = BigInt(policy.locktimeMarginSeconds);
                 if (
-                    q.recoveryLocktime.kind !== domain ||
-                    budget.kind !== q.recoveryLocktime.kind ||
+                    q.recoveryLocktime.kind !== "time" ||
+                    budget.kind !== "time" ||
                     budget.value < 0n ||
                     margin <= budget.value ||
-                    (deadline
-                        ? q.recoveryLocktime.value <= BigInt(q.createdAt)
-                        : q.recoveryLocktime.value + budget.value >= q.inputExpiryFloor.value ||
-                          q.inputExpiryFloor.value - q.recoveryLocktime.value !== margin)
+                    q.recoveryLocktime.value <= BigInt(q.createdAt)
                 )
                     throw new Error("receive quote: recovery execution budget is unsafe");
                 const current = allReservedOutpoints(this.db);
@@ -554,11 +528,11 @@ export class ReceiveQuoteRepository {
                         `INSERT INTO receive_quotes (
                             id, state, receiver_address, maker_public_key, params_json,
                             covenant_address, fare_json, payer, receiver_fare_json,
-                            covenant_version, batch_expiry_kind, batch_expiry_value,
+                            batch_expiry_kind, batch_expiry_value,
                             input_expiry_floor_kind, input_expiry_floor_value,
                             recovery_locktime_kind, recovery_locktime_value, loan_sats, created_at,
                             expires_at, policy_revision, operator_inputs_json, bound_fill_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     )
                     .run(
                         q.id,
@@ -570,7 +544,6 @@ export class ReceiveQuoteRepository {
                         encodeFare(q.fare),
                         q.payer ?? null,
                         q.receiverFare === undefined ? null : encodeReceiverFare(q.receiverFare),
-                        q.covenantVersion === undefined ? null : BigInt(q.covenantVersion),
                         q.batchExpiry.kind,
                         q.batchExpiry.value,
                         q.inputExpiryFloor.kind,
@@ -637,7 +610,6 @@ export class ReceiveQuoteRepository {
                     fill.fare.currency !== "sats" ||
                     fill.fare.units !== quote.fare.units ||
                     advance.topup !== quote.loanSats ||
-                    advance.covenantVersion !== quote.covenantVersion ||
                     advance.dust !== quote.params.dust ||
                     advance.assetUnits === undefined ||
                     advance.assetUnits <= 0n ||
@@ -657,12 +629,9 @@ export class ReceiveQuoteRepository {
                     advance.fare.units !== quote.fare.units ||
                     advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
                     advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||
-                    // A v2 advance keeps no batch expiry, so there is nothing to
-                    // hold the quote's funding snapshot against.
-                    (advance.batchExpiry !== undefined &&
-                        (advance.batchExpiry.kind !== quote.batchExpiry.kind ||
-                            advance.batchExpiry.value < quote.inputExpiryFloor.value)) ||
-                    (advance.batchExpiry === undefined) !== (advance.covenantVersion === 2) ||
+                    // A covenant advance keeps no batch expiry, so there is
+                    // nothing to hold the quote's funding snapshot against.
+                    advance.batchExpiry !== undefined ||
                     advance.expiresAt !== fill.expiresAt ||
                     !sameOutpoints(fill.taxiInputs) ||
                     !sameOutpoints(advance.operatorInputs)

@@ -44,14 +44,13 @@ describe("GET /admin/api/status", () => {
     it("sums every active exposure and keeps oldest locktimes in separate domains", async () => {
         const h = harness();
         h.advances.insert(advance({ state: "locked", topup: 9_007_199_254_740_993n }));
-        h.advances.insert(advance({ state: "locking", topup: 10n, locktime: 799_000n }));
+        h.advances.insert(advance({ state: "locking", topup: 10n, locktime: 1000799000n }));
         h.advances.insert(
             advance({
                 state: "recovering",
                 topup: 20n,
-                locktime: 1_700_000_000n,
-                batchExpiry: { kind: "time", value: 1_700_100_000n },
-                recoveryLocktime: { kind: "time", value: 1_700_000_000n },
+                locktime: 1700000000n,
+                recoveryLocktime: { kind: "time", value: 1700000000n },
             }),
         );
         h.advances.insert(advance({ state: "quoted", topup: 5_000n }));
@@ -63,7 +62,7 @@ describe("GET /admin/api/status", () => {
         expect(body.exposure).toEqual({
             outstandingSats: "9007199254741023",
             activeCount: 3,
-            oldestUnsweptLocktime: { height: "799000", time: "1700000000" },
+            oldestUnsweptLocktime: { height: null, time: "1000799000" },
         });
     });
 
@@ -633,7 +632,7 @@ describe("GET /admin/api/advances", () => {
             operatorKey: "33".repeat(32),
             dust: "330",
             topup: "3",
-            locktime: "800000",
+            locktime: "1800000000",
             fare: { currency: "sats", units: "0" },
             createdAt: 2_000,
         });
@@ -679,8 +678,8 @@ describe("GET /admin/api/advances", () => {
                 id: "urgent",
                 state: "recovering",
                 createdAt: 1,
-                batchExpiry: { kind: "height", value: 800_124n },
-                recoveryLocktime: { kind: "height", value: 800_000n },
+                locktime: 1_000_800_000n,
+                recoveryLocktime: { kind: "time", value: 1_000_800_000n },
             }),
         );
 
@@ -709,49 +708,37 @@ describe("GET /admin/api/advances", () => {
         });
     });
 
-    it.each([
-        ["time", "height"],
-        ["height", "time"],
-    ] as const)(
-        "keeps one expired %s exposure ahead of more than 200 eligible %s exposures",
-        async (urgentKind, benignKind) => {
-            const urgentId = `urgent-${urgentKind}`;
+    it("keeps one expired exposure ahead of more than 200 eligible ones", async () => {
+        {
+            const urgentId = "urgent";
             const h = harness();
             for (let index = 0; index < 201; index++) {
-                const id = `benign-${benignKind}-${index}`;
+                const id = `benign-${index}`;
                 h.advances.insert(
                     advance({
                         id,
                         state: "locked",
-                        locktime: benignKind === "height" ? 800_000n : 1_700_000_000n,
-                        recoveryLocktime: {
-                            kind: benignKind,
-                            value: benignKind === "height" ? 800_000n : 1_700_000_000n,
-                        },
-                        batchExpiry: {
-                            kind: benignKind,
-                            value: benignKind === "height" ? 900_000n : 1_800_000_000n,
-                        },
+                        locktime: 1_700_000_000n,
+                        recoveryLocktime: { kind: "time", value: 1_700_000_000n },
                     }),
                 );
             }
-            const urgentLocktime = urgentKind === "height" ? 799_000n : 1_699_000_000n;
+            const urgentLocktime = 1_699_000_000n;
             h.advances.insert(
                 advance({
                     id: urgentId,
                     state: "recovering",
                     locktime: urgentLocktime,
-                    recoveryLocktime: { kind: urgentKind, value: urgentLocktime },
-                    batchExpiry: { kind: urgentKind, value: urgentLocktime + 1n },
+                    recoveryLocktime: { kind: "time", value: urgentLocktime },
                 }),
             );
             h.setSweeper({
                 deadlines: [
                     {
                         advanceId: urgentId,
-                        kind: urgentKind,
+                        kind: "time",
                         locktime: urgentLocktime,
-                        batchExpiry: urgentLocktime + 1n,
+                        batchExpiry: null,
                         remaining: 0n,
                         severity: "expired",
                         code: "covenant_unspent_at_expiry",
@@ -763,50 +750,46 @@ describe("GET /admin/api/advances", () => {
 
             expect(body.advances).toHaveLength(200);
             expect(body.advances[0].id).toBe(urgentId);
-        },
-    );
+        }
+    });
 
-    it("orders active rows by domain then same-domain expiry, locktime, and id", async () => {
+    it("orders active rows by locktime then id", async () => {
         const h = harness();
         h.advances.insert(
             advance({
                 id: "time-small-scalar",
-                batchExpiry: { kind: "time", value: 1_700_100_000n },
-                locktime: 1_700_000_000n,
-                recoveryLocktime: { kind: "time", value: 1_700_000_000n },
+                locktime: 1700000000n,
+                recoveryLocktime: { kind: "time", value: 1700000000n },
             }),
         );
         h.advances.insert(
             advance({
                 id: "height-b",
-                batchExpiry: { kind: "height", value: 900n },
-                locktime: 5n,
-                recoveryLocktime: { kind: "height", value: 5n },
+                locktime: 1000000005n,
+                recoveryLocktime: { kind: "time", value: 1000000005n },
             }),
         );
         h.advances.insert(
             advance({
                 id: "height-a",
-                batchExpiry: { kind: "height", value: 900n },
-                locktime: 5n,
-                recoveryLocktime: { kind: "height", value: 5n },
+                locktime: 1000000005n,
+                recoveryLocktime: { kind: "time", value: 1000000005n },
             }),
         );
         h.advances.insert(
             advance({
                 id: "height-first",
-                batchExpiry: { kind: "height", value: 899n },
-                locktime: 800n,
-                recoveryLocktime: { kind: "height", value: 800n },
+                locktime: 1000000800n,
+                recoveryLocktime: { kind: "time", value: 1000000800n },
             }),
         );
 
         const { body } = await h.json("/admin/api/advances");
 
         expect(body.advances.map((row: { id: string }) => row.id)).toEqual([
-            "height-first",
             "height-a",
             "height-b",
+            "height-first",
             "time-small-scalar",
         ]);
     });
@@ -820,19 +803,18 @@ describe("GET /admin/api/advances", () => {
                 advance({
                     id,
                     state: "recovering",
-                    locktime: 700_000n + BigInt(index),
-                    recoveryLocktime: { kind: "height", value: 700_000n + BigInt(index) },
-                    batchExpiry: { kind: "height", value: 800_000n + BigInt(index) },
+                    locktime: 1_000_700_000n + BigInt(index),
+                    recoveryLocktime: { kind: "time", value: 1_000_700_000n + BigInt(index) },
                 }),
             );
             deadlines.push({
                 advanceId: id,
-                kind: "height" as const,
-                locktime: 700_000n + BigInt(index),
-                batchExpiry: 800_000n + BigInt(index),
+                kind: "time" as const,
+                locktime: 1_000_700_000n + BigInt(index),
+                batchExpiry: null,
                 remaining: 0n,
                 severity: index === 200 ? ("critical" as const) : ("expired" as const),
-                code: index === 200 ? "recovery_deadline_critical" : "covenant_unspent_at_expiry",
+                code: index === 200 ? "covenant_renewal_missing" : "covenant_unspent_at_expiry",
             });
         }
         h.setSweeper({ deadlines } as any);
@@ -883,7 +865,7 @@ describe("GET /admin/api/advances", () => {
                 {
                     advanceId: "first",
                     kind: "height",
-                    locktime: 800_000n,
+                    locktime: 1000800000n,
                     batchExpiry: 900_000n,
                     remaining: 0n,
                     severity: "expired",
@@ -897,7 +879,7 @@ describe("GET /admin/api/advances", () => {
                 {
                     advanceId: "second",
                     kind: "height",
-                    locktime: 800_000n,
+                    locktime: 1000800000n,
                     batchExpiry: 900_000n,
                     remaining: 0n,
                     severity: "expired",
@@ -980,9 +962,8 @@ describe("GET /admin/api/advances", () => {
                 id: "active",
                 state: "recovering",
                 updatedAt: 1_900,
-                batchExpiry: { kind: "time", value: 9_007_199_254_740_993n },
-                recoveryLocktime: { kind: "time", value: 9_007_199_254_700_000n },
-                locktime: 9_007_199_254_700_000n,
+                recoveryLocktime: { kind: "time", value: 9007199254700000n },
+                locktime: 9007199254700000n,
                 submissionPhase: "finalized",
                 recoveryPhase: "prepared",
                 submissionAttempts: 2,
@@ -998,7 +979,6 @@ describe("GET /admin/api/advances", () => {
         const { body } = await h.json("/admin/api/advances");
         expect(body.advances[0]).toMatchObject({
             ageSeconds: 100,
-            batchExpiry: { kind: "time", value: "9007199254740993" },
             recoveryLocktime: { kind: "time", value: "9007199254700000" },
             submissionPhase: "finalized",
             recoveryPhase: "prepared",

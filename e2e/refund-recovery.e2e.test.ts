@@ -4,6 +4,7 @@ import { expect } from "vitest";
 import { RestEmulatorProvider, Transaction } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Advance } from "@arkade-taxi/core";
+import { loanSats, lockupSats } from "@arkade-taxi/covenant";
 import { buildRecoveryIntent } from "../packages/app/src/arkade/recovery.js";
 import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
@@ -13,6 +14,7 @@ import {
     admin,
     artifactPath,
     expectReceipt,
+    health,
     lock,
     openLive,
     poll,
@@ -21,6 +23,7 @@ import {
     sizedSender,
     terminal,
     walletBalance,
+    walletInputOf,
 } from "./fixtures.js";
 
 liveScenario("sender-refund-before-locktime", async () => {
@@ -30,8 +33,8 @@ liveScenario("sender-refund-before-locktime", async () => {
             live,
             await quoteFor(live, "receiverSats", await sizedSender(live)),
         );
-        const health = await fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then((r) => r.json());
-        expect(BigInt(health.runtime.chainTime)).toBeLessThan(BigInt(locked.quote.params.locktime));
+        const before = await health();
+        expect(BigInt(before.runtime.chainTime)).toBeLessThan(BigInt(locked.quote.params.locktime));
         const sender = live.actors.sender.identity;
         const signed: Transaction[] = [];
         const identity = {
@@ -45,7 +48,13 @@ liveScenario("sender-refund-before-locktime", async () => {
                 return result;
             },
         };
-        const txid = await live.client.refund(locked.transfer, identity);
+        // Leaf 2 pays out[1] to in[1]'s own script, so the sender brings one.
+        const refundCoin = await sizedSender(live);
+        const txid = await live.client.refund(
+            locked.transfer,
+            identity,
+            walletInputOf(refundCoin, identity),
+        );
         expect(signed.length).toBeGreaterThanOrEqual(2);
         for (const tx of signed)
             expect(
@@ -56,10 +65,15 @@ liveScenario("sender-refund-before-locktime", async () => {
                     ),
             ).toBe(true);
         const { tx, checkpoint } = await terminal(live, locked, "refunded", txid);
-        // The whole-dust advance goes back to Taxi and the sender's payment to the
-        // sender; an asset one is 329/1.
-        expectReceipt(tx, 0, 330n, live.info.operatorKey);
-        expectReceipt(tx, 1, 329n, locked.quote.params.senderKey);
+        const lockup = lockupSats(locked.verified.params);
+        const loan = loanSats(locked.verified.params);
+        expect(tx.inputsLength).toBe(2);
+        expectReceipt(tx, 0, loan, live.info.operatorKey);
+        expect(tx.getOutput(1).amount).toBe(lockup + BigInt(refundCoin.value) - loan);
+        expect(hex.encode(tx.getOutput(1).script!)).toBe(refundCoin.script);
+        expect(hex.encode(tx.getOutput(1).script!)).not.toBe(
+            `5120${locked.quote.params.senderKey}`,
+        );
         expect(
             checkpoint
                 .getInput(0)
@@ -82,7 +96,6 @@ async function recoveryIntent(locked: Awaited<ReturnType<typeof lock>>) {
         ...locked.verified.params,
         // Read back: the graph is rebuilt from the fare the quote really charged.
         fare: { currency: row.fare.currency, units: BigInt(row.fare.units) },
-        batchExpiry: { kind: row.batchExpiry.kind, value: BigInt(row.batchExpiry.value) },
         recoveryLocktime: {
             kind: row.recoveryLocktime.kind,
             value: BigInt(row.recoveryLocktime.value),
@@ -151,8 +164,8 @@ liveScenario("premature-recovery-rejected", async () => {
 liveScenario("sweeper-recovery-after-locktime", async () => {
     const live = await openLive();
     try {
-        await admin("policy", { locktimeMarginSeconds: 129600 });
         const before = await walletBalance(live.actors.operator, live.fixture.asset.assetId);
+        const custodyBefore = (await health()).custody?.rows ?? 0;
         const locked = await lock(
             live,
             await quoteFor(live, "receiverSats", await sizedSender(live)),
@@ -183,13 +196,22 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         const { tx, row } = await terminal(live, locked, "recovered", intent.expectedTxid);
         expect(row.recoveryTxid).toBe(intent.expectedTxid);
         expect(row.recoveryPhase).toBe("submitted");
-        expectReceipt(tx, 0, 330n, live.info.operatorKey);
-        expectReceipt(tx, 1, 329n, locked.quote.params.senderKey);
-        const health = await fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then((r) => r.json());
-        expect(BigInt(health.runtime.chainTime)).toBeGreaterThanOrEqual(BigInt(deadline));
-        expect(BigInt(health.runtime.chainTime)).toBeLessThan(BigInt(row.batchExpiry.value));
+        const lockup = lockupSats(locked.verified.params);
+        const owed = lockup - loanSats(locked.verified.params);
+        // Payout, emulator packet, anchor: the payer is repaid through custody.
+        expect(tx.outputsLength).toBe(3);
+        expectReceipt(tx, 0, lockup, live.info.operatorKey);
+        expect(row.batchExpiry).toBeUndefined();
+        const observedHealth = await health();
+        expect(BigInt(observedHealth.runtime.chainTime)).toBeGreaterThanOrEqual(BigInt(deadline));
         expect((await admin("status")).exposure.outstandingSats).toBe("0");
-        const expected = before;
+        const custody = await poll(
+            "custody row for the payer's sats",
+            async () => (await health()).custody,
+            (value) => value?.rows === custodyBefore + 1,
+        );
+        expect(BigInt(custody.owedSats)).toBeGreaterThanOrEqual(owed);
+        const expected = { ...before, sats: before.sats + owed };
         expect(
             await poll(
                 "spendable recovery repayment",

@@ -14,6 +14,7 @@ import {
     addressFor,
     args,
     assetArgs,
+    DEADLINE,
     fundingInputs,
     HRP,
     info,
@@ -67,8 +68,8 @@ describe("verifyQuote — happy path", () => {
         expect(v.params.receiverKey).toEqual(receiverKey);
         expect(v.params.dust).toBe(330n);
         expect(v.params.topup).toBe(330n);
-        expect(v.params.locktime).toBe(800_000n);
-        expect(v.script.scripts).toHaveLength(5);
+        expect(v.params.locktime).toBe(DEADLINE);
+        expect(v.script.scripts).toHaveLength(6);
     });
 
     it("returns a script whose own address equals the quoted one", () => {
@@ -301,9 +302,7 @@ describe("verifyQuote — exact paymentSats", () => {
         expect(v.params).toMatchObject({ topup: 330n, paymentSats: 100n });
     });
 
-    // An operator predating whole-dust advances quotes the partial one.
     it.each([
-        ["a partial advance", { topup: 230n }],
         ["a different payment", { paymentSats: 99n }],
         ["no payment", {}],
     ])("rejects %s", (_name, p) => {
@@ -331,15 +330,16 @@ describe("verifyQuote — caller authorisation bounds", () => {
     });
 
     it("rejects a feeSats above maxFeeSats", () => {
+        const a = args();
         rejects(
-            { quote: { ...quote(), fare: { currency: "sats", units: "11" } } },
+            { expect: { ...a.expect, maxFare: { currency: "sats", units: 329n } } },
             "FEE_ABOVE_MAX",
         );
     });
 
     it("rejects a locktime below minLocktime", () => {
         const a = args();
-        rejects({ expect: { ...a.expect, minLocktime: 800_001n } }, "LOCKTIME_BELOW_MIN");
+        rejects({ expect: { ...a.expect, minLocktime: DEADLINE + 1n } }, "LOCKTIME_BELOW_MIN");
     });
 });
 
@@ -407,15 +407,20 @@ describe("verifyQuote — independent address rebuild", () => {
             {
                 quote: {
                     ...quote(),
-                    params: { ...quoteParamsToWire(params()), locktime: "900000" },
+                    params: {
+                        ...quoteParamsToWire(params()),
+                        locktime: (DEADLINE + 1n).toString(),
+                    },
                 },
             },
             "COVENANT_ADDRESS_MISMATCH",
         );
     });
 
-    it("rejects a vtxoMinAmount other than the one the address was derived under", () => {
-        rejects({ vtxoMinAmount: VTXO_MIN + 1n }, "COVENANT_ADDRESS_MISMATCH");
+    it("keeps the address stable under a different vtxoMinAmount", () => {
+        const base = verifyQuote(args());
+        const other = verifyQuote({ ...args(), vtxoMinAmount: VTXO_MIN + 1n });
+        expect(other.script.pkScript).toEqual(base.script.pkScript);
     });
 
     it("rejects a different bech32 prefix", () => {
@@ -457,8 +462,8 @@ describe("verifyQuote — independent lockup rebuild", () => {
         expect(() => verifyQuote({ ...assetArgs(), assetUnits: 1n })).toThrow();
     });
 
-    it("rejects a lockup minimum inconsistent with advertised info", () => {
-        expect(() => verifyQuote({ ...args(), vtxoMinAmount: VTXO_MIN + 1n })).toThrow();
+    it("rejects a lockup minimum above the dust the covenant lends", () => {
+        expect(() => verifyQuote({ ...args(), vtxoMinAmount: 331n })).toThrow();
     });
 });
 

@@ -290,7 +290,7 @@ describe("createSwapFillQuote", () => {
                 d,
                 body({
                     receiveQuoteId: "receive-1",
-                    contributionSats: "329",
+                    contributionSats: "330",
                     maxFare: { currency: "sats", units: "30" },
                     solverInputs: [
                         {
@@ -309,9 +309,9 @@ describe("createSwapFillQuote", () => {
             );
             expect(
                 result.graph.outputs.find((output) => output.role === "sponsor-change")?.sats,
-            ).toBe("19675");
+            ).toBe("19674");
             expect(builder.built[0]!.sponsor).toMatchObject({
-                netContributionSats: 329n,
+                netContributionSats: 330n,
                 combineSatsFareWithChange: true,
                 fare: { sats: 4n },
             });
@@ -319,7 +319,7 @@ describe("createSwapFillQuote", () => {
             const advance = storedAdvances.get("receive-1")!;
             expect(fill.receiveQuoteId).toBe("receive-1");
             expect(quotes.get("receive-1")).toMatchObject({ state: "bound", boundFillId: fill.id });
-            expect(advance).toMatchObject({ state: "locking", topup: 329n, assetUnits: 5n });
+            expect(advance).toMatchObject({ state: "locking", topup: 330n, assetUnits: 5n });
             expect(advance.outpoint).toBeUndefined();
             expect(reservations.listForAdvance("receive-1")).toEqual([TAXI_0]);
             const source = readFundingSource(advance.unsignedLockupTx);
@@ -363,7 +363,6 @@ describe("createSwapFillQuote", () => {
         const delegate = vi.fn(async () => "ark1qstranger");
         await expect(
             createBoundJointFill({
-                covenantVersion: 2,
                 delegatee: {
                     client: { delegate },
                     registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
@@ -377,14 +376,13 @@ describe("createSwapFillQuote", () => {
         const seen: string[] = [];
         // The v2 covenant is deterministic, so derive its address from a throwaway
         // quote: the stub has to answer with it before the advance exists.
-        const probe = insertReceiveQuote({ wantAmount: 5n, covenantVersion: 2 });
+        const probe = insertReceiveQuote({ wantAmount: 5n });
         const expected = probe.covenant
             .address(probe.cfg.addressHrp, probe.cfg.serverPubkey)
             .encode();
         probe.db.close();
 
         const bound = await createBoundJointFill({
-            covenantVersion: 2,
             delegatee: {
                 client: {
                     delegate: async (templateId, variables) => {
@@ -397,35 +395,20 @@ describe("createSwapFillQuote", () => {
             },
         });
         expect(bound.advance.covenantAddress).toBe(expected);
-        expect(bound.advance.covenantVersion).toBe(2);
         expect(seen).toEqual(["b".repeat(64)]);
         bound.db.close();
-
-        const v1 = await createBoundJointFill({
-            delegatee: {
-                client: {
-                    delegate: async () => {
-                        throw new Error("a v1 covenant has no renew leaf to register");
-                    },
-                },
-                registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },
-            },
-        });
-        expect(v1.advance.covenantVersion).toBeUndefined();
-        v1.db.close();
     });
 
     // The delegatee is idempotent on the watch, so registering on a replay is what
     // repairs a first attempt that committed the advance and then failed to register.
     it("registers a v2 renewal watch again when the same operation is replayed", async () => {
-        const probe = insertReceiveQuote({ wantAmount: 5n, covenantVersion: 2 });
+        const probe = insertReceiveQuote({ wantAmount: 5n });
         const expected = probe.covenant
             .address(probe.cfg.addressHrp, probe.cfg.serverPubkey)
             .encode();
         probe.db.close();
         const delegate = vi.fn(async () => expected);
         const bound = await createBoundJointFill({
-            covenantVersion: 2,
             delegatee: {
                 client: { delegate },
                 registration: { artifactId: "a".repeat(64), templateId: "b".repeat(64) },

@@ -210,7 +210,6 @@ async function boot(blocker = "vtxo_expiry_headroom", failure?: string, chainTim
         id: request.advanceId,
         state: "locked",
         ...request.params,
-        batchExpiry: request.funding.batchExpiry,
         recoveryLocktime: { kind: "time", value: BigInt(NOW) },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,
@@ -444,7 +443,9 @@ describe("CLI recovery under admission inventory degradation", () => {
             );
             expect(h.submissions).toBe(1);
             expect(h.runtime!.safety().chainTime).toBe(BigInt(NOW + 1));
-            expect(h.advance.batchExpiry!.value - h.runtime!.safety().chainTime!).toBe(86399n);
+            // The funding coin's expiry, not the advance's: a covenant advance
+            // stores none, and this blocker is about the coins.
+            expect(BigInt(NOW + 86400) - h.runtime!.safety().chainTime!).toBe(86399n);
             const recovering = await createRoutes(h.deps!).request(`/v1/transfers/${h.advance.id}`);
             expect(await recovering.json()).toMatchObject({ state: "recovering" });
             await expectAdmissionClosed(h, blocker);
