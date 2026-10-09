@@ -455,7 +455,12 @@ export function covenantDeadline(
     now: number,
 ): { kind: "time"; value: bigint } {
     const value = BigInt(now) + config.covenantDeadlineSeconds;
-    if (value < 500_000_000n || value > 0xffff_ffffn || value <= safety.chainTime!)
+    if (
+        safety.chainTime === null ||
+        value < 500_000_000n ||
+        value > 0xffff_ffffn ||
+        value <= safety.chainTime
+    )
         throw new ServiceError(
             ErrorCode.NoLocktimeHeadroom,
             503,

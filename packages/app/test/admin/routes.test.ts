@@ -814,7 +814,7 @@ describe("GET /admin/api/advances", () => {
                 batchExpiry: null,
                 remaining: 0n,
                 severity: index === 200 ? ("critical" as const) : ("expired" as const),
-                code: index === 200 ? "recovery_deadline_critical" : "covenant_unspent_at_expiry",
+                code: index === 200 ? "covenant_renewal_missing" : "covenant_unspent_at_expiry",
             });
         }
         h.setSweeper({ deadlines } as any);

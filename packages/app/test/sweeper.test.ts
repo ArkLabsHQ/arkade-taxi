@@ -52,6 +52,13 @@ const locked = (id: string, locktime: bigint) =>
         }),
     );
 
+const seenAt =
+    (expiries: Record<string, bigint>): SweeperDeps["observed"] =>
+    (a) =>
+        expiries[a.id] === undefined
+            ? undefined
+            : { swept: false, expiry: { kind: "time", value: expiries[a.id]! } };
+
 beforeEach(() => {
     advances = new MemoryAdvances();
     recovery = new FakeRecovery();
@@ -122,7 +129,13 @@ describe("tick", () => {
                 recoveryPhase: "submitted",
             }),
         );
-        const sweeper = createSweeper(deps());
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: seenAt({
+                critical: DEADLINE + cfg.recoveryCriticalSeconds,
+                expired: DEADLINE - 100n,
+            }),
+        });
         await sweeper.tick(HEIGHT, BigInt(NOW));
         expect(paused).toBe(true);
         expect(sweeper.status().blockers).toEqual(
@@ -143,7 +156,10 @@ describe("tick", () => {
                 failureCode,
             });
         advances.insert(pastDeadline("unrolled", "covenant_unrolled"));
-        const sweeper = createSweeper(deps());
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: seenAt({ unrolled: DEADLINE - 100n, live: DEADLINE - 100n }),
+        });
 
         await sweeper.tick(HEIGHT, BigInt(NOW));
         expect(recovery.seen).toEqual([]);
@@ -158,6 +174,20 @@ describe("tick", () => {
         expect(sweeper.status().blockers).toEqual([
             expect.objectContaining({ advanceId: "live", severity: "expired" }),
         ]);
+    });
+
+    it("reclaims a coin it has not observed without alarming on the CLTV", async () => {
+        locked("unseen", DEADLINE - 100n);
+        const sweeper = createSweeper(deps());
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(recovery.seen).toEqual(["unseen"]);
+        expect(paused).toBe(false);
+        expect(sweeper.status().blockers).toEqual([]);
+        expect(sweeper.status().nearestDeadline.time).toMatchObject({
+            advanceId: "unseen",
+            severity: "eligible",
+            code: "covenant_expiry_unobserved",
+        });
     });
 
     it("keeps a persisted deterministic recovery quarantine blocking after restart", async () => {
@@ -192,7 +222,7 @@ describe("tick", () => {
 
     it.each([
         [BigInt(NOW), 100_000n, "eligible", "recovery_submission_ambiguous", false],
-        [BigInt(NOW), 2n, "critical", "recovery_deadline_critical", true],
+        [BigInt(NOW), 2n, "critical", "covenant_renewal_missing", true],
         [BigInt(NOW), 0n, "expired", "covenant_unspent_at_expiry", true],
         [null, 100_000n, "eligible", "chain_time_unavailable", false],
     ] as const)(
@@ -214,6 +244,7 @@ describe("tick", () => {
             const sweeper = createSweeper({
                 ...deps(),
                 recovery: { recover: async () => undefined },
+                observed: seenAt({ retrying: DEADLINE + headroom }),
             });
 
             const result = await sweeper.tick(HEIGHT, time);
@@ -244,7 +275,10 @@ describe("tick", () => {
                 recoveryLastAttemptAt: NOW - 1,
             }),
         );
-        const sweeper = createSweeper(deps());
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: seenAt({ "expired-failure": DEADLINE - 100n }),
+        });
         await sweeper.tick(HEIGHT, BigInt(NOW));
         expect(sweeper.status().blockers).toEqual([
             expect.objectContaining({
@@ -271,13 +305,16 @@ describe("tick", () => {
                 failureCode: "recovery_artifact_invalid",
             }),
         );
-        const sweeper = createSweeper(deps());
+        const sweeper = createSweeper({
+            ...deps(),
+            observed: seenAt({ "critical-failure": DEADLINE + cfg.recoveryCriticalSeconds }),
+        });
         await sweeper.tick(HEIGHT, BigInt(NOW));
         expect(sweeper.status().blockers).toEqual([
             expect.objectContaining({
                 advanceId: "critical-failure",
                 severity: "critical",
-                code: "recovery_deadline_critical",
+                code: "covenant_renewal_missing",
             }),
         ]);
         expect(sweeper.status().lastRecoveryError?.code).toBe("recovery_artifact_invalid");
@@ -499,6 +536,7 @@ describe("resilience", () => {
         );
         const sweeper = createSweeper({
             ...deps(),
+            observed: seenAt({ "expired-now": DEADLINE }),
             recovery: {
                 recover: async () => {
                     const current = advances.get("expired-now")!;

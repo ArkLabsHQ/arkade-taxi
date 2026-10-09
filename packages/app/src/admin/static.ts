@@ -2009,10 +2009,9 @@ const BLOCKER_GROUPS = [
         "covenant_unspent_at_expiry",
     ],
     [
-        "A payment's recovery deadline is very close, so the Taxi paused new payments.",
-        "recovery_deadline_critical",
+        "The Taxi has not yet read a payment's coin, so it cannot tell how close that coin is to expiry.",
+        "covenant_expiry_unobserved",
     ],
-    ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
     [
         "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
         "covenant_renewal_missing",

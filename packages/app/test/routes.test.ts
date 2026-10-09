@@ -1654,7 +1654,7 @@ describe("GET /ready", () => {
                     batchExpiry: BigInt(NOW + 7_200),
                     remaining: 7_200n,
                     severity: "critical",
-                    code: "recovery_deadline_critical",
+                    code: "covenant_renewal_missing",
                 },
             ],
         };

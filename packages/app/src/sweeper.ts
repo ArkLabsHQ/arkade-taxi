@@ -172,6 +172,10 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 code: `chain_${racing.kind}_unavailable`,
             };
         const remaining = racing.value - chainClock;
+        // Unobserved, there is no coin expiry to race. The CLTV only says when a
+        // reclaim may start, so alarming on it would latch a pause for nothing.
+        if (!expiry)
+            return { ...at, remaining, severity: "eligible", code: "covenant_expiry_unobserved" };
         const severity =
             remaining <= 0n
                 ? "expired"
@@ -193,21 +197,13 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             ...at,
             remaining,
             severity: swept && severity !== "expired" ? "critical" : severity,
-            // Which clock is being raced decides the remedy: an observed coin
-            // expiry calls for a renewal, the deadline itself for a reclaim.
             code: swept
                 ? "covenant_swept_before_deadline"
                 : severity === "expired"
                   ? "covenant_unspent_at_expiry"
-                  : severity === "critical"
-                    ? expiry
-                        ? renewal
-                        : "recovery_deadline_critical"
-                    : severity === "warning"
-                      ? expiry
-                          ? renewal
-                          : "recovery_deadline_warning"
-                      : "recovery_eligible",
+                  : severity === "critical" || severity === "warning"
+                    ? renewal
+                    : "recovery_eligible",
         };
     };
 

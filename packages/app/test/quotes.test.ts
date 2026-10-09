@@ -5,6 +5,7 @@ import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { ServiceError } from "../src/errors.js";
 import {
+    covenantDeadline,
     createQuote,
     FakeLockupBuilder,
     getTransfer,
@@ -442,6 +443,12 @@ describe("createQuote", () => {
         expect(e.code).toBe("no_locktime_headroom");
         expect(e.status).toBe(503);
         expect(advances.rows.size).toBe(0);
+    });
+
+    it("refuses a deadline it cannot check against an unknown chain time", () => {
+        expect(() => covenantDeadline({ chainTime: null }, config(), NOW)).toThrow(
+            /not a future time-domain locktime/,
+        );
     });
 });
 
