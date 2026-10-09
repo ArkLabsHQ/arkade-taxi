@@ -173,7 +173,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             };
         const remaining = racing.value - chainClock;
         // Unobserved, there is no coin expiry to race. The CLTV only says when a
-        // reclaim may start, so alarming on it would latch a pause for nothing.
+        // reclaim may start (`remaining` goes negative once it is due), so alarming
+        // on it would latch a pause for nothing.
         if (!expiry)
             return { ...at, remaining, severity: "eligible", code: "covenant_expiry_unobserved" };
         const severity =
@@ -320,10 +321,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             oldestUnsweptLocktime = active.reduce<SweeperStatus["oldestUnsweptLocktime"]>(
                 (oldest, advance) => {
                     const recovery = advance.recoveryLocktime;
-                    // "time" is exact for v2: validateParams refuses a height-domain v2 locktime.
                     if (
                         !recovery ||
-                        recovery.kind !== (advance.batchExpiry?.kind ?? "time") ||
+                        recovery.kind !== "time" ||
                         recovery.value !== advance.locktime
                     )
                         return oldest;

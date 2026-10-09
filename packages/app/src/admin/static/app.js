@@ -193,7 +193,7 @@ const BLOCKER_GROUPS = [
         "covenant_unspent_at_expiry",
     ],
     [
-        "The Taxi has not yet read a payment's coin, so it cannot tell how close that coin is to expiry.",
+        "The Taxi has not yet read a payment's coin, so it cannot tell how close that coin is to expiry. Nothing is paused.",
         "covenant_expiry_unobserved",
     ],
     [
