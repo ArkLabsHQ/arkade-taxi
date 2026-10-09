@@ -3,6 +3,7 @@ import { expect } from "vitest";
 import { signLockup } from "@arkade-taxi/client";
 import { Extension, Transaction, type ExtendedVirtualCoin } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
+import { normalizeExpiry } from "../packages/app/src/arkade/providers.js";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { preEffectRequest } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
@@ -30,6 +31,15 @@ const rowFor = async (id: string) =>
 
 const lockupTxid = (offered: Awaited<ReturnType<typeof quoteFor>>) =>
     Transaction.fromPSBT(base64.decode(offered.verified.envelope.arkTx)).id;
+
+/** A covenant advance stores no expiry: the coin is the only clock to race. */
+const covenantExpiry = async (live: Live, locked: Locked) => {
+    const { vtxos } = await live.indexer.getVtxos({ outpoints: [locked.lockup.outpoint] });
+    expect(vtxos).toHaveLength(1);
+    const expiry = normalizeExpiry(vtxos[0]!);
+    expect(expiry.kind).toBe("time");
+    return Number(expiry.value);
+};
 
 const emulatorSubmits = async () => (await control("events")).submissionCounts.emulator;
 
@@ -333,13 +343,13 @@ liveScenario("stale-provider-identity", async () => {
 
 liveScenario("restart-locked-recovery", async () => {
     const live = await openLive();
-    await admin("policy", { locktimeMarginSeconds: 108000 });
     const locked = await lock(
         live,
         await quoteFor(live, "receiverSats", await sizedSender(live, true), true, true),
     );
     expect(locked.request.assetUnits).toBeUndefined();
     expect(locked.verified.envelope.assetUnits).toBe("100");
+    const expiry = await covenantExpiry(live, locked);
     const before = await rowFor(locked.quote.transferId);
     await restart();
     await ready();
@@ -352,15 +362,15 @@ liveScenario("restart-locked-recovery", async () => {
         (value) => value.state === "recovered",
         120_000,
     );
-    const { row, tx } = await terminal(live, locked, "recovered", recovered.spentTxid!);
+    const { tx } = await terminal(live, locked, "recovered", recovered.spentTxid!);
     expect(
         Extension.fromTx(tx)
             .getAssetPacket()!
             .groups[0]!.outputs.map((output) => [output.vout, output.amount]),
-    ).toEqual([[1, 100n]]);
+    ).toEqual([[0, 100n]]);
     expect(await emulatorSubmits()).toBe(submits + 1);
     const tip = await live.actors.sender.wallet.onchainProvider.getChainTip();
-    expect(BigInt(tip.time)).toBeLessThan(BigInt(row.batchExpiry.value));
+    expect(tip.time).toBeLessThan(expiry);
 });
 
 liveScenario("near-expiry-auto-pause", async () => {
@@ -371,8 +381,8 @@ liveScenario("near-expiry-auto-pause", async () => {
         senderInputs: [fundingOf(await sizedSender(live))],
     };
     const row = await rowFor(locked.quote.transferId);
-    expect(row.batchExpiry.kind).toBe("time");
-    const expiry = Number(row.batchExpiry.value);
+    expect(row.batchExpiry).toBeUndefined();
+    const expiry = await covenantExpiry(live, locked);
     await control("configure", {
         target: "emulator",
         path: "/v1/tx",
@@ -418,7 +428,7 @@ liveScenario("near-expiry-auto-pause", async () => {
         });
         if (severity === "critical") {
             expect(snapshot.paused).toBe(true);
-            expect(snapshot.blockers).toContain("recovery_deadline_critical");
+            expect(snapshot.blockers).toContain("covenant_renewal_missing");
         }
         await boundary(`deadline-${severity}`);
         const { vtxos } = await live.indexer.getVtxos({ outpoints: [locked.lockup.outpoint] });
@@ -433,6 +443,6 @@ liveScenario("near-expiry-auto-pause", async () => {
     );
     await terminal(live, locked, "recovered", recovered.spentTxid!);
     const tip = await live.actors.sender.wallet.onchainProvider.getChainTip();
-    expect(BigInt(tip.time)).toBeLessThan(BigInt(row.batchExpiry.value));
+    expect(tip.time).toBeLessThan(expiry);
     expect((await admin("status")).exposure.outstandingSats).toBe("0");
 });

@@ -138,12 +138,16 @@ the SDK's own background settlement, with no operator action, into usable
 inventory. The stack's VTXOs live two days, inside the SDK's three-day renewal
 default, so the harness sets `TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS` to 30 hours:
 above the one-day expiry headroom, and at least 12 hours short of the lifetime,
-or the Taxi stops renewal and closes admission.
+or the Taxi stops renewal and closes admission. The reclaim deadline is
+wall-clock from the quote and owes the funding nothing, so the shipped 100-day
+default would expire every coin in the stack the first time a scenario mined
+past one: the harness sets `TAXI_COVENANT_DEADLINE_SECONDS` to four hours, which
+is how far ahead of the wall clock those scenarios leave chain time.
 It also covers lost submit responses, duplicate requests, stale provider
-identity, warning/critical recovery deadlines before VTXO expiry, and one
-two-owner offer fill in which a solver and a sponsor each sign only their own
-inputs while the offer covenant is co-signed by nobody but the emulator and the
-Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
+identity, the warning and critical alarms a covenant raises as the coin it sits
+on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
+sponsor each sign only their own inputs while the offer covenant is co-signed by
+nobody but the emulator and the Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
 once the exit delay matures on median time past. The package skips the 330-sat
 covenant as uneconomic, so it reaches the chain only because the Taxi's change

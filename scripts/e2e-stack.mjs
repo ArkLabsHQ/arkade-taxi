@@ -92,6 +92,9 @@ const MIN_EXPIRY_HEADROOM_SECONDS = "86400";
 const VTXO_RENEWAL_THRESHOLD_SECONDS = "108000";
 const RECOVERY_BROADCAST_SECONDS = "43200";
 const RECOVERY_CRITICAL_SECONDS = "7200";
+// How far ahead of the wall clock a scenario mining past one deadline leaves
+// chain time, so the shipped 100-day default expires every coin in the stack.
+const COVENANT_DEADLINE_SECONDS = "14400";
 const SERVICES = [
     "bitcoin",
     "bitcoin-miner",
@@ -1044,6 +1047,7 @@ await import("/app/dist/cli.js");
             TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: VTXO_RENEWAL_THRESHOLD_SECONDS,
             TAXI_RECOVERY_BROADCAST_SECONDS: RECOVERY_BROADCAST_SECONDS,
             TAXI_RECOVERY_CRITICAL_SECONDS: RECOVERY_CRITICAL_SECONDS,
+            TAXI_COVENANT_DEADLINE_SECONDS: COVENANT_DEADLINE_SECONDS,
             TAXI_RECONCILE_INTERVAL_MS: "5000",
             TAXI_LOG_LEVEL: "debug",
         });
@@ -1241,6 +1245,7 @@ await import("/app/dist/cli.js");
             TAXI_VTXO_RENEWAL_THRESHOLD_SECONDS: VTXO_RENEWAL_THRESHOLD_SECONDS,
             TAXI_RECOVERY_BROADCAST_SECONDS: RECOVERY_BROADCAST_SECONDS,
             TAXI_RECOVERY_CRITICAL_SECONDS: RECOVERY_CRITICAL_SECONDS,
+            TAXI_COVENANT_DEADLINE_SECONDS: COVENANT_DEADLINE_SECONDS,
             TAXI_RECONCILE_INTERVAL_MS: "5000",
         });
         const vitestEntry = join(REPO, "node_modules", "vitest", "vitest.mjs");

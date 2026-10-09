@@ -164,7 +164,6 @@ liveScenario("premature-recovery-rejected", async () => {
 liveScenario("sweeper-recovery-after-locktime", async () => {
     const live = await openLive();
     try {
-        await admin("policy", { locktimeMarginSeconds: 129600 });
         const before = await walletBalance(live.actors.operator, live.fixture.asset.assetId);
         const custodyBefore = (await health()).custody?.rows ?? 0;
         const locked = await lock(
@@ -199,7 +198,8 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         expect(row.recoveryPhase).toBe("submitted");
         const lockup = lockupSats(locked.verified.params);
         const owed = lockup - loanSats(locked.verified.params);
-        expect(tx.outputsLength).toBe(2);
+        // Payout, emulator packet, anchor: the payer is repaid through custody.
+        expect(tx.outputsLength).toBe(3);
         expectReceipt(tx, 0, lockup, live.info.operatorKey);
         expect(row.batchExpiry).toBeUndefined();
         const observedHealth = await health();
