@@ -182,8 +182,12 @@ from a 1,000-sat coin whose remainder returns to the sender as change.
 
 Taxi's production proceeds collector consolidates canonical subdust receipts
 with an ordinary operator coin using the standard SDK wallet settlement path.
-The live test waits for that service-owned collection, checks the receipt's
-settlement commitment and its spendable wallet output. No test-only recovery
+The sponsored rail is what still hosts a fare below dust, so `sponsored-direct-send`
+is the scenario that waits for that service-owned collection and checks the
+receipt's settlement commitment and its spendable wallet output. A covenant
+hosts its asset fare at dust and merges the operator change onto it, so every
+payout on that rail is spendable as it lands and the claim scenarios assert the
+receipt rather than a collection. No test-only recovery
 or manual consolidation is performed. The zero-default collection fee cap is
 zero on regtest. The harness explicitly sets all four upstream intent fee
 programs to `0.0`, verifies the advertised values and records them in `stack.json`;

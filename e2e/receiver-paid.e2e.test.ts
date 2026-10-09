@@ -552,9 +552,13 @@ liveScenario("receiver-paid-mode1-reclaim", async () => {
             async () => (await health()).custody,
             (value) => value?.rows === custodyBefore + 1,
         );
-        expect(custody.coverageAssets.map((item: { units: string }) => item.units)).toContain(
-            DELIVERED.toString(),
-        );
+        // coverageAssets is held less owed: zero is owed in full and held in full.
+        const wire = taxiAssetId(minted.assetId);
+        expect(custody.coverageAssets).toContainEqual({
+            assetId: { txid: hex.encode(wire.txid), groupIndex: wire.groupIndex },
+            units: "0",
+        });
+        expect(custody.shortfall).toBe(false);
         evidence("receiver-paid-mode1-reclaim", {
             assetId: minted.assetId,
             transferId: carried.covenant.quote.transferId,
