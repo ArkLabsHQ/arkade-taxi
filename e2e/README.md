@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-four live scenarios in the main run, one isolated scenario, and two
+Twenty-five live scenarios in the main run, one isolated scenario, and two
 integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
@@ -37,7 +37,7 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-20 named scenarios and both integrity assertions plus the isolated run below,
+21 named scenarios and both integrity assertions plus the isolated run below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
 The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
@@ -64,6 +64,17 @@ records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator
 depends on.
+
+### The batch reclaim scenario
+
+`v2-covenant-batch-reclaim` is the measurement for a batch-settled spend that is
+not a renewal. It stands up its own in-process Taxi with a 120-second
+`covenantDeadlineSeconds`, moves canonical median time past that deadline, then
+registers a `reclaimWhole` intent paying the whole lockup to the operator's
+payout script. Its `batch-reclaim-r2.json` artifact is written even when the
+batch fails, and records the consumed coin, the forfeit `spentBy` names and the
+leaf its input 0 selected, and every coin at the operator's payout script —
+exactly the evidence the watcher classifies a batch reclaim from.
 
 ### Isolated scenarios
 
@@ -125,7 +136,7 @@ having asserted nothing is worse than no suite.
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
 - `assert-ran.mjs` validates Vitest's JSON report independently: the shared
-  run's twenty-four scenarios and both integrity assertions, and the isolated
+  run's twenty-five scenarios and both integrity assertions, and the isolated
   run's scenario, must pass with zero failures, skips, or todos.
 
 ## What the scenarios prove

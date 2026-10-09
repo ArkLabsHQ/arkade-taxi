@@ -17,6 +17,9 @@ class LiveSequencer extends BaseSequencer {
             // Its own operator key and ledger, but it settles a batch, so it
             // stays ahead of the scenarios that move chain time.
             "renewal",
+            // Moves chain time too, but only past its own short covenant
+            // deadline, so it stays ahead of the scenarios that jump a day.
+            "batch-reclaim",
             "refund-recovery",
             "resilience",
             "suite-integrity",
