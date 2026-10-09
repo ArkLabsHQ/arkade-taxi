@@ -64,7 +64,6 @@ export const fundingInputs = (): FundingInputValue[] => [
     {
         txid: "aa".repeat(32),
         vout: 2,
-        // Clears the covenant dust floor: every payout of its must.
         value: 660n,
         tapTree: senderTree.encode(),
         spendLeaf: senderTree.scripts[0],
@@ -128,8 +127,6 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
         {
             senderInputs,
             senderSats,
-            // Exactly what it owes: operator change would now share the payout
-            // script with the fare, neither being able to take a sub-dust form.
             funding: {
                 inputs: [fundingCoin({ value: Number(operatorOwes(p, fare, opts)) })],
                 totalValue: operatorOwes(p, fare, opts),

@@ -49,10 +49,8 @@ export function admit(
     // spendable coin; a bitcoin payment rides beside it in the covenant.
     const topup = dust;
     const paymentSats = isBitcoinTransfer ? (req.paymentSats ?? req.senderSats) : 0n;
-    // Deliberately tighter than the covenant, which only requires a positive
-    // payment: the reclaim leaf holds the payer's sats until the wall-clock
-    // deadline, so admission bounds how much can sit there and keeps the
-    // payment spendable on its own if a refund ever has to stand it up.
+    // Tighter than the covenant on purpose: the reclaim leaf holds the payer's
+    // sats until the deadline, so admission bounds how much can sit there.
     if (
         (paymentSats !== 0n || req.paymentSats !== undefined) &&
         (paymentSats < vtxoMinAmount || paymentSats >= dust || paymentSats > req.senderSats)

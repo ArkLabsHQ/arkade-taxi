@@ -50,8 +50,6 @@ it.each([false, true])(
             ),
         ]).serialize();
         if (assetFare) req.fare = { currency: "asset", assetId: req.params.assetId, units: 3n };
-        // Fare and change would otherwise share the payout script: both clear
-        // dust now, so neither takes the distinguishing sub-dust form.
         req.funding.totalValue = req.params.topup + config().dust;
         req.funding.inputs[0]!.value = Number(req.funding.totalValue);
         req.covenantAddress = new DustCovenantScript({
@@ -181,7 +179,6 @@ it.each([false, true])(
                     submitTx: async (arkTx, checkpoints) => {
                         const tx = Transaction.fromPSBT(base64.decode(arkTx));
                         const group = Extension.fromTx(tx).getAssetPacket()!.groups[0]!;
-                        // The reclaim pays the whole lockup as one output.
                         expect(group.outputs.map((output) => [output.vout, output.amount])).toEqual(
                             [[0, expected]],
                         );

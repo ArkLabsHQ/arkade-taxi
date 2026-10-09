@@ -39,8 +39,6 @@ export function buildRequest(): LockupBuildRequest {
         emulatorKey: config().emulatorPubkey,
         vtxoMinAmount: 10n,
     });
-    // The covenant deadline is wall-clock, so the funding evidence it is checked
-    // against lives in the time domain too.
     const expiry = V2_DEADLINE + 86_401n;
     return {
         advanceId: "golden",

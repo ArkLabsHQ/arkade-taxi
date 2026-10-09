@@ -2184,7 +2184,6 @@ describe("refund", () => {
         expect(tx.getInput(0).tapScriptSig).toHaveLength(1);
     });
 
-    // The dust floor is what keeps a refund clear of a third OP_RETURN.
     it("keeps both refund payouts clear of the SDK two-OP_RETURN ceiling", async () => {
         const opReturn = { script: new Uint8Array([0x6a]), amount: 0n };
         expect(() => buildOffchainTx([], [opReturn, opReturn, opReturn], unroll)).toThrow(

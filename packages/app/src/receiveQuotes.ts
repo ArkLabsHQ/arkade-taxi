@@ -453,8 +453,6 @@ async function createReserved(
     deps.receiveQuotes.insert({
         quote,
         expectedPolicyRevision: initial.revision,
-        // The budget is measured on the deadline's own wall clock rather than
-        // the funding floor's.
         recoveryExecutionBudget: {
             kind: "time",
             value: deps.config.recoveryBroadcastSeconds,

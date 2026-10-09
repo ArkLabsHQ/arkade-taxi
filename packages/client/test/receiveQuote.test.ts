@@ -25,7 +25,6 @@ import {
 
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
 const CREATED_AT = 1_000_000_000;
-/** The covenant's wall-clock deadline: the quote time plus 100 days. */
 const DEADLINE = BigInt(CREATED_AT) + 8_640_000n;
 const receiverAddress = new ArkAddress(serverKey, receiverKey, HRP).encode();
 const params = {

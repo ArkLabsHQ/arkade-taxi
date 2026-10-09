@@ -99,7 +99,6 @@ export function insertReceiveQuote(opts: {
     db?: Database;
 }): InsertedReceiveQuote {
     const db = opts.db ?? openDatabase(":memory:");
-    // The quote lends the whole dust and its CLTV is wall-clock.
     const cfg = config({ vtxoMinAmount: 330n });
     const policies = new PolicyRepository(db);
     const base = basePolicy();

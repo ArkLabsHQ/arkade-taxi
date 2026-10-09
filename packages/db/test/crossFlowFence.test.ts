@@ -77,7 +77,6 @@ const quote = (overrides: Partial<Advance> = {}): Advance => {
         expiresAt: 60,
         ...overrides,
     };
-    // A covenant advance keeps no batch expiry and its CLTV is wall-clock.
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,

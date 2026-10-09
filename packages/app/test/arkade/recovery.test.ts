@@ -82,9 +82,7 @@ const sourceAdvance = (
     > = {},
     fareSats = 330n,
 ) => {
-    // The covenant locktime is always a wall-clock deadline, NOW + 100 days, so
-    // it is strictly after the createdAt the startup invariant compares it with.
-    // `kind` now picks only the domain of the funding coins it outlives.
+    // NOW + 100 days: strictly after the createdAt the startup invariant checks.
     const locktime = 1_757_000_000n + 8_640_000n;
     const cfg = config();
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
@@ -123,8 +121,6 @@ const sourceAdvance = (
     const senderInput = operatorFundingInput(
         fundingCoin({
             txid: "11".repeat(32),
-            // The sender's change is pure change here, so it must clear the
-            // covenant dust floor rather than ride as a sub-dust OP_RETURN.
             value: 330 + Number(terms.paymentSats ?? 0n),
             script: hex.encode(senderTree.pkScript),
             tapTree: senderTree.encode(),
@@ -402,8 +398,6 @@ describe("recovery graph", () => {
         expect(startupError(preparedRecovery(row))).toBeUndefined();
     });
 
-    // The deadline is a time-domain CLTV, strictly after the lockup, and bounded
-    // by neither the funding coins' domain nor their expiry.
     it("holds the deadline to its own invariant, not the funding coins'", () => {
         const row = sourceAdvance("time", false, { topup: 330n, paymentSats: 20n });
         expect(() => assertRecoveryStartupInvariants([row], config())).not.toThrow();
@@ -493,8 +487,6 @@ describe("recovery graph", () => {
         const intent = buildRecoveryIntent(persisted, config());
         const tx = Transaction.fromPSBT(base64.decode(intent.arkTx));
         const lockup = lockupSats(persisted);
-        // reclaimWhole carries the asset to its single operator output; the
-        // receiver's claim on it lives in the custody ledger instead.
         expect(tx.getOutput(0)).toEqual({
             amount: lockup,
             script: payoutPkScript(persisted.operatorKey, lockup, persisted.dust),

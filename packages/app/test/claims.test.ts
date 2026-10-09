@@ -168,8 +168,6 @@ describe("listReceiverClaims", () => {
                     covenantAddress: row.covenantAddress,
                     outpoint: { txid: "cd".repeat(32), vout: 0 },
                     fare: { currency: "sats", units: "330" },
-                    // No batch expiry is stored, so the claim counts down to the
-                    // deadline itself.
                     batchExpiry: { kind: "time", value: row.locktime.toString() },
                     recoveryLocktime: { kind: "time", value: row.locktime.toString() },
                 },

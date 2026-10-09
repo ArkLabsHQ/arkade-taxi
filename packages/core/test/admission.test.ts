@@ -323,8 +323,6 @@ describe("paymentSats", () => {
         expect(reasonOf(ask(9n, {}, policy(), 10n))).toBe("invalid_payment_sats");
     });
 
-    // The covenant accepts any positive payment; admission does not. The gap is
-    // policy, so it is pinned here rather than left to look like a v1 leftover.
     it("stays tighter than the covenant's own positive-payment rule", () => {
         for (const paymentSats of [1n, DUST, DUST * 2n]) {
             expect(() =>

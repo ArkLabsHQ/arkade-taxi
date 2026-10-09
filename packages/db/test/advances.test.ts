@@ -36,8 +36,6 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    // A covenant advance keeps no batch expiry and its CLTV is wall-clock; only
-    // the sponsored rail, which has no covenant, carries an expiry.
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -586,8 +584,6 @@ describe("round-trip fidelity", () => {
 });
 
 describe("queries", () => {
-    // Every covenant deadline is wall-clock now, so a sweep given only a height
-    // picks nothing at all rather than picking the height-domain subset.
     it("does not compare timestamp recovery with chain height", () => {
         repo.insert(advance({ id: "timed", state: "locked" }));
         expect(repo.listSweepable(INT64_MAX)).toEqual([]);
@@ -628,9 +624,6 @@ describe("queries", () => {
         expect(repo.listSweepable(0n, DEADLINE - 1n)).toEqual([]);
     });
 
-    // The sweep picks a covenant advance on its own wall-clock deadline, there
-    // being no batch expiry left to agree with. Without this it never sweeps and
-    // the Taxi never reclaims its lent dust.
     it("sweeps a matured deadline, which stores no batch expiry to agree with", () => {
         repo.insert(advance({ id: "due", state: "locked" }));
 

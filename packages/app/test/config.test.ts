@@ -206,8 +206,6 @@ describe("aggregated validation", () => {
         expect(() => loadConfig(env({ TAXI_LOG_LEVEL: "chatty" }))).toThrow(/TAXI_LOG_LEVEL/);
     });
 
-    // One covenant, so there is nothing to select and nothing to refuse:
-    // TAXI_COVENANT_VERSION is an unknown variable like any other.
     it("carries no covenant version and ignores the retired variable", () => {
         expect(loadConfig(env())).not.toHaveProperty("covenantVersion");
         for (const value of ["1", "2", "0", "3", "", "two"])

@@ -204,10 +204,8 @@ async function setup(
         request.params.topup = request.params.dust;
         request.params.paymentSats = paymentSats;
     }
-    // Every lockup output reaches dust, so a sub-dust fare and the sender change
-    // left by a whole-dust loan are both unbuildable. The operator funds exactly
-    // the loan and the fare: a change output would share the payout script with
-    // the fare now that neither can take the distinguishing sub-dust form.
+    // Every lockup output reaches dust, so the operator funds exactly the loan and
+    // the fare: a change output would share the fare's payout script.
     if (request.fare.currency === "sats" && request.fare.units > 0n)
         request.fare.units = request.params.dust;
     request.senderSats = request.senderInputs[0]!.value = request.params.dust + (paymentSats ?? 0n);
@@ -231,7 +229,6 @@ async function setup(
         state: "quoted",
         ...request.params,
         ...(envelope.assetUnits !== undefined ? { assetUnits: BigInt(envelope.assetUnits) } : {}),
-        // A covenant advance keeps no batch expiry; its deadline is its own clock.
         recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,
@@ -1612,9 +1609,6 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    // reclaimWhole pays the operator and nothing else, so a receiver-owned
-    // recovery leaves no on-chain output for either party: what is owed moves to
-    // the custody ledger instead.
     it("proves a receiver-owned reclaim pays only the operator", async () => {
         const state = await setup(
             "recovered",
@@ -1645,8 +1639,6 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
-    // repayRefund pays out[1] to in[1]'s own script, so the refunder is paid by
-    // the coin they brought rather than by a key the covenant names.
     it("proves a receiver-owned refund pays the refunder's own script", async () => {
         const state = await setup(
             "refunded",

@@ -543,18 +543,12 @@ export const MIGRATIONS: readonly Migration[] = [
     },
     {
         id: 17,
-        // Breaking: a deadline is now every quote's shape, so an older build
-        // would read one as a corrupt row rather than a deliberate one.
+        // Breaking: an older build would read a deadline-shaped quote as corrupt.
         compat: "breaking",
-        // One covenant, so the version column that selected between two is gone
-        // and 15's conditional CHECKs become unconditional. SQLite cannot drop a
-        // table CHECK, hence the rebuild; `advances.covenant_version` carries
-        // only a self-contained CHECK and no index, so it drops in place.
-        // A height-domain v1 quote cannot satisfy the deadline CHECK and makes
-        // this migration fail loudly — that refusal is deliberate.
-        // receive_quote_reservations.quote_id references this table and foreign
-        // keys stay immediate inside applyMigrations' transaction, so the
-        // children move aside and come back, exactly as 15 does.
+        // SQLite cannot drop a table CHECK, hence the rebuild; covenant_version has
+        // no index or foreign CHECK, so it drops in place. A height-domain v1 quote
+        // fails the deadline CHECK on purpose. Reservations move aside and back as
+        // in 15: foreign keys stay immediate inside applyMigrations' transaction.
         up: `CREATE TABLE receive_quote_reservations_v17 AS
             SELECT outpoint_txid, outpoint_vout, quote_id, created_at
             FROM receive_quote_reservations;

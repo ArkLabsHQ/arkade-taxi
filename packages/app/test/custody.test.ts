@@ -97,10 +97,7 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         assetId: ASSET,
         assetUnits: 7n,
         receiverFare: { currency: "asset", units: 2n },
-        // The receive rail always names the receiver as the recovery owner, and
-        // the custody row follows that key.
         recoveryRecipient: "receiver",
-        // A covenant advance keeps no batch expiry; its CLTV is wall-clock.
         locktime: V2_DEADLINE,
         recoveryLocktime: { kind: "time", value: V2_DEADLINE },
         operatorInputs: [{ txid: "ab".repeat(32), vout: 7 }],

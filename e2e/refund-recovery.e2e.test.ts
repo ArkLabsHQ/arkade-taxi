@@ -199,7 +199,6 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         expect(row.recoveryPhase).toBe("submitted");
         const lockup = lockupSats(locked.verified.params);
         const owed = lockup - loanSats(locked.verified.params);
-        // One payout, out[1] being the extension; the ledger holds the rest.
         expect(tx.outputsLength).toBe(2);
         expectReceipt(tx, 0, lockup, live.info.operatorKey);
         expect(row.batchExpiry).toBeUndefined();

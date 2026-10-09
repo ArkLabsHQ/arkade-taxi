@@ -46,7 +46,6 @@ const persistedQuote = (): Advance => {
         id: request.advanceId,
         state: "quoted",
         ...request.params,
-        // A covenant advance keeps no batch expiry; its deadline is its own clock.
         recoveryLocktime: { kind: "time", value: request.params.locktime },
         operatorInputs: request.funding.inputs.map(({ txid, vout }) => ({ txid, vout })),
         unsignedLockupTx,

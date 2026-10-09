@@ -52,8 +52,6 @@ describe("joint funded graph", () => {
         const req = buildRequest();
         const payout = operatorTree.tweakedPublicKey;
         req.params.operatorKey = payout;
-        // Fare and change would otherwise share the payout script: both clear
-        // dust now, so neither takes the distinguishing sub-dust form.
         req.funding.totalValue = req.params.topup + req.fare.units;
         req.funding.inputs[0].value = Number(req.funding.totalValue);
         const cfg = config({ operatorKey: payout, operatorSignerKey: operatorKey });

@@ -141,7 +141,6 @@ const tokenFareDeps = () => {
     return deps();
 };
 
-/** The wall-clock deadline every quote in this suite lends to. */
 const deadline = (): bigint => BigInt(NOW) + config().covenantDeadlineSeconds;
 
 describe("createReceiveQuote", () => {

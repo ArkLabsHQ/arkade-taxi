@@ -307,9 +307,6 @@ function toParams(a: Advance): AdvanceParams {
 // says `undefined`. Timestamps and indices are narrowed back to `number`, which
 // safeIntegers would otherwise hand back as BigInt.
 function fromRow(r: AdvanceRow): Advance {
-    // A covenant row stores no batch expiry: its deadline is measured from
-    // lockup and a renewal re-dates the coins, so a snapshot would go stale.
-    // A sponsored row has no covenant and keeps its expiry.
     const sponsored = r.kind === "sponsored";
     if (
         (sponsored && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||

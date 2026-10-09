@@ -48,7 +48,6 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    // A covenant advance keeps no batch expiry and its CLTV is wall-clock.
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -66,7 +65,6 @@ const v2 = (overrides: Partial<Advance> = {}): Advance =>
         ...overrides,
     });
 
-/** The sender-paid transfer rail: no receiver fare, so no receiver-owned recovery. */
 const senderPaid = (overrides: Partial<Advance> = {}): Advance =>
     advance({ id: "sender-paid", paymentSats: 1_000n, ...overrides });
 
@@ -114,9 +112,6 @@ describe("a reclaim opens the liability", () => {
         });
     });
 
-    // The covenant pays a reclaim to the recovery owner, so the ledger has to owe
-    // it to the same party. On the sender-paid rail that is the payer, whose sats
-    // these are; naming the payee would credit someone who never paid.
     it("owes a reclaimed sender-paid payment to the payer, not the payee", () => {
         reclaim(senderPaid());
         expect(custody.get("sender-paid")).toMatchObject({

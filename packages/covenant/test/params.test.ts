@@ -117,7 +117,6 @@ describe("validateParams", () => {
         expect(() => validateParams(params, MIN)).toThrow(/requires an asset id/);
     });
 
-    // The whole dust is lent, so nothing has to stay behind to host a receipt.
     it("accepts receiver-owned recovery at dust = vtxoMinAmount", () => {
         expect(() => validateParams(receiverPaid(), 330n)).not.toThrow();
     });

@@ -694,8 +694,6 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     const allInputs = [...senderInputs, ...operatorInputs];
     if (new Set(allInputs.map((input) => `${input.txid}:${input.vout}`)).size !== allInputs.length)
         reject("funding outpoints are duplicated");
-    // The deadline shares neither domain nor ordering with the funding coins.
-    // What the inputs still owe is agreement with each other.
     if (allInputs.some((input) => input.expiry.kind !== allInputs[0].expiry.kind))
         reject("funding expiry evidence is inconsistent");
     if (context.params.locktime < 500_000_000n)

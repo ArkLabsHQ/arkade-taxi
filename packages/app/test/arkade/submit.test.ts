@@ -217,8 +217,6 @@ describe("persisted-fact submission validation", () => {
         const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
         const request = buildRequest();
         request.params.operatorKey = cfg.operatorKey;
-        // Fare and change would otherwise share the payout script: both clear
-        // dust now, so neither takes the distinguishing sub-dust form.
         request.funding.totalValue = request.params.topup + request.fare.units;
         request.funding.inputs[0]!.value = Number(request.funding.totalValue);
         request.covenantAddress = new DustCovenantScript({

@@ -58,7 +58,6 @@ const RELAXED_BY_15 = new Set([
     "operator_input_reservations.batch_expiry_value",
 ]);
 
-/** One covenant, so the column that selected between two is gone from both. */
 const DROPPED_BY_17 = new Set(["advances.covenant_version", "receive_quotes.covenant_version"]);
 
 function at(upto: number): Database {

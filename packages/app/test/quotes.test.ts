@@ -45,7 +45,6 @@ import {
 } from "@arkade-taxi/db";
 
 const MARGIN = 144;
-/** The quote's wall-clock deadline: NOW + the configured window. */
 const LOCKTIME = BigInt(NOW) + config().covenantDeadlineSeconds;
 const ASSET = { txid: new Uint8Array(32).fill(0xde), groupIndex: 2 };
 
@@ -193,8 +192,6 @@ describe("createQuote", () => {
         expect(response.params.locktime).toBe(LOCKTIME.toString());
         expect(advances.get(response.transferId)?.batchExpiry).toBeUndefined();
     });
-    // The sender rail now shares the receive rail's clock: a wall-clock deadline
-    // measured from the quote, and no batch expiry to date it against.
     it("anchors the locktime to now plus the configured deadline, with no expiry", async () => {
         const response = await createQuote(deps(), quoteBody());
         const deadline = BigInt(NOW) + config().covenantDeadlineSeconds;
@@ -545,7 +542,6 @@ describe("createQuote admission", () => {
         ).rejects.toMatchObject({ code: "operator_inventory_insufficient" });
         expect(advances.rows.size).toBe(0);
     });
-    // The dust floor is what keeps the SDK's two-OP_RETURN ceiling out of reach.
     it("refuses a sub-dust payout before reserving", async () => {
         const d = deps({ policy: satsFareRule(ASSET, DUST) });
         await expect(

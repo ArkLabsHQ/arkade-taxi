@@ -267,8 +267,6 @@ export const policy = (over: Partial<Policy> = {}): Policy => ({
 export const V2_DEADLINE = BigInt(NOW) + 8_640_000n;
 
 export const advance = (over: Partial<Advance> = {}): Advance => {
-    // A covenant advance keeps no batch expiry: its CLTV is wall-clock and a
-    // renewal re-dates the coins, so a snapshot would go stale.
     const clock = {
         locktime: V2_DEADLINE,
         recoveryLocktime: { kind: "time" as const, value: V2_DEADLINE },
