@@ -19,7 +19,7 @@ import type { LockupBuildRequest } from "../../src/quotes.js";
 
 describe("joint funded graph", () => {
     it.each([330n, 660n])(
-        "retains duplicate-output protection for canonical payout and change at fare %s",
+        "pays one output, not two of a script, for canonical payout and change at fare %s",
         (fare) => {
             const req = buildRequest();
             const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
@@ -35,7 +35,14 @@ describe("joint funded graph", () => {
             })
                 .address(cfg.addressHrp, cfg.serverPubkey)
                 .encode();
-            expect(() => buildLockupEnvelope(req, cfg, unroll)).toThrow(/script/);
+            const { valueOutputs } = lockupPlan(req, cfg);
+            expect(valueOutputs).toMatchObject([
+                { role: "covenant", amount: 330n },
+                { role: "operator-fare", amount: fare + fare },
+                { role: "sender-change", amount: 660n },
+            ]);
+            expect(new Set(valueOutputs.map((o) => hex.encode(o.script))).size).toBe(3);
+            expect(() => buildLockupEnvelope(req, cfg, unroll)).not.toThrow();
         },
     );
     it("rejects a quote payout that differs from runtime configuration", () => {
@@ -394,6 +401,60 @@ describe("covenant outputs", () => {
     it("refuses a sub-dust sats fare rather than paying it to a RETURN script", () => {
         expect(() => lockupPlan(request({ fare: 10n }), cfg)).toThrow(/operator-fare/);
         expect(() => lockupPlan(request({ fare: 330n, senderSats: 660n }), cfg)).not.toThrow();
+    });
+
+    // The shape production actually has: one Taxi wallet address, so the payout
+    // key IS the funding coin's key and two P2TR outputs of it would collide.
+    const oneWallet = config({ operatorKey: operatorTree.tweakedPublicKey });
+
+    const repin = (req: LockupBuildRequest) => {
+        req.params.operatorKey = oneWallet.operatorKey;
+        req.covenantAddress = new DustCovenantScript({
+            params: req.params,
+            serverKey: oneWallet.serverPubkey,
+            emulatorKey: oneWallet.emulatorPubkey,
+            vtxoMinAmount: oneWallet.vtxoMinAmount,
+        })
+            .address(oneWallet.addressHrp, oneWallet.serverPubkey)
+            .encode();
+        return req;
+    };
+
+    it("folds operator change into the asset fare output paid to the same wallet", () => {
+        const req = repin(withAssetFare(request()));
+        expect(lockupPlan(req, oneWallet).valueOutputs).toMatchObject([
+            { role: "covenant", amount: 330n },
+            { role: "operator-fare", amount: oneWallet.dust + 340n },
+            { role: "sender-change", amount: 330n },
+        ]);
+        const parsed = parseLockupEnvelope(
+            buildLockupEnvelope(req, oneWallet, unroll),
+            req,
+            oneWallet,
+            unroll,
+        );
+        expect(parsed.arkTx.getOutput(1).script).toEqual(
+            operatorTree.address(oneWallet.addressHrp, oneWallet.serverPubkey).pkScript,
+        );
+        expect(
+            Extension.fromTx(parsed.arkTx)
+                .getAssetPacket()!
+                .groups[0].outputs.map((o) => [o.vout, o.amount]),
+        ).toEqual([
+            [0, 95n],
+            [1, 5n],
+        ]);
+    });
+
+    it("keeps the fare output alone when the operator spends its funding exactly", () => {
+        const req = repin(withAssetFare(request()));
+        req.funding.totalValue = req.params.topup + oneWallet.dust;
+        req.funding.inputs[0].value = Number(req.funding.totalValue);
+        expect(lockupPlan(req, oneWallet).valueOutputs).toMatchObject([
+            { role: "covenant", amount: 330n },
+            { role: "operator-fare", amount: oneWallet.dust },
+            { role: "sender-change", amount: 330n },
+        ]);
     });
 });
 

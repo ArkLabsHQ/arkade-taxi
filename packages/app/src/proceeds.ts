@@ -582,10 +582,12 @@ export async function discoverProceeds(
             fail("proceeds_receipt_mismatch");
         found.set(key(point), candidate);
     };
-    const checkFare = (advance: Advance) =>
+    // Operator change rides on the fare output when a separate one would repeat
+    // its script, so the sats come from the validated graph, not the fare alone.
+    const checkFare = (advance: Advance, lockup: Transaction) =>
         check(
             { txid: advance.arkTxid!, vout: 1 },
-            advance.fare.currency === "sats" ? advance.fare.units : config.dust,
+            lockup.getOutput(1).amount!,
             advance.fare.currency === "asset"
                 ? [
                       {
@@ -626,7 +628,7 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance);
+        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance, tx);
         if (advance.state === "recycled") {
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
@@ -665,7 +667,7 @@ export async function discoverProceeds(
             advance.outpoint.vout !== envelope.covenantOutputIndex
         )
             fail("proceeds_lockup_mismatch");
-        await checkFare(advance);
+        await checkFare(advance, tx);
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
 }

@@ -18,7 +18,7 @@ import { base64, hex } from "@scure/base";
 import type { RuntimeConfig } from "../config.js";
 import type { LockupBuilder, LockupBuildRequest, QuotePhaseObserver } from "../quotes.js";
 import { normalizeExpiry } from "./providers.js";
-import { LockupShapeError, assertDistinctScripts } from "../lockup.js";
+import { LockupShapeError, assertDistinctScripts, operatorPayoutSats } from "../lockup.js";
 import {
     encodeLockupEnvelope,
     parseLockupEnvelope,
@@ -215,12 +215,6 @@ export function jointPlan(
                 : config.vtxoMinAmount;
     if (req.fare.units < 0n) throw new LockupShapeError("negative fare");
     const senderPaysFare = senderPaysSatsFare(req);
-    if (fareHosting > 0n)
-        outputs.push({
-            role: "operator-fare",
-            amount: fareHosting,
-            script: ownerOutputScript(req.params.operatorKey, fareHosting, config),
-        });
     const senderFare = senderPaysFare ? fareHosting : 0n;
     const operatorFare = fareHosting - senderFare;
     const senderChange = req.senderSats + graph.contribution - graph.first.amount - senderFare;
@@ -228,6 +222,19 @@ export function jointPlan(
     if (senderChange < 0n)
         throw new LockupShapeError(`sender funding does not cover the ${graph.carrier} and fare`);
     if (operatorChange < 0n) throw new LockupShapeError("insufficient funding");
+    const operatorChangeKey = VtxoScript.decode(operatorInputs[0].tapTree).tweakedPublicKey;
+    const farePayout = operatorPayoutSats(
+        fareHosting,
+        operatorChange,
+        ownerOutputScript(req.params.operatorKey, fareHosting, config),
+        ownerOutputScript(operatorChangeKey, operatorChange, config),
+    );
+    if (fareHosting > 0n)
+        outputs.push({
+            role: "operator-fare",
+            amount: farePayout,
+            script: ownerOutputScript(req.params.operatorKey, farePayout, config),
+        });
     const destinations = new Map<string, Map<number, bigint>>();
     const toId = (id: { txid: Uint8Array; groupIndex: number }) =>
         AssetId.create(hex.encode(Uint8Array.from(id.txid).reverse()), id.groupIndex).toString();
@@ -269,15 +276,11 @@ export function jointPlan(
             if (change) destinations.get(id)!.set(index, change);
         }
     }
-    if (operatorChange > 0n)
+    if (operatorChange > 0n && farePayout === fareHosting)
         outputs.push({
             role: "operator-change",
             amount: operatorChange,
-            script: ownerOutputScript(
-                VtxoScript.decode(operatorInputs[0].tapTree).tweakedPublicKey,
-                operatorChange,
-                config,
-            ),
+            script: ownerOutputScript(operatorChangeKey, operatorChange, config),
         });
     // The covenant commits to dust-or-above everywhere, so no payout of its can
     // land on payoutPkScript's sub-dust RETURN branch and need collecting in a

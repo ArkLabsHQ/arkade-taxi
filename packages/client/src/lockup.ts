@@ -732,17 +732,6 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
             : context.fare.currency === "sats"
               ? context.fare.units
               : context.params.dust;
-    if (fareHosting > 0n)
-        outputs.push({
-            amount: fareHosting,
-            script: ownerScript(
-                context.operatorKey,
-                fareHosting,
-                context.serverKey,
-                context.params.dust,
-                context.hrp,
-            ),
-        });
     if (
         envelope.satsFarePayer !== undefined &&
         (context.fare.currency !== "sats" || context.fare.units <= 0n)
@@ -756,6 +745,23 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
     const operatorTotal = operatorInputs.reduce((sum, input) => sum + input.value, 0n);
     const operatorChange = operatorTotal - context.params.topup - operatorFare;
     if (senderChange < 0n || operatorChange < 0n) reject("lockup funding is insufficient");
+    const payout = (key: Uint8Array, amount: bigint) =>
+        ownerScript(key, amount, context.serverKey, context.params.dust, context.hrp);
+    // One wallet pays out to its funding coin's own key, so a separate change
+    // output would repeat this script. Mirrors app/src/lockup.ts.
+    const mergeChange =
+        fareHosting > 0n &&
+        operatorChange > 0n &&
+        sameBytes(
+            payout(context.operatorKey, fareHosting),
+            payout(operatorTrees[0].tweakedPublicKey, operatorChange),
+        );
+    const farePayout = mergeChange ? fareHosting + operatorChange : fareHosting;
+    if (fareHosting > 0n)
+        outputs.push({
+            amount: farePayout,
+            script: payout(context.operatorKey, farePayout),
+        });
 
     const destinations = new Map<string, Map<number, bigint>>();
     const paymentId = context.params.assetId ? assetId(context.params.assetId) : undefined;
@@ -809,16 +815,10 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
             if (change) allocation.set(index, change);
         }
     }
-    if (operatorChange > 0n)
+    if (operatorChange > 0n && !mergeChange)
         outputs.push({
             amount: operatorChange,
-            script: ownerScript(
-                operatorTrees[0].tweakedPublicKey,
-                operatorChange,
-                context.serverKey,
-                context.params.dust,
-                context.hrp,
-            ),
+            script: payout(operatorTrees[0].tweakedPublicKey, operatorChange),
         });
     if (outputs.some((output) => output.amount < context.params.dust))
         reject("lockup output is below the covenant dust floor");

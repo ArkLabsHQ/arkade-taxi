@@ -60,6 +60,23 @@ export function assertDistinctScripts(
 }
 
 /**
+ * The sats on a joint graph's operator payout, at index 1. One Taxi wallet pays
+ * out to the very key its funding coin is locked to, so a separate change output
+ * would repeat this one's script, which `assertDistinctScripts` refuses. The
+ * change rides here instead; the asset fare units stay allocated to index 1.
+ */
+export function operatorPayoutSats(
+    fareHosting: bigint,
+    operatorChange: bigint,
+    fareScript: Uint8Array,
+    changeScript: Uint8Array,
+): bigint {
+    return fareHosting > 0n && operatorChange > 0n && sameScript(fareScript, changeScript)
+        ? fareHosting + operatorChange
+        : fareHosting;
+}
+
+/**
  * An asset fare costs the operator hosting sats it pays to ITSELF, so those are
  * not capital at risk — only `topup` is. A sats fare costs no hosting but
  * demands the sender hold spendable bitcoin, which is the thing this service

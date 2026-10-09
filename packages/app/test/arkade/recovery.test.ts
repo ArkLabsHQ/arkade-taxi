@@ -78,13 +78,14 @@ const sourceAdvance = (
             | "exitDelay"
             | "topup"
             | "paymentSats"
+            | "operatorKey"
         >
     > = {},
     fareSats = 330n,
 ) => {
     // NOW + 100 days: strictly after the createdAt the startup invariant checks.
     const locktime = 1_757_000_000n + 8_640_000n;
-    const cfg = config();
+    const cfg = config(terms.operatorKey ? { operatorKey: terms.operatorKey } : {});
     const sdkAsset = withAsset ? asset.AssetId.create("12".repeat(32), 7) : undefined;
     const assetId = sdkAsset
         ? { txid: Uint8Array.from(sdkAsset.txid).reverse(), groupIndex: sdkAsset.groupIndex }
@@ -563,6 +564,23 @@ describe("recovery graph", () => {
         ).toThrow(/operator funding/);
         expect(() =>
             buildRecoveryIntent({ ...row, fare: { currency: "sats", units: 11n } }, config()),
+        ).toThrow(/fare/);
+    });
+
+    it("audits a lockup whose operator change rides on the fare output", () => {
+        const operatorKey = operatorTree.tweakedPublicKey;
+        const row = sourceAdvance("height", false, { operatorKey });
+        const cfg = config({ operatorKey });
+        const source = Transaction.fromPSBT(
+            base64.decode(decodeLockupEnvelope(row.unsignedLockupTx).arkTx),
+        );
+        // Covenant, the merged operator payout, sender change, anchor — a separate
+        // change output would make five and repeat output 1's script.
+        expect(source.outputsLength).toBe(4);
+        expect(source.getOutput(1).amount).toBe(20_000n - row.topup);
+        expect(() => buildRecoveryIntent(row, cfg)).not.toThrow();
+        expect(() =>
+            buildRecoveryIntent({ ...row, fare: { currency: "sats", units: 11n } }, cfg),
         ).toThrow(/fare/);
     });
 

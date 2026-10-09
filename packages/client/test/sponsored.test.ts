@@ -404,4 +404,15 @@ describe("sponsored sender-paid sats fare", () => {
         });
         expect(() => verifySponsoredQuote(a)).toThrow(/positive sats fare/);
     });
+
+    // At the dust floor the fare output takes the same script as operator change,
+    // and the fixtures pay out to the funding coin's own key, as one wallet does.
+    it("accepts a fare output carrying the operator's change", () => {
+        const a = sponsoredArgs();
+        const fare = { currency: "sats" as const, units: 330n };
+        a.quote = sponsoredQuote(sponsoredParams(), { fare });
+        a.expect.maxFare = fare;
+        expect(amounts(a.quote.unsignedSponsoredTx)).toEqual([330n, 19_670n, 660n, 0n]);
+        expect(() => verifySponsoredQuote(a)).not.toThrow();
+    });
 });

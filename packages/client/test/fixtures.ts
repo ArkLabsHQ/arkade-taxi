@@ -111,12 +111,14 @@ interface QuoteFixtureOptions {
     fare?: FareSpec;
     satsFarePayer?: "sender";
     serverUnrollScript?: CSVMultisigTapscript.Type;
+    /** Sats the operator funds over what it owes, so the graph carries change. */
+    operatorChange?: bigint;
 }
 
 const fareSats = (fare: FareSpec): bigint => (fare.currency === "sats" ? fare.units : 330n);
 
 const operatorOwes = (p: CovenantParamsValue, fare: FareSpec, opts: QuoteFixtureOptions): bigint =>
-    p.topup + (opts.satsFarePayer === "sender" ? 0n : fareSats(fare));
+    p.topup + (opts.satsFarePayer === "sender" ? 0n : fareSats(fare)) + (opts.operatorChange ?? 0n);
 
 export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteResponse => {
     const senderInputs = opts.senderInputs ?? fundingInputs();

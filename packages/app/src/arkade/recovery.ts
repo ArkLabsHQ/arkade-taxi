@@ -31,6 +31,7 @@ import { fundingInputFromWire } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../config.js";
 import { sanitizeOperationalError } from "../errors.js";
 import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt.js";
+import { operatorPayoutSats } from "../lockup.js";
 import { validatePersistedLockupGraph } from "./submit.js";
 import { readFundingSource } from "./fundingSource.js";
 
@@ -310,9 +311,17 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     if (!advance.outpoint) fail(`advance ${advance.id}: covenant outpoint is missing`);
     const outpoint = advance.outpoint;
     const tagged = readFundingSource(advance.unsignedLockupTx);
+    const fareHosting =
+        advance.fare.units === 0n
+            ? 0n
+            : advance.fare.currency === "sats"
+              ? advance.fare.units
+              : config.dust;
+    if (advance.fare.units < 0n) fail(`advance ${advance.id}: persisted fare is negative`);
     let source: Transaction;
     let serverUnrollScript: string;
     let units: bigint | undefined;
+    let farePayout = fareHosting;
     if (tagged.kind === "joint-fill") {
         if (
             tagged.source.receiveQuoteId !== advance.id ||
@@ -333,14 +342,13 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         units = tagged.assetUnits;
     } else {
         const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
-        let operatorOutpoints: Advance["operatorInputs"];
+        let operatorFunding: ReturnType<typeof fundingInputFromWire>[];
         try {
-            operatorOutpoints = envelope.operatorInputs
-                .map((input) => fundingInputFromWire(input))
-                .map(({ txid, vout }) => ({ txid, vout }));
+            operatorFunding = envelope.operatorInputs.map((input) => fundingInputFromWire(input));
         } catch {
             return fail(`advance ${advance.id}: persisted operator funding is malformed`);
         }
+        const operatorOutpoints = operatorFunding.map(({ txid, vout }) => ({ txid, vout }));
         if (!isDeepStrictEqual(operatorOutpoints, advance.operatorInputs))
             fail(`advance ${advance.id}: persisted operator funding mismatch`);
         if (
@@ -354,6 +362,20 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
             fail(`advance ${advance.id}: persisted unsigned graph id mismatch`);
         serverUnrollScript = envelope.serverUnrollScript;
         units = envelope.assetUnits === undefined ? undefined : BigInt(envelope.assetUnits);
+        const operatorChange =
+            operatorFunding.reduce((sum, input) => sum + input.value, 0n) -
+            advance.topup -
+            (envelope.satsFarePayer === undefined ? fareHosting : 0n);
+        farePayout = operatorPayoutSats(
+            fareHosting,
+            operatorChange,
+            payoutPkScript(advance.operatorKey, fareHosting, advance.dust),
+            payoutPkScript(
+                VtxoScript.decode(operatorFunding[0]!.tapTree).tweakedPublicKey,
+                operatorChange,
+                advance.dust,
+            ),
+        );
     }
     if (source.id !== outpoint.txid || source.outputsLength <= outpoint.vout)
         fail(`advance ${advance.id}: covenant outpoint differs from the lockup graph`);
@@ -368,22 +390,15 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     )
         fail(`advance ${advance.id}: persisted covenant script or value mismatch`);
 
-    const fareHosting =
-        advance.fare.units === 0n
-            ? 0n
-            : advance.fare.currency === "sats"
-              ? advance.fare.units
-              : config.dust;
-    if (advance.fare.units < 0n) fail(`advance ${advance.id}: persisted fare is negative`);
     if (tagged.kind === "legacy" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;
         if (
             !fareOutput ||
-            fareOutput.amount !== fareHosting ||
+            fareOutput.amount !== farePayout ||
             !fareOutput.script ||
             !sameBytes(
                 fareOutput.script,
-                payoutPkScript(advance.operatorKey, fareHosting, advance.dust),
+                payoutPkScript(advance.operatorKey, farePayout, advance.dust),
             )
         )
             fail(`advance ${advance.id}: persisted fare output mismatch`);

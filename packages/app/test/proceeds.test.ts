@@ -1174,98 +1174,106 @@ describe("durable proceeds collector", () => {
         );
     });
 
-    it("discovers only the unspent fare from a verified sponsored lockup", async () => {
-        const s = setup();
-        expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
-        const receiverAddress = new ArkAddress(
-            cfg.serverPubkey,
-            receiverKey,
-            cfg.addressHrp,
-        ).encode();
-        const fare = { currency: "sats" as const, units: 10n };
-        const encoded = buildSponsoredEnvelope(
-            {
-                advanceId: "sponsored-1",
-                senderInputs: [
-                    {
-                        txid: "ac".repeat(32),
-                        vout: 0,
-                        value: 1000n,
-                        tapTree: senderTree.encode(),
-                        spendLeaf: senderTree.scripts[0],
-                        expiry: { kind: "height", value: 900000n },
+    // At 330 the fare output reaches dust, so operator change rides on it.
+    it.each([
+        [10n, 10n],
+        [330n, 2320n],
+    ])(
+        "discovers only the unspent %s-sat fare from a verified sponsored lockup",
+        async (units, receiptSats) => {
+            const s = setup();
+            expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
+            const receiverAddress = new ArkAddress(
+                cfg.serverPubkey,
+                receiverKey,
+                cfg.addressHrp,
+            ).encode();
+            const fare = { currency: "sats" as const, units };
+            const encoded = buildSponsoredEnvelope(
+                {
+                    advanceId: "sponsored-1",
+                    senderInputs: [
+                        {
+                            txid: "ac".repeat(32),
+                            vout: 0,
+                            value: 1000n,
+                            tapTree: senderTree.encode(),
+                            spendLeaf: senderTree.scripts[0],
+                            expiry: { kind: "height", value: 900000n },
+                        },
+                    ],
+                    senderSats: 1000n,
+                    funding: {
+                        inputs: [carrier],
+                        totalValue: 2000n,
+                        batchExpiry: { kind: "height", value: 900000n },
                     },
-                ],
-                senderSats: 1000n,
-                funding: {
-                    inputs: [carrier],
-                    totalValue: 2000n,
-                    batchExpiry: { kind: "height", value: 900000n },
+                    params: {
+                        receiverKey,
+                        senderKey,
+                        operatorKey: cfg.operatorKey,
+                        dust: cfg.dust,
+                        contribution: 10n,
+                    },
+                    receiverAddress,
+                    fare,
+                    satsFarePayer: "sender",
                 },
-                params: {
-                    receiverKey,
-                    senderKey,
-                    operatorKey: cfg.operatorKey,
-                    dust: cfg.dust,
-                    contribution: 10n,
-                },
-                receiverAddress,
+                cfg,
+                serverUnroll,
+            );
+            const envelope = decodeLockupEnvelope(encoded);
+            const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+            const locked = advance({
+                id: "sponsored-1",
+                kind: "sponsored",
+                operatorKey: cfg.operatorKey,
+                topup: 10n,
+                locktime: 0n,
+                batchExpiry: { kind: "height", value: 900000n },
+                operatorInputs: [{ txid: carrier.txid, vout: carrier.vout }],
+                unsignedLockupTx: encoded,
+                unsignedLockupId: envelope.unsignedTxId,
+                covenantAddress: receiverAddress,
                 fare,
-                satsFarePayer: "sender",
-            },
-            cfg,
-            serverUnroll,
-        );
-        const envelope = decodeLockupEnvelope(encoded);
-        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        const locked = advance({
-            id: "sponsored-1",
-            kind: "sponsored",
-            operatorKey: cfg.operatorKey,
-            topup: 10n,
-            locktime: 0n,
-            batchExpiry: { kind: "height", value: 900000n },
-            operatorInputs: [{ txid: carrier.txid, vout: carrier.vout }],
-            unsignedLockupTx: encoded,
-            unsignedLockupId: envelope.unsignedTxId,
-            covenantAddress: receiverAddress,
-            fare,
-            arkTxid: tx.id,
-            outpoint: { txid: tx.id, vout: envelope.covenantOutputIndex },
-        });
-        const advances = new AdvanceRepository(s.db);
-        s.deps.advances = advances;
-        advances.insert(locked);
-        const fareCoin = fundingCoin({
-            txid: tx.id,
-            vout: 1,
-            value: Number(tx.getOutput(1).amount),
-            isSwept: true,
-        });
-        let observed = fareCoin;
-        s.deps.runtime.providers.indexerProvider.getVtxos = async () => ({ vtxos: [observed] });
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([fareCoin]);
-        for (const [changed, code] of [
-            [{ ...locked, operatorKey: receiverKey }, "proceeds_payout_key_changed"],
-            [{ ...locked, arkTxid: "ee".repeat(32) }, "proceeds_lockup_mismatch"],
-            [
-                { ...locked, outpoint: { txid: "ee".repeat(32), vout: 0 } },
-                "proceeds_lockup_mismatch",
-            ],
-            [{ ...locked, outpoint: { txid: tx.id, vout: 1 } }, "proceeds_lockup_mismatch"],
-        ] as const) {
-            advances.update(changed);
-            await expect(
-                discoverProceeds(s.deps, [{ ...fareCoin, txid: changed.arkTxid! }]),
-            ).rejects.toThrow(code);
-        }
-        advances.update(locked);
-        observed = { ...fareCoin, vout: 2 };
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
-        observed = { ...fareCoin, isSpent: true };
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
-        expect(s.settle).not.toHaveBeenCalled();
-    });
+                arkTxid: tx.id,
+                outpoint: { txid: tx.id, vout: envelope.covenantOutputIndex },
+            });
+            const advances = new AdvanceRepository(s.db);
+            s.deps.advances = advances;
+            advances.insert(locked);
+            expect(tx.getOutput(1).amount).toBe(receiptSats);
+            const fareCoin = fundingCoin({
+                txid: tx.id,
+                vout: 1,
+                value: Number(tx.getOutput(1).amount),
+                isSwept: true,
+            });
+            let observed = fareCoin;
+            s.deps.runtime.providers.indexerProvider.getVtxos = async () => ({ vtxos: [observed] });
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([fareCoin]);
+            for (const [changed, code] of [
+                [{ ...locked, operatorKey: receiverKey }, "proceeds_payout_key_changed"],
+                [{ ...locked, arkTxid: "ee".repeat(32) }, "proceeds_lockup_mismatch"],
+                [
+                    { ...locked, outpoint: { txid: "ee".repeat(32), vout: 0 } },
+                    "proceeds_lockup_mismatch",
+                ],
+                [{ ...locked, outpoint: { txid: tx.id, vout: 1 } }, "proceeds_lockup_mismatch"],
+            ] as const) {
+                advances.update(changed);
+                await expect(
+                    discoverProceeds(s.deps, [{ ...fareCoin, txid: changed.arkTxid! }]),
+                ).rejects.toThrow(code);
+            }
+            advances.update(locked);
+            observed = { ...fareCoin, vout: 2 };
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
+            observed = { ...fareCoin, isSpent: true };
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
+            expect(s.settle).not.toHaveBeenCalled();
+        },
+    );
 });
 
 describe("plain inventory bootstrap", () => {
