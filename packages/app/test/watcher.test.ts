@@ -1269,7 +1269,8 @@ describe("canonical covenant observation", () => {
         });
 
         // Only the twin's coin at that script: no successor at this value, so the
-        // spend is not a renewal and takes the ordinary classification.
+        // spend is not a renewal and takes the batch classification, which this
+        // fixture's unreachable forfeit leaves loud.
         const alone = await setupV2(undefined);
         renew(alone, { txid: "5c".repeat(32), vout: 0 }, { value: twinValue });
         expect(alone.coins.get(`5c${"5c".repeat(31)}:0`)!.script).toBe(script);
@@ -1277,7 +1278,7 @@ describe("canonical covenant observation", () => {
         expect(alone.advances.get(alone.advance.id)).toMatchObject({
             outpoint: alone.outpoint,
             failureCode: "covenant_spend_unknown",
-            failureDetail: expect.stringContaining("spent outpoint evidence is incomplete"),
+            failureDetail: expect.stringContaining("omitted a required transaction"),
         });
         state.db.close();
         alone.db.close();
@@ -1298,6 +1299,154 @@ describe("canonical covenant observation", () => {
             failureCode: "covenant_spend_unknown",
             failureDetail: expect.stringContaining("renewal successor is ambiguous"),
         });
+        state.db.close();
+    });
+
+    /**
+     * arkd's own batch evidence for a spend that is not a renewal: the forfeit it
+     * stored under `spentBy` carries the leaf on input 0, and the payout rides
+     * the commitment's own tree at the operator's script.
+     */
+    const batchSpend = (
+        state: Awaited<ReturnType<typeof setup>>,
+        leaf: Leaf,
+        payouts: (Partial<VirtualCoin> | null)[] = [{}],
+    ) => {
+        const row = state.advances.get(state.advance.id)!;
+        const params = covenantParamsOf(row);
+        const covenant = new DustCovenantScript({
+            params,
+            serverKey: config().serverPubkey,
+            emulatorKey: config().emulatorPubkey,
+            vtxoMinAmount: config().vtxoMinAmount,
+        });
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        const live = state.coins.get(key)!;
+        const value = lockupSats(params);
+        const forfeit = new Transaction({ version: 3, lockTime: 0 });
+        forfeit.addInput({
+            txid: state.outpoint.txid,
+            index: state.outpoint.vout,
+            witnessUtxo: { amount: value, script: covenant.pkScript },
+            tapLeafScript: [covenant.findLeaf(hex.encode(covenant.scripts[leaf]!))],
+        });
+        forfeit.addInput({ txid: "c0".repeat(32), index: 0 });
+        forfeit.addOutput({ amount: value + 450n, script: operatorTree.pkScript });
+        forfeit.addOutput(P2A);
+        state.txs.set(forfeit.id, forfeit);
+        state.coins.set(key, {
+            ...live,
+            isSpent: true,
+            spentBy: forfeit.id,
+            settledBy: COMMITMENT,
+            arkTxId: "",
+        });
+        payouts.forEach((patch, index) => {
+            if (!patch) return;
+            const txid = `a${index}`.repeat(32);
+            state.coins.set(
+                `${txid}:0`,
+                fundingCoin({
+                    txid,
+                    vout: 0,
+                    value: Number(value),
+                    script: hex.encode(payoutPkScript(row.operatorKey, value, row.dust)),
+                    assets: live.assets ?? [],
+                    commitmentTxIds: [COMMITMENT],
+                    isPreconfirmed: false,
+                    status: { confirmed: true, isLeaf: true },
+                    ...patch,
+                }),
+            );
+        });
+        return { covenant, forfeit, live, value };
+    };
+
+    it("records a batch-settled reclaim and opens its custody row", async () => {
+        const state = await setupV2(undefined);
+        batchSpend(state, Leaf.Recovery);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recovered",
+            spentTxid: COMMITMENT,
+        });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        expect(new CustodyRepository(state.db).get(state.advance.id)).toMatchObject({
+            state: "held",
+            owedSats: 100n,
+            loanSats: 330n,
+        });
+        // The terminal review reads the coin alone, and the commitment is the only
+        // txid it can agree with: disagreeing would re-read the forfeit every pass.
+        let reads = 0;
+        const read = state.indexer.getVirtualTxs;
+        state.indexer.getVirtualTxs = (ids, opts) => (reads++, read(ids, opts));
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
+        expect(reads).toBe(0);
+        state.db.close();
+    });
+
+    it("keeps a batch-settled spend arkd recorded no forfeit for loud", async () => {
+        const state = await setupV2(undefined);
+        const { forfeit } = batchSpend(state, Leaf.Recovery);
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.set(key, { ...state.coins.get(key)!, spentBy: "" });
+        state.txs.delete(forfeit.id);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("no forfeit naming a covenant leaf"),
+        });
+        state.db.close();
+    });
+
+    it("keeps a batch-settled spend through another covenant leaf loud", async () => {
+        const state = await setupV2(undefined);
+        batchSpend(state, Leaf.Renew);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("batch-settled spend through covenant leaf 5"),
+        });
+        state.db.close();
+    });
+
+    it.each([
+        ["no payout at all", [null], "paid the operator no reclaim payout"],
+        ["a short payout", [{ value: 429 }], "paid the operator no reclaim payout"],
+        ["two identical payouts", [{}, {}], "reclaim payout is ambiguous"],
+    ] as const)("refuses a batch-settled reclaim with %s", async (_, payouts, reason) => {
+        const state = await setupV2(undefined);
+        batchSpend(state, Leaf.Recovery, [...payouts]);
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining(reason),
+        });
+        expect(new CustodyRepository(state.db).get(state.advance.id)).toBeUndefined();
+        state.db.close();
+    });
+
+    it("still reads a renewal whose forfeit names the renew leaf as a renewal", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        const { live } = batchSpend(state, Leaf.Renew);
+        state.coins.set(`${successor.txid}:${successor.vout}`, {
+            ...live,
+            ...successor,
+            isPreconfirmed: false,
+        });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            outpoint: successor,
+            renewals: 1,
+        });
+        expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         state.db.close();
     });
 
