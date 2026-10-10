@@ -392,6 +392,7 @@ export interface FillDeps {
         | "getByOperation"
         | "recordPrepared"
         | "recordSubmitInvoked"
+        | "recordSubmitted"
         | "recordSettled"
         | "recordAmbiguous"
         | "recordSigningFailure"
@@ -899,6 +900,9 @@ async function signAndSubmit(
             pins: { emulatorXOnly, serverXOnly },
             ownerKeys,
         });
+        // Recorded before answering, so a status read or a reconciler can
+        // follow the transaction the caller is about to be told about.
+        deps.fills.recordSubmitted(row.id, leaseToken, submitted.txid, now);
         return toStatus({ ...row, txid: submitted.txid, updatedAt: now });
     } catch (cause) {
         const message = sanitizeOperationalError(cause, "fill submission is ambiguous");

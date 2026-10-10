@@ -440,7 +440,10 @@ describe("package manager process boundary", () => {
             ),
         );
         for (const options of [resolveE2eOptions([], { ci: "true" }), direct])
-            expect(options.isolatedTests).toEqual(["e2e/unilateral-exit.e2e.test.ts"]);
+            expect(options.isolatedTests).toEqual([
+                "e2e/unilateral-exit.e2e.test.ts",
+                "e2e/fill-undersigned.e2e.test.ts",
+            ]);
         for (const args of [
             ["--direct", task12Tests[0]],
             ["--direct", "--direct"],

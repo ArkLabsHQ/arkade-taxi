@@ -174,7 +174,7 @@ const TASK12_TESTS = [
     "e2e/resilience.e2e.test.ts",
     "e2e/suite-integrity.e2e.test.ts",
 ];
-const ISOLATED_TESTS = ["e2e/unilateral-exit.e2e.test.ts"];
+const ISOLATED_TESTS = ["e2e/unilateral-exit.e2e.test.ts", "e2e/fill-undersigned.e2e.test.ts"];
 
 export const nodeEventSourceArgs = (script, args = []) => [EVENT_SOURCE_NODE_FLAG, script, ...args];
 

@@ -306,6 +306,20 @@ export class FillRepository {
         return Number(update.changes) === 1;
     }
 
+    /** The provider accepted the graph. The row stays `submitting` because
+     * settlement is an observation, but the txid is recorded now: without it a
+     * status read and a reconciler have no transaction to follow. */
+    recordSubmitted(id: string, leaseToken: string, txid: string, now: number): boolean {
+        assertNativeAccess(this.#db);
+        const update = this.#db
+            .prepare(
+                `UPDATE fills SET txid = ?, updated_at = max(updated_at, ?)
+                 WHERE id = ? AND state = 'submitting' AND lease_token = ?`,
+            )
+            .run(txid, now, id, leaseToken);
+        return Number(update.changes) === 1;
+    }
+
     recordSettled(
         id: string,
         leaseToken: string,

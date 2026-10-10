@@ -43,6 +43,12 @@ export class MemoryFills {
         Object.assign(row, { submitInvoked: true, updatedAt: now });
         return true;
     }
+    recordSubmitted(id: string, leaseToken: string, txid: string, now: number): boolean {
+        const row = this.#held(id, leaseToken);
+        if (!row) return false;
+        Object.assign(row, { txid, updatedAt: now });
+        return true;
+    }
     recordSettled(
         id: string,
         leaseToken: string,

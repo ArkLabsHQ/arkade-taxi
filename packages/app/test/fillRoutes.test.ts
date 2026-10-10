@@ -703,6 +703,28 @@ describe("POST /v1/fills when the provider refuses the signed graph", () => {
 });
 
 describe("GET /v1/fills/{id}", () => {
+    /** A status read is useless without the txid, and only `recordSubmitted`
+     * writes one before a reconciler exists. Fenced by the submit lease. */
+    it("reports the submitted txid, and only to the lease that holds the row", async () => {
+        const h = open();
+        try {
+            await expect(submitFill(h.deps, h.body)).rejects.toMatchObject({
+                code: "fill_submission_ambiguous",
+            });
+            const fills = new FillRepository(h.db);
+            const fill = fills.getByOperation("op-fill-1")!;
+            expect(fill.txid).toBeUndefined();
+            const txid = "ab".repeat(32);
+            expect(fills.recordSubmitted(fill.id, "not-the-lease", txid, NOW)).toBe(false);
+            h.db.prepare("UPDATE fills SET lease_token = 'lease' WHERE id = ?").run(fill.id);
+            expect(fills.recordSubmitted(fill.id, "lease", txid, NOW)).toBe(true);
+            expect(getFill(h.deps, fill.id).txid).toBe(txid);
+            expect(fills.get(fill.id)!.state).toBe("submitting");
+        } finally {
+            h.db.close();
+        }
+    });
+
     it("refuses an id it does not know", () => {
         const h = open();
         try {
