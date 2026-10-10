@@ -116,6 +116,7 @@ export {
     verifyJointGraph,
     prepareJointSubmission,
     providerCosignerKey,
+    providerCosignerKeys,
     signJointGraphForOwner,
     submitJointFill,
     buildOfferFillPlan,

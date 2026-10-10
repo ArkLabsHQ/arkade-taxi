@@ -12,6 +12,7 @@ export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from 
 export {
     JointSigningError,
     JointSubmissionAmbiguousError,
+    providerCosignerKeys,
     type JointPins,
     type JointSignerBinding,
     type PreparedJointSubmission,

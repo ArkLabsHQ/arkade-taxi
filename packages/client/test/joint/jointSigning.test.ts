@@ -23,6 +23,7 @@ import {
     type IWallet,
 } from "@arkade-os/sdk";
 import { tapLeavesOfInput } from "../../src/joint/arkTransaction.js";
+import { providerCosignerKeys } from "../../src/joint/jointSigning.js";
 import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
 import {
@@ -1389,5 +1390,56 @@ describe("providerCosignerKey", () => {
         expect(() =>
             providerCosignerKey({ expected: tampered, emulatorXOnly: pins.emulatorXOnly }),
         ).toThrow(/fails integrity/);
+    });
+});
+
+describe("providerCosignerKeys", () => {
+    const resealed = (graph: JointGraph, owners: (string | null)[]): JointGraph => {
+        const next = { ...structuredClone(graph), inputOwners: owners };
+        return { ...next, graphId: recomputeId(next) };
+    };
+
+    it("keys the cosigner by vin for the graph's one provider input", async () => {
+        const expected = await trustedGraph();
+        const keys = providerCosignerKeys({
+            expected,
+            emulatorXOnly: pins.emulatorXOnly,
+            template: OFFER_FILL_TEMPLATE,
+        });
+        expect([...keys.keys()]).toEqual([0]);
+        expect(keys.get(0)).toBe(
+            providerCosignerKey({ expected, emulatorXOnly: pins.emulatorXOnly }),
+        );
+    });
+
+    // The arkd route's case. `providerCosignerKey` throws on it, which is why
+    // the generic rail asks for the map and routes on whether it is empty.
+    it("returns an empty map when no input is provider-signed", async () => {
+        const expected = await trustedGraph();
+        const owned = resealed(expected, ["taxi", "solver", "sponsor"]);
+        expect(
+            providerCosignerKeys({
+                expected: owned,
+                emulatorXOnly: pins.emulatorXOnly,
+                template: OFFER_FILL_TEMPLATE,
+            }).size,
+        ).toBe(0);
+        expect(() =>
+            providerCosignerKey({ expected: owned, emulatorXOnly: pins.emulatorXOnly }),
+        ).toThrow(/names no provider-signed input/);
+    });
+
+    // The OD-5 bug: one key for every gated vin. A second provider-signed input
+    // with no packet entry of its own must refuse, never inherit vin 0's key.
+    it("refuses a second provider-signed input that carries no script of its own", async () => {
+        const expected = await trustedGraph();
+        const twoGated = resealed(expected, [null, null, "sponsor"]);
+        expect(() =>
+            providerCosignerKeys({
+                expected: twoGated,
+                emulatorXOnly: pins.emulatorXOnly,
+                template: OFFER_FILL_TEMPLATE,
+            }),
+        ).toThrow(/carries no provider script/);
     });
 });

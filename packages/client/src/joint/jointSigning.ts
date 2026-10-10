@@ -628,26 +628,50 @@ const assertPinnedComplete = (
     }
 };
 
+/**
+ * The tweaked emulator cosigner for every provider-signed input, keyed by vin.
+ *
+ * Each emulator-gated input is tweaked by its OWN script, so one key cannot
+ * stand in for all of them: a chained rail (an LN covenant and a FixedFloat
+ * covenant in one transaction) carries two different cosigners. Empty when the
+ * graph names no provider-signed input, which is the arkd route's case and not
+ * an error here.
+ */
+export function providerCosignerKeys(args: {
+    expected: JointGraph;
+    emulatorXOnly: string;
+    template: string;
+}): Map<number, string> {
+    checkIntegrity(args.expected, args.template);
+    const vins = args.expected.inputOwners.flatMap((owner, i) => (owner === null ? [i] : []));
+    const keys = new Map<number, string>();
+    if (vins.length === 0) return keys;
+    const ark = parseTx(args.expected.arkTx, "trusted arkTx");
+    let entries;
+    try {
+        entries = Extension.fromTx(ark).getEmulatorPacket()?.entries;
+    } catch (error) {
+        return fail("trusted graph carries no emulator packet", error);
+    }
+    const base = pinHex(args.emulatorXOnly, "emulator pin");
+    for (const vin of vins) {
+        const script = entries?.find((e) => e.vin === vin)?.script;
+        if (!script || script.length === 0) return fail("trusted graph carries no provider script");
+        keys.set(vin, hex.encode(computeArkadeScriptPublicKey(hex.decode(base), script)));
+    }
+    return keys;
+}
+
+/** The first provider-signed input's cosigner. `/v1/swap-fills` has exactly one. */
 export function providerCosignerKey(args: {
     expected: JointGraph;
     emulatorXOnly: string;
     template: string;
 }): string {
-    checkIntegrity(args.expected, args.template);
-    const ark = parseTx(args.expected.arkTx, "trusted arkTx");
-    const vin = args.expected.inputOwners.findIndex((o) => o === null);
-    if (vin === -1) fail("trusted graph names no provider-signed input");
-    let script: Uint8Array | undefined;
-    try {
-        script = Extension.fromTx(ark)
-            .getEmulatorPacket()
-            ?.entries.find((e) => e.vin === vin)?.script;
-    } catch (error) {
-        return fail("trusted graph carries no emulator packet", error);
-    }
-    if (!script || script.length === 0) fail("trusted graph carries no provider script");
-    const base = pinHex(args.emulatorXOnly, "emulator pin");
-    return hex.encode(computeArkadeScriptPublicKey(hex.decode(base), script as Uint8Array));
+    const keys = providerCosignerKeys(args);
+    const first = keys.values().next();
+    if (first.done) return fail("trusted graph names no provider-signed input");
+    return first.value;
 }
 
 export async function submitJointFill(args: {
@@ -683,7 +707,7 @@ export async function submitJointFill(args: {
     const ownerPins = normalizeOwnerKeys(args.ownerKeys, expected.inputOwners);
     const emulatorPin = pinHex(pins.emulatorXOnly, "emulator pin");
     const serverPin = pinHex(pins.serverXOnly, "server pin");
-    const providerPin = providerCosignerKey({
+    const providerPins = providerCosignerKeys({
         expected,
         emulatorXOnly: pins.emulatorXOnly,
         template,
@@ -749,7 +773,7 @@ export async function submitJointFill(args: {
             ownerPins,
             emulatorPin,
             serverPin,
-            providerPin,
+            providerPins,
         });
     } catch (error) {
         if (error instanceof JointSubmissionAmbiguousError) throw error;
@@ -780,7 +804,7 @@ const assertResponseSigs = (args: {
     ownerPins: Map<string, Set<string>>;
     emulatorPin: string;
     serverPin: string;
-    providerPin: string;
+    providerPins: ReadonlyMap<number, string>;
 }): void => {
     const {
         signedArk,
@@ -791,7 +815,7 @@ const assertResponseSigs = (args: {
         ownerPins,
         emulatorPin,
         serverPin,
-        providerPin,
+        providerPins,
     } = args;
     for (let i = 0; i < signedArk.inputsLength; i++) {
         if (owners[i] === null) continue;
@@ -815,6 +839,10 @@ const assertResponseSigs = (args: {
         throw new Error("trusted graph names no provider-signed input");
     }
     for (const i of providerInputs) {
+        const providerPin = providerPins.get(i);
+        if (providerPin === undefined) {
+            throw new Error(`provider input ${i} has no pinned cosigner`);
+        }
         const entries = tapScriptSigEntries(signedArk, i);
         if (entries.length === 0) {
             throw new Error(`provider input ${i} carries no server or provider signature`);
@@ -843,7 +871,7 @@ const assertResponseSigs = (args: {
                 const cosigned =
                     entry.pubKeyHex === emulatorPin ||
                     entry.pubKeyHex === serverPin ||
-                    entry.pubKeyHex === providerPin;
+                    entry.pubKeyHex === providerPins.get(i);
                 if (!cosigned) {
                     throw new Error(
                         `emulator checkpoint ${i} carries a signature from unpinned key ${entry.pubKeyHex}`,
