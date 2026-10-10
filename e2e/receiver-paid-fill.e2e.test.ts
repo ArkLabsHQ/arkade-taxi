@@ -6,6 +6,7 @@ import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
 import { preEffectRequest } from "./admission.js";
 import { liveScenario } from "./scenarios.js";
 import {
+    assetOutputs,
     claimFromFeed,
     expectReceipt,
     freshCoin,
@@ -37,7 +38,7 @@ liveScenario("receiver-paid-fill-claim", async () => {
     const bound: { release?: () => Promise<void> } = {};
     try {
         const bobCoin = await freshCoin(live, "receiverSats", BOB_COIN_SATS);
-        const quoted = await quotedFill(live, bound);
+        const quoted = await quotedFill(live);
         const { quote, graph, taxiInputIndexes, bobAddress, assetId, dust, minted, bob } = quoted;
         const operatorBefore = await walletBalance(live.actors.operator, minted.assetId);
         const posted = await signAsCaller(quoted);
@@ -139,9 +140,17 @@ liveScenario("receiver-paid-fill-claim", async () => {
         const { tx } = await terminal(live, covenant, "recycled", txid);
         expectReceipt(tx, 0, dust + SATS_FARE, live.info.operatorKey);
         expect(tx.getOutput(1).amount).toBe(BigInt(BOB_COIN_SATS) - SATS_FARE);
+        expect(tx.getOutput(1).script).toEqual(destination);
+        // The transaction itself, then the wallet catching up to it: a balance
+        // read alone races the recycle it is meant to observe.
+        expect(assetOutputs(tx, minted.assetId)).toEqual([[1, DELIVERED]]);
+        const bobObserved = await poll(
+            "Bob holds the delivery less his fare",
+            () => walletBalance(bob, minted.assetId),
+            (value) => value.sats === bobBefore.sats - SATS_FARE && value.units === DELIVERED,
+            120_000,
+        );
         const operatorAfter = await walletBalance(live.actors.operator, minted.assetId);
-        const bobAfter = await walletBalance(bob, minted.assetId);
-        expect(bobAfter.units - bobBefore.units).toBe(DELIVERED);
 
         evidence("receiver-paid-fill-claim", {
             fillId: submitted.fillId,
@@ -159,6 +168,9 @@ liveScenario("receiver-paid-fill-claim", async () => {
             emulatorKey: live.info.emulatorKey,
             serverKey: live.info.serverKey,
             operatorSatsDelta: operatorAfter.sats - operatorBefore.sats,
+            recycleAssets: assetOutputs(tx, minted.assetId),
+            bobBefore,
+            bobObserved,
             recycleTxid: txid,
         });
     } finally {

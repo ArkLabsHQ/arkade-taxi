@@ -53,7 +53,7 @@ export function evidence(scenario: string, fields: Record<string, unknown>) {
  * scenarios need before they build a graph of their own. Returns the pieces a
  * caller needs to perform the role the solver will.
  */
-export async function quotedFill(live: Live, bound: { release?: () => Promise<void> }) {
+export async function quotedFill(live: Live) {
     const maker = live.actors.receiverWithAsset;
     const solver = live.actors.sender;
     const bob = live.actors.receiverSats;
@@ -219,7 +219,6 @@ export async function quotedFill(live: Live, bound: { release?: () => Promise<vo
         quote,
         graph,
         taxiInputIndexes,
-        bound,
     };
 }
 

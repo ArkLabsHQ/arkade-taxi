@@ -5,25 +5,21 @@ import { liveScenario } from "./scenarios.js";
 import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport.js";
 
 /**
- * Its own stack, like `covenant-unilateral-exit-with-arkd-down`. An ambiguous
- * submission is the documented unresolved state, and nothing resolves it yet:
- * there is no fill reconciler, no admin action cancels a `locking` advance, and
- * the lockup reconciler deliberately leaves an unobserved covenant alone rather
- * than guess. So this scenario cannot hand a usable stack to the next one.
- */
-/**
  * The claim phase 7 gates on: with `assertSolverAuthorised` deleted, nothing
  * pins the caller's keys, so an under-signed foreign input must fail the whole
- * submission rather than move anything. This posts a graph with its last
- * caller-owned input deliberately unsigned and records exactly what the
- * provider answered.
+ * submission rather than move anything. Posts a graph with a caller-owned input
+ * deliberately unsigned and records exactly what the provider answered.
+ *
+ * On its own stack, like `covenant-unilateral-exit-with-arkd-down`: an ambiguous
+ * submission is the documented unresolved state, and nothing resolves it yet —
+ * no fill reconciler, no admin action that cancels a `locking` advance, and
+ * `reconciler.ts` leaves an unobserved covenant alone rather than guess.
  */
 liveScenario("fill-undersigned-foreign-input", async () => {
     const live = await openLive();
-    const bound: { release?: () => Promise<void> } = {};
     const observed: Record<string, unknown> = {};
     try {
-        const quoted = await quotedFill(live, bound);
+        const quoted = await quotedFill(live);
         const { quote, taxiInputIndexes } = quoted;
         const posted = await signAsCaller(quoted, { underSign: true });
         expect(posted.unsigned.length).toBeGreaterThan(0);

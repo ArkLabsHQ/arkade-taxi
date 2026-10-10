@@ -21,6 +21,12 @@ class LiveSequencer extends BaseSequencer {
             "refund-recovery",
             "resilience",
             "suite-integrity",
+            // The isolated stack runs first (`main(true)`), and a file missing
+            // from this list sorts to the front. The under-signed fill leaves a
+            // `locking` advance nothing resolves yet, which trips the next
+            // scenario's boundary check, so it must be the last of the two.
+            "unilateral-exit",
+            "fill-undersigned",
         ];
         return [...files].sort(
             (a, b) =>
