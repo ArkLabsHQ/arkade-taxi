@@ -385,6 +385,19 @@ const schemas: Record<string, Schema> = {
                 recoveryLocktime: ref("TaggedLocktime"),
                 createdAt: unixSeconds,
                 expiresAt,
+                operatorInputs: {
+                    type: "array",
+                    items: ref("FundingInput"),
+                    minItems: 1,
+                    maxItems: 256,
+                    description:
+                        "The Taxi coins this quote reserved. A builder spends exactly these and no other Taxi coin.",
+                },
+                operatorScript: {
+                    ...hex,
+                    description:
+                        "The one scriptPubKey every Taxi output must pay: its change and any sats fare.",
+                },
             },
             {
                 boundFillId: {
@@ -845,6 +858,18 @@ const examples = {
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
+        operatorInputs: [
+            {
+                txid: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                vout: 0,
+                value: "20000",
+                tapTree:
+                    "0100455120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                spendLeaf: "20531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337ac",
+                expiry: { kind: "height", value: "900000" },
+            },
+        ],
+        operatorScript: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
     },
     receiverPaidQuote: {
         quoteId: "adv-1",
@@ -892,6 +917,18 @@ const examples = {
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
+        operatorInputs: [
+            {
+                txid: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                vout: 0,
+                value: "20000",
+                tapTree:
+                    "0100455120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                spendLeaf: "20531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337ac",
+                expiry: { kind: "height", value: "900000" },
+            },
+        ],
+        operatorScript: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
         payer: "receiver",
         receiverFare: {
             currency: "sats",

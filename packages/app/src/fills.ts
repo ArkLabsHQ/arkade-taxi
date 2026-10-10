@@ -122,10 +122,19 @@ export function assertFillGraph(args: FillGraphArgs): void {
         const coin = observed.get(point(inputs[index]!));
         if (!coin) refuse("fill_taxi_inputs_differ", 400, "spends an unobserved Taxi coin");
         const tree = VtxoScript.decode(snapshot!.tapTree);
+        // findLeaf throws on a leaf the tree does not carry, so the lookup is
+        // the test; letting it escape would answer 500 instead of refusing.
+        const reserves = (): boolean => {
+            try {
+                return Boolean(tree.findLeaf(hex.encode(snapshot!.spendLeaf)));
+            } catch {
+                return false;
+            }
+        };
         if (
             BigInt(coin!.value) !== snapshot!.value ||
             coin!.script !== hex.encode(tree.pkScript) ||
-            !tree.findLeaf(hex.encode(snapshot!.spendLeaf)) ||
+            !reserves() ||
             (coin!.assets ?? []).length > 0 ||
             !isDeepStrictEqual(normalizeExpiry(coin!), snapshot!.expiry)
         )

@@ -1,4 +1,4 @@
-import { ArkAddress, asset } from "@arkade-os/sdk";
+import { ArkAddress, VtxoScript, asset } from "@arkade-os/sdk";
 import {
     DustCovenantScript,
     type DustCovenantParams,
@@ -208,6 +208,51 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         if (actual.kind !== minimum.kind || actual.value < minimum.value)
             reject(VerificationErrorCode.Locktime, `${label} is below the caller minimum`);
     assertExitDelayFloor(quote.params.exitDelay, expect.minExitDelay);
+
+    // The reserved coins and the script every Taxi output must pay. Checked on
+    // the quote's own terms, not re-derived from `info.operatorKey`: the Taxi
+    // may legitimately pay a different script later, and what matters is that a
+    // builder builds against the script the Taxi said it would accept.
+    if (!quote.operatorInputs.length)
+        reject(VerificationErrorCode.OperatorFunding, "receive quote reserves no operator funding");
+    if (
+        quote.operatorScript.length !== 34 ||
+        quote.operatorScript[0] !== 0x51 ||
+        quote.operatorScript[1] !== 0x20
+    )
+        reject(
+            VerificationErrorCode.OperatorFunding,
+            "receive quote operatorScript is not a taproot output script",
+        );
+    const seen = new Set<string>();
+    for (const [index, input] of quote.operatorInputs.entries()) {
+        const at = `operator input ${index}`;
+        const outpoint = `${input.txid}:${input.vout}`;
+        if (seen.has(outpoint))
+            reject(VerificationErrorCode.OperatorFunding, `${at} repeats an outpoint`);
+        seen.add(outpoint);
+        if (input.value <= 0n)
+            reject(VerificationErrorCode.OperatorFunding, `${at} reserves no value`);
+        let leaf: unknown;
+        try {
+            leaf = VtxoScript.decode(input.tapTree).findLeaf(hex.encode(input.spendLeaf));
+        } catch {
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} spend leaf is not in its own tap tree`,
+            );
+        }
+        if (!leaf)
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} spend leaf is not in its own tap tree`,
+            );
+        if (input.expiry.kind !== floor.kind || input.expiry.value < floor.value)
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} expires before the quote's own input expiry floor`,
+            );
+    }
 
     const now = args.now ?? Math.floor(Date.now() / 1000);
     if (quote.createdAt >= quote.expiresAt || now >= quote.expiresAt)

@@ -7,6 +7,7 @@
 import type {
     AssetIdWire,
     AssetRuleWire,
+    FundingInputValue,
     ClaimsChangedEvent,
     ClaimsSnapshotResponse,
     FareWire,
@@ -23,6 +24,7 @@ import type {
 import {
     assetIdFromWire,
     fareFromWire,
+    fundingInputFromWire,
     hexToBytes,
     quoteParamsFromWire,
     satsFromWire,
@@ -100,6 +102,8 @@ export interface DecodedReceiveQuote {
     recoveryLocktime: { kind: "height" | "time"; value: bigint };
     createdAt: number;
     expiresAt: number;
+    operatorInputs: FundingInputValue[];
+    operatorScript: Uint8Array;
     boundFillId?: string;
     payer?: "receiver";
     receiverFare?: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
@@ -494,6 +498,8 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "recoveryLocktime",
                 "createdAt",
                 "expiresAt",
+                "operatorInputs",
+                "operatorScript",
             ],
             ["boundFillId", "payer", "receiverFare", "unclaimedMode"],
             "receive quote",
@@ -524,6 +530,11 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
         };
         const quoteId = str(quote.quoteId, "receive quote.quoteId");
         if (quoteId.length > 128) invalid("receive quote.quoteId is too long");
+        if (!Array.isArray(quote.operatorInputs))
+            invalid("receive quote.operatorInputs must be an array");
+        const operatorInputs = (quote.operatorInputs as unknown[]).map((input, i) =>
+            fundingInputFromWire(input, `receive quote.operatorInputs[${i}]`),
+        );
         return {
             quoteId,
             state,
@@ -540,6 +551,11 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             recoveryLocktime: deadline("recoveryLocktime"),
             createdAt: uint(quote.createdAt, "receive quote.createdAt"),
             expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
+            operatorInputs,
+            operatorScript: hexToBytes(
+                quote.operatorScript as string,
+                "receive quote.operatorScript",
+            ),
             ...(boundFillId === undefined ? {} : { boundFillId }),
             ...(quote.payer === undefined
                 ? {}

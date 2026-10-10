@@ -10,7 +10,7 @@ import {
     type Database,
 } from "@arkade-taxi/db";
 import { DustCovenantScript, payoutPkScript } from "@arkade-taxi/covenant";
-import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
+import { assetIdToWire, bytesToHex, fundingInputToWire } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
 import {
     createReceiveQuote,
@@ -173,6 +173,8 @@ describe("createReceiveQuote", () => {
                 "fare",
                 "inputExpiryFloor",
                 "makerPublicKey",
+                "operatorInputs",
+                "operatorScript",
                 "params",
                 "quoteId",
                 "receiverAddress",
@@ -185,6 +187,16 @@ describe("createReceiveQuote", () => {
             value: 20_000n,
             expiry: { kind: "height", value: 900_000n },
         });
+        // Published verbatim from the reservation, so a builder spends exactly these.
+        expect(response.operatorInputs).toEqual([
+            fundingInputToWire(quotes.get("receive-1")!.operatorInputs[0]!),
+        ]);
+        expect(response.operatorScript).toBe(
+            bytesToHex(
+                new ArkAddress(config().serverPubkey, config().operatorKey, config().addressHrp)
+                    .pkScript,
+            ),
+        );
         expect(advances.rows.size).toBe(0);
     });
 
@@ -599,7 +611,7 @@ describe("getReceiveQuote", () => {
         const world = await createBoundJointFill();
         try {
             const read = getReceiveQuote(
-                { receiveQuotes: world.receiveQuotes, now: () => NOW },
+                { receiveQuotes: world.receiveQuotes, now: () => NOW, config: world.config },
                 "receive-1",
             );
             expect(read.state).toBe("bound");

@@ -21,7 +21,9 @@ import {
 } from "@arkade-taxi/db";
 import {
     assetIdFromWire,
+    bytesToHex,
     fareToWire,
+    fundingInputToWire,
     hexToBytes,
     quoteParamsToWire,
     satsFromWire,
@@ -459,7 +461,7 @@ async function createReserved(
         },
         expectedReservedOutpoints: reserved,
     });
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }
 
 function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadline {
@@ -522,7 +524,7 @@ const sameOutpoints = (a: readonly Outpoint[], b: readonly Outpoint[]): boolean 
     return first.size === b.length && b.every(({ txid, vout }) => first.has(`${txid}:${vout}`));
 };
 
-function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
+function toResponse(quote: ReceiveQuote, config: RuntimeConfig): ReceiveQuoteResponse {
     return {
         quoteId: quote.id,
         state: quote.state,
@@ -542,6 +544,10 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
         },
         createdAt: quote.createdAt,
         expiresAt: quote.expiresAt,
+        operatorInputs: quote.operatorInputs.map(fundingInputToWire),
+        operatorScript: bytesToHex(
+            new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).pkScript,
+        ),
         ...(quote.boundFillId === undefined ? {} : { boundFillId: quote.boundFillId }),
         ...(quote.payer === "receiver"
             ? {
@@ -554,11 +560,11 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
 }
 
 export function getReceiveQuote(
-    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now">,
+    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now" | "config">,
     id: string,
 ): ReceiveQuoteResponse {
     deps.receiveQuotes.expireQuotes(deps.now());
     const quote = deps.receiveQuotes.get(id);
     if (!quote) throw new ServiceError(ErrorCode.NotFound, 404, `receive quote ${id} not found`);
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }

@@ -343,6 +343,12 @@ export interface ReceiveQuoteResponse {
     recoveryLocktime: TaggedLocktimeWire;
     createdAt: number;
     expiresAt: number;
+    /** The Taxi coins this quote reserved, with the taproot evidence a builder
+     * needs, and the one script every Taxi output must pay. `/v1/info` already
+     * publishes `operatorKey`, so these coins were always enumerable from the
+     * indexer; what is new is knowing which ones this quote holds. */
+    operatorInputs: FundingInputWire[];
+    operatorScript: string;
     /** Read-only: the fill this quote is bound to, present only while `bound`.
      * Recovers a lost quote-creation response; it authorises nothing. */
     boundFillId?: string;
