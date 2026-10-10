@@ -7,6 +7,8 @@ const SWAP_SCENARIOS = [
     "receiver-paid-sats-fare-claim",
     "receiver-paid-asset-fare-claim",
     "receiver-paid-mode1-reclaim",
+    "receiver-paid-fill-claim",
+    "fill-undersigned-foreign-input",
 ];
 // Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
 const ISOLATED_SCENARIOS = ["covenant-unilateral-exit-with-arkd-down"];

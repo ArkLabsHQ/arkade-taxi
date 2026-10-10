@@ -412,6 +412,7 @@ describe("package manager process boundary", () => {
         "e2e/sponsored.e2e.test.ts",
         "e2e/joint-fill.e2e.test.ts",
         "e2e/receiver-paid.e2e.test.ts",
+        "e2e/receiver-paid-fill.e2e.test.ts",
         "e2e/exposure.e2e.test.ts",
         "e2e/verify-quote.e2e.test.ts",
         "e2e/renewal.e2e.test.ts",
@@ -434,7 +435,9 @@ describe("package manager process boundary", () => {
         expect(direct.mode).toBe("direct");
         expect(direct.emulatorImage).toBe("emulator:local");
         expect(direct.tests).toEqual(
-            task12Tests.filter((path) => !/\/(joint-fill|receiver-paid)\./.test(path)),
+            task12Tests.filter(
+                (path) => !/\/(joint-fill|receiver-paid|receiver-paid-fill)\.e2e\./.test(path),
+            ),
         );
         for (const options of [resolveE2eOptions([], { ci: "true" }), direct])
             expect(options.isolatedTests).toEqual(["e2e/unilateral-exit.e2e.test.ts"]);

@@ -90,6 +90,8 @@ jobs:
                       e2e-artifacts/boundary-diagnostics.jsonl
                       e2e-artifacts/cltv-evidence.json
                       e2e-artifacts/renewal-r2.json
+                      e2e-artifacts/receiver-paid-fill-claim.json
+                      e2e-artifacts/fill-undersigned-foreign-input.json
                       e2e-artifacts/isolated/stack.json
                       e2e-artifacts/isolated/results.json
                       e2e-artifacts/isolated/taxi.log

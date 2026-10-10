@@ -12,6 +12,7 @@ class LiveSequencer extends BaseSequencer {
             // that jump chain time past every wallet's expiry headroom.
             "joint-fill",
             "receiver-paid",
+            "receiver-paid-fill",
             "exposure",
             "verify-quote",
             // Its own operator key and ledger, but it settles a batch, so it
