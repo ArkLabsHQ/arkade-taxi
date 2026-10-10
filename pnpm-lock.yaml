@@ -78,9 +78,6 @@ importers:
       '@arkade-os/sdk':
         specifier: file:../../vendor/carrier/arkade-os-sdk-0.4.78-f49395ac.tgz
         version: file:vendor/carrier/arkade-os-sdk-0.4.78-f49395ac.tgz
-      '@arkade-os/solver-discovery':
-        specifier: 0.2.7
-        version: 0.2.7
       '@arkade-os/swap':
         specifier: file:../../vendor/carrier/arkade-os-swap-0.0.24-f49395ac.tgz
         version: file:vendor/carrier/arkade-os-swap-0.0.24-f49395ac.tgz

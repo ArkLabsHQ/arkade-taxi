@@ -5,8 +5,7 @@ import {
     type ArkInfo,
     type NetworkName,
 } from "@arkade-os/sdk";
-import type { ArkadeCarrierChoice } from "./receiveCarrier.js";
-import { TaxiClient, taxiAssetId, verifyReceiveQuote } from "../index.js";
+import { TaxiClient, taxiAssetId } from "../index.js";
 import { hex } from "@scure/base";
 import type { Bip21Taxi } from "./requests.js";
 import type { DirectTaxiMode } from "./send.js";
@@ -70,11 +69,6 @@ export interface TaxiProbeContext extends ArkadeContext {
     receiverAddress: string;
     fetch: typeof fetch;
     pageProtocol: string;
-}
-
-export interface ReceiverPaidCarrier {
-    choice: Extract<ArkadeCarrierChoice, { mode: "recycleReceiver" }>;
-    inputExpiryFloor: { kind: LocktimeDomain; value: bigint };
 }
 
 export const arkadeContextOf = (
@@ -319,79 +313,4 @@ export const probeBitcoinTaxi = async (
         operatorKey: taxi.operatorKey,
         fareId: taxi.fareId,
     });
-};
-
-/** Ask the probed Taxi for a quote the receiver pays, and verify it before anything relies on it. */
-export const receiverPaidCarrier = async (
-    taxi: Bip21Taxi,
-    info: TaxiInfo,
-    ctx: TaxiProbeContext,
-    payer: {
-        makerPublicKey: Uint8Array;
-        /** The floor the payer asked for, in `ctx.locktimeDomain`. */
-        fundingExpiry: bigint;
-        /** From `callerMinimum`. */
-        minimum: bigint;
-    },
-): Promise<ReceiverPaidCarrier> => {
-    if (taxi.payer === "sender") throw new Error("This request requires sender-covered delivery");
-    const { makerPublicKey } = payer;
-    const assetId = taxiAssetId(ctx.assetId);
-    const fare = taxi.fareId ? { fareId: taxi.fareId } : {};
-    const fundingExpiry = { kind: ctx.locktimeDomain, value: payer.fundingExpiry };
-    const minimum = { kind: ctx.locktimeDomain, value: payer.minimum };
-    const recoveryMinimum = { kind: "time" as const, value: callerRecoveryMinimum() };
-    const quote = await taxiClient(taxi.url, ctx.fetch).requestReceiveQuote({
-        receiverAddress: ctx.receiverAddress,
-        makerPublicKey,
-        assetId,
-        payer: "receiver",
-        fundingExpiry,
-        ...fare,
-    });
-    const verified = verifyReceiveQuote({
-        quote,
-        info,
-        trustedServerKey: ctx.serverKey,
-        trustedEmulatorKey: ctx.emulatorKey,
-        dust: ctx.dust,
-        vtxoMinAmount: ctx.vtxoMinAmount,
-        hrp: ctx.hrp,
-        expect: {
-            receiverAddress: ctx.receiverAddress,
-            makerPublicKey,
-            assetId,
-            payer: "receiver",
-            fundingExpiry,
-            ...fare,
-            maxServiceFareSats: 0n,
-            minRecoveryLocktime: recoveryMinimum,
-            minInputExpiryFloor: minimum,
-        },
-    });
-    const {
-        quoteId,
-        receiveAddress,
-        assetId: sdkAssetId,
-        physicalSats,
-        loanSats,
-        expiresAt,
-    } = verified.descriptor;
-    const floor = verified.quote.inputExpiryFloor;
-    return {
-        choice: {
-            mode: "recycleReceiver",
-            quote: {
-                quoteId,
-                receiveAddress,
-                makerPublicKey: verified.descriptor.makerPublicKey,
-                assetId: sdkAssetId,
-                physicalSats,
-                loanSats,
-                expiresAt,
-            },
-            taxi: { url: taxi.url, operatorKey: info.operatorKey },
-        },
-        inputExpiryFloor: { kind: floor.kind, value: BigInt(floor.value) },
-    };
 };
