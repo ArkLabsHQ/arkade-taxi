@@ -10,10 +10,11 @@ import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport.js"
  * submission rather than move anything. Posts a graph with a caller-owned input
  * deliberately unsigned and records exactly what the provider answered.
  *
- * On its own stack, like `covenant-unilateral-exit-with-arkd-down`: an ambiguous
- * submission is the documented unresolved state, and nothing resolves it yet —
- * no fill reconciler, no admin action that cancels a `locking` advance, and
- * `reconciler.ts` leaves an unobserved covenant alone rather than guess.
+ * Runs last in the suite, and nothing may follow it: an ambiguous submission is
+ * the documented unresolved state and nothing resolves it yet — no fill
+ * reconciler, no admin action that cancels a `locking` advance, and
+ * `reconciler.ts` leaves an unobserved covenant alone rather than guess. So the
+ * advance it leaves would trip the next scenario's boundary check.
  */
 liveScenario("fill-undersigned-foreign-input", async () => {
     const live = await openLive();

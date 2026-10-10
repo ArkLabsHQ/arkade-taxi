@@ -8,14 +8,10 @@ const SWAP_SCENARIOS = [
     "receiver-paid-asset-fare-claim",
     "receiver-paid-mode1-reclaim",
     "receiver-paid-fill-claim",
-];
-// Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
-const ISOLATED_SCENARIOS = [
-    "covenant-unilateral-exit-with-arkd-down",
-    // Leaves a `locking` advance nothing resolves yet: no fill reconciler, no
-    // admin cancel, and the lockup reconciler leaves an unobserved covenant be.
     "fill-undersigned-foreign-input",
 ];
+// Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
+const ISOLATED_SCENARIOS = ["covenant-unilateral-exit-with-arkd-down"];
 
 export function readScenarioIds(mode = "full") {
     if (!["full", "direct", "isolated"].includes(mode))

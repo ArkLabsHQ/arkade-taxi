@@ -91,12 +91,12 @@ jobs:
                       e2e-artifacts/cltv-evidence.json
                       e2e-artifacts/renewal-r2.json
                       e2e-artifacts/receiver-paid-fill-claim.json
+                      e2e-artifacts/fill-undersigned-foreign-input.json
                       e2e-artifacts/isolated/stack.json
                       e2e-artifacts/isolated/results.json
                       e2e-artifacts/isolated/taxi.log
                       e2e-artifacts/isolated/stack.log
                       e2e-artifacts/isolated/failure.log
-                      e2e-artifacts/isolated/fill-undersigned-foreign-input.json
                       e2e-artifacts/isolated/proxy-events.json
                       e2e-artifacts/isolated/boundary-diagnostics.jsonl
                       e2e-artifacts/isolated/unilateral-exit.json

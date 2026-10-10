@@ -21,11 +21,11 @@ class LiveSequencer extends BaseSequencer {
             "refund-recovery",
             "resilience",
             "suite-integrity",
-            // The isolated stack runs first (`main(true)`), and a file missing
-            // from this list sorts to the front. The under-signed fill leaves a
-            // `locking` advance nothing resolves yet, which trips the next
-            // scenario's boundary check, so it must be the last of the two.
-            "unilateral-exit",
+            // Dead last, and nothing may be added after it: it leaves a
+            // `locking` advance nothing resolves yet, which trips the boundary
+            // check the next scenario's `openLive` runs. The isolated stack
+            // cannot host it either — it runs first and shares one stack with
+            // `unilateral-exit`, which leaves its own `locked` advance.
             "fill-undersigned",
         ];
         return [...files].sort(

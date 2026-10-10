@@ -18,7 +18,7 @@ describe("live E2E result gate", () => {
     it("requires the full manifest by default and precisely the direct scenarios locally", () => {
         const full = readScenarioIds();
         const direct = readScenarioIds("direct");
-        expect(full).toHaveLength(25);
+        expect(full).toHaveLength(26);
         expect(direct).toHaveLength(20);
         const passing = {
             ...result(),
@@ -44,10 +44,7 @@ describe("live E2E result gate", () => {
 
     it("runs the isolated scenarios alone and keeps them out of the shared suite", () => {
         const isolated = readScenarioIds("isolated");
-        expect(isolated).toEqual([
-            "covenant-unilateral-exit-with-arkd-down",
-            "fill-undersigned-foreign-input",
-        ]);
+        expect(isolated).toEqual(["covenant-unilateral-exit-with-arkd-down"]);
         expect(readScenarioIds().filter((id: string) => isolated.includes(id))).toEqual([]);
     });
 

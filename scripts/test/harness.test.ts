@@ -419,6 +419,7 @@ describe("package manager process boundary", () => {
         "e2e/refund-recovery.e2e.test.ts",
         "e2e/resilience.e2e.test.ts",
         "e2e/suite-integrity.e2e.test.ts",
+        "e2e/fill-undersigned.e2e.test.ts",
     ];
 
     it("resolves only the exact Task 12 live test pair before orchestration", () => {
@@ -436,14 +437,14 @@ describe("package manager process boundary", () => {
         expect(direct.emulatorImage).toBe("emulator:local");
         expect(direct.tests).toEqual(
             task12Tests.filter(
-                (path) => !/\/(joint-fill|receiver-paid|receiver-paid-fill)\.e2e\./.test(path),
+                (path) =>
+                    !/\/(joint-fill|receiver-paid|receiver-paid-fill|fill-undersigned)\.e2e\./.test(
+                        path,
+                    ),
             ),
         );
         for (const options of [resolveE2eOptions([], { ci: "true" }), direct])
-            expect(options.isolatedTests).toEqual([
-                "e2e/unilateral-exit.e2e.test.ts",
-                "e2e/fill-undersigned.e2e.test.ts",
-            ]);
+            expect(options.isolatedTests).toEqual(["e2e/unilateral-exit.e2e.test.ts"]);
         for (const args of [
             ["--direct", task12Tests[0]],
             ["--direct", "--direct"],
