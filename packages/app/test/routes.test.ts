@@ -1766,6 +1766,47 @@ describe("GET /ready", () => {
         });
     });
 
+    it("surfaces an unresolved fill liability on readiness and health", async () => {
+        const router = createRoutes({
+            ...deps(),
+            fillReconciler: {
+                status: () => ({
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["fill_liability_unresolved"],
+                }),
+            },
+        });
+        const ready = await router.request("/ready");
+        expect(ready.status).toBe(503);
+        const health = await router.request("/health");
+        expect(await health.json()).toMatchObject({
+            status: "degraded",
+            blockers: ["fill_liability_unresolved"],
+            reconciler: {
+                fills: {
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    blockers: ["fill_liability_unresolved"],
+                },
+            },
+        });
+    });
+
+    it("waits for fill reconciliation before readiness", async () => {
+        const router = createRoutes({
+            ...deps(),
+            fillReconciler: {
+                status: () => ({ lastTickAt: null, submitting: 1, blockers: [] }),
+            },
+        });
+        const res = await router.request("/ready");
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({
+            reason: "the fill reconciler has not completed a tick",
+        });
+    });
+
     it("merges swap-fill reconciler blockers into readiness and health", async () => {
         const router = createRoutes({
             ...deps(),

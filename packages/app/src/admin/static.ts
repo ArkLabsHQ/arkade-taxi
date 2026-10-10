@@ -1934,6 +1934,10 @@ const BLOCKER_GROUPS = [
         "The Taxi has not finished its first check of swap fills in progress.",
         "swap_fill_reconciler_not_started",
     ],
+    [
+        "The Taxi has not finished its first check of fills in progress.",
+        "fill_reconciler_not_started",
+    ],
     ["The recovery sweeper has not run yet.", "sweeper_not_started"],
     [
         "The recovery sweeper has stopped running on time. Lent sats are recovered only while it runs.",
@@ -2013,6 +2017,14 @@ const BLOCKER_GROUPS = [
         "covenant_terminal_evidence_unavailable",
     ],
     ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
+    [
+        "A fill has an unresolved submission. Its coins stay reserved until reconciled.",
+        "fill_liability_unresolved",
+    ],
+    [
+        "A fill's inputs have contradictory spend evidence. Keep its coins reserved and investigate.",
+        "fill_unexpected_spend",
+    ],
     ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
     [
         "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",

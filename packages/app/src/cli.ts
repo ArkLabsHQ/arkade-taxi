@@ -33,6 +33,7 @@ import { createLockupReconciler } from "./reconciler.js";
 import { custodySolvencyView } from "./custody.js";
 import { DelegateeClient } from "./delegatee.js";
 import { createSwapFillReconciler } from "./swapFillReconciler.js";
+import { createFillReconciler } from "./fillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
@@ -238,6 +239,12 @@ async function runServe(): Promise<void> {
         indexer: runtime.providers.indexerProvider,
         now: seconds,
     });
+    const fillReconciler = createFillReconciler({
+        fills,
+        advances,
+        indexer: runtime.providers.indexerProvider,
+        now: seconds,
+    });
 
     let lifecycle: ReturnType<typeof createServiceLifecycle>;
     let running = false;
@@ -377,6 +384,7 @@ async function runServe(): Promise<void> {
         sweeper,
         reconciler,
         swapFillReconciler,
+        fillReconciler,
         sweeperStaleAfterSeconds: intervalSeconds * 3,
         sweeperIntervalMs: config.reconcileIntervalMs,
         sweeperRunning: () => running,
@@ -424,10 +432,12 @@ async function runServe(): Promise<void> {
         reconcile: async () => {
             await timed("lifecycle.reconcile", () => reconciler.tick());
             await timed("lifecycle.swapFills", () => swapFillReconciler.tick());
+            await timed("lifecycle.fills", () => fillReconciler.tick());
             return {
                 blockers: [
                     ...reconciler.status().blockers,
                     ...swapFillReconciler.status().blockers,
+                    ...fillReconciler.status().blockers,
                 ],
             };
         },

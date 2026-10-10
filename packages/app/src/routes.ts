@@ -29,6 +29,7 @@ import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
 import type { WatcherBlocker } from "./watcher.js";
 import type { SwapFillReconciler } from "./swapFillReconciler.js";
+import type { FillReconciler } from "./fillReconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
@@ -53,6 +54,7 @@ export interface RouteDeps extends QuoteDeps {
     sweeper: Pick<Sweeper, "status">;
     reconciler: Pick<LockupReconciler, "status">;
     swapFillReconciler?: Pick<SwapFillReconciler, "status">;
+    fillReconciler?: Pick<FillReconciler, "status">;
     /** Seconds since the last completed tick after which /health reports
      * degraded. */
     sweeperStaleAfterSeconds: number;
@@ -119,6 +121,11 @@ export interface HealthResponse {
         lastWatcherScanAt: number | null;
         watching: number;
         activelyScanned: number;
+        fills?: {
+            lastTickAt: number | null;
+            submitting: number;
+            blockers: string[];
+        };
         swapFills?: {
             lastTickAt: number | null;
             submitting: number;
@@ -166,6 +173,7 @@ export function operationalSnapshot(
         | "sweeper"
         | "reconciler"
         | "swapFillReconciler"
+        | "fillReconciler"
         | "sweeperStaleAfterSeconds"
         | "startup"
         | "proceeds"
@@ -178,6 +186,7 @@ export function operationalSnapshot(
     const runtime = deps.runtime?.safety();
     const reconciler = deps.reconciler.status();
     const swapFills = deps.swapFillReconciler?.status();
+    const fills = deps.fillReconciler?.status();
     const paused = deps.policy.get().paused;
     const startup = deps.startup?.();
     const proceeds = deps.proceeds?.();
@@ -195,6 +204,8 @@ export function operationalSnapshot(
         ...(reconciler.lastTickAt === null ? ["reconciler_not_started"] : []),
         ...(swapFills?.blockers ?? []).map((code) => safeCode(code, "reconciler_blocked")),
         ...(swapFills && swapFills.lastTickAt === null ? ["swap_fill_reconciler_not_started"] : []),
+        ...(fills?.blockers ?? []).map((code) => safeCode(code, "reconciler_blocked")),
+        ...(fills && fills.lastTickAt === null ? ["fill_reconciler_not_started"] : []),
         ...(age === null
             ? ["sweeper_not_started"]
             : age > deps.sweeperStaleAfterSeconds
@@ -218,15 +229,17 @@ export function operationalSnapshot(
     const reason =
         uniqueBlockers[0] === "reconciler_not_started"
             ? "the lockup reconciler has not completed a tick"
-            : uniqueBlockers[0] === "swap_fill_reconciler_not_started"
-              ? "the swap-fill reconciler has not completed a tick"
-              : uniqueBlockers[0] === "sweeper_not_started"
-                ? "the sweeper has not completed a tick"
-                : uniqueBlockers[0] === "chain_height_unavailable"
-                  ? "verified chain height is unavailable"
-                  : uniqueBlockers[0] === "chain_time_unavailable"
-                    ? "verified chain median time is unavailable"
-                    : uniqueBlockers[0];
+            : uniqueBlockers[0] === "fill_reconciler_not_started"
+              ? "the fill reconciler has not completed a tick"
+              : uniqueBlockers[0] === "swap_fill_reconciler_not_started"
+                ? "the swap-fill reconciler has not completed a tick"
+                : uniqueBlockers[0] === "sweeper_not_started"
+                  ? "the sweeper has not completed a tick"
+                  : uniqueBlockers[0] === "chain_height_unavailable"
+                    ? "verified chain height is unavailable"
+                    : uniqueBlockers[0] === "chain_time_unavailable"
+                      ? "verified chain median time is unavailable"
+                      : uniqueBlockers[0];
     return {
         ready,
         body: {
@@ -337,6 +350,17 @@ export function operationalSnapshot(
                 lastWatcherScanAt: reconciler.lastWatcherScanAt ?? null,
                 watching: reconciler.watching ?? 0,
                 activelyScanned: reconciler.activelyScanned ?? 0,
+                ...(fills
+                    ? {
+                          fills: {
+                              lastTickAt: fills.lastTickAt,
+                              submitting: fills.submitting,
+                              blockers: fills.blockers.map((code) =>
+                                  safeCode(code, "reconciler_blocked"),
+                              ),
+                          },
+                      }
+                    : {}),
                 ...(swapFills
                     ? {
                           swapFills: {

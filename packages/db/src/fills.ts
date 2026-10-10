@@ -191,6 +191,7 @@ export class FillRepository {
                 for (const input of fill.taxiInputs)
                     for (const [table, column] of [
                         ["operator_input_reservations", "advance_id"],
+                        ["receive_quote_reservations", "quote_id"],
                         ["proceeds_inputs", "job_id"],
                         ["fill_reservations", "fill_id"],
                     ] as const)
@@ -278,6 +279,145 @@ export class FillRepository {
         return row ? fromRow(row) : undefined;
     }
 
+    listByState(state: FillState): Fill[] {
+        assertNativeAccess(this.#db);
+        return this.#db
+            .prepare<[FillState], FillRow>("SELECT * FROM fills WHERE state = ? ORDER BY id")
+            .safeIntegers(true)
+            .all(state)
+            .map(fromRow);
+    }
+
+    reconcileCandidates(now: number): Fill[] {
+        assertNativeAccess(this.#db);
+        return this.#db
+            .prepare<[number, number], FillRow>(
+                `SELECT * FROM fills WHERE state = 'submitting'
+             AND (lease_until IS NULL OR lease_until <= ?)
+             AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY id`,
+            )
+            .safeIntegers(true)
+            .all(now, now)
+            .map(fromRow);
+    }
+
+    reconcileSettled(snapshot: Fill, txid: string, outpoint: FillOutpoint, now: number): boolean {
+        assertNativeAccess(this.#db);
+        return this.#db
+            .transaction(() => {
+                if (!snapshot.submitInvoked || !this.#matches(snapshot, now)) return false;
+                if (outpoint.txid !== txid || outpoint.vout !== snapshot.covenantOutputIndex)
+                    throw new Error("fill: settlement outpoint disagrees");
+                this.#lockLiability(snapshot, txid, outpoint, now);
+                this.#db
+                    .prepare(
+                        `UPDATE fills SET state = 'settled', txid = ?, outpoint_txid = ?, outpoint_vout = ?,
+                 failure_code = NULL, failure_detail = NULL, lease_owner = NULL, lease_token = NULL,
+                 lease_until = NULL, next_attempt_at = NULL, updated_at = max(updated_at, ?) WHERE id = ?`,
+                    )
+                    .run(txid, outpoint.txid, outpoint.vout, now, snapshot.id);
+                this.#release(snapshot.id);
+                return true;
+            })
+            .immediate();
+    }
+
+    reconcileCancelled(snapshot: Fill, code: string, now: number, spentTxid?: string): boolean {
+        assertNativeAccess(this.#db);
+        return this.#db
+            .transaction(() => {
+                if (!this.#matches(snapshot, now)) return false;
+                if (snapshot.submitInvoked && !spentTxid) return false;
+                this.#cancelLiability(snapshot.id, code, now);
+                this.#db
+                    .prepare(
+                        `UPDATE fills SET state = 'cancelled', spent_txid = ?, failure_code = ?,
+                 lease_owner = NULL, lease_token = NULL, lease_until = NULL, next_attempt_at = NULL,
+                 updated_at = max(updated_at, ?) WHERE id = ?`,
+                    )
+                    .run(spentTxid ?? null, code, now, snapshot.id);
+                this.#release(snapshot.id);
+                return true;
+            })
+            .immediate();
+    }
+
+    #matches(snapshot: Fill, now: number): boolean {
+        const current = this.get(snapshot.id);
+        return (
+            current !== undefined &&
+            current.state === "submitting" &&
+            current.submitInvoked === snapshot.submitInvoked &&
+            current.leaseToken === snapshot.leaseToken &&
+            current.leaseOwner === snapshot.leaseOwner &&
+            current.leaseUntil === snapshot.leaseUntil &&
+            current.updatedAt === snapshot.updatedAt &&
+            (current.leaseUntil === undefined || current.leaseUntil <= now)
+        );
+    }
+
+    #lockLiability(fill: Fill, txid: string, outpoint: FillOutpoint, now: number): void {
+        this.#assertBound(fill);
+        const advance = this.#db
+            .prepare<
+                [string],
+                {
+                    state: string;
+                    ark_txid: string | null;
+                    outpoint_txid: string | null;
+                    outpoint_vout: bigint | null;
+                }
+            >("SELECT state, ark_txid, outpoint_txid, outpoint_vout FROM advances WHERE id = ?")
+            .safeIntegers(true)
+            .get(fill.quoteId);
+        if (!advance) throw new Error(`fill: linked advance ${fill.quoteId} is missing`);
+        if (advance.state === "locking") {
+            this.#db
+                .prepare(
+                    `UPDATE advances SET state = 'locked', ark_txid = ?, outpoint_txid = ?, outpoint_vout = ?,
+                 last_observed_at = ?, updated_at = max(updated_at, ?), failure_code = NULL,
+                 failure_detail = NULL WHERE id = ? AND state = 'locking'`,
+                )
+                .run(txid, outpoint.txid, outpoint.vout, now, now, fill.quoteId);
+        } else if (
+            !["locked", "recovering", "recycled", "purchased", "refunded", "recovered"].includes(
+                advance.state,
+            ) ||
+            advance.ark_txid !== txid ||
+            advance.outpoint_txid !== outpoint.txid ||
+            Number(advance.outpoint_vout) !== outpoint.vout
+        )
+            throw new Error(`fill: linked advance ${fill.quoteId} observation disagrees`);
+    }
+
+    #cancelLiability(id: string, code: string, now: number): void {
+        const fill = this.get(id)!;
+        this.#assertBound(fill);
+        const changed = this.#db
+            .prepare(
+                `UPDATE advances SET state = 'expired', failure_code = ?,
+             submission_lease_owner = NULL, submission_lease_token = NULL, submission_lease_until = NULL,
+             submission_next_attempt_at = NULL, updated_at = max(updated_at, ?)
+             WHERE id = ? AND state = 'locking'`,
+            )
+            .run(code, now, fill.quoteId).changes;
+        if (Number(changed) !== 1)
+            throw new Error(`fill: linked advance ${fill.quoteId} is not locking`);
+        this.#db
+            .prepare("DELETE FROM operator_input_reservations WHERE advance_id = ?")
+            .run(fill.quoteId);
+    }
+
+    #assertBound(fill: Fill): void {
+        const quote = this.#db
+            .prepare<[string], { state: string; bound_fill_id: string | null }>(
+                "SELECT state, bound_fill_id FROM receive_quotes WHERE id = ?",
+            )
+            .get(fill.quoteId);
+        if (quote?.state !== "bound" || quote.bound_fill_id !== fill.id)
+            throw new Error(`fill: receive quote ${fill.quoteId} binding disagrees`);
+    }
+
     recordPrepared(
         id: string,
         leaseToken: string,
@@ -335,10 +475,11 @@ export class FillRepository {
                         `UPDATE fills SET state = 'settled', txid = ?, outpoint_txid = ?,
                          outpoint_vout = ?, lease_owner = NULL, lease_token = NULL, lease_until = NULL,
                          next_attempt_at = NULL, updated_at = max(updated_at, ?)
-                         WHERE id = ? AND state = 'submitting' AND lease_token = ?`,
+                         WHERE id = ? AND state = 'submitting' AND lease_token = ? AND submit_invoked = 1`,
                     )
                     .run(txid, outpoint.txid, outpoint.vout, now, id, leaseToken);
                 if (Number(update.changes) !== 1) throw new FillClaimError("invalid_state", id);
+                this.#lockLiability(this.get(id)!, txid, outpoint, now);
                 this.#release(id);
                 return this.get(id)!;
             })
@@ -382,10 +523,13 @@ export class FillRepository {
                         `UPDATE fills SET state = 'cancelled', failure_code = ?, failure_detail = ?,
                          lease_owner = NULL, lease_token = NULL, lease_until = NULL, next_attempt_at = NULL,
                          submit_invoked = 0, updated_at = max(updated_at, ?)
-                         WHERE id = ? AND state = 'submitting' AND lease_token = ?`,
+                         WHERE id = ? AND state = 'submitting' AND lease_token = ? AND submit_invoked = 0`,
                     )
                     .run(code, detail, now, id, leaseToken);
-                if (Number(update.changes) === 1) this.#release(id);
+                if (Number(update.changes) === 1) {
+                    this.#cancelLiability(id, code, now);
+                    this.#release(id);
+                }
             })
             .immediate();
     }
@@ -395,19 +539,34 @@ export class FillRepository {
         return this.#db
             .transaction(() => {
                 const stale = this.#db
-                    .prepare<[number], { id: string }>(
-                        "SELECT id FROM fills WHERE state = 'submitting' AND submit_invoked = 0 AND expires_at <= ?",
+                    .prepare<[number, number], { id: string }>(
+                        `SELECT id FROM fills WHERE state = 'submitting' AND submit_invoked = 0
+                         AND expires_at <= ? AND (lease_until IS NULL OR lease_until <= ?)`,
                     )
-                    .all(at);
+                    .all(at, at);
+                let expired = 0;
                 for (const { id } of stale) {
-                    this.#db
-                        .prepare(
-                            "UPDATE fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE id = ?",
-                        )
-                        .run(at, id);
-                    this.#release(id);
+                    try {
+                        this.#db.transaction(() => {
+                            this.#cancelLiability(id, "fill_submit_never_invoked", at);
+                            this.#db
+                                .prepare(
+                                    `UPDATE fills SET state = 'expired', lease_owner = NULL, lease_token = NULL,
+                                 lease_until = NULL, next_attempt_at = NULL, updated_at = max(updated_at, ?) WHERE id = ?`,
+                                )
+                                .run(at, id);
+                            this.#release(id);
+                        })();
+                        expired += 1;
+                    } catch {
+                        this.#db
+                            .prepare(
+                                "UPDATE fills SET failure_code = 'fill_bound_expiry_unsafe', updated_at = max(updated_at, ?) WHERE id = ?",
+                            )
+                            .run(at, id);
+                    }
                 }
-                return stale.length;
+                return expired;
             })
             .immediate();
     }
