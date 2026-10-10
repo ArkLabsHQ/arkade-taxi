@@ -57,7 +57,7 @@ const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse =
     quoteId: "receive-1",
     state: "quoted",
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     params: quoteParamsToWire(params),
     covenantAddress: address,
     fare: { currency: "sats", units: "3" },
@@ -97,7 +97,7 @@ const args = () => ({
     info: info(),
     expect: {
         receiverAddress,
-        makerPublicKey: senderKey,
+        senderKey: senderKey,
         assetId: ASSET,
         fareId: "receive",
         fundingExpiry: { kind: "height" as const, value: 850_000n },
@@ -243,7 +243,7 @@ describe("verifyReceiveQuote", () => {
         expect(verified.descriptor).toEqual({
             quoteId: "receive-1",
             receiveAddress: address,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: "12121212121212121212121212121212121212121212121212121212121212120700",
             physicalSats: 330n,
             loanSats: 330n,
@@ -307,7 +307,7 @@ describe("verifyReceiveQuote", () => {
 
     it.each([
         ["receiverAddress", { receiverAddress: `${receiverAddress}x` }],
-        ["maker", { makerPublicKey: "00".repeat(32) }],
+        ["maker", { senderKey: "00".repeat(32) }],
         [
             "asset",
             { params: { ...quote().params, assetId: { txid: "13".repeat(32), groupIndex: 7 } } },
@@ -426,14 +426,14 @@ describe("TaxiClient receive quotes", () => {
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
         await taxi.requestReceiveQuote({
             receiverAddress,
-            makerPublicKey: senderKey,
+            senderKey: senderKey,
             assetId: ASSET,
             fareId: "receive",
             fundingExpiry: { kind: "height", value: 850_000n },
         });
         expect(JSON.parse(fetch.calls[0]!.init.body as string)).toEqual({
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: assetIdToWire(ASSET),
             fareId: "receive",
             fundingExpiry: { kind: "height", value: "850000" },
@@ -457,7 +457,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -488,7 +488,7 @@ describe("TaxiClient receive quotes", () => {
             return {
                 ...trust,
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: expected.fundingExpiry,
@@ -540,7 +540,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: new Uint8Array(32).fill(0xff),
+                senderKey: new Uint8Array(32).fill(0xff),
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -587,7 +587,7 @@ describe("receive quotes from an operator on another protocol version", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },

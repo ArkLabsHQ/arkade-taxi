@@ -51,7 +51,7 @@ export interface ReceiveQuote {
     id: string;
     state: ReceiveQuoteState;
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: ReceiveQuoteParams;
     covenantAddress: string;
     fare: FareSpec;
@@ -96,7 +96,7 @@ type Row = {
     id: string;
     state: string;
     receiver_address: string;
-    maker_public_key: string;
+    sender_key: string;
     params_json: string;
     covenant_address: string;
     fare_json: string;
@@ -364,7 +364,7 @@ const decodeInputs = (json: string): ReceiveQuoteInputSnapshot[] => {
 
 const decodeRow = (row: Row): ReceiveQuote => {
     if (row.state !== "quoted" && row.state !== "bound" && row.state !== "expired") fail("state");
-    if (!row.receiver_address || !/^[0-9a-f]{64}$/.test(row.maker_public_key)) fail("identity");
+    if (!row.receiver_address || !/^[0-9a-f]{64}$/.test(row.sender_key)) fail("identity");
     const params = decodeParams(row.params_json);
     const fare = decodeFare(row.fare_json);
     if (row.payer !== null && row.payer !== "receiver") fail("payer");
@@ -388,7 +388,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
     );
     const operatorInputs = decodeInputs(row.operator_inputs_json);
     if (
-        hex(params.senderKey) !== row.maker_public_key ||
+        hex(params.senderKey) !== row.sender_key ||
         params.topup !== row.loan_sats ||
         params.dust !== params.topup ||
         params.locktime !== recoveryLocktime.value ||
@@ -417,7 +417,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
         id: row.id,
         state: row.state as ReceiveQuoteState,
         receiverAddress: row.receiver_address,
-        makerPublicKey: row.maker_public_key,
+        senderKey: row.sender_key,
         params,
         covenantAddress: row.covenant_address,
         fare,
@@ -449,7 +449,7 @@ export class ReceiveQuoteRepository {
             id: request.quote.id,
             state: request.quote.state,
             receiver_address: request.quote.receiverAddress,
-            maker_public_key: request.quote.makerPublicKey,
+            sender_key: request.quote.senderKey,
             params_json: encodeParams(request.quote.params),
             covenant_address: request.quote.covenantAddress,
             fare_json: encodeFare(request.quote.fare),
@@ -526,7 +526,7 @@ export class ReceiveQuoteRepository {
                 this.db
                     .prepare(
                         `INSERT INTO receive_quotes (
-                            id, state, receiver_address, maker_public_key, params_json,
+                            id, state, receiver_address, sender_key, params_json,
                             covenant_address, fare_json, payer, receiver_fare_json,
                             batch_expiry_kind, batch_expiry_value,
                             input_expiry_floor_kind, input_expiry_floor_value,
@@ -538,7 +538,7 @@ export class ReceiveQuoteRepository {
                         q.id,
                         q.state,
                         q.receiverAddress,
-                        q.makerPublicKey,
+                        q.senderKey,
                         encodeParams(q.params),
                         q.covenantAddress,
                         encodeFare(q.fare),

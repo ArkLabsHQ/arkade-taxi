@@ -167,7 +167,7 @@ export interface SponsoredQuoteRequest {
 
 export interface ReceiveQuoteRequest {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -180,7 +180,7 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     "quote" | "info" | "expect" | "now"
 > {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -188,7 +188,7 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     payer?: "receiver";
     expect: Omit<
         ReceiveQuoteExpectation,
-        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
+        "receiverAddress" | "senderKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
     >;
 }
 
@@ -327,7 +327,7 @@ export class TaxiClient {
     async requestReceiveQuote(req: ReceiveQuoteRequest): Promise<ReceiveQuoteResponse> {
         const wire: ReceiveQuoteRequestBody = {
             receiverAddress: req.receiverAddress,
-            makerPublicKey: bytesToHex(req.makerPublicKey),
+            senderKey: bytesToHex(req.senderKey),
             assetId: assetIdToWire(req.assetId),
         };
         if (req.fareId !== undefined) wire.fareId = req.fareId;
@@ -371,7 +371,7 @@ export class TaxiClient {
                         expect: {
                             ...request.expect,
                             receiverAddress: request.receiverAddress,
-                            makerPublicKey: request.makerPublicKey,
+                            senderKey: request.senderKey,
                             assetId: request.assetId,
                             ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
                             ...(request.fundingExpiry === undefined
@@ -807,10 +807,10 @@ async function preflightReceiveRequest(request: RequestVerifiedReceiveQuoteArgs)
             ClientErrorCode.InvalidResponse,
             "taxi: receiver address must be canonical and match the trusted network and server",
         );
-    if (!(request.makerPublicKey instanceof Uint8Array) || request.makerPublicKey.length !== 32)
+    if (!(request.senderKey instanceof Uint8Array) || request.senderKey.length !== 32)
         throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: maker key must be 32 bytes");
     try {
-        validatePubkey(request.makerPublicKey, PubT.schnorr);
+        validatePubkey(request.senderKey, PubT.schnorr);
     } catch (cause) {
         throw new TaxiError(
             ClientErrorCode.InvalidResponse,

@@ -23,7 +23,7 @@ declare const verifiedReceive: unique symbol;
 export interface RecycleCarrierQuote {
     quoteId: string;
     receiveAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     assetId: string;
     physicalSats: bigint;
     loanSats: bigint;
@@ -34,7 +34,7 @@ export interface RecycleCarrierQuote {
 
 export interface ReceiveQuoteExpectation {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -122,10 +122,10 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         reject(VerificationErrorCode.ReceiverKey, "receive quote substituted the receiver address");
     if (!sameBytes(quote.params.receiverKey, receiver!.vtxoTaprootKey))
         reject(VerificationErrorCode.ReceiverKey, "receive quote substituted the receiver key");
-    if (!sameBytes(quote.params.senderKey, expect.makerPublicKey))
+    if (!sameBytes(quote.params.senderKey, expect.senderKey))
         reject(VerificationErrorCode.SenderKey, "receive quote substituted the maker key");
-    if (quote.makerPublicKey !== hex.encode(expect.makerPublicKey))
-        reject(VerificationErrorCode.SenderKey, "receive quote substituted makerPublicKey");
+    if (quote.senderKey !== hex.encode(expect.senderKey))
+        reject(VerificationErrorCode.SenderKey, "receive quote substituted senderKey");
     if (!quote.params.assetId || !sameAsset(quote.params.assetId, expect.assetId))
         reject(VerificationErrorCode.AssetId, "receive quote substituted the asset");
     if (!sameBytes(quote.params.operatorKey, info.operatorKey))
@@ -278,7 +278,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         {
             quoteId: quote.quoteId,
             receiveAddress: quote.covenantAddress,
-            makerPublicKey: quote.makerPublicKey,
+            senderKey: quote.senderKey,
             assetId: asset.AssetId.create(
                 hex.encode(Uint8Array.from(expect.assetId.txid).reverse()),
                 expect.assetId.groupIndex,

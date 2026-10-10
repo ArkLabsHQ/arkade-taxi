@@ -322,7 +322,7 @@ export interface TaggedLocktimeWire {
 
 export interface ReceiveQuoteRequestBody {
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     assetId: AssetIdWire;
     fareId?: string;
     fundingExpiry?: TaggedLocktimeWire;
@@ -334,7 +334,7 @@ export interface ReceiveQuoteResponse {
     quoteId: string;
     state: "quoted" | "bound" | "expired";
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: QuoteParams;
     covenantAddress: string;
     fare: FareWire;

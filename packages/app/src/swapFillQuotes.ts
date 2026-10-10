@@ -403,7 +403,7 @@ async function createAdmittedSwapFillQuote(
         }
         const wantedAsset = offer.wantAsset;
         if (
-            bytesToHex(offer.makerPublicKey) !== receiveQuote.makerPublicKey ||
+            bytesToHex(offer.makerPublicKey) !== receiveQuote.senderKey ||
             bytesToHex(offer.makerProceedsScript) !== bytesToHex(covenantScript) ||
             !wantedAsset ||
             bytesToHex(wantedAsset.txid) !== bytesToHex(receiveQuote.params.assetId.txid) ||

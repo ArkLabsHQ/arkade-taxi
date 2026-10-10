@@ -245,7 +245,7 @@ async function receiverPaidCarrier(
         () =>
             live.client.requestVerifiedReceiveQuote({
                 receiverAddress: bobAddress,
-                makerPublicKey: makerKey,
+                senderKey: makerKey,
                 assetId,
                 fareId: fare.id,
                 fundingExpiry: { kind: "time", value: floor },
@@ -293,7 +293,7 @@ async function receiverPaidCarrier(
         wantAsset: sdkAssetId,
         receiveAddress: quote.covenantAddress,
     });
-    expect(hex.encode(decodeOffer(hex.decode(offer.offerHex)).makerPublicKey)).toBe(
+    expect(hex.encode(decodeOffer(hex.decode(offer.offerHex)).senderKey)).toBe(
         hex.encode(makerKey),
     );
     const depositTxid = await maker.wallet.send({

@@ -606,6 +606,122 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE receive_quote_reservations_v17;
         ALTER TABLE advances DROP COLUMN covenant_version;`,
     },
+    {
+        id: 18,
+        // Breaking twice over: a fill row carries no offer_hex, and the receive
+        // quote's signer column is renamed. An older build reads either as corrupt.
+        compat: "breaking",
+        // `fills` is `swap_fills` minus every offer_*, solver_*, swap_address and
+        // max_fare column, plus the covenant index and the delivered units the
+        // generic rail declares. Reservations move aside and back as in 15 and 17:
+        // foreign keys stay immediate inside applyMigrations' transaction.
+        up: `CREATE TABLE fills (
+            id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL UNIQUE,
+            state TEXT NOT NULL CHECK (state IN ('submitting', 'settled', 'expired', 'cancelled')),
+            quote_id TEXT NOT NULL,
+            taxi_inputs_json TEXT NOT NULL CHECK (json_valid(taxi_inputs_json)),
+            covenant_output_index INTEGER NOT NULL CHECK (covenant_output_index >= 0),
+            asset_units INTEGER NOT NULL CHECK (asset_units > 0),
+            contribution_sats INTEGER NOT NULL CHECK (contribution_sats > 0),
+            fare_currency TEXT NOT NULL CHECK (fare_currency IN ('sats', 'asset')),
+            fare_units INTEGER NOT NULL CHECK (fare_units >= 0),
+            fare_asset_txid BLOB,
+            fare_asset_group_index INTEGER,
+            graph_json TEXT NOT NULL CHECK (json_valid(graph_json)),
+            graph_id TEXT NOT NULL CHECK (length(graph_id) = 64 AND graph_id NOT GLOB '*[^0-9a-f]*'),
+            prepared_ark_tx TEXT,
+            prepared_checkpoints_json TEXT,
+            submit_invoked INTEGER NOT NULL DEFAULT 0 CHECK (submit_invoked IN (0, 1)),
+            txid TEXT,
+            outpoint_txid TEXT,
+            outpoint_vout INTEGER,
+            spent_txid TEXT,
+            failure_code TEXT,
+            failure_detail TEXT,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_until INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            valid_until INTEGER,
+            CHECK ((fare_currency = 'asset') = (fare_asset_txid IS NOT NULL)),
+            CHECK ((fare_asset_txid IS NULL) = (fare_asset_group_index IS NULL)),
+            CHECK ((outpoint_txid IS NULL) = (outpoint_vout IS NULL)),
+            CHECK (expires_at > created_at)
+        );
+        CREATE UNIQUE INDEX fills_operation ON fills (operation_id);
+        CREATE INDEX fills_state ON fills (state, expires_at);
+        CREATE INDEX fills_quote ON fills (quote_id);
+        CREATE TABLE fill_reservations (
+            outpoint_txid TEXT NOT NULL CHECK (
+                length(outpoint_txid) = 64 AND outpoint_txid NOT GLOB '*[^0-9a-f]*'
+            ),
+            outpoint_vout INTEGER NOT NULL CHECK (outpoint_vout BETWEEN 0 AND 4294967295),
+            fill_id TEXT NOT NULL REFERENCES fills(id),
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (outpoint_txid, outpoint_vout)
+        );
+        CREATE INDEX fill_reservations_fill ON fill_reservations (fill_id);
+        CREATE TABLE receive_quote_reservations_v18 AS
+            SELECT outpoint_txid, outpoint_vout, quote_id, created_at
+            FROM receive_quote_reservations;
+        DELETE FROM receive_quote_reservations;
+        CREATE TABLE receive_quotes_v18 (
+            id TEXT PRIMARY KEY,
+            state TEXT NOT NULL CHECK (state IN ('quoted', 'bound', 'expired')),
+            receiver_address TEXT NOT NULL CHECK (length(receiver_address) > 0),
+            sender_key TEXT NOT NULL CHECK (
+                length(sender_key) = 64 AND sender_key NOT GLOB '*[^0-9a-f]*'
+            ),
+            params_json TEXT NOT NULL CHECK (json_valid(params_json)),
+            covenant_address TEXT NOT NULL CHECK (length(covenant_address) > 0),
+            fare_json TEXT NOT NULL CHECK (json_valid(fare_json)),
+            batch_expiry_kind TEXT NOT NULL CHECK (batch_expiry_kind IN ('height', 'time')),
+            batch_expiry_value INTEGER NOT NULL,
+            input_expiry_floor_kind TEXT NOT NULL CHECK (input_expiry_floor_kind IN ('height', 'time')),
+            input_expiry_floor_value INTEGER NOT NULL,
+            recovery_locktime_kind TEXT NOT NULL CHECK (recovery_locktime_kind = 'time'),
+            recovery_locktime_value INTEGER NOT NULL CHECK (recovery_locktime_value >= 500000000),
+            loan_sats INTEGER NOT NULL CHECK (loan_sats > 0),
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            policy_revision INTEGER NOT NULL CHECK (policy_revision >= 0),
+            operator_inputs_json TEXT NOT NULL CHECK (json_valid(operator_inputs_json)),
+            bound_fill_id TEXT,
+            payer TEXT CHECK (payer IS NULL OR payer = 'receiver'),
+            receiver_fare_json TEXT CHECK (receiver_fare_json IS NULL OR json_valid(receiver_fare_json)),
+            CHECK ((payer IS NULL) = (receiver_fare_json IS NULL)),
+            CHECK (expires_at > created_at),
+            CHECK (batch_expiry_kind = input_expiry_floor_kind),
+            CHECK (batch_expiry_value >= input_expiry_floor_value),
+            CHECK (recovery_locktime_value > created_at),
+            CHECK ((state = 'bound') = (bound_fill_id IS NOT NULL))
+        );
+        INSERT INTO receive_quotes_v18 (
+            id, state, receiver_address, sender_key, params_json, covenant_address,
+            fare_json, batch_expiry_kind, batch_expiry_value, input_expiry_floor_kind,
+            input_expiry_floor_value, recovery_locktime_kind, recovery_locktime_value,
+            loan_sats, created_at, expires_at, policy_revision, operator_inputs_json,
+            bound_fill_id, payer, receiver_fare_json
+        ) SELECT
+            id, state, receiver_address, maker_public_key, params_json, covenant_address,
+            fare_json, batch_expiry_kind, batch_expiry_value, input_expiry_floor_kind,
+            input_expiry_floor_value, recovery_locktime_kind, recovery_locktime_value,
+            loan_sats, created_at, expires_at, policy_revision, operator_inputs_json,
+            bound_fill_id, payer, receiver_fare_json
+        FROM receive_quotes;
+        DROP TABLE receive_quotes;
+        ALTER TABLE receive_quotes_v18 RENAME TO receive_quotes;
+        CREATE INDEX receive_quotes_state_expiry ON receive_quotes (state, expires_at);
+        INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
+            SELECT outpoint_txid, outpoint_vout, quote_id, created_at
+            FROM receive_quote_reservations_v18;
+        DROP TABLE receive_quote_reservations_v18;`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */
@@ -635,6 +751,10 @@ const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; 
     { since: 14, table: "custody_release_inputs", column: "advance_id", type: "TEXT" },
     { since: 16, table: "advances", column: "renewals", type: "INTEGER" },
     { since: 16, table: "advances", column: "last_renewed_at", type: "INTEGER" },
+    { since: 18, table: "fills", column: "covenant_output_index", type: "INTEGER" },
+    { since: 18, table: "fills", column: "asset_units", type: "INTEGER" },
+    { since: 18, table: "fill_reservations", column: "fill_id", type: "TEXT" },
+    { since: 18, table: "receive_quotes", column: "sender_key", type: "TEXT" },
 ];
 
 function missingSchema(db: Database, upto: number): string[] {

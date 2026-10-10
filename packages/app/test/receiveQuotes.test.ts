@@ -43,7 +43,7 @@ const TOKEN_ASSET = { txid: new Uint8Array(32).fill(0x77), groupIndex: 3 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const body = (over: Record<string, unknown> = {}) => ({
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     assetId: assetIdToWire(ASSET),
     ...over,
 });
@@ -150,7 +150,7 @@ describe("createReceiveQuote", () => {
             quoteId: "receive-1",
             state: "quoted",
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             params: {
                 dust: "330",
                 topup: "330",
@@ -172,7 +172,7 @@ describe("createReceiveQuote", () => {
                 "expiresAt",
                 "fare",
                 "inputExpiryFloor",
-                "makerPublicKey",
+                "senderKey",
                 "operatorInputs",
                 "operatorScript",
                 "params",
@@ -324,8 +324,8 @@ describe("createReceiveQuote", () => {
 
     it.each([
         [body({ extra: true }), /unexpected/],
-        [body({ makerPublicKey: "FF".repeat(32) }), /makerPublicKey/],
-        [body({ makerPublicKey: "ff".repeat(32) }), /makerPublicKey/],
+        [body({ senderKey: "FF".repeat(32) }), /senderKey/],
+        [body({ senderKey: "ff".repeat(32) }), /senderKey/],
         [
             body({ receiverAddress: new ArkAddress(serverKey, receiverKey, "tark").encode() }),
             /network/,

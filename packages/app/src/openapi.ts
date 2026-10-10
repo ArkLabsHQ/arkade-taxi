@@ -352,7 +352,7 @@ const schemas: Record<string, Schema> = {
                 maxLength: 512,
                 description: "Canonical Arkade address on this server's network and server key.",
             },
-            makerPublicKey: key32,
+            senderKey: key32,
             assetId: ref("AssetId"),
         },
         {
@@ -376,7 +376,7 @@ const schemas: Record<string, Schema> = {
                 quoteId: { ...text, maxLength: 128 },
                 state: oneOfStrings("quoted", "bound", "expired"),
                 receiverAddress: str,
-                makerPublicKey: key32,
+                senderKey: key32,
                 params: ref("QuoteParams"),
                 covenantAddress: str,
                 fare: ref("Fare"),
@@ -821,7 +821,7 @@ const examples = {
         state: "quoted",
         receiverAddress:
             "ark1qprzw7ddf2knj52xz3635uggtuh3pcw85kf7fcpsa76msusuu4dskxuyc4t8kynygzv460k442aq2ewhrcvrgczgr8lec9l4a82a6pu0ezudfg",
-        makerPublicKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+        senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
         params: {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -876,7 +876,7 @@ const examples = {
         state: "quoted",
         receiverAddress:
             "ark1qprzw7ddf2knj52xz3635uggtuh3pcw85kf7fcpsa76msusuu4dskxuyc4t8kynygzv460k442aq2ewhrcvrgczgr8lec9l4a82a6pu0ezudfg",
-        makerPublicKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+        senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
         params: {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",

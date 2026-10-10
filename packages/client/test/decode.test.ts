@@ -72,7 +72,7 @@ const receiveQuoteWire = (): ReceiveQuoteResponse => ({
     quoteId: "receive-1",
     state: "quoted",
     receiverAddress: "ark1qreceiver",
-    makerPublicKey: senderKey,
+    senderKey: senderKey,
     params: paramsWire(),
     covenantAddress: "ark1qcovenant",
     fare: { currency: "sats", units: "3" },

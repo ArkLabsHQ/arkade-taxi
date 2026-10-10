@@ -166,7 +166,7 @@ export function insertReceiveQuote(opts: {
             id: quoteId,
             state: "quoted",
             receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
-            makerPublicKey: hex.encode(makerKey),
+            senderKey: hex.encode(makerKey),
             params,
             covenantAddress: covenant.address(cfg.addressHrp, cfg.serverPubkey).encode(),
             fare: { currency: "sats", units: receiverPaid ? 0n : FARE },

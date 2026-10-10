@@ -974,7 +974,7 @@ const receivePolicy = {
 
 const receiveQuoteBody = () => ({
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     assetId: assetIdToWire(ASSET),
     fundingExpiry: { kind: "height", value: "850000" },
 });
@@ -2146,7 +2146,7 @@ describe("exposure cap across flows", () => {
         id: "rcv-cap",
         state: "quoted",
         receiverAddress,
-        makerPublicKey: bytesToHex(senderKey),
+        senderKey: bytesToHex(senderKey),
         params: {
             receiverKey,
             senderKey,

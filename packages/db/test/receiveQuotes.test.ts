@@ -25,7 +25,7 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
     id: "receive-1",
     state: "quoted",
     receiverAddress: "ark1receiver",
-    makerPublicKey: "22".repeat(32),
+    senderKey: "22".repeat(32),
     params: {
         receiverKey: new Uint8Array(32).fill(0x11),
         senderKey: new Uint8Array(32).fill(0x22),

@@ -93,7 +93,7 @@ export interface DecodedReceiveQuote {
     quoteId: string;
     state: "quoted" | "bound" | "expired";
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: CovenantParamsValue;
     covenantAddress: string;
     fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
@@ -489,7 +489,7 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "quoteId",
                 "state",
                 "receiverAddress",
-                "makerPublicKey",
+                "senderKey",
                 "params",
                 "covenantAddress",
                 "fare",
@@ -519,9 +519,9 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             if (!boundFillId.length || boundFillId.length > 128)
                 invalid("receive quote.boundFillId is not a bounded identifier");
         }
-        const makerPublicKey = str(quote.makerPublicKey, "receive quote.makerPublicKey");
-        if (!/^[0-9a-f]{64}$/.test(makerPublicKey))
-            invalid("receive quote.makerPublicKey must be lowercase x-only hex");
+        const senderKey = str(quote.senderKey, "receive quote.senderKey");
+        if (!/^[0-9a-f]{64}$/.test(senderKey))
+            invalid("receive quote.senderKey must be lowercase x-only hex");
         const deadline = (field: "batchExpiry" | "inputExpiryFloor" | "recoveryLocktime") => {
             const wire = taggedLocktime(quote[field], `receive quote.${field}`);
             const parsed = satsFromWire(wire.value, `receive quote.${field}.value`);
@@ -539,7 +539,7 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             quoteId,
             state,
             receiverAddress: str(quote.receiverAddress, "receive quote.receiverAddress"),
-            makerPublicKey,
+            senderKey,
             params: quoteParamsFromWire(
                 quoteParams(quote.params, "receive quote.params"),
                 "receive quote.params",
