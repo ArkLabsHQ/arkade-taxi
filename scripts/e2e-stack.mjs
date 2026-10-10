@@ -655,7 +655,10 @@ export const packClient = async (root, env) => {
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);
     const manifest = buildConsumerManifest(tarballs, consumer);
-    for (const [name, spec] of vendoredClientDependencies()) manifest.pnpm.overrides[name] = spec;
+    for (const [name, spec] of vendoredClientDependencies()) {
+        manifest.dependencies[name] = spec;
+        manifest.pnpm.overrides[name] = spec;
+    }
     writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
@@ -688,9 +691,11 @@ export const packClient = async (root, env) => {
     const lock = readFileSync(join(consumer, "pnpm-lock.yaml"), "utf8");
     assertLocalConsumerResolution(manifest, lock, listed);
     // This consumer reaches the real registry, and a bare import cannot tell it apart.
+    const artifacts = frozenArtifacts();
+    await assertFrozenResolutions(join(consumer, "package.json"), artifacts);
     await assertFrozenResolutions(
         join(consumer, "node_modules", "@arkade-taxi", "client", "package.json"),
-        frozenArtifacts(),
+        artifacts.filter((artifact) => artifact.package === "@arkade-os/sdk"),
     );
     await import(pathToFileURL(entry).href);
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };

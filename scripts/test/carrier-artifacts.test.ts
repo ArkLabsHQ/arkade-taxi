@@ -103,9 +103,17 @@ describe("frozen carrier artifacts", () => {
 
     it("asks a consumer's own resolver for the frozen version and the candidate symbol", async () => {
         const artifacts = readJson(at(MANIFEST_PATH)).artifacts;
+        await expect(assertFrozenResolutions(at("package.json"), artifacts)).resolves.toBe(
+            artifacts.length,
+        );
         await expect(
-            assertFrozenResolutions(at("packages/client/package.json"), artifacts),
-        ).resolves.toBe(artifacts.length);
+            assertFrozenResolutions(
+                at("packages/client/package.json"),
+                artifacts.filter(
+                    (artifact: { package: string }) => artifact.package === "@arkade-os/sdk",
+                ),
+            ),
+        ).resolves.toBe(1);
         await expect(
             assertFrozenResolutions(at("packages/client/package.json"), [
                 { ...artifacts[0], version: "9.9.9" },

@@ -1545,20 +1545,31 @@ describe("durable submission resumption", () => {
     it("does not persist a provider result after heartbeat renewal loses its token", async () => {
         const external = provider();
         const implementation = external.submitTx.getMockImplementation()!;
+        let submitStarted = false;
+        let releaseSubmit!: () => void;
+        const submitResponse = new Promise<void>((resolve) => {
+            releaseSubmit = resolve;
+        });
         external.submitTx.mockImplementation(async (...args) => {
-            await new Promise((resolve) => setTimeout(resolve, 100));
+            submitStarted = true;
+            await submitResponse;
             return implementation(...args);
         });
         const db = openDatabase(":memory:");
         const advances = new AdvanceRepository(db);
         advances.insert(await claimedAdvance());
-        let renewals = 0;
         const store = {
             get: advances.get.bind(advances),
             claimSubmissionLease: advances.claimSubmissionLease.bind(advances),
             renewSubmissionLease: (
                 ...args: Parameters<AdvanceRepository["renewSubmissionLease"]>
-            ) => (++renewals === 4 ? false : advances.renewSubmissionLease(...args)),
+            ) => {
+                if (args[3] === "prepared" && submitStarted) {
+                    releaseSubmit();
+                    return false;
+                }
+                return advances.renewSubmissionLease(...args);
+            },
             recordPreparedSubmission: advances.recordPreparedSubmission.bind(advances),
             recordSubmissionResponse: advances.recordSubmissionResponse.bind(advances),
             recordSubmissionFinalized: advances.recordSubmissionFinalized.bind(advances),
@@ -1570,7 +1581,7 @@ describe("durable submission resumption", () => {
             advances: store,
             submitter: productionLockupSubmitter(config(), operatorIdentity, external),
             workerId: "lost-renewal-worker",
-            now: () => Date.now() / 1000,
+            now: () => NOW + 1,
             leaseSeconds: 0.15,
             backoffSeconds: 1,
         });
