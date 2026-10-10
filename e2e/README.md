@@ -69,11 +69,13 @@ depends on.
 
 `covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
-chain time a day ahead. Both modes therefore run it first, on a fresh stack of its own,
-before the shared suite, one stack each.
+chain time a day ahead. `fill-undersigned-foreign-input` leaves a bound quote whose
+advance stays `locking` and whose operator inputs stay reserved, because nothing
+reconciles a fill. Both modes therefore run each of them before the shared suite,
+on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
-checks that run, whose artifacts land in `e2e-artifacts/isolated/` (or its own
-`direct-<run>/`).
+checks one such run, whose artifacts land in `e2e-artifacts/isolated/<test>/` (or
+its own `direct-<run>/`).
 
 Check registration integrity without starting network services:
 
@@ -148,7 +150,10 @@ It also covers lost submit responses, duplicate requests, stale provider
 identity, the warning and critical alarms a covenant raises as the coin it sits
 on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
 sponsor each sign only their own inputs while the offer covenant is co-signed by
-nobody but the emulator and the Arkade Service. With arkd and the emulator paused, the SDK's pre-signed exit
+nobody but the emulator and the Arkade Service. `receiver-paid-fill-claim` builds
+the same shape for `POST /v1/fills` instead, with a receiver-paid sats fare: the
+caller's own inputs arrive signed, the Taxi's arrive unsigned and the gated
+covenant carries the emulator's tweaked key alone. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
 once the exit delay matures on median time past. The package skips the 330-sat
 covenant as uneconomic, so it reaches the chain only because the Taxi's change

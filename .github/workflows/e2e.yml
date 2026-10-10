@@ -98,9 +98,8 @@ jobs:
                       e2e-artifacts/isolated/*/failure.log
                       e2e-artifacts/isolated/*/unilateral-exit.json
                       e2e-artifacts/isolated/*/fill-undersigned-foreign-input.json
-                      e2e-artifacts/isolated/proxy-events.json
-                      e2e-artifacts/isolated/boundary-diagnostics.jsonl
-                      e2e-artifacts/isolated/unilateral-exit.json
+                      e2e-artifacts/isolated/*/proxy-events.json
+                      e2e-artifacts/isolated/*/boundary-diagnostics.jsonl
                   if-no-files-found: warn
 
     client-wallet:
