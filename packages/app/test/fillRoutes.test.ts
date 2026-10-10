@@ -29,7 +29,7 @@ import type { ServiceError } from "../src/errors.js";
 import { NOW, operatorPrivkey, runtimeSafety, serverUnroll } from "./fixtures.js";
 import { insertReceiveQuote } from "./jointFillFixtures.js";
 import { asIndexed } from "./swapFillFixtures.js";
-import { receiverPaidFill } from "./realFillFixtures.js";
+import { receiverPaidFill, solverPrivkey } from "./realFillFixtures.js";
 
 const state = vi.hoisted(() => ({
     contractVtxos: [] as unknown[],
@@ -84,6 +84,7 @@ interface Built {
     operatorCoin: ExtendedVirtualCoin;
     coins: ExtendedVirtualCoin[];
     operatorScript: Uint8Array;
+    solverIndex: number;
 }
 
 let built: Built;
@@ -102,6 +103,7 @@ beforeAll(async () => {
             arkTx: quoted.graph.arkTx,
             checkpoints: [...quoted.graph.checkpoints],
             taxiIndex: owners.indexOf("sponsor"),
+            solverIndex: owners.indexOf("solver"),
             changeVout: quoted.graph.outputs.find((o) =>
                 same(hex.decode(o.script), operatorScript),
             )!.vout,
@@ -592,6 +594,44 @@ describe("POST /v1/fills submission", () => {
         }
     });
 
+    /**
+     * What a real caller sends. `/v1/fills` asks for every non-Taxi input signed
+     * and the Taxi's left unsigned, so a graph whose foreign inputs already
+     * carry their holder's signature must be accepted — the Taxi signs on top
+     * of it. Only the gated covenant input must still arrive unsigned, because
+     * the emulator signs that one and nobody else may.
+     */
+    it("accepts a graph whose ungated foreign input already carries a signature", async () => {
+        const h = open();
+        try {
+            const arkTx = txOf(built.arkTx);
+            const foreign = built.solverIndex;
+            const signedArk = await SingleKey.fromPrivateKey(solverPrivkey).sign(arkTx, [foreign]);
+            expect(signedArk.getInput(foreign).tapScriptSig?.length ?? 0).toBeGreaterThan(0);
+            const checkpoints = [...built.checkpoints];
+            const signedCp = await SingleKey.fromPrivateKey(solverPrivkey).sign(
+                txOf(checkpoints[foreign]!),
+                [0],
+            );
+            checkpoints[foreign] = psbtOf(signedCp);
+            await expect(
+                submitFill(h.deps, {
+                    ...h.body,
+                    arkTx: psbtOf(signedArk),
+                    checkpoints,
+                }),
+            ).rejects.toMatchObject({ code: "fill_submission_ambiguous" });
+            expect(h.emulatorCalls).toBe(1);
+            const fill = new FillRepository(h.db).getByOperation("op-fill-1")!;
+            // The caller's signature survived the Taxi's own signing round.
+            const prepared = txOf(fill.preparedArkTx!);
+            expect(prepared.getInput(foreign).tapScriptSig?.length ?? 0).toBeGreaterThan(0);
+            expect(prepared.getInput(built.taxiIndex).tapScriptSig?.length ?? 0).toBeGreaterThan(0);
+        } finally {
+            h.db.close();
+        }
+    });
+
     it("routes to arkd when no input is emulator-gated", async () => {
         const h = open();
         try {
@@ -615,6 +655,47 @@ describe("POST /v1/fills submission", () => {
             ).rejects.toMatchObject({ code: "fill_submission_ambiguous" });
             expect(h.arkCalls).toBe(1);
             expect(h.emulatorCalls).toBe(0);
+        } finally {
+            h.db.close();
+        }
+    });
+});
+
+describe("POST /v1/fills when the provider refuses the signed graph", () => {
+    /**
+     * What an under-signed foreign input looks like from the Taxi's side: it
+     * validates, binds, signs and submits, and the provider refuses the whole
+     * transaction. Nothing partial can have moved — one submission, atomically
+     * refused — so the row must land in the documented ambiguous state with its
+     * reservation still held, never a terminal one and never stuck leased.
+     */
+    it("keeps the reservation and records an ambiguous submission, not a terminal state", async () => {
+        const h = open();
+        try {
+            await expect(submitFill(h.deps, h.body)).rejects.toMatchObject({
+                code: "fill_submission_ambiguous",
+                status: 503,
+            });
+            const fill = new FillRepository(h.db).getByOperation("op-fill-1")!;
+            expect(fill.state).toBe("submitting");
+            expect(fill.failureCode).toBe("fill_submission_ambiguous");
+            expect(fill.submitInvoked).toBe(true);
+            expect(fill.txid).toBeUndefined();
+            // The lease is released so a reconciler can pick the row up, and
+            // the row is not expired away while its submission is unresolved.
+            expect(fill.leaseToken).toBeUndefined();
+            expect(fill.nextAttemptAt).toBeGreaterThan(NOW);
+            expect(new FillRepository(h.db).expire(fill.expiresAt + 1)).toBe(0);
+            expect(new FillRepository(h.db).get(fill.id)!.state).toBe("submitting");
+            // The coins stay reserved, now by the advance rather than the quote.
+            const reserved = h.db
+                .prepare<[], { outpoint_txid: string; advance_id: string }>(
+                    "SELECT outpoint_txid, advance_id FROM operator_input_reservations",
+                )
+                .all();
+            expect(reserved).toHaveLength(1);
+            expect(reserved[0]!.advance_id).toBe(h.quoteId);
+            expect(new AdvanceRepository(h.db).get(h.quoteId)!.state).toBe("locking");
         } finally {
             h.db.close();
         }

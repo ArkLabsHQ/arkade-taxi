@@ -16,6 +16,7 @@ import {
 } from "@arkade-os/sdk";
 import {
     assertSameUnsignedTx,
+    assertUnsignedInput,
     assertUnsignedPsbt,
     setTapScriptSigEntries,
     tapLeavesOfInput,
@@ -145,7 +146,21 @@ interface TrustedGraphs {
     ark: Transaction;
     checkpoints: Transaction[];
     owners: readonly (string | null)[];
+    /** Unowned inputs the emulator packet gates. The rest are unowned because
+     * they are someone else's ordinary coin, and that holder signs them. */
+    gated: ReadonlySet<number>;
 }
+
+const gatedInputs = (ark: Transaction, owners: readonly (string | null)[]): Set<number> => {
+    let entries: { vin: number }[];
+    try {
+        entries = Extension.fromTx(ark).getEmulatorPacket()?.entries ?? [];
+    } catch (error) {
+        if (error instanceof ExtensionNotFoundError) entries = [];
+        else return fail("graph carries no emulator packet", error);
+    }
+    return new Set(entries.filter((e) => owners[e.vin] === null).map((e) => e.vin));
+};
 
 const loadGraphs = (graph: JointGraph, what: string): TrustedGraphs => {
     const ark = parseTx(graph.arkTx, `${what} arkTx`);
@@ -153,7 +168,8 @@ const loadGraphs = (graph: JointGraph, what: string): TrustedGraphs => {
     if (graph.inputOwners.length !== ark.inputsLength || checkpoints.length !== ark.inputsLength) {
         fail(`${what} metadata does not match its transaction`);
     }
-    return { ark, checkpoints, owners: [...graph.inputOwners] };
+    const owners = [...graph.inputOwners];
+    return { ark, checkpoints, owners, gated: gatedInputs(ark, owners) };
 };
 
 const loadTrustedForSigning = async (
@@ -195,8 +211,18 @@ const loadTrustedForSigning = async (
         }
     }
     try {
-        assertUnsignedPsbt(trusted.ark, "trusted arkTx");
-        trusted.checkpoints.forEach((c, i) => assertUnsignedPsbt(c, `trusted checkpoint ${i}`));
+        // Only where a signature would be ours to add or the emulator's: an
+        // ungated foreign input arrives signed, and that is the point of it.
+        for (let i = 0; i < trusted.ark.inputsLength; i++) {
+            if (trusted.owners[i] === null && !trusted.gated.has(i)) continue;
+            assertUnsignedInput(trusted.ark, i, `trusted arkTx input ${i}`);
+            assertUnsignedInput(trusted.checkpoints[i], 0, `trusted checkpoint ${i}`);
+        }
+        // Transaction-level and nothing to do with ownership: a non-DEFAULT
+        // declared sighash is refused on every input, signed or not.
+        assertAllowedSighashTypes(trusted.ark, [SigHash.DEFAULT]);
+        for (const checkpoint of trusted.checkpoints)
+            assertAllowedSighashTypes(checkpoint, [SigHash.DEFAULT]);
     } catch (error) {
         fail("trusted graph must be unsigned", error);
     }
@@ -366,6 +392,10 @@ const assertAccumulatedSigs = (
 ): void => {
     for (let i = 0; i < trusted.ark.inputsLength; i++) {
         if (trusted.owners[i] === null) {
+            // A gated input is the emulator's to sign and nobody else's. An
+            // ungated one is someone else's ordinary coin, which arrives signed
+            // by its holder under a key we were never told, so it is left alone.
+            if (!trusted.gated.has(i)) continue;
             if (tapScriptSigEntries(acc.ark, i).length > 0) {
                 fail(`${context} signs the provider input`);
             }

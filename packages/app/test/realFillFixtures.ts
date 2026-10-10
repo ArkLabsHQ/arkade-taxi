@@ -32,9 +32,8 @@ export interface RealBuilderState {
     checkpoint: string;
 }
 
-export const solverKey = await SingleKey.fromPrivateKey(
-    new Uint8Array(32).fill(21),
-).xOnlyPublicKey();
+export const solverPrivkey = new Uint8Array(32).fill(21);
+export const solverKey = await SingleKey.fromPrivateKey(solverPrivkey).xOnlyPublicKey();
 export const solverTree = new VtxoScript([
     MultisigTapscript.encode({ pubkeys: [serverKey, solverKey] }).script,
 ]);
