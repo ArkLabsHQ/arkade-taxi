@@ -70,7 +70,8 @@ depends on.
 `covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
 chain time a day ahead. Both modes therefore run it first, on a fresh stack of its own,
-before the shared suite. `node e2e/assert-ran.mjs --isolated <results.json>`
+before the shared suite, one stack each.
+`node e2e/assert-ran.mjs --isolated <test> <results.json>`
 checks that run, whose artifacts land in `e2e-artifacts/isolated/` (or its own
 `direct-<run>/`).
 

@@ -1316,7 +1316,11 @@ await import("/app/dist/cli.js");
             process.execPath,
             [
                 join(REPO, "e2e", "assert-ran.mjs"),
-                ...(isolated ? ["--isolated"] : options.mode === "direct" ? ["--direct"] : []),
+                ...(isolated
+                    ? ["--isolated", isolatedFile]
+                    : options.mode === "direct"
+                      ? ["--direct"]
+                      : []),
                 resultsFile,
             ],
             {

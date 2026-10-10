@@ -96,9 +96,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         const mode =
             args[0] === "--direct" ? "direct" : args[0] === "--isolated" ? "isolated" : "full";
         if (mode !== "full") args.shift();
+        // An isolated run is one stack for one file, so it names the file whose
+        // scenarios that stack had to run. Resolving the whole isolated class
+        // here would demand scenarios this stack never executed.
+        const isolatedFile = mode === "isolated" ? args.shift() : undefined;
+        if (mode === "isolated" && !isolatedFile?.endsWith(".e2e.test.ts"))
+            throw new Error("usage: assert-ran.mjs --isolated <test> [results.json]");
         if (args.length > 1 || args[0]?.startsWith("--"))
-            throw new Error("usage: assert-ran.mjs [--direct|--isolated] [results.json]");
-        const ids = readScenarioIds(mode);
+            throw new Error("usage: assert-ran.mjs [--direct|--isolated <test>] [results.json]");
+        const ids = isolatedFile ? isolatedScenarioIds(isolatedFile) : readScenarioIds(mode);
         const results = JSON.parse(readFileSync(args[0] ?? "e2e-results.json", "utf8"));
         // The integrity file runs with the shared suite only.
         const problems = validateResults(results, ids, mode === "isolated" ? 0 : 2);
