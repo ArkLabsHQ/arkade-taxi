@@ -293,7 +293,7 @@ async function receiverPaidCarrier(
         wantAsset: sdkAssetId,
         receiveAddress: quote.covenantAddress,
     });
-    expect(hex.encode(decodeOffer(hex.decode(offer.offerHex)).senderKey)).toBe(
+    expect(hex.encode(decodeOffer(hex.decode(offer.offerHex)).makerPublicKey)).toBe(
         hex.encode(makerKey),
     );
     const depositTxid = await maker.wallet.send({
