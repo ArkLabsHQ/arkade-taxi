@@ -47,20 +47,25 @@ const key = (txid: string, vout: number): string => `${txid}:${vout}`;
 
 type TrustedOutput = DerivedJointOutput;
 
+/** `assembleOfferFill` puts the maker's proceeds first, so every graph this rail
+ * ever built carries the covenant at 0. `/v1/fills` declares its own index. */
+const SWAP_FILL_COVENANT_VOUT = 0;
+
 // F6: solver_graph_json is caller-supplied, so settlement keys off the trusted
 // graph_json and Taxi's own prepared bytes only; fill.solverGraph is never read.
-// Every expectation below is derived from the persisted trusted arkTx: the
-// receiver at output 0 plus each sponsor-script output (fare and change). The
+// Every expectation is derived from the persisted trusted arkTx: the covenant at
+// its recorded index plus each sponsor-script output (fare and change). The
 // solver proceeds output is the solver's business and is never required.
-const trustedOutputs = (fill: SwapFill): TrustedOutput[] => {
+const trustedOutputs = (fill: SwapFill, covenantOutputIndex: number): TrustedOutput[] => {
     const sponsor = fill.sponsorScript;
     const outputs = deriveJointOutputs({ arkTx: fill.graph.arkTx });
-    const [receiver, ...rest] = outputs;
-    if (!receiver || receiver.vout !== 0) return [];
+    const covenant = outputs.find((output) => output.vout === covenantOutputIndex);
+    if (!covenant) return [];
     return [
-        receiver,
-        ...rest.filter(
+        covenant,
+        ...outputs.filter(
             (output) =>
+                output.vout !== covenantOutputIndex &&
                 output.script.length === sponsor.length &&
                 output.script.every((byte, i) => byte === sponsor[i]),
         ),
@@ -205,7 +210,7 @@ export function createSwapFillReconciler(deps: SwapFillReconcilerDeps): SwapFill
             }
             let expected: TrustedOutput[];
             try {
-                expected = trustedOutputs(fill);
+                expected = trustedOutputs(fill, SWAP_FILL_COVENANT_VOUT);
             } catch (cause) {
                 if (cause instanceof JointGraphDerivationError) return;
                 throw cause;

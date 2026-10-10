@@ -57,9 +57,9 @@ import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js"
 import { assertOwnerServerLeaf, operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { normalizeExpiry, normalizeSigner, withinVtxoMaxAmount } from "./arkade/providers.js";
 import {
-    encodeJointFillSource,
+    encodeFillSource,
     readFundingSource,
-    type JointFillFundingSource,
+    type FillFundingSource,
 } from "./arkade/fundingSource.js";
 import { buildRecoveryIntent } from "./arkade/recovery.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
@@ -743,10 +743,10 @@ async function createAdmittedSwapFillQuote(
                 })),
             ];
             const roles = [
-                "offer-covenant",
-                ...solverCoins.map(() => "solver" as const),
-                ...selection.inputs.map(() => "sponsor" as const),
-            ] as const;
+                "foreign" as const,
+                ...solverCoins.map(() => "foreign" as const),
+                ...selection.inputs.map(() => "taxi" as const),
+            ];
             const operatorPayouts = deriveJointOutputs(graph)
                 .filter(
                     (output) =>
@@ -760,14 +760,12 @@ async function createAdmittedSwapFillQuote(
                     fareSats: receiveQuote!.fare.units.toString(10),
                 }));
             const tx = Transaction.fromPSBT(base64.decode(graph.arkTx));
-            const source: JointFillFundingSource = {
-                tag: "joint-fill",
+            const source: FillFundingSource = {
+                tag: "fill",
                 version: 1,
                 receiveQuoteId: receiveQuote.id,
                 fillId: fill.id,
                 operationId: fill.operationId,
-                offerHex: fill.offerHex,
-                offerOutpoint: fundingOutpoint,
                 graph,
                 covenantOutputIndex: 0,
                 covenantSats: receiveQuote.params.dust.toString(10),
@@ -824,14 +822,14 @@ async function createAdmittedSwapFillQuote(
                 // A renewal re-dates the coins, so a snapshot would go stale.
                 recoveryLocktime: receiveQuote.recoveryLocktime,
                 operatorInputs: selection.inputs.map(({ txid, vout }) => ({ txid, vout })),
-                unsignedLockupTx: encodeJointFillSource(source),
+                unsignedLockupTx: encodeFillSource(source),
                 unsignedLockupId: graph.graphId,
             };
             source.recoveryPreflight = buildRecoveryIntent(
                 { ...advance, outpoint: { txid: tx.id.toLowerCase(), vout: 0 } },
                 config,
             );
-            advance.unsignedLockupTx = encodeJointFillSource(source);
+            advance.unsignedLockupTx = encodeFillSource(source);
             deps.receiveQuotes!.bind({
                 quoteId: receiveQuote.id,
                 fill,
@@ -1364,10 +1362,10 @@ async function revalidateAdmittedBoundSwapFill(
         deps.advances.get(fill.receiveQuoteId)?.unsignedLockupTx ?? "",
     );
     if (
-        source.kind !== "joint-fill" ||
+        source.kind !== "fill" ||
         source.source.fillId !== fill.id ||
         source.source.operationId !== fill.operationId ||
-        source.source.offerHex.toLowerCase() !== fill.offerHex.toLowerCase()
+        source.source.graph.graphId !== bytesToHex(fill.graphId)
     )
         throw new Error("bound funding source differs from the fill");
     const [spendable, locks, indexed] = await Promise.all([
@@ -1375,7 +1373,7 @@ async function revalidateAdmittedBoundSwapFill(
         deps.inventory.getLockedVtxoOutpoints(),
         deps.senderInventory.getVtxos({
             outpoints: source.source.inputs
-                .filter((input) => input.role !== "sponsor")
+                .filter((input) => input.role !== "taxi")
                 .map(({ txid, vout }) => ({ txid, vout })),
         }),
     ]);
@@ -1395,7 +1393,7 @@ async function revalidateAdmittedBoundSwapFill(
             coin.isSpent ||
             BigInt(coin.value).toString(10) !== input.value ||
             coin.script.toLowerCase() !== input.script ||
-            (input.role === "sponsor" &&
+            (input.role === "taxi" &&
                 (!coin.tapTree ||
                     bytesToHex(coin.tapTree) !== input.tapTree ||
                     !leaf ||

@@ -16,7 +16,7 @@ import {
 import type { SwapFillQuoteResponse } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
-import { encodeJointFillSource, type JointFillFundingSource } from "../src/arkade/fundingSource.js";
+import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource.js";
 import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
 import {
     config,
@@ -341,17 +341,17 @@ const SOURCE_PREFIX = "taxi-source:";
 
 export function patchJointSource(
     advance: Advance,
-    patch: (source: JointFillFundingSource) => void,
+    patch: (source: FillFundingSource) => void,
 ): Advance {
     const source = JSON.parse(
         advance.unsignedLockupTx.slice(SOURCE_PREFIX.length),
-    ) as JointFillFundingSource;
+    ) as FillFundingSource;
     patch(source);
-    return { ...advance, unsignedLockupTx: encodeJointFillSource(source) };
+    return { ...advance, unsignedLockupTx: encodeFillSource(source) };
 }
 
 /** A self-consistent preflight that no advance in this repository rebuilds to. */
-export function foreignRecoveryPreflight(): JointFillFundingSource["recoveryPreflight"] {
+export function foreignRecoveryPreflight(): FillFundingSource["recoveryPreflight"] {
     const tx = new Transaction({ version: 3 });
     tx.addInput({ txid: "77".repeat(32), index: 0 });
     tx.addOutput({ script: new Uint8Array([0x51]), amount: 1n });

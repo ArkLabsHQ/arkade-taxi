@@ -146,7 +146,7 @@ const boundAdvance = (over: Partial<Advance> = {}): Advance => ({
     expiresAt: NOW + 60,
     recoveryLocktime: { kind: "time", value: DEADLINE },
     operatorInputs: [INPUT],
-    unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":1}',
+    unsignedLockupTx: 'taxi-source:{"tag":"fill","version":1}',
     unsignedLockupId: "ab".repeat(32),
     ...over,
 });

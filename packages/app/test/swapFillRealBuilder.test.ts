@@ -62,9 +62,9 @@ describe("a receiver-paid swap fill through the real graph builder", () => {
             });
             const advance = fill.advances.get(fill.quoteId)!;
             const source = readFundingSource(advance.unsignedLockupTx);
-            const deposit = source.kind === "joint-fill" ? source.source.inputs[0] : undefined;
+            const deposit = source.kind === "fill" ? source.source.inputs[0] : undefined;
             expect(deposit).toMatchObject({
-                role: "offer-covenant",
+                role: "foreign",
                 tapTree: hex.encode(fill.offerScript.encode()),
                 spendLeaf: hex.encode(fill.offerScript.functionByName("fulfill")!.leafScript),
             });

@@ -607,16 +607,14 @@ export async function discoverProceeds(
         const fare = { txid: advance.arkTxid, vout: 1 };
         const repayment = { txid: advance.spentTxid, vout: 0 };
         if (
-            (source.kind === "joint-fill" || !candidates.has(key(fare))) &&
+            (source.kind === "fill" || !candidates.has(key(fare))) &&
             !candidates.has(key(repayment))
         )
             continue;
         const envelope =
             source.kind === "legacy" ? validatePersistedLockupGraph(advance, config) : undefined;
         const tx = Transaction.fromPSBT(
-            base64.decode(
-                source.kind === "joint-fill" ? source.source.graph.arkTx : envelope!.arkTx,
-            ),
+            base64.decode(source.kind === "fill" ? source.source.graph.arkTx : envelope!.arkTx),
         );
         if (tx.id !== advance.arkTxid) fail("proceeds_lockup_mismatch");
         const covenant = await timed("proceeds.discovery.covenant", () =>

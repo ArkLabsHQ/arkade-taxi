@@ -426,7 +426,7 @@ async function enterSubmit(
             if (!advance) throw new Error("bound advance is missing");
             const source = readFundingSource(advance.unsignedLockupTx);
             if (
-                source.kind !== "joint-fill" ||
+                source.kind !== "fill" ||
                 source.source.fillId !== claimed.id ||
                 source.source.receiveQuoteId !== claimed.receiveQuoteId
             )

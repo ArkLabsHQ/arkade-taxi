@@ -4,14 +4,12 @@ import { verifyOfferFillPlan, type JointGraph } from "@arkade-taxi/client";
 import { base64, hex } from "@scure/base";
 import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation.js";
 
-export interface JointFillFundingSource {
-    tag: "joint-fill";
+export interface FillFundingSource {
+    tag: "fill";
     version: 1;
     receiveQuoteId: string;
     fillId: string;
     operationId: string;
-    offerHex: string;
-    offerOutpoint: { txid: string; vout: number };
     graph: JointGraph;
     covenantOutputIndex: number;
     covenantSats: string;
@@ -19,7 +17,7 @@ export interface JointFillFundingSource {
     assetUnits: string;
     inputExpiryFloor: { kind: "height" | "time"; value: string };
     inputs: {
-        role: "offer-covenant" | "solver" | "sponsor";
+        role: "taxi" | "foreign";
         txid: string;
         vout: number;
         value: string;
@@ -41,12 +39,12 @@ export interface JointFillFundingSource {
     };
 }
 
-export const encodeJointFillSource = (source: JointFillFundingSource): string =>
+export const encodeFillSource = (source: FillFundingSource): string =>
     `taxi-source:${JSON.stringify(source)}`;
 
-interface ValidatedJointFillSource {
-    kind: "joint-fill";
-    source: JointFillFundingSource;
+interface ValidatedFillSource {
+    kind: "fill";
+    source: FillFundingSource;
     covenantOutpoint: { txid: string; vout: number };
     operatorPayouts: { vout: number; sats: bigint; fareSats: bigint }[];
     batchExpiry: { kind: "height" | "time"; value: bigint };
@@ -64,7 +62,7 @@ const HEX = /^(?:[0-9a-f]{2})+$/;
 const DECIMAL = /^(0|[1-9][0-9]*)$/;
 
 const fail = (detail: string): never => {
-    throw new Error(`joint-fill source: ${detail}`);
+    throw new Error(`fill source: ${detail}`);
 };
 const amount = (value: unknown, label: string): bigint => {
     if (typeof value !== "string" || !DECIMAL.test(value)) return fail(`${label} is invalid`);
@@ -83,21 +81,19 @@ const outpoint = (value: { txid?: unknown; vout?: unknown }, label: string) => {
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
     a.length === b.length && a.every((value, index) => value === b[index]);
 
-export function readFundingSource(encoded: string): { kind: "legacy" } | ValidatedJointFillSource {
+export function readFundingSource(encoded: string): { kind: "legacy" } | ValidatedFillSource {
     if (!encoded.startsWith(SOURCE_PREFIX)) return { kind: "legacy" };
-    let source: JointFillFundingSource;
+    let source: FillFundingSource;
     try {
-        source = JSON.parse(encoded.slice(SOURCE_PREFIX.length)) as JointFillFundingSource;
+        source = JSON.parse(encoded.slice(SOURCE_PREFIX.length)) as FillFundingSource;
     } catch {
         return fail("malformed tagged source");
     }
-    if (source?.tag !== "joint-fill" || source.version !== 1)
-        fail("unsupported source tag or version");
+    if (source?.tag !== "fill" || source.version !== 1) fail("unsupported source tag or version");
     if (
         !source.receiveQuoteId ||
         !source.fillId ||
         !source.operationId ||
-        !source.offerHex ||
         !Array.isArray(source.inputs) ||
         !source.inputs.length ||
         !Array.isArray(source.operatorPayouts) ||
@@ -114,7 +110,8 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
     source.inputs.forEach((input, index) => {
         const point = outpoint(input, `input ${index}`);
         const derived = derivedInputs[index];
-        const owner = derived?.owner === null ? "offer-covenant" : derived?.owner;
+        const owner =
+            derived?.owner === "sponsor" || derived?.owner === "taxi" ? "taxi" : "foreign";
         const expiry = amount(input.expiry?.value, `input ${index} expiry`);
         if (
             !derived ||
@@ -143,8 +140,7 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
             if (hex.encode(tree.pkScript) !== input.script || !tree.findLeaf(input.spendLeaf))
                 fail(`input ${index} taproot proof differs from source script`);
         } catch (cause) {
-            if (cause instanceof Error && cause.message.startsWith("joint-fill source:"))
-                throw cause;
+            if (cause instanceof Error && cause.message.startsWith("fill source:")) throw cause;
             fail(`input ${index} taproot proof is malformed`);
         }
         batchExpiry = batchExpiry === undefined || expiry < batchExpiry ? expiry : batchExpiry;
@@ -155,7 +151,7 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
         for (const group of packet?.groups ?? []) {
             const id = group.assetId
                 ? group.assetId.toString()
-                : fail("joint-fill asset issuance is unsupported");
+                : fail("fill asset issuance is unsupported");
             for (const input of group.inputs) {
                 if (!graphAssets[input.vin]) fail("asset input index is outside the graph");
                 graphAssets[input.vin]!.set(
@@ -179,16 +175,9 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
                 fail(`input ${index} asset facts differ from the graph`);
         });
     } catch (cause) {
-        if (cause instanceof Error && cause.message.startsWith("joint-fill source:")) throw cause;
+        if (cause instanceof Error && cause.message.startsWith("fill source:")) throw cause;
         fail("input asset facts are malformed");
     }
-    const offerPoint = outpoint(source.offerOutpoint, "offer outpoint");
-    if (
-        source.inputs[0]?.role !== "offer-covenant" ||
-        source.inputs[0].txid !== offerPoint.txid ||
-        source.inputs[0].vout !== offerPoint.vout
-    )
-        fail("offer binding differs from graph inputs");
     const covenant = outpoint(
         { txid: tx.id.toLowerCase(), vout: source.covenantOutputIndex },
         "covenant outpoint",
@@ -261,11 +250,11 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
             Transaction.fromPSBT(base64.decode(checkpoint)),
         );
     } catch (cause) {
-        if (cause instanceof Error && cause.message.startsWith("joint-fill source:")) throw cause;
+        if (cause instanceof Error && cause.message.startsWith("fill source:")) throw cause;
         fail("recovery preflight is malformed");
     }
     return {
-        kind: "joint-fill",
+        kind: "fill",
         source,
         covenantOutpoint: covenant,
         operatorPayouts,

@@ -324,24 +324,24 @@ describe("createSwapFillQuote", () => {
             expect(reservations.listForAdvance("receive-1")).toEqual([TAXI_0]);
             const source = readFundingSource(advance.unsignedLockupTx);
             expect(source).toMatchObject({
-                kind: "joint-fill",
+                kind: "fill",
                 source: {
                     fillId: fill.id,
                     recoveryPreflight: { expectedTxid: expect.any(String) },
                 },
             });
             const derived = offerTaprootOf(depositCoin);
-            const recorded = source.kind === "joint-fill" ? source.source.inputs : [];
+            const recorded = source.kind === "fill" ? source.source.inputs : [];
             expect(
                 recorded.map(({ role, tapTree, spendLeaf }) => ({ role, tapTree, spendLeaf })),
             ).toEqual([
                 {
-                    role: "offer-covenant",
+                    role: "foreign",
                     tapTree: hex.encode(derived.covenantTapTree),
                     spendLeaf: hex.encode(derived.covenantSpendLeaf),
                 },
-                { role: "solver", ...solverTaproot() },
-                { role: "sponsor", ...solverTaproot(operatorTree) },
+                { role: "foreign", ...solverTaproot() },
+                { role: "taxi", ...solverTaproot(operatorTree) },
             ]);
             await expect(revalidateBoundSwapFill(d, fill)).resolves.toBeUndefined();
             indexerCoins.set(key(DEP), { ...depositCoin, script: FAKE_COVENANT_SCRIPT });
