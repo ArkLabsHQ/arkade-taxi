@@ -15,12 +15,11 @@ import {
 } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade-taxi/db";
-import { createSwapFillQuote } from "../src/swapFillQuotes.js";
 import { assertFillGraph, type FillGraphArgs } from "../src/fills.js";
 import type { ServiceError } from "../src/errors.js";
 import { runtimeSafety, serverUnroll } from "./fixtures.js";
 import { WANTED_ASSET } from "./jointFillFixtures.js";
-import { asIndexed } from "./swapFillFixtures.js";
+import { asIndexed } from "./graphFixtures.js";
 import { receiverPaidFill } from "./realFillFixtures.js";
 
 const state = vi.hoisted(() => ({
@@ -168,7 +167,7 @@ let fixture: Fixture;
 beforeAll(async () => {
     const fill = receiverPaidFill(state);
     try {
-        const quoted = await createSwapFillQuote(fill.deps, fill.body);
+        const quoted = await fill.buildGraph();
         const owners = quoted.graph.inputs.map((input) => input.owner);
         const operatorScript = new ArkAddress(
             fill.cfg.serverPubkey,

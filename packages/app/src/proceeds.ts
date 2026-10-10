@@ -23,7 +23,6 @@ import type {
     ProceedsPlan,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
 import {
@@ -510,7 +509,6 @@ interface Deps {
     runtime: ReturnType<typeof createOperatorRuntime>;
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
-    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
     receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
@@ -673,8 +671,7 @@ export async function discoverProceeds(
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
     const timed = phaseTimer(deps.phaseLogger);
-    const taxiLocksOf = () =>
-        unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
+    const taxiLocksOf = () => unionReservedOutpoints(reservations, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
@@ -830,7 +827,6 @@ export function createProceedsCollector(deps: Deps) {
             const own = jobs.active();
             const locks = [
                 ...reservations.listReservedOutpoints(),
-                ...(deps.swapFills?.listReservedOutpoints() ?? []),
                 ...(deps.receiveQuotes?.listReservedOutpoints() ?? []),
             ];
             if (

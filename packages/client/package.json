@@ -25,7 +25,6 @@
         "@arkade-taxi/covenant": "workspace:*",
         "@arkade-taxi/protocol": "workspace:*",
         "@arkade-os/sdk": "0.4.78",
-        "@arkade-os/swap": "0.0.24",
         "@noble/hashes": "^2.0.1",
         "@scure/base": "^2.0.0",
         "@scure/btc-signer": "2.0.1"

@@ -703,7 +703,7 @@ export function providerCosignerKeys(args: {
     return keys;
 }
 
-/** The first gated input's cosigner. `/v1/swap-fills` has exactly one. */
+/** The first gated input's cosigner; use the map for multiple gated inputs. */
 export function providerCosignerKey(args: {
     expected: JointGraph;
     emulatorXOnly: string;

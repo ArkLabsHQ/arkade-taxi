@@ -6,7 +6,6 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     type Database,
 } from "@arkade-taxi/db";
 import { DustCovenantScript, payoutPkScript } from "@arkade-taxi/covenant";
@@ -88,7 +87,6 @@ const deps = (over: Partial<ReceiveQuoteDeps> = {}): ReceiveQuoteDeps => ({
     policy,
     advances,
     reservations: new ReservationRepository(db),
-    swapFills: new SwapFillRepository(db),
     receiveQuotes: quotes,
     inventory: {
         getSpendableVtxos: async () => [

@@ -2,7 +2,7 @@ import { Extension, ExtensionNotFoundError, P2A, Transaction } from "@arkade-os/
 import { base64, hex } from "@scure/base";
 
 export class JointGraphDerivationError extends Error {
-    readonly code = "swap_fill_graph_invalid";
+    readonly code = "fill_graph_invalid";
 }
 
 interface DerivedJointInput {

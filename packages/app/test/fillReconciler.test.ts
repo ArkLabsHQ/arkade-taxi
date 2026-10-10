@@ -16,7 +16,7 @@ import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingS
 import { deriveJointOutputs } from "../src/arkade/jointGraphDerivation.js";
 import { insertReceiveQuote, WANTED_ASSET, WANTED_SWAP_ID } from "./jointFillFixtures.js";
 import { fundingCoin, NOW, operatorTree, serverUnroll } from "./fixtures.js";
-import { checkpointSpending } from "./swapFillFixtures.js";
+import { checkpointSpending } from "./graphFixtures.js";
 
 const TAXI = { txid: "cc".repeat(32), vout: 0 };
 const FOREIGN = { txid: "ee".repeat(32), vout: 1 };

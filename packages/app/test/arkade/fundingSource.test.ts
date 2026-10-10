@@ -10,7 +10,7 @@ import {
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { createHash } from "node:crypto";
 import { base64, hex } from "@scure/base";
-import { checkpointSpending, sealGraph } from "../swapFillFixtures.js";
+import { checkpointSpending, sealGraph } from "../graphFixtures.js";
 import {
     encodeFillSource,
     readFundingSource,
@@ -45,7 +45,7 @@ const graph = () => {
         arkTx: base64.encode(tx.toPSBT()),
         checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
         graphId: "",
-        inputOwners: [null, "solver", "sponsor"],
+        inputOwners: [null, null, "taxi"],
     });
 };
 

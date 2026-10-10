@@ -6,8 +6,7 @@
 import { writeFileSync } from "node:fs";
 import { expect } from "vitest";
 import { Transaction, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
-import { createOffer } from "@arkade-os/swap";
-import { buildOfferFillPlan } from "@arkade-taxi/client";
+import { buildOfferFillPlan, createOffer } from "@arkade-os/swap";
 import { base64, hex } from "@scure/base";
 import { loadConfig } from "../packages/app/src/config.js";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";

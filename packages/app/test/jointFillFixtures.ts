@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
-import { ArkAddress, Transaction, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import {
+    ArkAddress,
+    Transaction,
+    VtxoScript,
+    asset,
+    type ExtendedVirtualCoin,
+} from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Advance, FareSpec } from "@arkade-taxi/core";
 import { DustCovenantScript, type ReceiverFare } from "@arkade-taxi/covenant";
@@ -9,15 +15,14 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
+    FillRepository,
     type Database,
-    type SwapFill,
+    type Fill,
 } from "@arkade-taxi/db";
-import type { SwapFillQuoteResponse } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "../src/config.js";
 import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
 import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource.js";
-import { createSwapFillQuote, type SwapFillQuoteDeps } from "../src/swapFillQuotes.js";
+import { buildRecoveryIntent } from "../src/arkade/recovery.js";
 import {
     config,
     fundingCoin,
@@ -27,14 +32,9 @@ import {
     runtimeSafety,
     serverUnroll,
 } from "./fixtures.js";
-import {
-    asIndexed,
-    FakeSwapFillGraphBuilder,
-    fakeOfferTerms,
-    offerTaprootOf,
-    solverCoin,
-    solverTaproot,
-} from "./swapFillFixtures.js";
+import { checkpointSpending, sealGraph, solverCoin } from "./graphFixtures.js";
+import { scriptFromTapLeafScript, Extension, P2A } from "@arkade-os/sdk";
+import { normalizeExpiry } from "../src/arkade/providers.js";
 
 export const BOUND_DEPOSIT = { txid: "dd".repeat(32), vout: 3 };
 export const BOUND_SOLVER = { txid: "ee".repeat(32), vout: 1 };
@@ -47,26 +47,18 @@ export const WANTED_ASSET = {
 };
 export const WANTED_SWAP_ID = asset.AssetId.create(DISPLAY_ASSET, 0).toString();
 const WANT_UNITS = 5n;
-const LOAN = 329n;
 const FARE = 4n;
 
 export interface BoundJointFill {
     db: Database;
     config: RuntimeConfig;
-    /** The deps that quoted the fill, so a test can revalidate it with another runtime. */
-    deps: SwapFillQuoteDeps;
-    /** The body that quoted it, so a test can replay the same operation. */
-    request: Parameters<typeof createSwapFillQuote>[1];
-    quote: SwapFillQuoteResponse;
-    fill: SwapFill;
+    fill: Fill;
     advance: Advance;
     advances: AdvanceRepository;
-    swapFills: SwapFillRepository;
+    fills: FillRepository;
     receiveQuotes: ReceiveQuoteRepository;
     close(): void;
 }
-
-const key = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`;
 
 export interface InsertedReceiveQuote {
     db: Database;
@@ -74,7 +66,7 @@ export interface InsertedReceiveQuote {
     quoteId: string;
     policies: PolicyRepository;
     quotes: ReceiveQuoteRepository;
-    swapFills: SwapFillRepository;
+    fills: FillRepository;
     advances: AdvanceRepository;
     reservations: ReservationRepository;
     covenant: DustCovenantScript;
@@ -126,7 +118,7 @@ export function insertReceiveQuote(opts: {
     );
     const revision = policies.getSnapshot().revision;
     const quotes = new ReceiveQuoteRepository(db);
-    const swapFills = new SwapFillRepository(db);
+    const fills = new FillRepository(db);
     const advances = new AdvanceRepository(db);
     const reservations = new ReservationRepository(db);
     const operatorCoin = opts.operatorCoin ?? fundingCoin({ ...BOUND_TAXI, value: 20_000 });
@@ -191,7 +183,7 @@ export function insertReceiveQuote(opts: {
         quoteId,
         policies,
         quotes,
-        swapFills,
+        fills,
         advances,
         reservations,
         covenant,
@@ -203,131 +195,145 @@ export function insertReceiveQuote(opts: {
     };
 }
 
-/**
- * Drives the real quote path end to end so the bound advance carries a genuine
- * `taxi-source:` graph and recovery preflight. Nothing downstream of a bound
- * fill can be exercised against a hand-written source: both the signing gate and
- * the startup invariant rebuild the recovery intent from these exact bytes.
- */
 export async function createBoundJointFill(
-    over: {
-        validUntil?: number;
-        receiverFare?: ReceiverFare;
-        delegatee?: SwapFillQuoteDeps["delegatee"];
-    } = {},
+    over: { validUntil?: number; receiverFare?: ReceiverFare } = {},
 ): Promise<BoundJointFill> {
-    const {
-        db,
-        cfg,
-        quoteId,
-        policies,
-        quotes,
-        swapFills,
-        advances,
-        reservations,
-        covenant,
-        operatorCoin,
-        depositCoin,
-        makerKey,
-        loan,
-        receiverPaid,
-    } = insertReceiveQuote({ wantAmount: WANT_UNITS, receiverFare: over.receiverFare });
+    const world = insertReceiveQuote({ wantAmount: WANT_UNITS, receiverFare: over.receiverFare });
+    const { db, cfg, quotes, quoteId, advances, fills, covenant, operatorCoin, depositCoin } =
+        world;
     try {
-        const solverFunding = solverCoin({
+        const quote = quotes.get(quoteId)!;
+        const solver = solverCoin({
             ...BOUND_SOLVER,
             value: 6_000,
             assets: [{ assetId: WANTED_SWAP_ID, amount: WANT_UNITS }],
         });
-        const indexed = new Map<string, ExtendedVirtualCoin>([
-            [key(depositCoin), depositCoin],
-            [key(solverFunding), solverFunding],
-        ]);
-        const deps: SwapFillQuoteDeps = {
-            runtime: {
-                assertAdmission: async () => {},
-                withAdmission: async (work) => work(() => {}),
-                safety: () => runtimeSafety(),
-            },
-            policy: policies,
-            advances,
-            reservations,
-            swapFills,
-            receiveQuotes: quotes,
-            inventory: {
-                getSpendableVtxos: async () => [operatorCoin],
-                getLockedVtxoOutpoints: async () => [],
-            },
-            senderInventory: {
-                getVtxos: async (opts) => ({
-                    vtxos:
-                        opts?.outpoints
-                            ?.map((o) => indexed.get(key(o))!)
-                            .filter(Boolean)
-                            .map(asIndexed) ?? [],
-                }),
-            },
-            config: cfg,
-            now: () => NOW,
-            nowMs: () => NOW * 1000,
-            randomId: () => "fill-1",
-            swapFillBuilder: new FakeSwapFillGraphBuilder(hex.encode(covenant.pkScript), 330n, {
-                id: WANTED_SWAP_ID,
-                amount: WANT_UNITS,
-            }),
-            offerCodec: {
-                decodeOffer: () =>
-                    fakeOfferTerms({
-                        ...offerTaprootOf(depositCoin),
-                        makerProceedsScript: covenant.pkScript,
-                        makerPublicKey: makerKey,
-                        wantAsset: WANTED_ASSET,
-                        wantAmount: WANT_UNITS,
-                    }),
-            },
-            providerLimits: async () => ({ vtxoMaxAmount: 10_000_000n }),
-            getServerUnroll: () => serverUnroll,
-            ...(over.delegatee === undefined ? {} : { delegatee: over.delegatee }),
-        };
-        const request = {
-            operationId: "op-1",
-            offerHex: "ab12",
+        const coins = [depositCoin, solver, operatorCoin];
+        const checkpoints = coins.map(checkpointSpending);
+        const operatorScript = new ArkAddress(cfg.serverPubkey, cfg.operatorKey, cfg.addressHrp)
+            .pkScript;
+        const taxiSats = BigInt(operatorCoin.value) - quote.loanSats + quote.fare.units;
+        const tx = new Transaction({ version: 3, lockTime: 0 });
+        for (const cp of checkpoints) tx.addInput({ txid: cp.id, index: 0 });
+        tx.addOutput({ script: covenant.pkScript, amount: 330n });
+        tx.addOutput({
+            script: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).pkScript,
+            amount: BigInt(depositCoin.value + solver.value) - quote.fare.units,
+        });
+        tx.addOutput({ script: operatorScript, amount: taxiSats });
+        tx.addOutput(
+            Extension.create([
+                asset.Packet.create([
+                    asset.AssetGroup.create(
+                        asset.AssetId.fromString(WANTED_SWAP_ID),
+                        null,
+                        [asset.AssetInput.create(1, WANT_UNITS)],
+                        [asset.AssetOutput.create(0, WANT_UNITS)],
+                        [],
+                    ),
+                ]),
+            ]).txOut(),
+        );
+        tx.addOutput(P2A);
+        const graph = sealGraph({
+            arkTx: base64.encode(tx.toPSBT()),
+            checkpoints: checkpoints.map((cp) => base64.encode(cp.toPSBT())),
+            graphId: "",
+            inputOwners: [null, null, "taxi"],
+        });
+        const source: FillFundingSource = {
+            tag: "fill",
+            version: 1,
             receiveQuoteId: quoteId,
-            solverInputs: [
-                {
-                    txid: BOUND_SOLVER.txid,
-                    vout: BOUND_SOLVER.vout,
-                    value: "6000",
-                    ...solverTaproot(),
-                    assets: [
-                        {
-                            assetId: {
-                                txid: hex.encode(WANTED_ASSET.txid),
-                                groupIndex: WANTED_ASSET.groupIndex,
-                            },
-                            amount: WANT_UNITS.toString(10),
-                        },
-                    ],
+            fillId: "fill-1",
+            operationId: "op-1",
+            graph,
+            covenantOutputIndex: 0,
+            covenantSats: "330",
+            assetId: { txid: hex.encode(WANTED_ASSET.txid), groupIndex: WANTED_ASSET.groupIndex },
+            assetUnits: WANT_UNITS.toString(),
+            inputExpiryFloor: {
+                kind: quote.inputExpiryFloor.kind,
+                value: quote.inputExpiryFloor.value.toString(),
+            },
+            inputs: coins.map((coin, index) => ({
+                role: index === 2 ? "taxi" : "foreign",
+                txid: coin.txid,
+                vout: coin.vout,
+                value: String(coin.value),
+                script: hex.encode(VtxoScript.decode(coin.tapTree).pkScript),
+                tapTree: hex.encode(coin.tapTree),
+                spendLeaf: hex.encode(scriptFromTapLeafScript(coin.forfeitTapLeafScript)),
+                assets: (coin.assets ?? []).map((a) => ({
+                    assetId: a.assetId,
+                    amount: a.amount.toString(),
+                })),
+                expiry: {
+                    kind: normalizeExpiry(coin).kind,
+                    value: normalizeExpiry(coin).value.toString(),
                 },
+            })),
+            serverUnrollScript: hex.encode(serverUnroll.script),
+            operatorScript: hex.encode(operatorScript),
+            operatorPayouts: [
+                { vout: 2, sats: taxiSats.toString(), fareSats: quote.fare.units.toString() },
             ],
-            solverProceedsScript: "51",
-            solverKeys: ["ab".repeat(32)],
-            contributionSats: loan.toString(10),
-            maxFare: { currency: "sats", units: receiverPaid ? "0" : "30" },
-            fundingTxid: BOUND_DEPOSIT.txid,
-            fundingVout: BOUND_DEPOSIT.vout,
+            recoveryPreflight: foreignRecoveryPreflight(),
+        };
+        const expiresAt = Math.min(quote.expiresAt, over.validUntil ?? quote.expiresAt);
+        const advance: Advance = {
+            id: quoteId,
+            state: "locking",
+            ...quote.params,
+            assetUnits: WANT_UNITS,
+            covenantAddress: quote.covenantAddress,
+            fare: quote.fare,
+            createdAt: NOW,
+            updatedAt: NOW,
+            expiresAt,
+            recoveryLocktime: quote.recoveryLocktime,
+            operatorInputs: [{ txid: operatorCoin.txid, vout: operatorCoin.vout }],
+            unsignedLockupTx: encodeFillSource(source),
+            unsignedLockupId: graph.graphId,
+        };
+        source.recoveryPreflight = buildRecoveryIntent(
+            { ...advance, outpoint: { txid: tx.id, vout: 0 } },
+            cfg,
+        );
+        advance.unsignedLockupTx = encodeFillSource(source);
+        const fill: Fill = {
+            id: "fill-1",
+            quoteId,
+            operationId: "op-1",
+            state: "submitting",
+            taxiInputs: advance.operatorInputs!,
+            covenantOutputIndex: 0,
+            assetUnits: WANT_UNITS,
+            contributionSats: quote.loanSats,
+            fare: quote.fare,
+            graph: { arkTx: graph.arkTx, checkpoints: [...graph.checkpoints] },
+            graphId: hex.decode(graph.graphId),
+            submitInvoked: true,
+            attempts: 1,
+            createdAt: NOW,
+            updatedAt: NOW,
+            expiresAt,
             ...(over.validUntil === undefined ? {} : { validUntil: over.validUntil }),
         };
-        const quote = await createSwapFillQuote(deps, request);
+        quotes.bindFill({
+            quoteId,
+            fill,
+            advance,
+            expectedPolicyRevision: quote.policyRevision,
+            now: NOW,
+        });
         return {
             db,
             config: cfg,
-            deps,
-            request,
-            quote,
-            fill: swapFills.get(quote.fillId)!,
+            fill: fills.get(fill.id)!,
             advance: advances.get(quoteId)!,
             advances,
-            swapFills,
+            fills,
             receiveQuotes: quotes,
             close: () => db.close(),
         };

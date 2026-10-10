@@ -30,6 +30,7 @@ import type {
     Fill,
 } from "@arkade-taxi/db";
 import {
+    sdkAssetId,
     fillCosignerKeys,
     prepareFillSubmission,
     sealFillGraph,
@@ -54,7 +55,6 @@ import {
     type DerivedJointOutput,
 } from "./arkade/jointGraphDerivation.js";
 import { assertCheckpointForInput } from "./arkade/psbt.js";
-import { taxiAssetIdToSwapId } from "./arkade/swapFillBuilder.js";
 import { normalizeExpiry, withinVtxoMaxAmount } from "./arkade/providers.js";
 
 export interface FillGraphArgs {
@@ -247,7 +247,7 @@ export function assertFillGraph(args: FillGraphArgs): void {
             400,
             "covenant output differs from the quoted covenant",
         );
-    const wanted = taxiAssetIdToSwapId(quote.params.assetId);
+    const wanted = sdkAssetId(quote.params.assetId);
     const delivered = new Map<string, bigint>();
     for (const held of covenant!.assets)
         delivered.set(held.assetId, (delivered.get(held.assetId) ?? 0n) + held.units);

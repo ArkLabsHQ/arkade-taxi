@@ -11,7 +11,6 @@ import {
     ProceedsRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
@@ -53,13 +52,11 @@ liveScenario("provider-contract", async () => {
     const repositories = () => ({
         advances: new AdvanceRepository(db),
         reservations: new ReservationRepository(db),
-        swapFills: new SwapFillRepository(db),
         receiveQuotes: new ReceiveQuoteRepository(db),
         jobs: new ProceedsRepository(db),
     });
     let ledger = repositories();
-    const reserved = () =>
-        unionReservedOutpoints(ledger.reservations, ledger.swapFills, ledger.receiveQuotes);
+    const reserved = () => unionReservedOutpoints(ledger.reservations, ledger.receiveQuotes);
     const makeRuntime = () =>
         createOperatorRuntime(config, db, {
             onchainProvider: new EsploraProvider(esplora),

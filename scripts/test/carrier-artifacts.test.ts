@@ -33,11 +33,10 @@ const at = (...parts: string[]) => join(REPO, ...parts);
 const lines = (...parts: string[]) => readFileSync(at(...parts), "utf8").split(/\r?\n/);
 const WORKFLOWS = readdirSync(at(".github", "workflows")).filter((name) => /\.ya?ml$/.test(name));
 
-// Literals, not imported constants: an assertion against the value under test
-// would pass for any build. Both were added in the pinned source commit.
+// Literals, not imported constants, independently pin the required capabilities.
 const CANDIDATES = [
     ["@arkade-os/sdk", "SendDeadlineExceededError"],
-    ["@arkade-os/swap", "FundingOutputMismatchError"],
+    ["@arkade-os/swap", "buildOfferFillPlan"],
 ] as const;
 
 /** Every workspace manifest that declares a candidate owes a resolution for it. */
@@ -58,12 +57,11 @@ describe("frozen carrier artifacts", () => {
         );
         expect(output).toContain(`${PINNED_PACKAGES.length} archives`);
         expect(output).toContain("Dockerfile and workflows checked");
-        // Coverage may grow; it must never shrink silently, and "0 of 0" must
-        // not read as a pass.
+        // Four SDK importers and the caller-builder test dependency remain.
         const confirmed = /confirmed on (\d+) of (\d+) declared resolutions/.exec(output);
         expect(confirmed).not.toBeNull();
         expect(confirmed![1]).toBe(confirmed![2]);
-        expect(Number(confirmed![1])).toBeGreaterThanOrEqual(6);
+        expect(Number(confirmed![1])).toBeGreaterThanOrEqual(5);
         const paths = /across (\d+) units holding (\d+) installing paths/.exec(output);
         expect(paths).not.toBeNull();
         expect(Number(paths![1])).toBeGreaterThanOrEqual(6);
@@ -125,7 +123,7 @@ describe("frozen carrier artifacts", () => {
                 await assertCandidateExport(packageRootFrom(at(importer), name), name, symbol);
                 asserted++;
             }
-        expect(asserted).toBe(6);
+        expect(asserted).toBe(5);
     });
 
     it("refuses an archive packed from anywhere but the pinned source", () => {

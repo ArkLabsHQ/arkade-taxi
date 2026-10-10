@@ -1,7 +1,7 @@
 import type { Database } from "better-sqlite3";
 import type { Outpoint } from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
-import { expireReceiveQuotes, expireUnboundSwapFills } from "./reservations.js";
+import { expireReceiveQuotes } from "./reservations.js";
 
 export interface ProceedsPlan {
     inputs: Outpoint[];
@@ -132,7 +132,6 @@ export class ProceedsRepository {
         assertNativeAccess(this.db);
         this.db
             .transaction(() => {
-                expireUnboundSwapFills(this.db, at);
                 expireReceiveQuotes(this.db, at);
                 if (this.active()) throw new Error("proceeds job already active");
                 if (expectedReserved) {
@@ -140,7 +139,7 @@ export class ProceedsRepository {
                         .prepare<[], { txid: string; vout: number }>(
                             `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
                              UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
-                             UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
+                             UNION ALL SELECT outpoint_txid, outpoint_vout FROM fill_reservations
                              UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations`,
                         )
                         .all();
@@ -169,7 +168,7 @@ export class ProceedsRepository {
                     if (
                         this.db
                             .prepare(
-                                "SELECT 1 FROM swap_fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                                "SELECT 1 FROM fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
                             )
                             .get(input.txid, input.vout)
                     )

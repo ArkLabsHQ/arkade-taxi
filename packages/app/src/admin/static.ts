@@ -470,7 +470,7 @@ export const INDEX_HTML = `<!doctype html>
                                     at once.
                                 </dd>
                                 <dt>Swap fills</dt>
-                                <dd id="help-route-swap-fills">
+                                <dd id="help-route-fills">
                                     A solver fills a swap offer into a receive quote's covenant, and
                                     the Taxi puts in the sats that quote lends, on its terms. Uses
                                     Pause and the Bitcoin rule (on, max per payment) whatever is
@@ -1931,10 +1931,6 @@ const BLOCKER_GROUPS = [
         "reconciler_not_started",
     ],
     [
-        "The Taxi has not finished its first check of swap fills in progress.",
-        "swap_fill_reconciler_not_started",
-    ],
-    [
         "The Taxi has not finished its first check of fills in progress.",
         "fill_reconciler_not_started",
     ],
@@ -2016,7 +2012,6 @@ const BLOCKER_GROUPS = [
         "The Taxi could not re-read the coin of a payment it already settled, so it will try again. Nothing is paused.",
         "covenant_terminal_evidence_unavailable",
     ],
-    ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
     [
         "A fill has an unresolved submission. Its coins stay reserved until reconciled.",
         "fill_liability_unresolved",
@@ -2025,7 +2020,6 @@ const BLOCKER_GROUPS = [
         "A fill's inputs have contradictory spend evidence. Keep its coins reserved and investigate.",
         "fill_unexpected_spend",
     ],
-    ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
     [
         "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",
         "covenant_unspent_at_expiry",

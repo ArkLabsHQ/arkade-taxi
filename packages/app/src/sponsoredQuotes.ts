@@ -212,7 +212,7 @@ async function createReservedSponsoredQuote(
         config,
     );
 
-    const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
+    const exposure = totalExposure(deps.advances, deps.receiveQuotes);
     const lending = deps.lending?.();
     const decision = admit(
         {
@@ -255,7 +255,7 @@ async function createReservedSponsoredQuote(
             { cause },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
         reserved: [...reserved, ...intentLocks],
@@ -391,7 +391,7 @@ async function createReservedSponsoredQuote(
         ...selectionOptions,
         spendable: currentSpendable,
         reserved: [
-            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...unionReservedOutpoints(deps.reservations, deps.receiveQuotes),
             ...currentLocks,
         ],
         safety: latestSafety,

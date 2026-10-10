@@ -1,21 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
-import { admin, openLive } from "./fixtures.js";
+import { admin, health, openLive, poll } from "./fixtures.js";
 import { liveScenario } from "./scenarios.js";
 import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport.js";
 
-/**
- * The claim phase 7 gates on: with `assertSolverAuthorised` deleted, nothing
- * pins the caller's keys, so an under-signed foreign input must fail the whole
- * submission rather than move anything. Posts a graph with a caller-owned input
- * deliberately unsigned and records exactly what the provider answered.
- *
- * Runs last in the suite, and nothing may follow it: an ambiguous submission is
- * the documented unresolved state and nothing resolves it yet — no fill
- * reconciler, no admin action that cancels a `locking` advance, and
- * `reconciler.ts` leaves an unobserved covenant alone rather than guess. So the
- * advance it leaves would trip the next scenario's boundary check.
- */
 liveScenario("fill-undersigned-foreign-input", async () => {
     const live = await openLive();
     const observed: Record<string, unknown> = {};
@@ -60,6 +48,23 @@ liveScenario("fill-undersigned-foreign-input", async () => {
             };
         } else observed.submitted = refusal.value;
 
+        const blocked = await poll(
+            "under-signed fill retains unresolved liability",
+            health,
+            (snapshot) => snapshot.blockers.includes("fill_liability_unresolved"),
+            120_000,
+        );
+        observed.health = blocked;
+        expect((await live.client.status(quote.quoteId)).state).toBe("locking");
+        const retained = await poll(
+            "bound quote survives its quote TTL",
+            () => live.client.getReceiveQuote(quote.quoteId),
+            () => Date.now() / 1000 > quote.expiresAt,
+            150_000,
+        );
+        expect(retained.state).toBe("bound");
+        expect((await live.client.status(quote.quoteId)).state).toBe("locking");
+
         // Whatever the Taxi answered, no Taxi coin may have moved.
         const reservedAfter = await Promise.all(
             quote.operatorInputs.map(async ({ txid, vout }) => {
@@ -84,10 +89,6 @@ liveScenario("fill-undersigned-foreign-input", async () => {
             (await admin("advances")).advances.find((row: any) => row.id === quote.quoteId) ?? null;
 
         expect(refusal.accepted).toBe(false);
-        // Phase 7's gate needs the PROVIDER's refusal, not the Taxi's own. The
-        // quote only reaches `bound` after validation passes, immediately before
-        // the Taxi signs and submits, so this is what proves the graph got that
-        // far instead of being turned away by a graph rule.
         expect(quoteAfter.state).toBe("bound");
         expect(["fill_submission_ambiguous", "fill_signing_failed"]).toContain(
             (observed.refusal as { code?: string }).code,

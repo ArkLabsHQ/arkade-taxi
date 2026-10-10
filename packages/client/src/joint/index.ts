@@ -8,11 +8,15 @@ export {
     unsignedPsbtBytes,
 } from "./arkTransaction.js";
 export { deepFreeze, digestJointGraph, verifyJointGraph, type JointGraph } from "./jointGraph.js";
-// The generic signer takes an explicit template; offerFillSigning binds ours.
 export {
     JointSigningError,
     JointSubmissionAmbiguousError,
     providerCosignerKeys,
+    providerCosignerKey,
+    prepareJointSubmission,
+    signJointGraphForOwner,
+    submitJointFill,
+    type JointOwnerKeys,
     type JointPins,
     type JointSignerBinding,
     type PreparedJointSubmission,
@@ -28,20 +32,3 @@ export {
     type FillOwner,
     type FillOwnerKeys,
 } from "./fillSigning.js";
-export {
-    prepareJointSubmission,
-    providerCosignerKey,
-    signJointGraphForOwner,
-    submitJointFill,
-    type JointFundingOwner,
-    type JointOwnerKeys,
-} from "./offerFillSigning.js";
-export {
-    buildOfferFillPlan,
-    verifyOfferFillPlan,
-    OFFER_FILL_OWNERS,
-    OFFER_FILL_TEMPLATE,
-    type BuildOfferFillPlanOpts,
-    type FillSponsor,
-    type FillSponsorFare,
-} from "./offerFillPlan.js";

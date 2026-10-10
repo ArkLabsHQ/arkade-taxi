@@ -61,6 +61,7 @@ const RELAXED_BY_15 = new Set([
 const DROPPED_BY_17 = new Set(["advances.covenant_version", "receive_quotes.covenant_version"]);
 // Migration 18 renames it to sender_key, the covenant's own name for the signer.
 const RENAMED_BY_18 = new Set(["receive_quotes.maker_public_key"]);
+const DROPPED_TABLES_BY_18 = new Set(["swap_fills", "swap_fill_reservations"]);
 
 function at(upto: number): Database {
     const db = fresh();
@@ -698,8 +699,6 @@ describe("migrations", () => {
             "receive_quotes",
             "schema_compat",
             "sqlite_sequence",
-            "swap_fill_reservations",
-            "swap_fills",
         ]);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(advances)")
@@ -796,20 +795,26 @@ describe("migrations", () => {
         ]);
         db.close();
     });
-    it("migrates a v3 database forward with a sponsor script column on swap fills", () => {
+    it("adds the historical sponsor script before dropping swap fills at version 18", () => {
         const db = fresh();
         applyMigrations(
             db,
             MIGRATIONS.filter((m) => m.id <= 3),
         );
         expect(userVersion(db)).toBe(3);
-        applyMigrations(db);
-        expect(userVersion(db)).toBe(18);
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 4),
+        );
+        expect(userVersion(db)).toBe(4);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
             .map(({ name }) => name);
         expect(columns).toContain("sponsor_script");
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(18);
+        expect(tableNames(db)).not.toContain("swap_fills");
         db.close();
     });
     it("migrates a v4 database forward adding a nullable claim mode", () => {
@@ -850,25 +855,31 @@ describe("migrations", () => {
         ).toEqual({ recovery_recipient: null });
         db.close();
     });
-    it("migrates a v8 database forward adding a nullable swap-fill deadline ceiling", () => {
+    it("adds the historical nullable swap-fill ceiling before dropping it at version 18", () => {
         const db = fresh();
         applyMigrations(
             db,
             MIGRATIONS.filter((m) => m.id <= 8),
         );
         expect(userVersion(db)).toBe(8);
-        applyMigrations(db);
-        expect(userVersion(db)).toBe(18);
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 9),
+        );
+        expect(userVersion(db)).toBe(9);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
                 .all()
                 .find(({ name }) => name === "valid_until"),
         ).toMatchObject({ notnull: 0n });
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(18);
+        expect(tableNames(db)).not.toContain("swap_fills");
         db.close();
     });
     it("rejects a v9 stamp without the swap-fill deadline column", () => {
-        const db = migrated();
+        const db = at(9);
         db.exec("ALTER TABLE swap_fills DROP COLUMN valid_until");
         db.pragma("user_version = 9");
         const before = db.serialize();
@@ -1103,6 +1114,21 @@ describe("migration 18", () => {
         }
     });
 
+    it("drops the obsolete swap rail and reopens without weakening fill shape guards", () => {
+        const db = migrated();
+        try {
+            expect(tableNames(db)).not.toContain("swap_fills");
+            expect(tableNames(db)).not.toContain("swap_fill_reservations");
+            expect(() => applyMigrations(db)).not.toThrow();
+            db.exec("ALTER TABLE fills DROP COLUMN covenant_output_index");
+            const before = db.serialize();
+            expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
     it("adds a fills table carrying no offer, solver or max-fare column", () => {
         const db = migrated();
         try {
@@ -1215,6 +1241,19 @@ describe("rollback onto a newer schema", () => {
         }
     });
 
+    it("refuses a newer schema that dropped a generic fill column", () => {
+        const db = ahead("additive", "ALTER TABLE fills DROP COLUMN covenant_output_index");
+        const before = db.serialize();
+        try {
+            expect(() => applyMigrations(db)).toThrow(
+                /schema 19[\s\S]*fills.covenant_output_index/,
+            );
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
     it("refuses an additive newer schema whose migration declared itself breaking", () => {
         const db = ahead("breaking", ADD_COLUMN);
         const before = db.serialize();
@@ -1244,7 +1283,7 @@ describe("rollback onto a newer schema", () => {
     // Both inputs a 13-era guard reads before admitting a newer database. The
     // cross-build run against origin/main's built package is the real proof;
     // this pins the preconditions that run depends on.
-    it("leaves a 13-era reader every column it reads, but migration 17 locks it out", () => {
+    it("retains historical columns except the declared breaking removals", () => {
         const db = migrated();
         const thirteen = at(13);
         const before = shape(thirteen);
@@ -1261,6 +1300,7 @@ describe("rollback onto a newer schema", () => {
             for (const [table, columns] of Object.entries(before))
                 for (const [column, declared] of Object.entries(columns))
                     if (
+                        !DROPPED_TABLES_BY_18.has(table) &&
                         !RELAXED_BY_15.has(`${table}.${column}`) &&
                         !DROPPED_BY_17.has(`${table}.${column}`) &&
                         !RENAMED_BY_18.has(`${table}.${column}`)

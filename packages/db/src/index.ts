@@ -33,18 +33,6 @@ export {
 } from "./reservations.js";
 export { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "./schema.js";
 export {
-    SwapFillRepository,
-    SwapFillClaimError,
-    SwapFillReservationConflictError,
-    type SwapFill,
-    type SwapFillAssetId,
-    type SwapFillFare,
-    type SwapFillGraph,
-    type SwapFillOutpoint,
-    type SwapFillSolverInput,
-    type SwapFillState,
-} from "./swapFills.js";
-export {
     FillRepository,
     FillClaimError,
     FillReservationConflictError,

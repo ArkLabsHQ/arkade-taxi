@@ -17,7 +17,6 @@ import {
     type ReceiveQuote,
     type ReceiveQuoteRepository,
     type ReservationRepository,
-    type SwapFillRepository,
 } from "@arkade-taxi/db";
 import {
     assetIdFromWire,
@@ -49,13 +48,9 @@ export interface ReceiveQuoteDeps {
     policy: { get(): Policy; getSnapshot(): PolicySnapshot };
     advances: Pick<AdvanceStore, "exposureTotals">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints" | "expireQuotes">;
-    swapFills?: Pick<
-        SwapFillRepository,
-        "listReservedOutpoints" | "expireQuotes" | "exposureTotals"
-    >;
     receiveQuotes: Pick<
         ReceiveQuoteRepository,
-        "insert" | "get" | "bind" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
+        "insert" | "get" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
     >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
@@ -296,7 +291,6 @@ async function createAdmitted(
         throw badRequest("senderKey or receiverAddress is not a valid covenant identity");
     }
     deps.reservations.expireQuotes(deps.now());
-    deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -341,7 +335,7 @@ async function createReserved(
             },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.receiveQuotes);
     const options = {
         spendable,
         reserved: [...reserved, ...locks],
@@ -398,7 +392,7 @@ async function createReserved(
         ...options,
         spendable: latestSpendable,
         reserved: [
-            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...unionReservedOutpoints(deps.reservations, deps.receiveQuotes),
             ...latestLocks,
         ],
         safety: latestSafety,
@@ -480,17 +474,10 @@ function assertFloorHeadroom(
 
 function enforceExposure(deps: ReceiveQuoteDeps, policy: Policy, loan: bigint): void {
     const advance = deps.advances.exposureTotals();
-    const swaps = deps.swapFills?.exposureTotals() ?? { outstandingSats: 0n, activeCount: 0 };
     const receive = deps.receiveQuotes.exposureTotals();
-    if (
-        advance.outstandingSats + swaps.outstandingSats + receive.outstandingSats + loan >
-        policy.maxOutstandingSats
-    )
+    if (advance.outstandingSats + receive.outstandingSats + loan > policy.maxOutstandingSats)
         throw admissionError("exceeds_max_outstanding");
-    if (
-        advance.lockedCount + swaps.activeCount + receive.activeCount >=
-        policy.maxConcurrentAdvances
-    )
+    if (advance.lockedCount + receive.activeCount >= policy.maxConcurrentAdvances)
         throw admissionError("max_concurrent_advances");
 }
 

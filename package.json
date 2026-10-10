@@ -26,7 +26,8 @@
         "regtest:test:client": "node scripts/client-regtest.mjs test"
     },
     "devDependencies": {
-        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-f49395ac.tgz",
+        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz",
+        "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
         "@types/node": "^24.13.3",
@@ -40,8 +41,8 @@
             "esbuild"
         ],
         "overrides": {
-            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-f49395ac.tgz",
-            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.24-f49395ac.tgz"
+            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz",
+            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz"
         }
     }
 }

@@ -95,7 +95,14 @@ liveScenario("receiver-paid-fill-claim", async () => {
             120_000,
         );
         expect(locked.outpoint).toEqual(outpoint);
-        expect((await live.client.fillStatus(submitted.fillId)).txid).toBe(submitted.txid);
+        const fillStatus = await poll(
+            "generic fill reconciles",
+            () => live.client.fillStatus(submitted.fillId),
+            (status) => status.state === "settled",
+            120_000,
+        );
+        expect(fillStatus.txid).toBe(submitted.txid);
+        expect(fillStatus.outpoint).toEqual(outpoint);
 
         // What the providers actually signed, read off the settled transaction.
         const settled = await transaction(live, submitted.txid!);

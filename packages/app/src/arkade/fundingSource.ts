@@ -1,17 +1,8 @@
 import { Extension, Transaction, VtxoScript, asset } from "@arkade-os/sdk";
 import { createHash } from "node:crypto";
-import {
-    FILL_TEMPLATE,
-    verifyJointGraph,
-    verifyOfferFillPlan,
-    type JointGraph,
-} from "@arkade-taxi/client";
+import { FILL_TEMPLATE, verifyJointGraph, type JointGraph } from "@arkade-taxi/client";
 
-/** The record is rail-agnostic, so the graph id may commit under either rail's
- * template: `/v1/swap-fills` seals with the offer one, `/v1/fills` with its own.
- * Either way the id proves the id commits to exactly these bytes and owners. */
-const sealedGraph = (graph: JointGraph): boolean =>
-    verifyJointGraph(graph, FILL_TEMPLATE) || verifyOfferFillPlan(graph);
+const sealedGraph = (graph: JointGraph): boolean => verifyJointGraph(graph, FILL_TEMPLATE);
 import { base64, hex } from "@scure/base";
 import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation.js";
 
@@ -121,8 +112,7 @@ export function readFundingSource(encoded: string): { kind: "legacy" } | Validat
     source.inputs.forEach((input, index) => {
         const point = outpoint(input, `input ${index}`);
         const derived = derivedInputs[index];
-        const owner =
-            derived?.owner === "sponsor" || derived?.owner === "taxi" ? "taxi" : "foreign";
+        const owner = derived?.owner === "taxi" ? "taxi" : "foreign";
         const expiry = amount(input.expiry?.value, `input ${index} expiry`);
         if (
             !derived ||

@@ -23,12 +23,11 @@ import {
     ReceiveQuoteRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { createSwapFillQuote } from "../src/swapFillQuotes.js";
 import { submitFill, getFill, type FillDeps } from "../src/fills.js";
 import type { ServiceError } from "../src/errors.js";
 import { NOW, operatorPrivkey, runtimeSafety, serverUnroll } from "./fixtures.js";
 import { insertReceiveQuote } from "./jointFillFixtures.js";
-import { asIndexed } from "./swapFillFixtures.js";
+import { asIndexed } from "./graphFixtures.js";
 import { receiverPaidFill, solverPrivkey } from "./realFillFixtures.js";
 
 const state = vi.hoisted(() => ({
@@ -70,11 +69,6 @@ const psbtOf = (tx: Transaction): string => base64.encode(tx.toPSBT());
 const point = (o: { txid: string; vout: number }): string => `${o.txid}:${o.vout}`;
 const same = (a: Uint8Array, b: Uint8Array): boolean => hex.encode(a) === hex.encode(b);
 
-/** The production builder's own bytes, built once against a throwaway database:
- * `createSwapFillQuote` binds the quote it fills, and `/v1/fills` needs an
- * unbound one. The graph depends only on the coins and the params, so a fresh
- * database seeded with the same `operatorCoin` reserves the same outpoint and
- * derives the same covenant. */
 interface Built {
     arkTx: string;
     checkpoints: string[];
@@ -92,7 +86,7 @@ let built: Built;
 beforeAll(async () => {
     const fill = receiverPaidFill(state);
     try {
-        const quoted = await createSwapFillQuote(fill.deps, fill.body);
+        const quoted = await fill.buildGraph();
         const operatorScript = new ArkAddress(
             fill.cfg.serverPubkey,
             fill.cfg.operatorKey,

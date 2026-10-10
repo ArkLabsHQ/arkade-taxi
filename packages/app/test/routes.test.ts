@@ -9,7 +9,6 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     totalExposure,
     type InsertReceiveQuoteRequest,
     type ReceiveQuote,
@@ -23,8 +22,6 @@ import type {
     QuoteResponse,
     ReceiveQuoteResponse,
     SponsoredQuoteResponse,
-    SwapFillQuoteResponse,
-    SwapFillStatusResponse,
     TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import {
@@ -36,14 +33,11 @@ import {
     decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
-    decodeSwapFillQuote,
-    decodeSwapFillStatus,
 } from "@arkade-taxi/client";
 import { openApiDocument, type Schema } from "../src/openapi.js";
 import { createRoutes, operationalSnapshot, type RouteDeps } from "../src/routes.js";
 import { FakeLockupBuilder } from "../src/quotes.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
-import type { SwapFillJointOps } from "../src/swapFillSubmit.js";
 import { ServiceError } from "../src/errors.js";
 import { createServiceLifecycle } from "../src/lifecycle.js";
 import { createAdminApp, createApp, type ServerDeps } from "../src/server.js";
@@ -74,58 +68,14 @@ import {
     signedEnvelope,
 } from "./fixtures.js";
 import type { Policy } from "@arkade-taxi/core";
-import {
-    asIndexed,
-    FAKE_COVENANT_SCRIPT,
-    FAKE_MAKER_SCRIPT,
-    FakeSwapFillGraphBuilder,
-    fakeOfferTerms,
-    MemorySwapFills,
-    solverCoin,
-    solverTaproot,
-} from "./swapFillFixtures.js";
+import { asIndexed } from "./graphFixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;
 
-const submitJointStub = (): SwapFillJointOps => ({
-    verifyPlan: () => true,
-    signForTaxi: async (args) => args.partial,
-    prepare: (args) => ({
-        arkTx: args.partial.arkTx,
-        checkpointTxs: [...args.partial.checkpoints],
-        txid: "dd".repeat(32),
-    }),
-    covenantKey: () => "cc".repeat(32),
-    submit: async (args) => {
-        const response = await args.provider.submitTx(args.prepared.arkTx, [
-            ...args.prepared.checkpointTxs,
-        ]);
-        return {
-            txid: args.prepared.txid,
-            signedArkTx: response.signedArkTx,
-            signedCheckpointTxs: [...response.signedCheckpointTxs],
-        };
-    },
-});
-
-const submitEmulatorStub = () => ({
-    submitTx: async (arkTx: string, checkpoints: string[]) => ({
-        signedArkTx: arkTx,
-        signedCheckpointTxs: [...checkpoints],
-    }),
-});
-
-const submitIdentityStub = {
-    xOnlyPublicKey: async () => operatorKey,
-    sign: async (tx: unknown) => tx,
-} as unknown as import("@arkade-os/sdk").Identity;
-
 let advances: MemoryAdvances;
 let lockupBuilder: FakeLockupBuilder;
 let sponsoredBuilder: FakeSponsoredLockupBuilder;
-let swapFills: MemorySwapFills;
-let swapFillBuilder: FakeSwapFillGraphBuilder;
 let receiveQuotes: MemoryReceiveQuotes;
 const fills = new MemoryFills();
 let sweeperStatus: SweeperStatus;
@@ -171,20 +121,7 @@ const deps = (over: Partial<Policy> = {}): RouteDeps & Pick<ServerDeps, "runtime
     lockupBuilder,
     lockupSubmitter: lockupBuilder,
     sponsoredBuilder,
-    swapFills,
     receiveQuotes,
-    swapFillBuilder,
-    swapFillSubmit: {
-        swapFills,
-        taxiIdentity: () => submitIdentityStub,
-        emulator: submitEmulatorStub(),
-        config: config(),
-        now: () => clock,
-        randomId: () => `lease-${++ids}`,
-        leaseSeconds: 60,
-        joint: submitJointStub(),
-        assertSolverAuthorised: () => {},
-    },
     fill: idleFillDeps({
         runtime: quoteInfrastructure(advances, () => basePolicy(over)).runtime,
         policy: { getSnapshot: () => ({ policy: basePolicy(over), revision: 1n }) },
@@ -195,7 +132,6 @@ const deps = (over: Partial<Policy> = {}): RouteDeps & Pick<ServerDeps, "runtime
         randomId: () => `fill-${++ids}`,
         getServerUnroll: () => serverUnroll,
     }),
-    offerCodec: { decodeOffer: () => fakeOfferTerms() },
     sweeper: { status: () => sweeperStatus },
     reconciler: { status: () => reconcilerStatus },
     sweeperStaleAfterSeconds: STALE_AFTER,
@@ -211,13 +147,6 @@ class MemoryReceiveQuotes {
     get(id: string): ReceiveQuote | undefined {
         const row = this.rows.get(id);
         return row && structuredClone(row);
-    }
-    bind(request: Parameters<ReceiveQuoteRepository["bind"]>[0]): void {
-        const row = this.rows.get(request.quoteId);
-        if (!row || row.state !== "quoted") throw new Error("receive quote is not bindable");
-        this.rows.set(row.id, { ...row, state: "bound", boundFillId: request.fill.id });
-        swapFills.insert(request.fill);
-        advances.insert(request.advance);
     }
     bindFill(request: Parameters<ReceiveQuoteRepository["bindFill"]>[0]): void {
         const row = this.rows.get(request.quoteId);
@@ -906,8 +835,6 @@ beforeEach(() => {
     advances = new MemoryAdvances();
     lockupBuilder = new FakeLockupBuilder(config(), serverUnroll);
     sponsoredBuilder = new FakeSponsoredLockupBuilder(config(), serverUnroll);
-    swapFills = new MemorySwapFills();
-    swapFillBuilder = new FakeSwapFillGraphBuilder(FAKE_MAKER_SCRIPT, 5000n);
     receiveQuotes = new MemoryReceiveQuotes();
     sweeperStatus = okSweeper();
     reconcilerStatus = { lastTickAt: NOW, locking: 0, blockers: [] };
@@ -1290,165 +1217,6 @@ describe("sponsored direct-send routes", () => {
 
 const USDT_DISPLAY = "1234".repeat(16);
 const USDT_INTERNAL = Buffer.from(USDT_DISPLAY, "hex").reverse().toString("hex");
-const swapBody = (over: Record<string, unknown> = {}) => {
-    registerSenderCoin(
-        "dd".repeat(32),
-        3,
-        asIndexed(
-            fundingCoin({
-                txid: "dd".repeat(32),
-                vout: 3,
-                value: 10000,
-                script: FAKE_COVENANT_SCRIPT,
-            }),
-        ),
-    );
-    registerSenderCoin(
-        "ee".repeat(32),
-        1,
-        asIndexed(
-            solverCoin({
-                txid: "ee".repeat(32),
-                vout: 1,
-                value: 6000,
-                assets: [
-                    {
-                        assetId: asset.AssetId.create(USDT_DISPLAY, 0).toString(),
-                        amount: 100n,
-                    },
-                ],
-            }),
-        ),
-    );
-    return {
-        operationId: "op-1",
-        offerHex: "ab12",
-        solverInputs: [
-            {
-                txid: "ee".repeat(32),
-                vout: 1,
-                value: "6000",
-                ...solverTaproot(),
-                assets: [
-                    {
-                        assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
-                        amount: "100",
-                    },
-                ],
-            },
-        ],
-        solverProceedsScript: "51",
-        solverKeys: ["ab".repeat(32)],
-        contributionSats: "330",
-        maxFare: {
-            currency: "asset",
-            assetId: { txid: USDT_INTERNAL, groupIndex: 0 },
-            units: "5",
-        },
-        fundingTxid: "dd".repeat(32),
-        fundingVout: 3,
-        ...over,
-    };
-};
-
-describe("swap-fill routes", () => {
-    const legacySwapApp = () => createRoutes({ ...deps(), receiveQuotes: undefined as never });
-    const legacySwapPost = (path: string, body: unknown) =>
-        legacySwapApp().request(path, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-        });
-
-    it("requires a receive quote for a new public positive-contribution fill", async () => {
-        const response = await post("/v1/swap-fills", swapBody());
-        expect(response.status).toBe(400);
-        expect(((await response.json()) as ErrorResponse).code).toBe("receive_quote_required");
-    });
-
-    it("keeps the legacy unbound fill harness readable and replayable", async () => {
-        const first = await legacySwapPost("/v1/swap-fills", swapBody());
-        expect(first.status).toBe(200);
-        const quote = (await first.json()) as SwapFillQuoteResponse;
-        expect(quote.operationId).toBe("op-1");
-        expect(quote.template).toBe("taxi-fill/1");
-        expect(quote.graph.inputs).toEqual([
-            { owner: "offer-covenant", txid: "dd".repeat(32), vout: 3 },
-            { owner: "solver", txid: "ee".repeat(32), vout: 1 },
-            { owner: "sponsor", txid: "bb".repeat(32), vout: 0 },
-        ]);
-        const replay = await legacySwapPost("/v1/swap-fills", swapBody());
-        expect(replay.status).toBe(200);
-        expect(await replay.json()).toEqual(quote);
-        const conflict = await legacySwapPost(
-            "/v1/swap-fills",
-            swapBody({ contributionSats: "331" }),
-        );
-        expect(conflict.status).toBe(409);
-        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
-        expect(status.status).toBe(200);
-        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
-    });
-
-    it("returns 404 for an unknown swap fill", async () => {
-        const res = await app().request("/v1/swap-fills/nope");
-        expect(res.status).toBe(404);
-        expect(((await res.json()) as ErrorResponse).code).toBe("not_found");
-    });
-
-    it("submits a quoted fill with 202 and fences a replay", async () => {
-        const first = await legacySwapPost("/v1/swap-fills", swapBody());
-        const quote = (await first.json()) as SwapFillQuoteResponse;
-        const submit = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
-            solverGraph: quote.graph,
-        });
-        expect(submit.status).toBe(202);
-        const status = (await submit.json()) as SwapFillStatusResponse;
-        expect(status).toMatchObject({
-            fillId: quote.fillId,
-            operationId: "op-1",
-            state: "submitting",
-        });
-        expect(typeof status.txid).toBe("string");
-        const replay = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
-            solverGraph: quote.graph,
-        });
-        expect(replay.status).toBe(409);
-        expect(((await replay.json()) as ErrorResponse).code).toBe("invalid_state");
-    });
-
-    it("returns 404 for an unknown fill submit and 400 for a malformed solver graph", async () => {
-        const quoted = (await (
-            await legacySwapPost("/v1/swap-fills", swapBody())
-        ).json()) as SwapFillQuoteResponse;
-        const missing = await legacySwapPost("/v1/swap-fills/nope/submit", {
-            solverGraph: quoted.graph,
-        });
-        expect(missing.status).toBe(404);
-        const first = await legacySwapPost("/v1/swap-fills", swapBody({ operationId: "op-2" }));
-        const quote = (await first.json()) as SwapFillQuoteResponse;
-        const malformed = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
-            solverGraph: { template: "taxi-fill/9" },
-        });
-        expect(malformed.status).toBe(400);
-    });
-
-    it("returns 409 when the solver graph differs from the quoted fill", async () => {
-        const first = await legacySwapPost("/v1/swap-fills", swapBody());
-        const quote = (await first.json()) as SwapFillQuoteResponse;
-        const diverted = structuredClone(quote.graph);
-        const change = diverted.outputs.find((o) => o.role === "sponsor-change")!;
-        change.script = "dd".repeat(34);
-        const rejected = await legacySwapPost(`/v1/swap-fills/${quote.fillId}/submit`, {
-            solverGraph: diverted,
-        });
-        expect(rejected.status).toBe(409);
-        expect(((await rejected.json()) as ErrorResponse).code).toBe("swap_fill_graph_conflict");
-        const status = await legacySwapApp().request(`/v1/swap-fills/${quote.fillId}`);
-        expect(((await status.json()) as SwapFillStatusResponse).state).toBe("quoted");
-    });
-});
-
 type ProviderCall = { name: string; outpoints?: number };
 
 /** Counts every provider read a request makes and how many sequential waves
@@ -1572,44 +1340,6 @@ describe("provider read budget", () => {
         ]);
         expect(counter.outpoints()).toEqual([1, 1]);
         expect(counter.waves()).toBe(3);
-    });
-
-    it("spends five waves of eight reads on POST /v1/swap-fills", async () => {
-        const { counter, response } = await run(
-            "/v1/swap-fills",
-            swapBody(),
-            {},
-            { receiveQuotes: undefined as never },
-        );
-        expect(response.status).toBe(200);
-        expect(counter.names()).toEqual([
-            "arkd.getInfo",
-            "indexer.getVtxos",
-            "indexer.getVtxos",
-            "indexer.getVtxos",
-            "storage.lockedOutpoints",
-            "storage.lockedOutpoints",
-            "wallet.getSpendableVtxos",
-            "wallet.getSpendableVtxos",
-        ]);
-        // The deposit and every solver input share the closing re-read.
-        expect(counter.outpoints()).toEqual([1, 1, 2]);
-        expect(counter.waves()).toBe(5);
-    });
-
-    it("reads the provider limits while the fill graph is being built", async () => {
-        const counter = prepared({}, { receiveQuotes: undefined as never });
-        const build = swapFillBuilder.buildSwapFillGraph.bind(swapFillBuilder);
-        let duringBuild = 0;
-        counter.deps.swapFillBuilder = {
-            buildSwapFillGraph: (req: Parameters<typeof build>[0]) => {
-                duringBuild = counter.inFlight();
-                return build(req);
-            },
-        };
-        const response = await send(counter, "/v1/swap-fills", swapBody());
-        expect(response.status).toBe(200);
-        expect(duringBuild).toBe(1);
     });
 });
 
@@ -1804,47 +1534,6 @@ describe("GET /ready", () => {
         expect(res.status).toBe(503);
         expect(await res.json()).toMatchObject({
             reason: "the fill reconciler has not completed a tick",
-        });
-    });
-
-    it("merges swap-fill reconciler blockers into readiness and health", async () => {
-        const router = createRoutes({
-            ...deps(),
-            swapFillReconciler: {
-                status: () => ({
-                    lastTickAt: NOW,
-                    submitting: 1,
-                    blockers: ["swap_fill_unexpected_spend"],
-                }),
-            },
-        });
-        const res = await router.request("/ready");
-        expect(res.status).toBe(503);
-        expect(await res.json()).toMatchObject({
-            status: "degraded",
-            reconciler: {
-                swapFills: {
-                    lastTickAt: NOW,
-                    submitting: 1,
-                    blockers: ["swap_fill_unexpected_spend"],
-                },
-            },
-            reason: "swap_fill_unexpected_spend",
-        });
-    });
-
-    it("is 503 before the swap-fill reconciler has completed catch-up", async () => {
-        const router = createRoutes({
-            ...deps(),
-            swapFillReconciler: {
-                status: () => ({ lastTickAt: null, submitting: 1, blockers: [] }),
-            },
-        });
-        const res = await router.request("/ready");
-        expect(res.status).toBe(503);
-        expect(await res.json()).toMatchObject({
-            status: "degraded",
-            reason: "the swap-fill reconciler has not completed a tick",
         });
     });
 
@@ -2326,7 +2015,6 @@ describe("exposure cap across flows", () => {
                 advances: ledger,
                 policy: terms,
                 reservations: new ReservationRepository(db),
-                swapFills: new SwapFillRepository(db),
                 receiveQuotes: quotes,
                 sweeperIntervalMs: 1_000,
                 sweeperRunning: () => true,
@@ -2470,9 +2158,6 @@ describe("API documentation", () => {
             "POST /v1/sponsored-transfers/{id}/lockup 200": decodeLockup,
             "POST /v1/sponsored-transfers/{id}/lockup 202": decodeLockup,
             "GET /v1/sponsored-transfers/{id} 200": decodeStatus,
-            "POST /v1/swap-fills 200": decodeSwapFillQuote,
-            "GET /v1/swap-fills/{id} 200": decodeSwapFillStatus,
-            "POST /v1/swap-fills/{id}/submit 202": decodeSwapFillStatus,
             "GET /v1/claims 200": decodeClaimsSnapshot,
             "GET /v1/claims/events 200 claims-snapshot": decodeClaimsSnapshot,
             "GET /v1/claims/events 200 claims-changed": decodeClaimsChanged,

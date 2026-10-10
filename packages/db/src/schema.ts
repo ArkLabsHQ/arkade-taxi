@@ -720,27 +720,35 @@ export const MIGRATIONS: readonly Migration[] = [
         INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
             SELECT outpoint_txid, outpoint_vout, quote_id, created_at
             FROM receive_quote_reservations_v18;
-        DROP TABLE receive_quote_reservations_v18;`,
+        DROP TABLE receive_quote_reservations_v18;
+        DROP TABLE swap_fill_reservations;
+        DROP TABLE swap_fills;`,
     },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */
-const REQUIRED_SCHEMA: readonly { since: number; table: string; column: string; type: string }[] = [
+const REQUIRED_SCHEMA: readonly {
+    since: number;
+    before?: number;
+    table: string;
+    column: string;
+    type: string;
+}[] = [
     { since: 1, table: "advances", column: "asset_units", type: "INTEGER" },
     { since: 1, table: "proceeds_jobs", column: "lease_until", type: "INTEGER" },
     { since: 1, table: "proceeds_inputs", column: "job_id", type: "TEXT" },
     { since: 1, table: "proceeds_jobs", column: "submission_state", type: "TEXT" },
     { since: 1, table: "proceeds_local_intents", column: "digest", type: "TEXT" },
     { since: 2, table: "advances", column: "kind", type: "TEXT" },
-    { since: 3, table: "swap_fills", column: "graph_id", type: "TEXT" },
-    { since: 3, table: "swap_fill_reservations", column: "fill_id", type: "TEXT" },
-    { since: 4, table: "swap_fills", column: "sponsor_script", type: "TEXT" },
+    { since: 3, before: 18, table: "swap_fills", column: "graph_id", type: "TEXT" },
+    { since: 3, before: 18, table: "swap_fill_reservations", column: "fill_id", type: "TEXT" },
+    { since: 4, before: 18, table: "swap_fills", column: "sponsor_script", type: "TEXT" },
     { since: 5, table: "advances", column: "claim_mode", type: "TEXT" },
     { since: 6, table: "advances", column: "recovery_recipient", type: "TEXT" },
     { since: 7, table: "receive_quotes", column: "input_expiry_floor_value", type: "INTEGER" },
     { since: 7, table: "receive_quote_reservations", column: "quote_id", type: "TEXT" },
-    { since: 8, table: "swap_fills", column: "receive_quote_id", type: "TEXT" },
-    { since: 9, table: "swap_fills", column: "valid_until", type: "INTEGER" },
+    { since: 8, before: 18, table: "swap_fills", column: "receive_quote_id", type: "TEXT" },
+    { since: 9, before: 18, table: "swap_fills", column: "valid_until", type: "INTEGER" },
     { since: 10, table: "advances", column: "receiver_fare_currency", type: "TEXT" },
     { since: 11, table: "advances", column: "exit_signer_key", type: "BLOB" },
     { since: 12, table: "advances", column: "payment_sats", type: "INTEGER" },
@@ -762,7 +770,10 @@ function missingSchema(db: Database, upto: number): string[] {
         "SELECT 1 AS present FROM pragma_table_info(?) WHERE name = ? AND type = ?",
     );
     return REQUIRED_SCHEMA.filter(
-        (c) => c.since <= upto && !probe.get(c.table, c.column, c.type),
+        (c) =>
+            c.since <= upto &&
+            (c.before === undefined || upto < c.before) &&
+            !probe.get(c.table, c.column, c.type),
     ).map((c) => `${c.table}.${c.column} ${c.type}`);
 }
 

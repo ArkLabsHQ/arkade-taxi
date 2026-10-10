@@ -532,109 +532,6 @@ const schemas: Record<string, Schema> = {
         },
         commitment: ref("SponsoredCommitment"),
     }),
-    SolverInput: object(
-        { txid, vout, value: decimal, tapTree: hex, spendLeaf: hex },
-        {
-            assets: {
-                type: "array",
-                items: object({ assetId: ref("AssetId"), amount: decimal }),
-            },
-        },
-    ),
-    SwapFillQuoteRequest: object(
-        {
-            operationId: {
-                ...text,
-                maxLength: 128,
-                description:
-                    "Idempotency key: a replay with identical terms returns the same fill.",
-            },
-            receiveQuoteId: { ...text, description: "The receive quote this fill binds." },
-            offerHex: hex,
-            solverInputs: { type: "array", items: ref("SolverInput"), minItems: 1, maxItems: 256 },
-            solverProceedsScript: hex,
-            solverKeys: {
-                type: "array",
-                items: { type: "string", pattern: "^(0[23])?[0-9a-fA-F]{64}$" },
-                minItems: 1,
-                maxItems: 256,
-                description: "x-only or compressed public keys, hex.",
-            },
-            contributionSats: {
-                ...decimal,
-                description: "Positive; must equal the bound receive quote's `params.topup`.",
-            },
-            maxFare: {
-                ...ref("Fare"),
-                description: "Highest fare accepted; at least the receive quote's sats fare.",
-            },
-            fundingTxid: { ...txid, description: "The offer's outpoint txid." },
-            fundingVout: vout,
-        },
-        {
-            swapAddress: str,
-            validUntil: {
-                ...unixSeconds,
-                minimum: 1,
-                description: "Caller's deadline, unix seconds.",
-            },
-        },
-    ),
-    SwapFillGraph: object({
-        arkTx: { ...base64, description: "Ark transaction PSBT." },
-        checkpoints: { type: "array", items: base64 },
-        graphId: { type: "string", pattern: "^[0-9a-f]{64}$" },
-        template: constant("taxi-fill/1"),
-        inputs: {
-            type: "array",
-            minItems: 1,
-            items: object({
-                owner: oneOfStrings("offer-covenant", "solver", "sponsor"),
-                txid,
-                vout,
-            }),
-        },
-        outputs: {
-            type: "array",
-            minItems: 1,
-            description: "Derived from `arkTx`; the server re-checks it against the transaction.",
-            items: object({
-                role: oneOfStrings("receiver", "solver", "sponsor-fare", "sponsor-change"),
-                vout,
-                script: hex,
-                sats: decimal,
-                assets: {
-                    type: "array",
-                    items: object({ assetId: ref("AssetId"), units: decimal }),
-                },
-            }),
-        },
-    }),
-    SwapFillQuoteResponse: object({
-        fillId: text,
-        operationId: text,
-        expiresAt,
-        template: constant("taxi-fill/1"),
-        contributionSats: decimal,
-        fare: ref("Fare"),
-        graph: ref("SwapFillGraph"),
-    }),
-    SwapFillSubmitRequest: object({
-        solverGraph: {
-            ...ref("SwapFillGraph"),
-            description: "The quoted graph with the solver's signatures.",
-        },
-    }),
-    SwapFillStatus: object(
-        {
-            fillId: text,
-            operationId: text,
-            state: oneOfStrings("quoted", "submitting", "settled", "expired", "cancelled"),
-            updatedAt: unixSeconds,
-            expiresAt: unixSeconds,
-        },
-        { txid, outpoint: ref("Outpoint"), spentTxid: txid, failureCode: text },
-    ),
     ClaimDescriptor: {
         description: "Everything a receiver needs to verify and claim a locked covenant.",
         ...object(
@@ -725,7 +622,7 @@ const schemas: Record<string, Schema> = {
                     activelyScanned: count,
                 },
                 {
-                    swapFills: object({
+                    fills: object({
                         lastTickAt: nullable(unixSeconds),
                         submitting: count,
                         blockers: strings,
@@ -1026,109 +923,6 @@ const examples = {
             unsignedTxId: "4734261a43c11a9d5efd83a2f7bdba346b7e07426ece05b043aa1cf08c4da147",
         },
     },
-    swapFill: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        expiresAt: 1757000060,
-        template: "taxi-fill/1",
-        contributionSats: "330",
-        fare: {
-            currency: "asset",
-            units: "5",
-            assetId: {
-                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                groupIndex: 0,
-            },
-        },
-        graph: {
-            arkTx: "cHNidP8BAP1SAQMAAAADwXUOI1Uz1BYe3iWZ1qYfCxVI2W5xw5KDojEUHdYvKSgAAAAAAP////8XHk1lVnYFhAixVjGhY/HKCzPJvhVqKWs9YNC5/H6VpwAAAAAA/////yClXW+ZI9CeT87JgI3nyJR+k4ow/umLoGHiJNY2wWGrAAAAAAD/////BYgTAAAAAAAAIlEgG4TFVnsSZECZXT7VqroFZdceGDRgSBn/nBf16dXdB4/oAwAAAAAAAAFRSgEAAAAAAAAiUSBTH+YGgTRQPScjEzInyGesj6bIPFN+mkTDxb29yx/jN9ZMAAAAAAAAIlEgUx/mBoE0UD0nIxMyJ8hnrI+myDxTfppEw8W9vcsf4zcAAAAAAAAAADlqN0FSSwAyAQESNBI0EjQSNBI0EjQSNBI0EjQSNBI0EjQSNBI0EjQSNAAAAQEBAGQCAQIABQEBAF8AAAAAAAAAAAAAAAAA",
-            checkpoints: [
-                "cHNidP8BAD0DAAAAAd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3dAwAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-                "cHNidP8BAD0DAAAAAe7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7uAQAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-                "cHNidP8BAD0DAAAAAbu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7AAAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-            ],
-            graphId: "e057ce6c6f8809ce08d16a6a4a73f7a1dc3b0015c15c9ad3ba343496e3ba4f62",
-            template: "taxi-fill/1",
-            inputs: [
-                {
-                    owner: "offer-covenant",
-                    txid: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-                    vout: 3,
-                },
-                {
-                    owner: "solver",
-                    txid: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                    vout: 1,
-                },
-                {
-                    owner: "sponsor",
-                    txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    vout: 0,
-                },
-            ],
-            outputs: [
-                {
-                    role: "receiver",
-                    vout: 0,
-                    script: "51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
-                    sats: "5000",
-                    assets: [],
-                },
-                {
-                    role: "solver",
-                    vout: 1,
-                    script: "51",
-                    sats: "1000",
-                    assets: [
-                        {
-                            assetId: {
-                                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                                groupIndex: 0,
-                            },
-                            units: "95",
-                        },
-                    ],
-                },
-                {
-                    role: "sponsor-fare",
-                    vout: 2,
-                    script: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
-                    sats: "330",
-                    assets: [
-                        {
-                            assetId: {
-                                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                                groupIndex: 0,
-                            },
-                            units: "5",
-                        },
-                    ],
-                },
-                {
-                    role: "sponsor-change",
-                    vout: 3,
-                    script: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
-                    sats: "19670",
-                    assets: [],
-                },
-            ],
-        },
-    },
-    swapFillStatus: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        state: "quoted",
-        updatedAt: 1757000000,
-        expiresAt: 1757000060,
-    },
-    swapFillSubmitted: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        state: "submitting",
-        txid: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        updatedAt: 1757000000,
-        expiresAt: 1757000060,
-    },
     claims: {
         claims: [
             {
@@ -1265,11 +1059,6 @@ const examples = {
             lastWatcherScanAt: null,
             watching: 0,
             activelyScanned: 0,
-            swapFills: {
-                lastTickAt: 1757000000,
-                submitting: 0,
-                blockers: [],
-            },
         },
     },
 };
@@ -1402,7 +1191,7 @@ export const openApiDocument: {
                 tags: ["Receive quotes"],
                 summary: "Quote a receive",
                 description:
-                    "Reserves operator funding for a recycle covenant paying `receiverAddress`, for a swap fill to bind. Unknown request fields are rejected.",
+                    "Reserves operator funding for a recycle covenant paying `receiverAddress`, for a caller-built fill to bind. Unknown request fields are rejected.",
                 requestBody: body("ReceiveQuoteRequest"),
                 responses: {
                     200: ok("ReceiveQuote", examples.receiveQuote),
@@ -1453,69 +1242,6 @@ export const openApiDocument: {
         },
         "/v1/sponsored-transfers/{id}/lockup": { post: lockup("Sponsored transfers") },
         "/v1/sponsored-transfers/{id}": { get: transferStatus("Sponsored transfers") },
-        "/v1/swap-fills": {
-            post: {
-                tags: ["Swap fills"],
-                summary: "Quote a swap fill",
-                description:
-                    "Builds the joint fill graph for a swap offer, bound to a receive quote. Idempotent per `operationId`; different terms get `operation_conflict`.",
-                requestBody: body("SwapFillQuoteRequest"),
-                responses: {
-                    200: ok("SwapFillQuoteResponse", examples.swapFill),
-                    400: error(
-                        "Codes include `invalid_request`, `receive_quote_required`, `swap_fill_funding_outpoint_required` and `swap_fill_offer_invalid`.",
-                    ),
-                    409: quoteRefused(
-                        "`operation_conflict`, `receive_quote_unavailable`, `receive_quote_funding_changed`, `swap_fill_deadline_expired` and the admission refusals",
-                    ),
-                    500: error("Codes include `receive_quote_invalid` and `internal_error`."),
-                    503: notQuoting(
-                        "`paused`, `not_ready`, `runtime_unsafe`, `database_busy` and `shutting_down`",
-                    ),
-                },
-            },
-        },
-        "/v1/swap-fills/{id}": {
-            get: {
-                tags: ["Swap fills"],
-                summary: "Swap fill status",
-                parameters: byId("`fillId` from the quote."),
-                responses: {
-                    200: ok("SwapFillStatus", examples.swapFillStatus),
-                    404: error("`not_found`."),
-                    500: internal,
-                    503: unavailable,
-                },
-            },
-        },
-        "/v1/swap-fills/{id}/submit": {
-            post: {
-                tags: ["Swap fills"],
-                summary: "Submit the solver-signed fill",
-                description:
-                    "Verifies the solver's graph against the quote, co-signs and submits it.",
-                parameters: byId("`fillId` from the quote."),
-                requestBody: body("SwapFillSubmitRequest"),
-                responses: {
-                    202: ok(
-                        "SwapFillStatus",
-                        examples.swapFillSubmitted,
-                        "Submitted: `submitting`.",
-                    ),
-                    400: error("`invalid_request`."),
-                    404: error("`not_found`."),
-                    409: error(
-                        "Codes include `quote_expired`, `invalid_state`, `swap_fill_graph_conflict`, `swap_fill_solver_unauthorised` and `swap_fill_bound_unsafe`.",
-                    ),
-                    500: error(
-                        "Codes include `swap_fill_graph_integrity`, `swap_fill_covenant_pin_invalid` and `internal_error`.",
-                    ),
-                    503: error(
-                        "Codes include `not_ready`, `swap_fill_signing_failed`, `database_busy` and `shutting_down`. `swap_fill_submission_ambiguous` means the outcome is unknown: poll the fill status, never resubmit blindly.",
-                    ),
-                },
-            },
-        },
         "/v1/fills": {
             post: {
                 tags: ["Fills"],

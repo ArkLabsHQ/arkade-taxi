@@ -14,10 +14,8 @@ import {
     PolicyRevisionConflictError,
     allReservedOutpoints,
     expireReceiveQuotes,
-    expireUnboundSwapFills,
     totalExposure,
 } from "./reservations.js";
-import { SwapFillRepository, type SwapFill } from "./swapFills.js";
 import { FillRepository, type Fill } from "./fills.js";
 
 export type ReceiveQuoteState = "quoted" | "bound" | "expired";
@@ -76,14 +74,6 @@ export interface InsertReceiveQuoteRequest {
     expectedPolicyRevision: bigint;
     recoveryExecutionBudget: ExpiryDeadline;
     expectedReservedOutpoints?: readonly Outpoint[];
-}
-
-export interface BindReceiveQuoteRequest {
-    quoteId: string;
-    fill: SwapFill;
-    advance: Advance;
-    expectedPolicyRevision: bigint;
-    now: number;
 }
 
 export interface BindFillRequest {
@@ -484,7 +474,6 @@ export class ReceiveQuoteRepository {
         this.db
             .transaction(() => {
                 expireReceiveQuotes(this.db, q.createdAt);
-                expireUnboundSwapFills(this.db, q.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (
                     revision !== request.expectedPolicyRevision ||
@@ -575,13 +564,12 @@ export class ReceiveQuoteRepository {
             .immediate();
     }
 
-    bind(request: BindReceiveQuoteRequest): void {
+    bindFill(request: BindFillRequest): void {
         assertNativeAccess(this.db);
         if (!Number.isSafeInteger(request.now) || request.now < 0) fail("binding clock");
         this.db
             .transaction(() => {
                 expireReceiveQuotes(this.db, request.now);
-                expireUnboundSwapFills(this.db, request.now);
                 const quote = this.get(request.quoteId);
                 if (!quote || quote.state !== "quoted" || quote.boundFillId !== undefined)
                     throw new Error("receive quote: state is not bindable");
@@ -611,109 +599,6 @@ export class ReceiveQuoteRepository {
                     (first === undefined ||
                         (first.currency === second!.currency && first.units === second!.units));
                 if (
-                    fill.receiveQuoteId !== quote.id ||
-                    advance.id !== quote.id ||
-                    advance.state !== "locking" ||
-                    fill.state !== "quoted" ||
-                    fill.contributionSats !== quote.loanSats ||
-                    fill.fare.currency !== "sats" ||
-                    fill.fare.units !== quote.fare.units ||
-                    advance.topup !== quote.loanSats ||
-                    advance.dust !== quote.params.dust ||
-                    advance.assetUnits === undefined ||
-                    advance.assetUnits <= 0n ||
-                    !advance.assetId ||
-                    !sameBytes(advance.receiverKey, quote.params.receiverKey) ||
-                    !sameBytes(advance.senderKey, quote.params.senderKey) ||
-                    !sameBytes(advance.operatorKey, quote.params.operatorKey) ||
-                    !sameBytes(advance.operatorSignerKey, quote.params.operatorSignerKey) ||
-                    advance.exitDelay.type !== quote.params.exitDelay.type ||
-                    advance.exitDelay.value !== quote.params.exitDelay.value ||
-                    !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
-                    advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
-                    advance.locktime !== quote.params.locktime ||
-                    !sameReceiverFare(advance.receiverFare, quote.params.receiverFare) ||
-                    advance.covenantAddress !== quote.covenantAddress ||
-                    advance.fare.currency !== "sats" ||
-                    advance.fare.units !== quote.fare.units ||
-                    advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
-                    advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||
-                    // A covenant advance keeps no batch expiry, so there is
-                    // nothing to hold the quote's funding snapshot against.
-                    advance.batchExpiry !== undefined ||
-                    advance.expiresAt !== fill.expiresAt ||
-                    !sameOutpoints(fill.taxiInputs) ||
-                    !sameOutpoints(advance.operatorInputs)
-                )
-                    throw new Error("receive quote: bound economics mismatch");
-                this.db
-                    .prepare("DELETE FROM receive_quote_reservations WHERE quote_id = ?")
-                    .run(quote.id);
-                new SwapFillRepository(this.db).insert(fill);
-                this.db
-                    .prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?")
-                    .run(fill.id);
-                new AdvanceRepository(this.db).insert(advance);
-                const reserve = this.db.prepare(
-                    "INSERT INTO operator_input_reservations (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                );
-                for (const input of quote.operatorInputs)
-                    reserve.run(
-                        input.txid,
-                        input.vout,
-                        advance.id,
-                        quote.batchExpiry.kind,
-                        quote.batchExpiry.value,
-                        request.now,
-                    );
-                const changed = this.db
-                    .prepare(
-                        "UPDATE receive_quotes SET state = 'bound', bound_fill_id = ? WHERE id = ? AND state = 'quoted' AND bound_fill_id IS NULL",
-                    )
-                    .run(fill.id, quote.id).changes;
-                if (changed !== 1) throw new Error("receive quote: binding race");
-            })
-            .immediate();
-    }
-
-    /**
-     * `bind` for `/v1/fills`: the quote goes `bound`, the fill is inserted already
-     * holding its submit lease, and the advance goes `locking` — one transaction,
-     * so nothing exists half-bound and no second caller can take the same coins.
-     *
-     * The economics checked here are only the ones the generic rail still knows:
-     * the loan, the fare, the covenant terms and the reserved outpoints. What the
-     * fill delivers to the receiver is `assertFillGraph`'s business, not the
-     * database's.
-     */
-    bindFill(request: BindFillRequest): void {
-        assertNativeAccess(this.db);
-        if (!Number.isSafeInteger(request.now) || request.now < 0) fail("binding clock");
-        this.db
-            .transaction(() => {
-                expireReceiveQuotes(this.db, request.now);
-                const quote = this.get(request.quoteId);
-                if (!quote || quote.state !== "quoted" || quote.boundFillId !== undefined)
-                    throw new Error("receive quote: state is not bindable");
-                const { policy, revision } = this.#policy.getSnapshot();
-                if (
-                    revision !== request.expectedPolicyRevision ||
-                    quote.policyRevision !== revision
-                )
-                    throw new PolicyRevisionConflictError();
-                if (policy.paused) throw new Error("receive quote: paused");
-                const { fill, advance } = request;
-                const sameOutpoints = (actual: readonly Outpoint[]) =>
-                    actual.length === quote.operatorInputs.length &&
-                    actual.every(
-                        (input, index) =>
-                            input.txid === quote.operatorInputs[index]!.txid &&
-                            input.vout === quote.operatorInputs[index]!.vout,
-                    );
-                const sameBytes = (first: Uint8Array, second: Uint8Array) =>
-                    first.length === second.length &&
-                    first.every((byte, index) => byte === second[index]);
-                if (
                     fill.quoteId !== quote.id ||
                     advance.id !== quote.id ||
                     advance.state !== "locking" ||
@@ -736,6 +621,9 @@ export class ReceiveQuoteRepository {
                     !sameBytes(advance.assetId.txid, quote.params.assetId.txid) ||
                     advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
                     advance.locktime !== quote.params.locktime ||
+                    !sameReceiverFare(advance.receiverFare, quote.params.receiverFare) ||
+                    advance.fare.currency !== quote.fare.currency ||
+                    advance.fare.units !== quote.fare.units ||
                     advance.covenantAddress !== quote.covenantAddress ||
                     advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
                     advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||

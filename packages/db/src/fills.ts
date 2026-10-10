@@ -558,12 +558,12 @@ export class FillRepository {
                             this.#release(id);
                         })();
                         expired += 1;
-                    } catch {
+                    } catch (error) {
                         this.#db
                             .prepare(
-                                "UPDATE fills SET failure_code = 'fill_bound_expiry_unsafe', updated_at = max(updated_at, ?) WHERE id = ?",
+                                "UPDATE fills SET failure_code = 'fill_bound_expiry_unsafe', failure_detail = ?, updated_at = max(updated_at, ?) WHERE id = ?",
                             )
-                            .run(at, id);
+                            .run(error instanceof Error ? error.message : String(error), at, id);
                     }
                 }
                 return expired;

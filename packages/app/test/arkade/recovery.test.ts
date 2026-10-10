@@ -29,7 +29,7 @@ import { fundingInputToWire } from "@arkade-taxi/protocol";
 import { covenantParamsOf, type Advance } from "@arkade-taxi/core";
 import type { RuntimeConfig } from "../../src/config.js";
 import { readFundingSource } from "../../src/arkade/fundingSource.js";
-import { sealGraph } from "../swapFillFixtures.js";
+import { sealGraph } from "../graphFixtures.js";
 import {
     advance,
     config,
