@@ -1247,6 +1247,7 @@ await import("/app/dist/cli.js");
             TAXI_E2E_FIXTURE_FILE: fixtureFile,
             TAXI_E2E_SECRET_FILE: secretFile,
             TAXI_E2E_CLIENT_ENTRY: packs.entry,
+            TAXI_E2E_CONSUMER_PACKAGE: join(packs.consumer, "package.json"),
             TAXI_E2E_ARTIFACTS: artifacts,
             TAXI_DB_PATH: ":memory:",
             TAXI_ARKD_URL: arkdUrl,
