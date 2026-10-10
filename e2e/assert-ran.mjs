@@ -10,8 +10,13 @@ const SWAP_SCENARIOS = [
     "receiver-paid-fill-claim",
     "fill-undersigned-foreign-input",
 ];
-// Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
-const ISOLATED_SCENARIOS = ["covenant-unilateral-exit-with-arkd-down"];
+// Each leaves its stack unusable for later scenarios, so each runs on a stack
+// of its own: they are mutually exclusive as well as terminal, so one shared
+// isolated stack is not enough.
+const ISOLATED_SCENARIOS = [
+    "covenant-unilateral-exit-with-arkd-down",
+    "fill-undersigned-foreign-input",
+];
 
 export function readScenarioIds(mode = "full") {
     if (!["full", "direct", "isolated"].includes(mode))
@@ -35,6 +40,27 @@ export function readScenarioIds(mode = "full") {
     if (mode === "isolated") return [...ISOLATED_SCENARIOS];
     const shared = ids.filter((id) => !ISOLATED_SCENARIOS.includes(id));
     return mode === "direct" ? shared.filter((id) => !SWAP_SCENARIOS.includes(id)) : shared;
+}
+
+/**
+ * The scenarios one isolated test file registers, read from the file rather than
+ * a second list that could drift from it. Each isolated stack is validated
+ * against exactly these, so a file that silently stops registering one fails.
+ */
+export function isolatedScenarioIds(file) {
+    const source = readFileSync(
+        resolve(dirname(fileURLToPath(import.meta.url)), "..", file),
+        "utf8",
+    );
+    const ids = [...source.matchAll(/\bliveScenario\(\s*"([^"]+)"/g)].map((match) => match[1]);
+    const known = readScenarioIds("isolated");
+    if (
+        ids.length === 0 ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !known.includes(id))
+    )
+        throw new Error(`isolated test ${file} registers no classified isolated scenario`);
+    return ids;
 }
 
 export function validateResults(result, ids, integrityCount = 0) {

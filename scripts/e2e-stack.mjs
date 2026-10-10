@@ -47,6 +47,7 @@ import {
     redactSecrets,
     resolveMasterSha,
     resolveInstalledClientEntry,
+    isolatedLabel,
     resolveE2eOptions,
     resolveWalletTimeoutMs,
     reserveWalletPorts,
@@ -56,7 +57,7 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
-import { readScenarioIds } from "../e2e/assert-ran.mjs";
+import { isolatedScenarioIds, readScenarioIds } from "../e2e/assert-ran.mjs";
 import {
     VENDOR_DIR,
     assertFrozenResolutions,
@@ -730,11 +731,14 @@ const patchPolicy = async (adminUrl) => {
         throw new Error(`policy bootstrap failed: ${response.status} ${await response.text()}`);
 };
 
-async function main(isolated = false) {
+async function main(isolatedFile = undefined) {
+    const isolated = isolatedFile !== undefined;
     const options = resolveE2eOptions(process.argv.slice(2));
     const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);
-    const tests = isolated ? options.isolatedTests : options.tests;
-    const scenarioIds = readScenarioIds(isolated ? "isolated" : options.mode);
+    const tests = isolated ? [isolatedFile] : options.tests;
+    const scenarioIds = isolated
+        ? isolatedScenarioIds(isolatedFile)
+        : readScenarioIds(options.mode);
     const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
     if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
         throw new Error("--wallet checkout requires playwright.taxi.config.ts");
@@ -756,7 +760,11 @@ async function main(isolated = false) {
     const artifacts = join(
         REPO,
         "e2e-artifacts",
-        ...(options.mode === "direct" ? [`direct-${id}`] : isolated ? ["isolated"] : []),
+        ...(options.mode === "direct"
+            ? [`direct-${id}`]
+            : isolated
+              ? ["isolated", isolatedLabel(isolatedFile)]
+              : []),
     );
     const secretDir = join(root, "secrets");
     const secretFile = join(secretDir, "actors.json");
@@ -1580,7 +1588,9 @@ await import("/app/dist/cli.js");
 
 const mainPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (mainPath && fileURLToPath(import.meta.url) === mainPath)
-    main(true)
+    // One stack per isolated test, then the shared suite.
+    resolveE2eOptions(process.argv.slice(2))
+        .isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve())
         .then(() => main())
         .catch((error) => {
             process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

@@ -3,8 +3,8 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-six live scenarios in the main run, one isolated scenario, and two
-integrity assertions must all pass. Skips,
+Twenty-five live scenarios in the main run, two isolated scenarios each on a
+stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 

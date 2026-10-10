@@ -173,11 +173,12 @@ const TASK12_TESTS = [
     "e2e/refund-recovery.e2e.test.ts",
     "e2e/resilience.e2e.test.ts",
     "e2e/suite-integrity.e2e.test.ts",
-    // Last: it leaves an advance nothing resolves yet, so no scenario may
-    // open a stack after it. See the sequencer order.
-    "e2e/fill-undersigned.e2e.test.ts",
 ];
-const ISOLATED_TESTS = ["e2e/unilateral-exit.e2e.test.ts"];
+// One stack each: both leave their stack unusable, and in opposite ways.
+const ISOLATED_TESTS = ["e2e/unilateral-exit.e2e.test.ts", "e2e/fill-undersigned.e2e.test.ts"];
+
+/** The artifact sub-directory one isolated run writes to. */
+export const isolatedLabel = (file) => file.replace(/^.*\//, "").replace(/\.e2e\.test\.ts$/, "");
 
 export const nodeEventSourceArgs = (script, args = []) => [EVENT_SOURCE_NODE_FLAG, script, ...args];
 
@@ -235,7 +236,7 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
             options.mode === "direct"
                 ? tests.filter(
                       (path) =>
-                          !/\/(joint-fill|receiver-paid|receiver-paid-fill|fill-undersigned)\.e2e\.test\.ts$/.test(
+                          !/\/(joint-fill|receiver-paid|receiver-paid-fill)\.e2e\.test\.ts$/.test(
                               path,
                           ),
                   )
