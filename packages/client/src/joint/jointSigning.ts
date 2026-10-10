@@ -3,6 +3,7 @@ import { SigHash } from "@scure/btc-signer";
 import { tapLeafHash } from "@scure/btc-signer/payment.js";
 import {
     Extension,
+    ExtensionNotFoundError,
     Transaction,
     arkade,
     assertAllowedSighashTypes,
@@ -629,13 +630,16 @@ const assertPinnedComplete = (
 };
 
 /**
- * The tweaked emulator cosigner for every provider-signed input, keyed by vin.
+ * The tweaked emulator cosigner for every provider-gated input, keyed by vin.
  *
- * Each emulator-gated input is tweaked by its OWN script, so one key cannot
- * stand in for all of them: a chained rail (an LN covenant and a FixedFloat
- * covenant in one transaction) carries two different cosigners. Empty when the
- * graph names no provider-signed input, which is the arkd route's case and not
- * an error here.
+ * The gating signal is the emulator packet, not the owner label: an unowned
+ * input is simply "not ours", and a generic fill carries unowned inputs that
+ * are ordinary VTXOs their own holder signed. Each gated input is tweaked by
+ * its OWN script, so one key cannot stand in for all of them — a chained rail
+ * (an LN covenant and a FixedFloat covenant in one transaction) carries two.
+ *
+ * Empty means no input is gated, which is the arkd route and not an error. An
+ * entry naming an input we own is a refusal: our coins are never emulator-gated.
  */
 export function providerCosignerKeys(args: {
     expected: JointGraph;
@@ -643,26 +647,33 @@ export function providerCosignerKeys(args: {
     template: string;
 }): Map<number, string> {
     checkIntegrity(args.expected, args.template);
-    const vins = args.expected.inputOwners.flatMap((owner, i) => (owner === null ? [i] : []));
-    const keys = new Map<number, string>();
-    if (vins.length === 0) return keys;
     const ark = parseTx(args.expected.arkTx, "trusted arkTx");
-    let entries;
-    try {
-        entries = Extension.fromTx(ark).getEmulatorPacket()?.entries;
-    } catch (error) {
-        return fail("trusted graph carries no emulator packet", error);
-    }
+    const read = (): { vin: number; script: Uint8Array }[] => {
+        try {
+            return Extension.fromTx(ark).getEmulatorPacket()?.entries ?? [];
+        } catch (error) {
+            if (error instanceof ExtensionNotFoundError) return [];
+            return fail("trusted graph carries no emulator packet", error);
+        }
+    };
+    const entries = read();
+    const keys = new Map<number, string>();
+    if (entries.length === 0) return keys;
     const base = pinHex(args.emulatorXOnly, "emulator pin");
-    for (const vin of vins) {
-        const script = entries?.find((e) => e.vin === vin)?.script;
-        if (!script || script.length === 0) return fail("trusted graph carries no provider script");
-        keys.set(vin, hex.encode(computeArkadeScriptPublicKey(hex.decode(base), script)));
+    for (const entry of entries) {
+        if (args.expected.inputOwners[entry.vin] !== null)
+            return fail(`trusted graph gates input ${entry.vin}, which it owns`);
+        if (!entry.script || entry.script.length === 0)
+            return fail("trusted graph carries no provider script");
+        keys.set(
+            entry.vin,
+            hex.encode(computeArkadeScriptPublicKey(hex.decode(base), entry.script)),
+        );
     }
     return keys;
 }
 
-/** The first provider-signed input's cosigner. `/v1/swap-fills` has exactly one. */
+/** The first gated input's cosigner. `/v1/swap-fills` has exactly one. */
 export function providerCosignerKey(args: {
     expected: JointGraph;
     emulatorXOnly: string;
@@ -834,16 +845,20 @@ const assertResponseSigs = (args: {
             assertEntryValid(signedArk, trustedArk, i, entry, "emulator arkTx");
         }
     }
-    const providerInputs = owners.flatMap((o, i) => (o === null ? [i] : []));
-    if (providerInputs.length === 0) {
-        throw new Error("trusted graph names no provider-signed input");
-    }
-    for (const i of providerInputs) {
+    for (const [i, owner] of owners.entries()) {
+        if (owner !== null) continue;
+        const entries = tapScriptSigEntries(signedArk, i);
         const providerPin = providerPins.get(i);
         if (providerPin === undefined) {
-            throw new Error(`provider input ${i} has no pinned cosigner`);
+            // An unowned, ungated input: whoever holds it signed it, with a key
+            // we were never told. Its signatures are checked for validity, not
+            // against a pin — an under-signed one only fails submission, and it
+            // fails atomically, so the loan is never half-made.
+            for (const entry of entries) {
+                assertEntryValid(signedArk, trustedArk, i, entry, `emulator arkTx foreign ${i}`);
+            }
+            continue;
         }
-        const entries = tapScriptSigEntries(signedArk, i);
         if (entries.length === 0) {
             throw new Error(`provider input ${i} carries no server or provider signature`);
         }
@@ -864,6 +879,12 @@ const assertResponseSigs = (args: {
         if (!server) throw new Error(`emulator checkpoint ${i} is missing from the response`);
         if (owners[i] === null) {
             const cpEntries = tapScriptSigEntries(server, 0);
+            const providerPin = providerPins.get(i);
+            if (providerPin === undefined) {
+                for (const entry of cpEntries)
+                    assertEntryValid(server, local, 0, entry, `emulator checkpoint ${i}`);
+                return;
+            }
             if (cpEntries.length === 0) {
                 throw new Error(`emulator checkpoint ${i} carries no server or emulator signature`);
             }
@@ -871,7 +892,7 @@ const assertResponseSigs = (args: {
                 const cosigned =
                     entry.pubKeyHex === emulatorPin ||
                     entry.pubKeyHex === serverPin ||
-                    entry.pubKeyHex === providerPins.get(i);
+                    entry.pubKeyHex === providerPin;
                 if (!cosigned) {
                     throw new Error(
                         `emulator checkpoint ${i} carries a signature from unpinned key ${entry.pubKeyHex}`,

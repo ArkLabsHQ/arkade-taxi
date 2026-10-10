@@ -113,6 +113,12 @@ export {
 export {
     deepFreeze,
     digestJointGraph,
+    FILL_TEMPLATE,
+    fillCosignerKeys,
+    prepareFillSubmission,
+    sealFillGraph,
+    signFillForTaxi,
+    submitFillGraph,
     verifyJointGraph,
     prepareJointSubmission,
     providerCosignerKey,

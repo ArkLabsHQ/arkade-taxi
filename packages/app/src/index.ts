@@ -1,4 +1,11 @@
 export {
+    getFill,
+    submitFill,
+    assertFillGraph,
+    type FillDeps,
+    type FillGraphArgs,
+} from "./fills.js";
+export {
     ConfigError,
     LOG_LEVELS,
     loadConfig,

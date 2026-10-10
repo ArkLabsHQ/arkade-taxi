@@ -22,6 +22,7 @@ import {
     type SwapFillStore,
 } from "./swapFillQuotes.js";
 import { submitSwapFill, type SwapFillSubmitDeps } from "./swapFillSubmit.js";
+import { getFill, submitFill, type FillDeps } from "./fills.js";
 import type { DelegateeClient } from "./delegatee.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
@@ -44,6 +45,7 @@ export interface RouteDeps extends QuoteDeps {
         client: Pick<DelegateeClient, "getDelegation">;
     };
     swapFillSubmit: SwapFillSubmitDeps;
+    fill: FillDeps;
     offerCodec: OfferCodec;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
@@ -488,6 +490,23 @@ export function createRoutes(deps: RouteDeps): Hono {
             return c.json(toErrorResponse(err), err.status);
         }
     });
+
+    // The generic rail, alongside the swap-fill one. One call validates, binds,
+    // signs last and submits, so there is no second endpoint to receive
+    // signatures and no window between quoting a graph and spending it.
+    app.post("/v1/fills", async (c) => {
+        try {
+            const body = await submitFill(deps.fill, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
+            );
+            return c.json(body, 202);
+        } catch (e) {
+            const err = ServiceError.from(e);
+            return c.json(toErrorResponse(err), err.status);
+        }
+    });
+
+    app.get("/v1/fills/:id", (c) => handle(c, () => getFill(deps.fill, c.req.param("id"))));
 
     app.get("/v1/claims", (c) =>
         handle(c, () => ({

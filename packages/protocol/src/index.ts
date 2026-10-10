@@ -61,6 +61,13 @@ export {
     type SwapFillStatusResponse,
     type SwapFillSubmitRequestBody,
 } from "./swapFill.js";
+export {
+    fillRequestToWire,
+    fillStatusFromWire,
+    type FillRequestBody,
+    type FillState,
+    type FillStatusResponse,
+} from "./fill.js";
 
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */

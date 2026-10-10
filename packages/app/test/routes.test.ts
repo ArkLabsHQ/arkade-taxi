@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { idleFillDeps, MemoryFills } from "./fillFixtures.js";
 import { ArkAddress, asset } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
@@ -126,6 +127,7 @@ let sponsoredBuilder: FakeSponsoredLockupBuilder;
 let swapFills: MemorySwapFills;
 let swapFillBuilder: FakeSwapFillGraphBuilder;
 let receiveQuotes: MemoryReceiveQuotes;
+const fills = new MemoryFills();
 let sweeperStatus: SweeperStatus;
 let reconcilerStatus: ReconcilerStatus;
 let clock: number;
@@ -183,6 +185,16 @@ const deps = (over: Partial<Policy> = {}): RouteDeps & Pick<ServerDeps, "runtime
         joint: submitJointStub(),
         assertSolverAuthorised: () => {},
     },
+    fill: idleFillDeps({
+        runtime: quoteInfrastructure(advances, () => basePolicy(over)).runtime,
+        policy: { getSnapshot: () => ({ policy: basePolicy(over), revision: 1n }) },
+        fills,
+        receiveQuotes,
+        config: config(),
+        now: () => clock,
+        randomId: () => `fill-${++ids}`,
+        getServerUnroll: () => serverUnroll,
+    }),
     offerCodec: { decodeOffer: () => fakeOfferTerms() },
     sweeper: { status: () => sweeperStatus },
     reconciler: { status: () => reconcilerStatus },
@@ -205,6 +217,13 @@ class MemoryReceiveQuotes {
         if (!row || row.state !== "quoted") throw new Error("receive quote is not bindable");
         this.rows.set(row.id, { ...row, state: "bound", boundFillId: request.fill.id });
         swapFills.insert(request.fill);
+        advances.insert(request.advance);
+    }
+    bindFill(request: Parameters<ReceiveQuoteRepository["bindFill"]>[0]): void {
+        const row = this.rows.get(request.quoteId);
+        if (!row || row.state !== "quoted") throw new Error("receive quote is not bindable");
+        this.rows.set(row.id, { ...row, state: "bound", boundFillId: request.fill.id });
+        fills.insert(request.fill);
         advances.insert(request.advance);
     }
     expireQuotes(at: number): number {

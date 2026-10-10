@@ -3,6 +3,7 @@ import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
+    FillRepository,
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
@@ -15,6 +16,7 @@ import { createServiceLifecycle } from "../src/lifecycle.js";
 import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
+import { idleFillDeps } from "./fillFixtures.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
 import { FakeSwapFillGraphBuilder, fakeOfferTerms } from "./swapFillFixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
@@ -170,6 +172,16 @@ function setup() {
             sponsoredBuilder: new FakeSponsoredLockupBuilder(cfg, serverUnroll),
             receiveQuotes,
             swapFills,
+            fill: idleFillDeps({
+                runtime: deps.runtime,
+                policy: terms,
+                fills: new FillRepository(db),
+                receiveQuotes,
+                config: cfg,
+                now: deps.now,
+                randomId: deps.randomId,
+                getServerUnroll: () => serverUnroll,
+            }),
             swapFillBuilder: new FakeSwapFillGraphBuilder("bd".repeat(34), 5000n),
             swapFillSubmit: {
                 swapFills,

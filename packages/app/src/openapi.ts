@@ -411,6 +411,63 @@ const schemas: Record<string, Schema> = {
             },
         ),
     },
+    FillRequest: {
+        description:
+            "A complete graph the caller built. Every input outpoint is read off the checkpoints, so none is declared.",
+        ...object(
+            {
+                operationId: { ...text, maxLength: 128 },
+                quoteId: { ...text, maxLength: 128 },
+                arkTx: {
+                    ...text,
+                    maxLength: 4000000,
+                    description: "base64 PSBT. Every non-Taxi input signed; the Taxi's unsigned.",
+                },
+                checkpoints: {
+                    type: "array",
+                    items: { ...text, maxLength: 4000000 },
+                    minItems: 1,
+                    maxItems: 256,
+                    description: "base64 PSBTs, one per arkTx input, index-aligned.",
+                },
+                taxiInputIndexes: {
+                    type: "array",
+                    items: { type: "integer", minimum: 0 },
+                    minItems: 1,
+                    maxItems: 256,
+                    description: "Which arkTx inputs are the Taxi's reserved coins.",
+                },
+                covenantOutputIndex: {
+                    type: "integer",
+                    minimum: 0,
+                    description: "Where the quoted covenant output sits. Any index.",
+                },
+                assetUnits: {
+                    ...decimal,
+                    description: "Units the covenant output must carry.",
+                },
+            },
+            { validUntil: unixSeconds },
+        ),
+    },
+    FillStatus: {
+        description: "Carries no PSBT bytes: the caller never holds a Taxi-signed graph.",
+        ...object(
+            {
+                fillId: { ...text, maxLength: 128 },
+                operationId: { ...text, maxLength: 128 },
+                state: oneOfStrings("submitting", "settled", "expired", "cancelled"),
+                updatedAt: unixSeconds,
+                expiresAt,
+            },
+            {
+                txid,
+                outpoint: ref("Outpoint"),
+                spentTxid: txid,
+                failureCode: text,
+            },
+        ),
+    },
     ExtraPacket: {
         description:
             "Extension packet the payment must carry, e.g. an offer's packet when funding it. Echoed in `params`.",
@@ -870,6 +927,14 @@ const examples = {
             },
         ],
         operatorScript: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+    },
+    fillSubmitted: {
+        fillId: "fill-1",
+        operationId: "op-1",
+        state: "submitting",
+        txid: "9f3c1f2e7a5b4d6c8e0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60",
+        updatedAt: 1757000001,
+        expiresAt: 1757000060,
     },
     receiverPaidQuote: {
         quoteId: "adv-1",
@@ -1448,6 +1513,42 @@ export const openApiDocument: {
                     503: error(
                         "Codes include `not_ready`, `swap_fill_signing_failed`, `database_busy` and `shutting_down`. `swap_fill_submission_ambiguous` means the outcome is unknown: poll the fill status, never resubmit blindly.",
                     ),
+                },
+            },
+        },
+        "/v1/fills": {
+            post: {
+                tags: ["Fills"],
+                summary: "Fill a receive quote with a graph you built",
+                description:
+                    "One call: validates the graph against the quote, binds the quote, signs the Taxi's inputs last and submits. The Taxi checks only that it gets its reserved coins back, its fare paid and the quoted covenant created.",
+                requestBody: body("FillRequest"),
+                responses: {
+                    202: ok("FillStatus", examples.fillSubmitted, "Submitted: `submitting`."),
+                    400: error(
+                        "Codes include `invalid_request`, `fill_graph_invalid`, `fill_taxi_inputs_differ`, `fill_foreign_taxi_coin`, `fill_checkpoint_mismatch`, `fill_covenant_output_mismatch`, `fill_covenant_asset_mismatch`, `fill_asset_units_invalid`, `fill_fare_exceeds_delivery`, `fill_operator_payout_mismatch`, `fill_unpriced_fare`, `fill_two_fares`, `fill_output_below_floor`, `fill_asset_not_conserved`, `fill_taxi_input_assets`, `fill_input_unspendable` and `fill_taxi_input_signed`.",
+                    ),
+                    404: error("`not_found`: no such receive quote."),
+                    409: error(
+                        "Codes include `quote_expired`, `invalid_state`, `operation_conflict`, `policy_changed`, `fill_input_expiry_floor`, `fill_output_limit_exceeded` and `fill_bind_failed`.",
+                    ),
+                    500: internal,
+                    503: error(
+                        "Codes include `not_ready`, `runtime_unsafe`, `fill_signing_failed`, `database_busy` and `shutting_down`. `fill_submission_ambiguous` means the outcome is unknown: poll the fill status, never resubmit blindly.",
+                    ),
+                },
+            },
+        },
+        "/v1/fills/{id}": {
+            get: {
+                tags: ["Fills"],
+                summary: "Fill status",
+                parameters: byId("`fillId` from the submission."),
+                responses: {
+                    200: ok("FillStatus", examples.fillSubmitted),
+                    404: error("`not_found`."),
+                    500: internal,
+                    503: unavailable,
                 },
             },
         },

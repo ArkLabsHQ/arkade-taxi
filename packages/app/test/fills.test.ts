@@ -14,11 +14,12 @@ import {
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
-import type { ReceiveQuote } from "@arkade-taxi/db";
+import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade-taxi/db";
 import { createSwapFillQuote } from "../src/swapFillQuotes.js";
 import { assertFillGraph, type FillGraphArgs } from "../src/fills.js";
 import type { ServiceError } from "../src/errors.js";
 import { runtimeSafety, serverUnroll } from "./fixtures.js";
+import { WANTED_ASSET } from "./jointFillFixtures.js";
 import { asIndexed } from "./swapFillFixtures.js";
 import { receiverPaidFill } from "./realFillFixtures.js";
 
@@ -254,6 +255,36 @@ describe("assertFillGraph against the graph today's builder emits", () => {
         const arkTx = txOf(fixture.args.graph.arkTx);
         expect(same(arkTx.getOutput(0).script!, covenant.pkScript)).toBe(true);
         expect(() => assertFillGraph(fixture.args)).not.toThrow();
+    });
+
+    /**
+     * The phase-2 open claim, answered: V7's asset-fare branch was not merely
+     * untested, it was unreachable. `encodeFare` in the receive-quote
+     * repository refuses any currency but sats, and the bind requires the same,
+     * so no quote this rail can load ever prices an asset fare. The branch is
+     * gone; this pins the invariant it rested on.
+     */
+    it("V7 refuses a quote whose fare the rail cannot price, which no quote can be", () => {
+        const quote: ReceiveQuote = {
+            ...fixture.quote,
+            fare: { currency: "asset", assetId: WANTED_ASSET, units: 2n },
+        };
+        expect(refused({ quote }).code).toBe("fill_fare_unsupported");
+        // And the store will not hold one, so the refusal is unreachable in
+        // production rather than merely unexercised.
+        const db = openDatabase(":memory:");
+        try {
+            const quotes = new ReceiveQuoteRepository(db);
+            expect(() =>
+                quotes.insert({
+                    quote,
+                    expectedPolicyRevision: 0n,
+                    recoveryExecutionBudget: { kind: "time", value: 43_200n },
+                }),
+            ).toThrow(/invalid fare/);
+        } finally {
+            db.close();
+        }
     });
 
     it("V1 refuses an arkTx input that does not spend its own checkpoint", () => {

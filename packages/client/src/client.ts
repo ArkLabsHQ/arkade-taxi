@@ -13,6 +13,9 @@ import {
     type QuoteResponse,
     type ReceiveQuoteRequestBody,
     type ReceiveQuoteResponse,
+    fillRequestToWire,
+    fillStatusFromWire,
+    type FillStatusResponse,
     type ReceiverClaimWire,
     type SponsoredQuoteRequestBody,
     type SponsoredQuoteResponse,
@@ -604,6 +607,28 @@ export class TaxiClient {
     async swapFillStatus(fillId: string): Promise<SwapFillStatusResponse> {
         const path = `/v1/swap-fills/${encodeURIComponent(fillId)}`;
         return decodeSwapFillStatus((await this.request("GET", path)) as SwapFillStatusResponse);
+    }
+
+    /** One liable call: the Taxi validates, binds, signs last and submits.
+     * `fill_submission_ambiguous` means the outcome is unknown — poll, never
+     * resubmit. The response carries no PSBT bytes. */
+    async submitFill(req: {
+        operationId: string;
+        quoteId: string;
+        arkTx: string;
+        checkpoints: readonly string[];
+        taxiInputIndexes: readonly number[];
+        covenantOutputIndex: number;
+        assetUnits: bigint;
+        validUntil?: number;
+    }): Promise<FillStatusResponse> {
+        const body = await this.request("POST", "/v1/fills", fillRequestToWire(req));
+        return fillStatusFromWire(body);
+    }
+
+    async fillStatus(fillId: string): Promise<FillStatusResponse> {
+        const path = `/v1/fills/${encodeURIComponent(fillId)}`;
+        return fillStatusFromWire(await this.request("GET", path));
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {

@@ -1,18 +1,52 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
+    ArkAddress,
     Extension,
     ExtensionNotFoundError,
     Transaction,
     VtxoScript,
+    VtxoTaprootTree,
     asset,
     canSpendOffchain,
+    getArkPsbtFields,
+    scriptFromTapLeafScript,
+    type ArkProvider,
     type CSVMultisigTapscript,
+    type EmulatorProvider,
+    type ExtendedVirtualCoin,
+    type Identity,
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
+import type { Advance, Outpoint } from "@arkade-taxi/core";
 import { DustCovenantScript, lockupSats } from "@arkade-taxi/covenant";
-import type { ReceiveQuote, ReceiveQuoteInputSnapshot } from "@arkade-taxi/db";
-import { ServiceError } from "./errors.js";
+import type {
+    FillRepository,
+    PolicyRepository,
+    ReceiveQuote,
+    ReceiveQuoteInputSnapshot,
+    ReceiveQuoteRepository,
+    Fill,
+} from "@arkade-taxi/db";
+import {
+    fillCosignerKeys,
+    prepareFillSubmission,
+    sealFillGraph,
+    signFillForTaxi,
+    submitFillGraph,
+    type JointGraph,
+    type JointSignerBinding,
+    type PreparedJointSubmission,
+} from "@arkade-taxi/client";
+import type { FillRequestBody, FillStatusResponse } from "@arkade-taxi/protocol";
+import type { RuntimeConfig } from "./config.js";
+import { ErrorCode, ServiceError, sanitizeOperationalError } from "./errors.js";
+import { withQuoteAdmission } from "./quotes.js";
+import type { RuntimeGate } from "./arkade/types.js";
+import { assertFreshSafety } from "./arkade/inventory.js";
+import { buildRecoveryIntent } from "./arkade/recovery.js";
+import { encodeFillSource, type FillFundingSource } from "./arkade/fundingSource.js";
 import {
     deriveJointInputs,
     deriveJointOutputs,
@@ -66,9 +100,6 @@ const assetPacket = (tx: Transaction): asset.Packet | null => {
         return refuse("fill_asset_packet_invalid", 400, "asset packet is not parsable");
     }
 };
-
-const holdings = (coin: VirtualCoin): Map<string, bigint> =>
-    new Map((coin.assets ?? []).map((held) => [held.assetId, BigInt(held.amount)]));
 
 /**
  * V1-V11 of the rail-agnostic fill design, on a graph the caller built.
@@ -240,44 +271,27 @@ export function assertFillGraph(args: FillGraphArgs): void {
     // except the loan, plus the fare it quoted. Summed, not matched per output:
     // a sats fare and change both pay `operatorScript` carrying no assets, so
     // they are indistinguishable per output and only the total is checkable.
+    // A receive quote's fare is sats by construction: `encodeFare` in the quote
+    // repository refuses any other currency, and so does the bind. Asserted
+    // rather than handled, so the day that changes this refuses instead of
+    // silently valuing an asset fare at zero.
+    if (quote.fare.currency !== "sats")
+        refuse("fill_fare_unsupported", 409, "quote prices a fare this rail cannot check");
     const contributed = [...taxiSnapshots.values()].reduce((sum, i) => sum + i.value, 0n);
-    const satsFare = quote.fare.currency === "sats" ? quote.fare.units : 0n;
     let paidToTaxi = 0n;
-    let assetFare: { assetId: string; units: bigint } | undefined;
     for (const output of outputs) {
         if (!same(output.script, operatorScript)) continue;
-        if (!output.assets.length) {
-            paidToTaxi += output.sats;
-            continue;
-        }
-        if (assetFare) refuse("fill_two_fares", 400, "pays the Taxi two asset fares");
-        assetFare = {
-            assetId: output.assets[0]!.assetId,
-            units: output.assets.reduce((sum, held) => sum + held.units, 0n),
-        };
-        if (output.assets.some((held) => held.assetId !== assetFare!.assetId))
-            refuse("fill_unpriced_fare", 400, "pays the Taxi an asset mix it never quoted");
+        // The Taxi quoted sats, so any asset at its own script is unpriced.
+        if (output.assets.length)
+            refuse("fill_unpriced_fare", 400, "pays the Taxi an asset fare it never priced");
+        paidToTaxi += output.sats;
     }
-    if (paidToTaxi !== contributed - quote.params.topup + satsFare)
+    if (paidToTaxi !== contributed - quote.params.topup + quote.fare.units)
         refuse(
             "fill_operator_payout_mismatch",
             400,
             "Taxi payout is not the reservation less the loan plus the fare",
         );
-    if (quote.fare.currency === "asset" && quote.fare.units > 0n) {
-        const allowed = taxiAssetIdToSwapId(quote.fare.assetId);
-        if (!assetFare || assetFare.assetId !== allowed || assetFare.units !== quote.fare.units)
-            refuse("fill_unpriced_fare", 400, "asset fare differs from the quoted fare");
-        const funded = inputs.some((input, index) => {
-            if (taxi.has(index)) return false;
-            const coin = observed.get(point(input));
-            return coin !== undefined && (holdings(coin).get(allowed) ?? 0n) >= assetFare!.units;
-        });
-        if (!funded)
-            refuse("fill_unpriced_fare", 400, "asset fare is not carried by a foreign input");
-    } else if (assetFare) {
-        refuse("fill_unpriced_fare", 400, "pays the Taxi an asset fare it never priced");
-    }
 
     // V8 — the standing no-sub-dust decision, and arkd refuses them anyway.
     // Unconditional, unlike the fill path it replaces: a zero-sat value output
@@ -364,3 +378,552 @@ export function assertFillGraph(args: FillGraphArgs): void {
             refuse("fill_taxi_input_signed", 400, `Taxi input ${index} arrives already signed`);
     }
 }
+
+// ---------------------------------------------------------------------------
+// POST /v1/fills, GET /v1/fills/{id}
+// ---------------------------------------------------------------------------
+
+export interface FillDeps {
+    runtime: RuntimeGate;
+    policy: Pick<PolicyRepository, "getSnapshot">;
+    fills: Pick<
+        FillRepository,
+        | "get"
+        | "getByOperation"
+        | "recordPrepared"
+        | "recordSubmitInvoked"
+        | "recordSettled"
+        | "recordAmbiguous"
+        | "recordSigningFailure"
+        | "expire"
+    >;
+    receiveQuotes: Pick<ReceiveQuoteRepository, "get" | "bindFill" | "expireQuotes">;
+    inventory: { getLockedVtxoOutpoints(): Promise<Outpoint[]> };
+    senderInventory: {
+        getVtxos(opts?: { outpoints?: Outpoint[] }): Promise<{ vtxos: VirtualCoin[] }>;
+    };
+    config: RuntimeConfig;
+    now: () => number;
+    nowMs: () => number;
+    randomId: () => string;
+    taxiIdentity: () => Identity;
+    emulator: Pick<EmulatorProvider, "submitTx">;
+    arkProvider: Pick<ArkProvider, "submitTx" | "finalizeTx">;
+    providerLimits: () => Promise<{ vtxoMaxAmount: bigint }>;
+    getServerUnroll: () => CSVMultisigTapscript.Type;
+    leaseSeconds: number;
+}
+
+const DECIMAL = /^(0|[1-9][0-9]*)$/;
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+const bad = (detail: string): never => {
+    throw new ServiceError(ErrorCode.InvalidRequest, 400, `fill request ${detail}`);
+};
+
+function decodeFillBody(body: unknown): FillRequestBody {
+    if (!body || typeof body !== "object" || Array.isArray(body)) bad("must be an object");
+    const raw = body as Record<string, unknown>;
+    const text = (key: "operationId" | "quoteId", max: number): string => {
+        const value = raw[key];
+        if (typeof value !== "string" || !value.length || value.length > max)
+            return bad(`${key} is not a bounded string`);
+        return value;
+    };
+    const psbt = (value: unknown, label: string): string => {
+        if (typeof value !== "string" || !value.length || value.length > 4_000_000)
+            return bad(`${label} is not a bounded PSBT`);
+        if (!BASE64.test(value)) bad(`${label} is not base64`);
+        return value;
+    };
+    if (!Array.isArray(raw.checkpoints) || !raw.checkpoints.length || raw.checkpoints.length > 256)
+        bad("checkpoints must be a bounded array");
+    if (
+        !Array.isArray(raw.taxiInputIndexes) ||
+        !raw.taxiInputIndexes.length ||
+        raw.taxiInputIndexes.length > 256
+    )
+        bad("taxiInputIndexes must be a bounded array");
+    for (const index of raw.taxiInputIndexes as unknown[])
+        if (!Number.isSafeInteger(index) || (index as number) < 0)
+            bad("taxiInputIndexes must be non-negative integers");
+    if (!Number.isSafeInteger(raw.covenantOutputIndex) || (raw.covenantOutputIndex as number) < 0)
+        bad("covenantOutputIndex must be a non-negative integer");
+    if (typeof raw.assetUnits !== "string" || !DECIMAL.test(raw.assetUnits))
+        bad("assetUnits must be a canonical decimal string");
+    if (
+        raw.validUntil !== undefined &&
+        (!Number.isSafeInteger(raw.validUntil) || (raw.validUntil as number) <= 0)
+    )
+        bad("validUntil must be a positive integer when present");
+    return {
+        operationId: text("operationId", 128),
+        quoteId: text("quoteId", 128),
+        arkTx: psbt(raw.arkTx, "arkTx"),
+        checkpoints: (raw.checkpoints as unknown[]).map((c, i) => psbt(c, `checkpoints[${i}]`)),
+        taxiInputIndexes: [...(raw.taxiInputIndexes as number[])],
+        covenantOutputIndex: raw.covenantOutputIndex as number,
+        assetUnits: raw.assetUnits as string,
+        ...(raw.validUntil === undefined ? {} : { validUntil: raw.validUntil as number }),
+    };
+}
+
+const toStatus = (fill: Fill): FillStatusResponse => ({
+    fillId: fill.id,
+    operationId: fill.operationId,
+    state: fill.state,
+    ...(fill.txid === undefined ? {} : { txid: fill.txid }),
+    ...(fill.outpoint === undefined ? {} : { outpoint: { ...fill.outpoint } }),
+    ...(fill.spentTxid === undefined ? {} : { spentTxid: fill.spentTxid }),
+    ...(fill.failureCode === undefined ? {} : { failureCode: fill.failureCode }),
+    updatedAt: fill.updatedAt,
+    expiresAt: fill.expiresAt,
+});
+
+/** What a replayed `operationId` must still name, so one idempotency key cannot
+ * be reused for a different graph. Stored as the fill's `graphId`. */
+const termsDigest = (body: FillRequestBody): string =>
+    createHash("sha256")
+        .update(
+            JSON.stringify({
+                quoteId: body.quoteId,
+                arkTx: body.arkTx,
+                checkpoints: body.checkpoints,
+                taxiInputIndexes: body.taxiInputIndexes,
+                covenantOutputIndex: body.covenantOutputIndex,
+                assetUnits: body.assetUnits,
+            }),
+        )
+        .digest("hex");
+
+/** Every input's outpoint, read off the checkpoints rather than declared. */
+const fillOutpoints = (
+    graph: { arkTx: string; checkpoints: readonly string[] },
+    taxiInputIndexes: readonly number[],
+): Outpoint[] => {
+    const taxi = new Set(taxiInputIndexes);
+    try {
+        return deriveJointInputs({
+            arkTx: graph.arkTx,
+            checkpoints: graph.checkpoints,
+            inputOwners: Array.from({ length: graph.checkpoints.length }, (_, i) =>
+                taxi.has(i) ? "taxi" : null,
+            ),
+        }).map(({ txid, vout }) => ({ txid, vout }));
+    } catch (cause) {
+        if (cause instanceof JointGraphDerivationError)
+            throw new ServiceError("fill_graph_invalid", 400, `fill graph ${cause.message}`, {
+                cause,
+            });
+        throw cause;
+    }
+};
+
+export function getFill(deps: Pick<FillDeps, "fills" | "now">, id: string): FillStatusResponse {
+    deps.fills.expire(deps.now());
+    const fill = deps.fills.get(id);
+    if (!fill) throw new ServiceError(ErrorCode.NotFound, 404, `fill ${id} not found`);
+    return toStatus(fill);
+}
+
+export async function submitFill(
+    deps: FillDeps,
+    body: unknown,
+    assertReady?: () => void,
+): Promise<FillStatusResponse> {
+    const req = decodeFillBody(body);
+    return withQuoteAdmission(deps, assertReady, (admitted) => createFill(admitted, req));
+}
+
+async function createFill(deps: FillDeps, req: FillRequestBody): Promise<FillStatusResponse> {
+    const { config } = deps;
+    const now = deps.now();
+    deps.receiveQuotes.expireQuotes(now);
+    deps.fills.expire(now);
+    const digest = termsDigest(req);
+    const replay = deps.fills.getByOperation(req.operationId);
+    if (replay) {
+        if (hex.encode(replay.graphId) !== digest)
+            throw new ServiceError(
+                "operation_conflict",
+                409,
+                "operation id was already filled with different terms",
+            );
+        return toStatus(replay);
+    }
+    if (req.validUntil !== undefined && req.validUntil <= now)
+        throw new ServiceError(ErrorCode.QuoteExpired, 409, "fill deadline has already passed");
+
+    const quote = deps.receiveQuotes.get(req.quoteId);
+    if (!quote)
+        throw new ServiceError(ErrorCode.NotFound, 404, `receive quote ${req.quoteId} not found`);
+    if (quote.state !== "quoted")
+        throw new ServiceError(
+            ErrorCode.InvalidState,
+            409,
+            `receive quote ${req.quoteId} is ${quote.state}, not fillable`,
+        );
+    if (quote.expiresAt <= now)
+        throw new ServiceError(ErrorCode.QuoteExpired, 409, `receive quote ${req.quoteId} expired`);
+    const { revision } = deps.policy.getSnapshot();
+    if (quote.policyRevision !== revision)
+        throw new ServiceError("policy_changed", 409, "policy changed since the quote was issued");
+
+    const graph = { arkTx: req.arkTx, checkpoints: req.checkpoints };
+    const safety = deps.runtime.safety();
+    assertFreshSafety(safety, deps.nowMs(), config.reconcileIntervalMs);
+    const operatorScript = new ArkAddress(
+        config.serverPubkey,
+        config.operatorKey,
+        config.addressHrp,
+    ).pkScript;
+
+    // One batched indexer read over every derived outpoint, so the validator
+    // stays synchronous and sees one snapshot instead of a coin per round trip.
+    let observed: Map<string, VirtualCoin>;
+    try {
+        const response = await deps.senderInventory.getVtxos({
+            outpoints: fillOutpoints(graph, req.taxiInputIndexes),
+        });
+        observed = new Map(response.vtxos.map((coin) => [point(coin), coin]));
+    } catch (cause) {
+        if (cause instanceof ServiceError) throw cause;
+        throw new ServiceError("runtime_unsafe", 503, "funding verification unavailable", {
+            cause,
+        });
+    }
+    const limits = await deps.providerLimits();
+    assertFillGraph({
+        graph,
+        taxiInputIndexes: req.taxiInputIndexes,
+        covenantOutputIndex: req.covenantOutputIndex,
+        assetUnits: BigInt(req.assetUnits),
+        quote,
+        operatorScript,
+        observed,
+        serverUnroll: deps.getServerUnroll(),
+        limits,
+        dust: config.dust,
+        vtxoMinAmount: config.vtxoMinAmount,
+        serverKey: config.serverPubkey,
+        emulatorKey: config.emulatorPubkey,
+        clock: {
+            height: Number(safety.chainHeight),
+            timestamp: new Date(Number(safety.chainTime) * 1000),
+        },
+    });
+
+    // V12: every rule above read a moving world, so the reservation, the policy
+    // and the runtime are re-read before anything binds.
+    const locks = await deps.inventory.getLockedVtxoOutpoints();
+    if (locks.some((l) => quote.operatorInputs.some((input) => point(input) === point(l))))
+        throw new ServiceError(
+            "runtime_unsafe",
+            503,
+            "a reserved Taxi coin is locked by an intent",
+        );
+    if (deps.policy.getSnapshot().revision !== revision)
+        throw new ServiceError("policy_changed", 409, "policy changed during validation");
+    assertFreshSafety(deps.runtime.safety(), deps.nowMs(), config.reconcileIntervalMs);
+
+    const txid = Transaction.fromPSBT(base64.decode(req.arkTx)).id.toLowerCase();
+    const expiresAt =
+        req.validUntil !== undefined && req.validUntil < quote.expiresAt
+            ? req.validUntil
+            : quote.expiresAt;
+    const leaseToken = deps.randomId();
+    const row: Fill = {
+        id: deps.randomId(),
+        quoteId: quote.id,
+        operationId: req.operationId,
+        state: "submitting",
+        taxiInputs: quote.operatorInputs.map(({ txid: t, vout }) => ({ txid: t, vout })),
+        covenantOutputIndex: req.covenantOutputIndex,
+        assetUnits: BigInt(req.assetUnits),
+        contributionSats: quote.loanSats,
+        fare: quote.fare,
+        graph: { arkTx: graph.arkTx, checkpoints: [...graph.checkpoints] },
+        graphId: hex.decode(digest),
+        submitInvoked: false,
+        leaseOwner: "fill",
+        leaseToken,
+        leaseUntil: now + deps.leaseSeconds,
+        attempts: 1,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt,
+        ...(req.validUntil === undefined ? {} : { validUntil: req.validUntil }),
+    };
+
+    const source = fillSource(deps, quote, row, req, observed, operatorScript, txid);
+    const advance: Advance = {
+        id: quote.id,
+        state: "locking",
+        ...quote.params,
+        assetUnits: row.assetUnits,
+        covenantAddress: quote.covenantAddress,
+        fare: quote.fare,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt,
+        recoveryLocktime: quote.recoveryLocktime,
+        operatorInputs: row.taxiInputs.map(({ txid: t, vout }) => ({ txid: t, vout })),
+        unsignedLockupTx: encodeFillSource(source),
+        unsignedLockupId: source.graph.graphId,
+    };
+    source.recoveryPreflight = buildRecoveryIntent(
+        { ...advance, outpoint: { txid, vout: req.covenantOutputIndex } },
+        config,
+    );
+    advance.unsignedLockupTx = encodeFillSource(source);
+    try {
+        deps.receiveQuotes.bindFill({
+            quoteId: quote.id,
+            fill: row,
+            advance,
+            expectedPolicyRevision: revision,
+            now,
+        });
+    } catch (cause) {
+        const raced = deps.fills.getByOperation(req.operationId);
+        if (raced) return toStatus(raced);
+        throw new ServiceError("fill_bind_failed", 409, "fill could not bind its receive quote", {
+            cause,
+        });
+    }
+    return signAndSubmit(deps, row, leaseToken, now);
+}
+
+/** The persisted record a restart rebuilds the recovery from. */
+function fillSource(
+    deps: FillDeps,
+    quote: ReceiveQuote,
+    row: Fill,
+    req: FillRequestBody,
+    observed: ReadonlyMap<string, VirtualCoin>,
+    operatorScript: Uint8Array,
+    txid: string,
+): FillFundingSource {
+    const sealed = sealFillGraph({
+        arkTx: row.graph.arkTx,
+        checkpoints: row.graph.checkpoints,
+        taxiInputIndexes: req.taxiInputIndexes,
+    });
+    const taxi = new Set(req.taxiInputIndexes);
+    const reserved = new Map(quote.operatorInputs.map((input) => [point(input), input]));
+    const inputs = fillOutpoints(row.graph, req.taxiInputIndexes).map((outpoint, index) => {
+        const coin = observed.get(point(outpoint))!;
+        const snapshot = reserved.get(point(outpoint));
+        const taproot = snapshot ?? checkpointTaproot(row.graph.checkpoints[index]!, index);
+        return {
+            role: (taxi.has(index) ? "taxi" : "foreign") as "taxi" | "foreign",
+            txid: outpoint.txid,
+            vout: outpoint.vout,
+            value: BigInt(coin.value).toString(10),
+            script: coin.script.toLowerCase(),
+            tapTree: hex.encode(taproot.tapTree),
+            spendLeaf: hex.encode(taproot.spendLeaf),
+            assets: (coin.assets ?? []).map((held) => ({
+                assetId: held.assetId,
+                amount: BigInt(held.amount).toString(10),
+            })),
+            expiry: {
+                kind: normalizeExpiry(coin).kind,
+                value: normalizeExpiry(coin).value.toString(10),
+            },
+        };
+    });
+    const operatorPayouts = deriveJointOutputs(row.graph)
+        .filter(
+            (output) =>
+                output.assets.length === 0 &&
+                output.script.length === operatorScript.length &&
+                output.script.every((byte, i) => byte === operatorScript[i]),
+        )
+        .map((output) => ({
+            vout: output.vout,
+            sats: output.sats.toString(10),
+            fareSats: quote.fare.units.toString(10),
+        }));
+    return {
+        tag: "fill",
+        version: 1,
+        receiveQuoteId: quote.id,
+        fillId: row.id,
+        operationId: row.operationId,
+        graph: sealed,
+        covenantOutputIndex: req.covenantOutputIndex,
+        covenantSats: quote.params.dust.toString(10),
+        assetId: {
+            txid: hex.encode(quote.params.assetId.txid),
+            groupIndex: quote.params.assetId.groupIndex,
+        },
+        assetUnits: req.assetUnits,
+        inputExpiryFloor: {
+            kind: quote.inputExpiryFloor.kind,
+            value: quote.inputExpiryFloor.value.toString(10),
+        },
+        inputs,
+        serverUnrollScript: hex.encode(deps.getServerUnroll().script),
+        operatorScript: hex.encode(operatorScript),
+        operatorPayouts,
+        recoveryPreflight: {
+            digest: createHash("sha256")
+                .update(
+                    JSON.stringify({ arkTx: row.graph.arkTx, checkpoints: row.graph.checkpoints }),
+                )
+                .digest("hex"),
+            expectedTxid: txid,
+            arkTx: row.graph.arkTx,
+            checkpoints: [...row.graph.checkpoints],
+        },
+    };
+}
+
+/**
+ * A foreign input's taproot evidence, read off its own checkpoint rather than
+ * off the coin: the indexer serves no tree or leaf, and the checkpoint is the
+ * only place the graph says which leaf it spends under. `readFundingSource`
+ * re-checks that the tree rebuilds the coin's script, so a lie does not survive.
+ */
+const checkpointTaproot = (
+    psbt: string,
+    index: number,
+): { tapTree: Uint8Array; spendLeaf: Uint8Array } => {
+    const checkpoint = decode(psbt, `checkpoints[${index}]`);
+    const [tapTree] = getArkPsbtFields(checkpoint, 0, VtxoTaprootTree);
+    const leaf = checkpoint.getInput(0).tapLeafScript?.[0];
+    if (!tapTree || !leaf)
+        throw new ServiceError(
+            "fill_input_taproot_unknown",
+            400,
+            `fill checkpoint ${index} carries no taproot evidence for its input`,
+        );
+    return { tapTree, spendLeaf: scriptFromTapLeafScript(leaf) };
+};
+
+/**
+ * V13: sign only the Taxi's indexes, prepare, re-read the clock with nothing
+ * awaited, submit, and answer without bytes. The Taxi's signatures never leave
+ * the process, so there is nothing to replay once the reservation lapses.
+ */
+async function signAndSubmit(
+    deps: FillDeps,
+    row: Fill,
+    leaseToken: string,
+    now: number,
+): Promise<FillStatusResponse> {
+    const { config } = deps;
+    const taxi = new Set(row.taxiInputs.map((input) => point(input)));
+    const taxiInputIndexes = fillOutpoints(row.graph, [])
+        .map((outpoint, index) => ({ outpoint, index }))
+        .filter(({ outpoint }) => taxi.has(point(outpoint)))
+        .map(({ index }) => index);
+    const sealed: JointGraph = sealFillGraph({
+        arkTx: row.graph.arkTx,
+        checkpoints: row.graph.checkpoints,
+        taxiInputIndexes,
+    });
+    const owners = sealed.inputOwners;
+    const failSigning = (code: string, status: 409 | 503, cause: unknown): never => {
+        const detail = sanitizeOperationalError(cause, "fill signing failed");
+        deps.fills.recordSigningFailure(row.id, leaseToken, code, detail, deps.now());
+        throw new ServiceError(code, status, detail, { cause });
+    };
+    let identity: Identity;
+    let taxiXOnly: string;
+    try {
+        identity = deps.taxiIdentity();
+        taxiXOnly = hex.encode(await identity.xOnlyPublicKey()).toLowerCase();
+    } catch (cause) {
+        return failSigning("fill_signing_failed", 503, cause);
+    }
+    const bindings: JointSignerBinding[] = owners
+        .map((owner, inputIndex) => ({ owner, inputIndex }))
+        .filter(({ owner }) => owner === "taxi")
+        .map(({ inputIndex }) => ({ inputIndex, identity: identity! }));
+    const ownerKeys = { taxi: [taxiXOnly!] };
+    let signed: JointGraph;
+    let prepared: PreparedJointSubmission;
+    try {
+        signed = await signFillForTaxi({ expected: sealed, bindings });
+        prepared = prepareFillSubmission({ expected: sealed, partial: signed, ownerKeys });
+    } catch (cause) {
+        return failSigning("fill_signing_failed", 503, cause);
+    }
+    if (
+        !deps.fills.recordPrepared(
+            row.id,
+            leaseToken,
+            prepared!.arkTx,
+            [...prepared!.checkpointTxs],
+            now,
+        )
+    )
+        throw new ServiceError(
+            ErrorCode.InvalidState,
+            409,
+            `fill ${row.id} lease lost before submission (not submitted)`,
+        );
+    const emulatorXOnly = hex.encode(config.emulatorPubkey).toLowerCase();
+    const serverXOnly = hex.encode(config.serverPubkey).toLowerCase();
+    // Emulator when any input is provider-gated, arkd when none is (OD-5).
+    const gated = fillCosignerKeys({ expected: sealed, emulatorXOnly });
+    // Nothing is awaited between this read and the first provider call, and
+    // refusing here records no invocation: the fill is known not to be submitted.
+    const atSubmit = deps.now();
+    if (row.expiresAt <= atSubmit) {
+        const message = `fill ${row.id} expired before submission (not submitted)`;
+        deps.fills.recordSigningFailure(
+            row.id,
+            leaseToken,
+            ErrorCode.QuoteExpired,
+            message,
+            atSubmit,
+        );
+        throw new ServiceError(ErrorCode.QuoteExpired, 409, message);
+    }
+    if (!deps.fills.recordSubmitInvoked(row.id, leaseToken, now))
+        throw new ServiceError(
+            ErrorCode.InvalidState,
+            409,
+            `fill ${row.id} lease lost before submission (not submitted)`,
+        );
+    const provider: Pick<EmulatorProvider, "submitTx"> =
+        gated.size > 0 ? deps.emulator : arkSubmitter(deps.arkProvider);
+    try {
+        const submitted = await submitFillGraph({
+            expected: sealed,
+            prepared: prepared!,
+            provider,
+            pins: { emulatorXOnly, serverXOnly },
+            ownerKeys,
+        });
+        return toStatus({ ...row, txid: submitted.txid, updatedAt: now });
+    } catch (cause) {
+        const message = sanitizeOperationalError(cause, "fill submission is ambiguous");
+        deps.fills.recordAmbiguous(
+            row.id,
+            leaseToken,
+            "fill_submission_ambiguous",
+            message,
+            now + deps.leaseSeconds,
+            now,
+        );
+        throw new ServiceError("fill_submission_ambiguous", 503, message, { cause });
+    }
+}
+
+/** arkd in the emulator's submit shape, so one submission path serves both. */
+const arkSubmitter = (
+    ark: Pick<ArkProvider, "submitTx" | "finalizeTx">,
+): Pick<EmulatorProvider, "submitTx"> => ({
+    submitTx: async (arkTx: string, checkpointTxs: string[]) => {
+        const response = await ark.submitTx(arkTx, checkpointTxs);
+        await ark.finalizeTx(response.arkTxid, [...response.signedCheckpointTxs]);
+        return {
+            signedArkTx: response.finalArkTx,
+            signedCheckpointTxs: [...response.signedCheckpointTxs],
+        };
+    },
+});

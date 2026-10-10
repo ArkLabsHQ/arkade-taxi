@@ -11,6 +11,7 @@ import {
     ReservationRepository,
     ProceedsRepository,
     ReceiveQuoteRepository,
+    FillRepository,
     SwapFillRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
@@ -76,6 +77,7 @@ async function runServe(): Promise<void> {
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
     const swapFills = new SwapFillRepository(db);
+    const fills = new FillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
     const custody = new CustodyRepository(db);
     advances.assertExitParamsPresent();
@@ -305,6 +307,29 @@ async function runServe(): Promise<void> {
         swapFills,
         swapFillBuilder,
         ...(delegatee ? { delegatee } : {}),
+        fill: {
+            runtime,
+            policy,
+            fills,
+            receiveQuotes,
+            inventory,
+            senderInventory: runtime.providers.indexerProvider,
+            config,
+            now: seconds,
+            nowMs: () => Date.now(),
+            randomId: () => randomUUID(),
+            taxiIdentity: () => {
+                const wallet = runtime.wallet;
+                if (!wallet)
+                    throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
+                return wallet.identity;
+            },
+            emulator: runtime.providers.emulatorProvider,
+            arkProvider: runtime.providers.arkProvider,
+            providerLimits,
+            getServerUnroll: runtime.getServerUnroll,
+            leaseSeconds: Math.max(30, intervalSeconds * 2),
+        },
         swapFillSubmit: {
             swapFills,
             policy,

@@ -1393,6 +1393,28 @@ describe("providerCosignerKey", () => {
     });
 });
 
+const withoutEmulatorPacket = (graph: JointGraph): JointGraph => {
+    const tx = arkOf(graph);
+    const out = new Transaction({ version: 3, lockTime: 0 });
+    for (let i = 0; i < tx.inputsLength; i++) out.addInput(tx.getInput(i));
+    const kept = Extension.fromTx(tx)
+        .getPackets()
+        .filter((packet) => packet.type() === asset.Packet.PACKET_TYPE);
+    const replacement = kept.length ? Extension.create([...kept]).txOut() : undefined;
+    for (let i = 0; i < tx.outputsLength; i++) {
+        const output = tx.getOutput(i);
+        const isExtension = output.script && Extension.isExtension(output.script);
+        if (!isExtension) out.addOutput(output);
+        else if (replacement) out.addOutput(replacement);
+    }
+    const next = {
+        arkTx: base64.encode(out.toPSBT()),
+        checkpoints: [...graph.checkpoints],
+        inputOwners: [...graph.inputOwners],
+    };
+    return { ...next, graphId: recomputeId({ ...next, graphId: "" }) };
+};
+
 describe("providerCosignerKeys", () => {
     const resealed = (graph: JointGraph, owners: (string | null)[]): JointGraph => {
         const next = { ...structuredClone(graph), inputOwners: owners };
@@ -1412,34 +1434,33 @@ describe("providerCosignerKeys", () => {
         );
     });
 
-    // The arkd route's case. `providerCosignerKey` throws on it, which is why
-    // the generic rail asks for the map and routes on whether it is empty.
-    it("returns an empty map when no input is provider-signed", async () => {
+    // The arkd route's case, and the reason the generic rail asks for the map:
+    // the gate is the emulator packet, so an unowned input with no entry of its
+    // own is an ordinary VTXO its holder signed, not something to pin.
+    it("returns an empty map when the graph carries no emulator packet", async () => {
         const expected = await trustedGraph();
-        const owned = resealed(expected, ["taxi", "solver", "sponsor"]);
+        const ungated = withoutEmulatorPacket(expected);
         expect(
             providerCosignerKeys({
-                expected: owned,
+                expected: ungated,
                 emulatorXOnly: pins.emulatorXOnly,
                 template: OFFER_FILL_TEMPLATE,
             }).size,
         ).toBe(0);
         expect(() =>
-            providerCosignerKey({ expected: owned, emulatorXOnly: pins.emulatorXOnly }),
+            providerCosignerKey({ expected: ungated, emulatorXOnly: pins.emulatorXOnly }),
         ).toThrow(/names no provider-signed input/);
     });
 
-    // The OD-5 bug: one key for every gated vin. A second provider-signed input
-    // with no packet entry of its own must refuse, never inherit vin 0's key.
-    it("refuses a second provider-signed input that carries no script of its own", async () => {
+    it("refuses a packet that gates an input the graph says we own", async () => {
         const expected = await trustedGraph();
-        const twoGated = resealed(expected, [null, null, "sponsor"]);
+        const owned = resealed(expected, ["taxi", "solver", "sponsor"]);
         expect(() =>
             providerCosignerKeys({
-                expected: twoGated,
+                expected: owned,
                 emulatorXOnly: pins.emulatorXOnly,
                 template: OFFER_FILL_TEMPLATE,
             }),
-        ).toThrow(/carries no provider script/);
+        ).toThrow(/gates input 0, which it owns/);
     });
 });
