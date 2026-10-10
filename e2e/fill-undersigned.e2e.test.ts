@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
-import { admin, health, openLive, poll } from "./fixtures.js";
+import { TaxiClient } from "@arkade-taxi/client";
+import { admin, health, openLive, poll, required } from "./fixtures.js";
 import { liveScenario } from "./scenarios.js";
 import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport.js";
 
@@ -24,7 +25,17 @@ liveScenario("fill-undersigned-foreign-input", async () => {
         );
         observed.reservedBefore = reservedBefore;
 
-        const refusal = await live.client
+        const responseStatuses: number[] = [];
+        observed.submitResponseStatuses = responseStatuses;
+        const submitClient = new TaxiClient({
+            baseUrl: required("TAXI_E2E_BASE_URL"),
+            fetch: async (...args) => {
+                const response = await globalThis.fetch(...args);
+                responseStatuses.push(response.status);
+                return response;
+            },
+        });
+        const refusal = await submitClient
             .submitFill({
                 operationId: randomUUID(),
                 quoteId: quote.quoteId,
@@ -40,10 +51,10 @@ liveScenario("fill-undersigned-foreign-input", async () => {
             );
         observed.accepted = refusal.accepted;
         if (!refusal.accepted) {
-            const error = refusal.error as { code?: string; status?: number; message?: string };
+            const error = refusal.error as { code?: string; message?: string };
             observed.refusal = {
                 code: error.code,
-                status: error.status,
+                status: responseStatuses[0],
                 message: error.message,
             };
         } else observed.submitted = refusal.value;
@@ -82,6 +93,7 @@ liveScenario("fill-undersigned-foreign-input", async () => {
             (await admin("advances")).advances.find((row: any) => row.id === quote.quoteId) ?? null;
 
         expect(refusal.accepted).toBe(false);
+        expect(responseStatuses).toEqual([400]);
         expect(quoteAfter.state).toBe("quoted");
         expect(observed.advance).toBeNull();
         expect(observed.advanceRow).toBeNull();
