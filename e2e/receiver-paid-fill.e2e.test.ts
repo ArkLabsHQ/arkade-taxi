@@ -245,16 +245,18 @@ async function quotedFill(live: Live, bound: { release?: () => Promise<void> }) 
     };
 }
 
-/** Signs every input the caller owns: its own asset coins, and the offer
- * covenant's collaborative leaf. The Taxi's inputs are left untouched. */
+/**
+ * Signs only the inputs the caller holds the key for: its own asset coins. The
+ * Taxi's inputs stay unsigned because the Taxi signs last, and the offer
+ * covenant stays unsigned because only the emulator may sign that one.
+ */
 async function signAsCaller(
     quoted: Awaited<ReturnType<typeof quotedFill>>,
     options: { underSign?: boolean } = {},
 ) {
-    const { graph, taxiInputIndexes, solver } = quoted;
-    const mine = graph.inputOwners.flatMap((owner, index) =>
-        taxiInputIndexes.includes(index) ? [] : [index],
-    );
+    const { graph, solver } = quoted;
+    const mine = graph.inputOwners.flatMap((owner, index) => (owner === "solver" ? [index] : []));
+    if (mine.length === 0) throw new Error("fill graph assigns the caller no input to sign");
     const signable = options.underSign ? mine.slice(0, Math.max(0, mine.length - 1)) : mine;
     let arkTx = txOf(graph.arkTx);
     const checkpoints = graph.checkpoints.map((psbt) => txOf(psbt));
@@ -282,7 +284,11 @@ liveScenario("receiver-paid-fill-claim", async () => {
         const operatorBefore = await walletBalance(live.actors.operator, minted.assetId);
         const posted = await signAsCaller(quoted);
         expect(posted.unsigned).toEqual([]);
-        for (const index of taxiInputIndexes) expect(sigCount(txOf(posted.arkTx), index)).toBe(0);
+        // The Taxi signs last, and the gated covenant is the emulator's alone.
+        const postedArk = txOf(posted.arkTx);
+        for (const index of taxiInputIndexes) expect(sigCount(postedArk, index)).toBe(0);
+        for (const [index, owner] of graph.inputOwners.entries())
+            if (owner === null) expect(sigCount(postedArk, index)).toBe(0);
 
         const operationId = randomUUID();
         bound.release = ownCleanup(() =>
@@ -298,6 +304,7 @@ liveScenario("receiver-paid-fill-claim", async () => {
                 await recycleWith(live, transfer, coin, ArkAddress.decode(bobAddress).pkScript);
             }),
         );
+        live.owned.set(quote.quoteId, {});
         const submitted = await preEffectRequest(
             () =>
                 live.client.submitFill({
@@ -316,7 +323,6 @@ liveScenario("receiver-paid-fill-claim", async () => {
                     throw new Error("receive quote is not an unchanged quote");
             },
         );
-        live.owned.set(quote.quoteId, {});
         // V13: the answer carries a txid and no bytes.
         expect(Object.keys(submitted).sort()).toEqual(
             ["expiresAt", "fillId", "operationId", "state", "txid", "updatedAt"].sort(),
@@ -478,6 +484,10 @@ liveScenario("fill-undersigned-foreign-input", async () => {
         observed.reservedAfter = reservedAfter;
         const quoteAfter = await live.client.getReceiveQuote(quote.quoteId);
         observed.quoteState = quoteAfter.state;
+        // The Taxi binds before it submits, so a refusal still leaves an
+        // advance holding the reservation until it expires.
+        if (quoteAfter.state === "bound")
+            bound.release = ownCleanup(() => releaseBound(live, quote.quoteId, async () => {}));
         observed.advance = await live.client.status(quote.quoteId).then(
             (status) => ({ state: status.state, outpoint: status.outpoint ?? null }),
             () => null,
@@ -490,8 +500,6 @@ liveScenario("fill-undersigned-foreign-input", async () => {
             expect(coin.spent).toBe(false);
             expect(coin.arkTxId).toBeFalsy();
         }
-        if (quoteAfter.state === "bound")
-            bound.release = ownCleanup(() => releaseBound(live, quote.quoteId, async () => {}));
     } finally {
         evidence("fill-undersigned-foreign-input", observed);
         if (bound.release) await bound.release();
