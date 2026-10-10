@@ -191,6 +191,10 @@ const BLOCKER_GROUPS = [
         "fill_liability_unresolved",
     ],
     [
+        "The request exceeds the 4 MiB body limit. Reduce its transaction graph before retrying.",
+        "request_body_too_large",
+    ],
+    [
         "A fill's inputs have contradictory spend evidence. Keep its coins reserved and investigate.",
         "fill_unexpected_spend",
     ],

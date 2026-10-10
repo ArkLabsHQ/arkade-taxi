@@ -28,7 +28,7 @@ import type { ServiceError } from "../src/errors.js";
 import { NOW, operatorPrivkey, runtimeSafety, serverUnroll } from "./fixtures.js";
 import { insertReceiveQuote } from "./jointFillFixtures.js";
 import { asIndexed } from "./graphFixtures.js";
-import { receiverPaidFill, solverPrivkey } from "./realFillFixtures.js";
+import { receiverPaidFill, solverPrivkey, solverTree } from "./realFillFixtures.js";
 
 const state = vi.hoisted(() => ({
     contractVtxos: [] as unknown[],
@@ -202,21 +202,32 @@ const refusal = async (
             (e: unknown) => e as ServiceError,
         )) as ServiceError | undefined;
         if (!error) throw new Error("the route accepted a fill it must refuse");
+        expect(h.emulatorCalls).toBe(0);
+        expect(h.arkCalls).toBe(0);
+        expect(new FillRepository(h.db).getByOperation("op-fill-1")).toBeUndefined();
+        expect(new ReceiveQuoteRepository(h.db).get(h.quoteId)!.state).toBe("quoted");
+        expect(new AdvanceRepository(h.db).get(h.quoteId)).toBeUndefined();
         return { code: error.code, status: error.status };
     } finally {
         h.db.close();
     }
 };
 
-const mutated = (mutate: (arkTx: Transaction) => Transaction): Record<string, unknown> => ({
-    arkTx: psbtOf(mutate(txOf(built.arkTx))),
-});
+const mutated = (mutate: (arkTx: Transaction) => Transaction): Record<string, unknown> => {
+    const tx = txOf(built.arkTx);
+    for (let i = 0; i < tx.inputsLength; i++) tx.updateInput(i, { tapScriptSig: undefined });
+    return { arkTx: psbtOf(mutate(tx)) };
+};
 
 const repointArkInput = (arkTx: Transaction, index: number, txid: string): Transaction => {
     const out = new Transaction({ version: 3, lockTime: 0 });
     for (let i = 0; i < arkTx.inputsLength; i++) {
         const input = arkTx.getInput(i);
-        out.addInput(i === index ? { ...input, txid: hex.decode(txid) } : input);
+        out.addInput({
+            ...input,
+            tapScriptSig: undefined,
+            ...(i === index ? { txid: hex.decode(txid) } : {}),
+        });
     }
     for (let i = 0; i < arkTx.outputsLength; i++) out.addOutput(arkTx.getOutput(i));
     return out;
@@ -253,7 +264,8 @@ const withPacket = (arkTx: Transaction, next: asset.Packet): Transaction => {
         .map((packet) => (packet.type() === asset.Packet.PACKET_TYPE ? next : packet));
     const replacement = Extension.create([...packets]).txOut();
     const out = new Transaction({ version: 3, lockTime: 0 });
-    for (let i = 0; i < arkTx.inputsLength; i++) out.addInput(arkTx.getInput(i));
+    for (let i = 0; i < arkTx.inputsLength; i++)
+        out.addInput({ ...arkTx.getInput(i), tapScriptSig: undefined });
     for (let i = 0; i < arkTx.outputsLength; i++) {
         const output = arkTx.getOutput(i);
         out.addOutput(output.script && Extension.isExtension(output.script) ? replacement : output);
@@ -280,7 +292,8 @@ const appendValueOutput = (
     output: { script: Uint8Array; amount: bigint },
 ): { tx: Transaction; vout: number } => {
     const out = new Transaction({ version: 3, lockTime: 0 });
-    for (let i = 0; i < arkTx.inputsLength; i++) out.addInput(arkTx.getInput(i));
+    for (let i = 0; i < arkTx.inputsLength; i++)
+        out.addInput({ ...arkTx.getInput(i), tapScriptSig: undefined });
     const tail: ReturnType<Transaction["getOutput"]>[] = [];
     for (let i = 0; i < arkTx.outputsLength; i++) {
         const existing = arkTx.getOutput(i);
@@ -299,6 +312,38 @@ const appendValueOutput = (
 const SOMEONE_ELSE = hex.decode(`5120${"7c".repeat(32)}`);
 
 describe("POST /v1/fills refuses a bad graph with its own code", () => {
+    it.each(["ark", "checkpoint"])(
+        "refuses a missing foreign %s signature before binding",
+        async (side) => {
+            const ark = txOf(built.arkTx);
+            const checkpoints = [...built.checkpoints];
+            const cp = txOf(checkpoints[built.solverIndex]!);
+            (side === "ark" ? ark : cp).updateInput(side === "ark" ? built.solverIndex : 0, {
+                tapScriptSig: undefined,
+            });
+            checkpoints[built.solverIndex] = psbtOf(cp);
+            expect(await refusal({ arkTx: psbtOf(ark), checkpoints })).toEqual({
+                code: "fill_foreign_signature_invalid",
+                status: 400,
+            });
+        },
+    );
+
+    it("caps checkpoint cardinality before deriving or binding", async () => {
+        expect(await refusal({ checkpoints: Array(33).fill(built.checkpoints[0]) })).toEqual({
+            code: "invalid_request",
+            status: 400,
+        });
+    });
+
+    it("caps aggregate graph size before deriving or binding", async () => {
+        expect(
+            await refusal({ arkTx: "AAAA".repeat(600_000), checkpoints: ["AAAA".repeat(600_000)] }),
+        ).toEqual({
+            code: "invalid_request",
+            status: 400,
+        });
+    });
     it("V1 an arkTx input that does not spend its own checkpoint", async () => {
         expect(
             await refusal(mutated((tx) => repointArkInput(tx, built.taxiIndex, "ab".repeat(32)))),
@@ -600,13 +645,13 @@ describe("POST /v1/fills submission", () => {
         try {
             const arkTx = txOf(built.arkTx);
             const foreign = built.solverIndex;
+            arkTx.updateInput(foreign, { tapScriptSig: undefined });
             const signedArk = await SingleKey.fromPrivateKey(solverPrivkey).sign(arkTx, [foreign]);
             expect(signedArk.getInput(foreign).tapScriptSig?.length ?? 0).toBeGreaterThan(0);
             const checkpoints = [...built.checkpoints];
-            const signedCp = await SingleKey.fromPrivateKey(solverPrivkey).sign(
-                txOf(checkpoints[foreign]!),
-                [0],
-            );
+            const unsignedCp = txOf(checkpoints[foreign]!);
+            unsignedCp.updateInput(0, { tapScriptSig: undefined });
+            const signedCp = await SingleKey.fromPrivateKey(solverPrivkey).sign(unsignedCp, [0]);
             checkpoints[foreign] = psbtOf(signedCp);
             await expect(
                 submitFill(h.deps, {
@@ -629,11 +674,34 @@ describe("POST /v1/fills submission", () => {
     it("routes to arkd when no input is emulator-gated", async () => {
         const h = open();
         try {
-            // Strip the emulator packet: with no gated input the fill must not
-            // reach the emulator at all (OD-5's zero-gated-input case).
             const arkTx = txOf(built.arkTx);
+            const original = txOf(built.checkpoints[0]!).getInput(0);
+            const source = new Transaction({ version: 3, lockTime: 0 });
+            source.addInput({
+                txid: original.txid,
+                index: original.index,
+                witnessUtxo: { amount: original.witnessUtxo!.amount, script: solverTree.pkScript },
+                tapLeafScript: [solverTree.leaves[0]!],
+            });
+            setArkPsbtField(source, 0, VtxoTaprootTree, solverTree.encode());
+            const next = new VtxoScript([serverUnroll.script, solverTree.scripts[0]!]);
+            source.addOutput({ amount: original.witnessUtxo!.amount, script: next.pkScript });
+            source.addOutput(P2A);
             const out = new Transaction({ version: 3, lockTime: 0 });
-            for (let i = 0; i < arkTx.inputsLength; i++) out.addInput(arkTx.getInput(i));
+            for (let i = 0; i < arkTx.inputsLength; i++)
+                out.addInput(
+                    i === 0
+                        ? {
+                              txid: source.id,
+                              index: 0,
+                              witnessUtxo: {
+                                  amount: source.getOutput(0).amount!,
+                                  script: source.getOutput(0).script!,
+                              },
+                              tapLeafScript: [next.findLeaf(hex.encode(solverTree.scripts[0]!))],
+                          }
+                        : { ...arkTx.getInput(i), tapScriptSig: undefined },
+                );
             const packets = Extension.fromTx(arkTx)
                 .getPackets()
                 .filter((packet) => packet.type() === asset.Packet.PACKET_TYPE);
@@ -644,8 +712,24 @@ describe("POST /v1/fills submission", () => {
                     output.script && Extension.isExtension(output.script) ? replacement : output,
                 );
             }
+            const caller = SingleKey.fromPrivateKey(solverPrivkey);
+            const signed = await caller.sign(out, [0, built.solverIndex]);
+            const checkpoints = [...built.checkpoints];
+            checkpoints[0] = psbtOf(await caller.sign(source, [0]));
+            const read = h.deps.senderInventory.getVtxos;
+            h.deps.senderInventory.getVtxos = async (query) => {
+                const result = await read(query);
+                return {
+                    ...result,
+                    vtxos: result.vtxos.map((coin) =>
+                        coin.txid === hex.encode(original.txid!) && coin.vout === original.index
+                            ? { ...coin, script: hex.encode(solverTree.pkScript) }
+                            : coin,
+                    ),
+                };
+            };
             await expect(
-                submitFill(h.deps, { ...h.body, arkTx: psbtOf(out) }),
+                submitFill(h.deps, { ...h.body, arkTx: psbtOf(signed), checkpoints }),
             ).rejects.toMatchObject({ code: "fill_submission_ambiguous" });
             expect(h.arkCalls).toBe(1);
             expect(h.emulatorCalls).toBe(0);
@@ -656,13 +740,7 @@ describe("POST /v1/fills submission", () => {
 });
 
 describe("POST /v1/fills when the provider refuses the signed graph", () => {
-    /**
-     * What an under-signed foreign input looks like from the Taxi's side: it
-     * validates, binds, signs and submits, and the provider refuses the whole
-     * transaction. Nothing partial can have moved — one submission, atomically
-     * refused — so the row must land in the documented ambiguous state with its
-     * reservation still held, never a terminal one and never stuck leased.
-     */
+    // A thrown transport error cannot prove that the provider did not accept.
     it("keeps the reservation and records an ambiguous submission, not a terminal state", async () => {
         const h = open();
         try {

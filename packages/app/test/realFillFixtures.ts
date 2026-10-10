@@ -106,7 +106,9 @@ export function receiverPaidFill(
     const wallet = {
         identity: {
             xOnlyPublicKey: async () => solverKey,
-            sign: vi.fn(async (tx: Transaction) => tx),
+            sign: vi.fn((tx: Transaction, indexes?: number[]) =>
+                SingleKey.fromPrivateKey(solverPrivkey).sign(tx, indexes),
+            ),
         },
         getContractManager: async () => null,
     } as unknown as IWallet;
@@ -141,11 +143,26 @@ export function receiverPaidFill(
                 changeScript: operatorScript,
             },
         });
+        const solverIndex = graph.inputOwners.indexOf("solver");
+        const identity = SingleKey.fromPrivateKey(solverPrivkey);
+        const arkTx = await identity.sign(Transaction.fromPSBT(base64.decode(graph.arkTx)), [
+            solverIndex,
+        ]);
+        const checkpoints = [...graph.checkpoints];
+        checkpoints[solverIndex] = base64.encode(
+            (
+                await identity.sign(
+                    Transaction.fromPSBT(base64.decode(checkpoints[solverIndex]!)),
+                    [0],
+                )
+            ).toPSBT(),
+        );
+        const signed = { ...graph, arkTx: base64.encode(arkTx.toPSBT()), checkpoints };
         return {
             graph: {
-                ...graph,
-                inputs: deriveJointInputs(graph),
-                outputs: deriveJointOutputs(graph).map((output) => ({
+                ...signed,
+                inputs: deriveJointInputs(signed),
+                outputs: deriveJointOutputs(signed).map((output) => ({
                     ...output,
                     script: hex.encode(output.script),
                     sats: output.sats.toString(),

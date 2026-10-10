@@ -1,6 +1,11 @@
 import { ArkAddress, Transaction, type IndexerProvider, type VirtualCoin } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import type { AdvanceRepository, Fill, FillRepository } from "@arkade-taxi/db";
+import type {
+    AdvanceRepository,
+    Fill,
+    FillRepository,
+    ReceiveQuoteRepository,
+} from "@arkade-taxi/db";
 import { readFundingSource } from "./arkade/fundingSource.js";
 import {
     deriveJointInputs,
@@ -11,6 +16,7 @@ import {
 export interface FillReconcilerStatus {
     lastTickAt: number | null;
     submitting: number;
+    quarantined?: number;
     blockers: string[];
 }
 export interface FillReconciler {
@@ -23,6 +29,7 @@ export interface FillReconcilerDeps {
         "reconcileCandidates" | "listByState" | "reconcileSettled" | "reconcileCancelled"
     >;
     advances: Pick<AdvanceRepository, "get">;
+    receiveQuotes: Pick<ReceiveQuoteRepository, "get">;
     indexer: Pick<IndexerProvider, "getVtxos">;
     now(): number;
 }
@@ -50,14 +57,10 @@ const outputMatches = (coin: VirtualCoin, txid: string, output: DerivedJointOutp
 
 export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
     let lastTickAt: number | null = null;
-    let unexpected = new Set<string>();
+    const unexpected = new Set<string>();
+    const quarantineObserved = new Set<string>();
     let pending: Promise<void> | undefined;
-    const reconcile = async (fill: Fill): Promise<void> => {
-        if (
-            fill.state !== "submitting" ||
-            (fill.leaseUntil !== undefined && fill.leaseUntil > deps.now())
-        )
-            return;
+    const linkedFunding = (fill: Fill) => {
         const advance = deps.advances.get(fill.quoteId);
         if (!advance?.unsignedLockupTx) return;
         const trusted = readFundingSource(advance.unsignedLockupTx);
@@ -91,6 +94,38 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
             )
         )
             return;
+        return { advance, trusted, source, txid, taxi };
+    };
+    const isQuarantined = (fill: Fill): boolean => {
+        if (unexpected.has(fill.id) || !quarantineObserved.has(fill.id)) return false;
+        try {
+            const linked = linkedFunding(fill);
+            const quote = deps.receiveQuotes.get(fill.quoteId);
+            return (
+                linked !== undefined &&
+                linked.advance.state === "locking" &&
+                quote?.state === "bound" &&
+                quote.boundFillId === fill.id &&
+                quote.loanSats === fill.contributionSats &&
+                quote.operatorInputs.length === linked.taxi.length &&
+                quote.operatorInputs.every((input) =>
+                    linked.taxi.some((other) => point(input) === point(other)),
+                )
+            );
+        } catch {
+            return false;
+        }
+    };
+    const reconcile = async (fill: Fill): Promise<void> => {
+        if (
+            fill.state !== "submitting" ||
+            (fill.leaseUntil !== undefined && fill.leaseUntil > deps.now())
+        )
+            return;
+        quarantineObserved.delete(fill.id);
+        const linked = linkedFunding(fill);
+        if (!linked) return;
+        const { source, trusted, txid, taxi } = linked;
         const inputs = deriveJointInputs(source.graph);
         const ownForInput = inputs.map(
             (_, i) =>
@@ -122,7 +157,10 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
             unexpected.add(fill.id);
             return;
         }
-        if (observations.some((observation) => observation.unknownSpend)) return;
+        if (observations.some((observation) => observation.unknownSpend)) {
+            unexpected.add(fill.id);
+            return;
+        }
         const ownsAnySpend = observations.some((observation) => observation.own);
         if (!fill.submitInvoked) {
             if (ownsAnySpend) unexpected.add(fill.id);
@@ -141,6 +179,7 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
                 );
             return;
         }
+        if (inputs.every((input) => byPoint.has(point(input)))) quarantineObserved.add(fill.id);
         if (
             !observations
                 .filter((o) => taxi.some((input) => point(input) === point(o.input)))
@@ -159,7 +198,6 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
                     hex.encode(output.script) === source.operatorScript,
             ),
         ];
-        if (expected.length === 1) return;
         const indexed = await deps.indexer.getVtxos({
             outpoints: expected.map((output) => ({ txid, vout: output.vout })),
         });
@@ -177,7 +215,6 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
         tick() {
             if (!pending)
                 pending = (async () => {
-                    unexpected = new Set();
                     for (const fill of deps.fills.reconcileCandidates(deps.now())) {
                         try {
                             await reconcile(fill);
@@ -185,6 +222,12 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
                             continue;
                         }
                     }
+                    const active = new Set(
+                        deps.fills.listByState("submitting").map((fill) => fill.id),
+                    );
+                    for (const id of unexpected) if (!active.has(id)) unexpected.delete(id);
+                    for (const id of quarantineObserved)
+                        if (!active.has(id)) quarantineObserved.delete(id);
                     lastTickAt = deps.now();
                 })().finally(() => {
                     pending = undefined;
@@ -196,6 +239,7 @@ export function createFillReconciler(deps: FillReconcilerDeps): FillReconciler {
             return {
                 lastTickAt,
                 submitting: rows.length,
+                quarantined: rows.filter(isQuarantined).length,
                 blockers: [
                     ...(rows.some((row) => unexpected.has(row.id))
                         ? ["fill_unexpected_spend"]

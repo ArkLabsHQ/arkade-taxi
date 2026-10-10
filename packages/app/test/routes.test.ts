@@ -1006,6 +1006,162 @@ describe("POST /v1/transfers", () => {
     });
 });
 
+describe("financial request body limits", () => {
+    const limit = 4 * 1024 * 1024;
+    const financialPaths = [
+        "/v1/transfers",
+        "/v1/transfers/adv-1/lockup",
+        "/v1/receive-quotes",
+        "/v1/sponsored-transfers",
+        "/v1/sponsored-transfers/adv-1/lockup",
+        "/v1/fills",
+    ];
+
+    it.each(financialPaths)(
+        "rejects a declared oversized body on %s before parsing",
+        async (path) => {
+            const json = vi.spyOn(JSON, "parse");
+            try {
+                const res = await app().request(path, {
+                    method: "POST",
+                    headers: { "content-length": String(limit + 1) },
+                    body: "{not json",
+                });
+                expect(res.status).toBe(413);
+                expect(json).not.toHaveBeenCalled();
+                expect(await res.json()).toMatchObject({ code: "request_body_too_large" });
+                expect(ids).toBe(0);
+            } finally {
+                json.mockRestore();
+            }
+        },
+    );
+
+    it.each(["-1", "1.5", "invalid", "9007199254740992"])(
+        "rejects invalid declared length %s before parsing",
+        async (length) => {
+            const res = await app().request("/v1/fills", {
+                method: "POST",
+                headers: { "content-length": length },
+                body: "{not json",
+            });
+            expect(res.status).toBe(413);
+            expect(await res.json()).toMatchObject({ code: "request_body_too_large" });
+        },
+    );
+
+    it.each(["missing", "understated", "chunked"])(
+        "bounds the actual %s stream before JSON or provider calls",
+        async (mode) => {
+            const dependency = deps();
+            const indexer = vi.spyOn(dependency.fill.senderInventory, "getVtxos");
+            const emulator = vi.spyOn(dependency.fill.emulator, "submitTx");
+            const provider = vi.spyOn(dependency.fill.arkProvider, "submitTx");
+            const json = vi.spyOn(JSON, "parse");
+            const cancelled = vi.fn();
+            let reads = 0;
+            const stream = new ReadableStream<Uint8Array>(
+                {
+                    pull(controller) {
+                        reads++;
+                        if (reads === 3) controller.close();
+                        else controller.enqueue(new Uint8Array(reads === 1 ? limit : 1));
+                    },
+                    cancel: cancelled,
+                },
+                { highWaterMark: 0 },
+            );
+            const headers: Record<string, string> = { "content-type": "application/json" };
+            if (mode === "understated") headers["content-length"] = "1";
+            if (mode === "chunked") headers["transfer-encoding"] = "chunked";
+            try {
+                const request = new Request("http://localhost/v1/fills", {
+                    method: "POST",
+                    headers,
+                    body: stream,
+                    duplex: "half",
+                } as RequestInit);
+                const res = await createRoutes(dependency).request(request);
+                expect(res.status).toBe(413);
+                expect(json).not.toHaveBeenCalled();
+                expect(indexer).not.toHaveBeenCalled();
+                expect(emulator).not.toHaveBeenCalled();
+                expect(provider).not.toHaveBeenCalled();
+                expect(reads).toBe(2);
+                expect(cancelled).toHaveBeenCalledOnce();
+                expect(await res.json()).toMatchObject({ code: "request_body_too_large" });
+                expect(ids).toBe(0);
+            } finally {
+                json.mockRestore();
+            }
+        },
+    );
+
+    it.each([limit - 1, limit])("accepts a valid JSON body of %i bytes", async (size) => {
+        const prefix = JSON.stringify(quoteBody()).slice(0, -1) + ',"padding":"';
+        const body = prefix + "x".repeat(size - prefix.length - 2) + '"}';
+        expect(new TextEncoder().encode(body).byteLength).toBe(size);
+        const res = await app().request("/v1/transfers", {
+            method: "POST",
+            headers: { "content-type": "application/json", "content-length": String(size) },
+            body,
+        });
+        expect(res.status).toBe(200);
+        expect((await res.json()).transferId).toBe("adv-1");
+    });
+
+    it("counts UTF-8 bytes rather than JavaScript characters", async () => {
+        const body = JSON.stringify({ padding: "é".repeat(limit / 2) });
+        expect(body.length).toBeLessThan(limit);
+        expect(new TextEncoder().encode(body).byteLength).toBeGreaterThan(limit);
+        const res = await app().request("/v1/fills", { method: "POST", body });
+        expect(res.status).toBe(413);
+    });
+
+    it.each([limit, limit + 1])(
+        "bounds %i bytes over the native chunked HTTP adapter",
+        async (size) => {
+            const router = app();
+            let server: ReturnType<typeof serve> | undefined;
+            const origin = await new Promise<string>((resolve) => {
+                server = serve({ fetch: router.fetch, hostname: "127.0.0.1", port: 0 }, (info) =>
+                    resolve(`http://127.0.0.1:${info.port}`),
+                );
+            });
+            const prefix = JSON.stringify(quoteBody()).slice(0, -1) + ',"padding":"';
+            const bytes = new TextEncoder().encode(
+                prefix + "x".repeat(size - prefix.length - 2) + '"}',
+            );
+            let offset = 0;
+            const body = new ReadableStream<Uint8Array>({
+                pull(controller) {
+                    if (offset === bytes.length) return controller.close();
+                    const end = Math.min(offset + 64 * 1024, bytes.length);
+                    controller.enqueue(bytes.subarray(offset, end));
+                    offset = end;
+                },
+            });
+            try {
+                const res = await fetch(`${origin}/v1/transfers`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body,
+                    duplex: "half",
+                    signal: AbortSignal.timeout(5_000),
+                } as RequestInit);
+                expect(res.status).toBe(size > limit ? 413 : 200);
+                expect(await res.json()).toMatchObject(
+                    size > limit ? { code: "request_body_too_large" } : { transferId: "adv-1" },
+                );
+            } finally {
+                await new Promise<void>((resolve, reject) =>
+                    server!.close((error) => (error ? reject(error) : resolve())),
+                );
+            }
+        },
+    );
+});
+
 describe("POST /v1/transfers/:id/lockup", () => {
     const quoted = async () => {
         const res = await post("/v1/transfers", quoteBody());
@@ -1535,6 +1691,52 @@ describe("GET /ready", () => {
         expect(await res.json()).toMatchObject({
             reason: "the fill reconciler has not completed a tick",
         });
+    });
+
+    it.each([true, false])(
+        "isolates uncertain fill funds only with intact reservations: %s",
+        async (intact) => {
+            const router = createRoutes({
+                ...deps(),
+                fillReconciler: {
+                    status: () => ({
+                        lastTickAt: NOW,
+                        submitting: 1,
+                        quarantined: intact ? 1 : 0,
+                        blockers: ["fill_liability_unresolved"],
+                    }),
+                },
+            });
+            expect((await router.request("/ready")).status).toBe(503);
+            const response = await router.request("/v1/transfers", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(quoteBody()),
+            });
+            expect(response.status).toBe(intact ? 200 : 503);
+            if (!intact) expect(await response.json()).toMatchObject({ code: "not_ready" });
+        },
+    );
+
+    it("blocks unrelated mutations on unexpected spends despite intact fill reservations", async () => {
+        const router = createRoutes({
+            ...deps(),
+            fillReconciler: {
+                status: () => ({
+                    lastTickAt: NOW,
+                    submitting: 1,
+                    quarantined: 1,
+                    blockers: ["fill_liability_unresolved", "fill_unexpected_spend"],
+                }),
+            },
+        });
+        const response = await router.request("/v1/transfers", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(quoteBody()),
+        });
+        expect(response.status).toBe(503);
+        expect(await response.json()).toMatchObject({ code: "not_ready" });
     });
 
     it("is 503 once the last tick is older than the staleness bar", async () => {

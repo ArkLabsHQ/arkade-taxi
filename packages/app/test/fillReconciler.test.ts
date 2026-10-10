@@ -4,6 +4,8 @@ import { base64, hex } from "@scure/base";
 import {
     asset,
     Extension,
+    ArkAddress,
+    P2A,
     Transaction,
     scriptFromTapLeafScript,
     type VirtualCoin,
@@ -25,17 +27,27 @@ const point = (o: { txid: string; vout: number }) => `${o.txid}:${o.vout}`;
 const closers: (() => void)[] = [];
 afterEach(() => closers.splice(0).forEach((close) => close()));
 
-const setup = (over: Partial<Fill> = {}) => {
-    const inserted = insertReceiveQuote({ wantAmount: 5n, operatorCoin: fundingCoin(TAXI) });
+const setup = (over: Partial<Fill> = {}, zeroPayout = false) => {
+    const inserted = insertReceiveQuote({
+        wantAmount: 5n,
+        operatorCoin: fundingCoin({ ...TAXI, value: zeroPayout ? 330 : 20_000 }),
+        ...(zeroPayout ? { receiverFare: { currency: "sats" as const, units: 4n } } : {}),
+    });
     closers.push(() => inserted.db.close());
     const quote = inserted.quotes.get(inserted.quoteId)!;
     const checkpoints = [TAXI, FOREIGN].map(checkpointSpending);
+    if (zeroPayout) checkpoints.forEach((cp) => cp.updateOutput(0, { amount: 330n }));
     const tx = new Transaction({ version: 3 });
     checkpoints.forEach((cp) => tx.addInput({ txid: cp.id, index: 0 }));
-    tx.addOutput({ script: operatorTree.pkScript, amount: 4n });
-    tx.addOutput({ script: hex.decode("51"), amount: 330n });
+    tx.addOutput({
+        script: zeroPayout
+            ? ArkAddress.decode(quote.receiverAddress).pkScript
+            : operatorTree.pkScript,
+        amount: zeroPayout ? 330n : 4n,
+    });
+    tx.addOutput(zeroPayout ? P2A : { script: hex.decode("51"), amount: 330n });
     tx.addOutput({ script: inserted.covenant.pkScript, amount: quote.params.dust });
-    tx.addOutput({ script: operatorTree.pkScript, amount: 18_800n });
+    if (!zeroPayout) tx.addOutput({ script: operatorTree.pkScript, amount: 18_800n });
     const packet = asset.Packet.create([
         asset.AssetGroup.create(
             asset.AssetId.fromString(WANTED_SWAP_ID),
@@ -92,7 +104,7 @@ const setup = (over: Partial<Fill> = {}) => {
         inputs: [TAXI, FOREIGN].map((input, i) => ({
             ...input,
             role: i === 0 ? "taxi" : "foreign",
-            value: "20000",
+            value: zeroPayout ? "330" : "20000",
             script: hex.encode(operatorTree.pkScript),
             tapTree: hex.encode(operatorTree.encode()),
             spendLeaf: hex.encode(scriptFromTapLeafScript(operatorTree.leaves[0]!)),
@@ -104,10 +116,12 @@ const setup = (over: Partial<Fill> = {}) => {
         })),
         serverUnrollScript: hex.encode(serverUnroll.script),
         operatorScript: hex.encode(operatorTree.pkScript),
-        operatorPayouts: [
-            { vout: 0, sats: "4", fareSats: "4" },
-            { vout: 3, sats: "18800", fareSats: "4" },
-        ],
+        operatorPayouts: zeroPayout
+            ? []
+            : [
+                  { vout: 0, sats: "4", fareSats: "4" },
+                  { vout: 3, sats: "18800", fareSats: "4" },
+              ],
         recoveryPreflight: {
             digest: createHash("sha256").update(JSON.stringify(graph)).digest("hex"),
             expectedTxid: tx.id,
@@ -139,7 +153,10 @@ const setup = (over: Partial<Fill> = {}) => {
     });
     const fills = new FillRepository(inserted.db);
     const coins = new Map<string, VirtualCoin>(
-        [TAXI, FOREIGN].map((o) => [point(o), fundingCoin(o)]),
+        [TAXI, FOREIGN].map((o) => [
+            point(o),
+            fundingCoin({ ...o, value: zeroPayout ? 330 : 20_000 }),
+        ]),
     );
     let at = NOW + 120;
     let fail = false;
@@ -147,6 +164,7 @@ const setup = (over: Partial<Fill> = {}) => {
     const reconciler = createFillReconciler({
         fills,
         advances: inserted.advances,
+        receiveQuotes: inserted.quotes,
         now: () => at,
         indexer: {
             getVtxos: async (opts) => {
@@ -161,7 +179,12 @@ const setup = (over: Partial<Fill> = {}) => {
     const land = () => {
         coins.set(
             point(TAXI),
-            fundingCoin({ ...TAXI, isSpent: true, arkTxId: checkpoints[0]!.id }),
+            fundingCoin({
+                ...TAXI,
+                value: zeroPayout ? 330 : 20_000,
+                isSpent: true,
+                arkTxId: checkpoints[0]!.id,
+            }),
         );
         for (const out of deriveJointOutputs(graph))
             coins.set(
@@ -198,6 +221,23 @@ const setup = (over: Partial<Fill> = {}) => {
 };
 
 describe("generic fill reconciliation", () => {
+    it("settles a receiver-paid fill when its exact loan creates no immediate operator payout", async () => {
+        const h = setup({}, true);
+        const quote = h.quotes.get(h.quoteId)!;
+        const outputs = deriveJointOutputs(h.fill.graph);
+        expect(quote.fare.units).toBe(0n);
+        expect(quote.loanSats).toBe(330n);
+        expect(
+            outputs.filter((out) => hex.encode(out.script) === hex.encode(operatorTree.pkScript)),
+        ).toEqual([]);
+        expect(outputs.reduce((sum, out) => sum + out.sats, 0n)).toBe(660n);
+        expect(h.reservations()).toEqual([TAXI]);
+        h.land();
+        await h.reconciler.tick();
+        expect(h.fills.get("f1")!.state).toBe("settled");
+        expect(h.advances.get(h.quoteId)!.outpoint).toEqual({ txid: h.txid, vout: 2 });
+        expect(h.reconciler.status().blockers).toEqual([]);
+    });
     it("settles a lost reply from checkpoint-spend evidence and covenant vout 2", async () => {
         const h = setup({ failureCode: "fill_submission_ambiguous" });
         h.land();
@@ -235,7 +275,24 @@ describe("generic fill reconciliation", () => {
         expect(h.fills.get("f1")!.state).toBe("submitting");
         expect(h.reservations()).toEqual([TAXI]);
         expect(h.reconciler.status().blockers).toEqual(["fill_liability_unresolved"]);
+        expect(h.reconciler.status().quarantined).toBe(1);
     });
+    it.each(["reservation", "binding", "advance", "graph"])(
+        "does not quarantine an uncertain fill with broken %s linkage",
+        async (kind) => {
+            const h = setup();
+            if (kind === "reservation")
+                h.db.prepare("DELETE FROM operator_input_reservations").run();
+            if (kind === "binding")
+                h.db.prepare("UPDATE receive_quotes SET bound_fill_id = 'other'").run();
+            if (kind === "advance") h.db.prepare("UPDATE advances SET topup = topup + 1").run();
+            if (kind === "graph") h.db.prepare("UPDATE fills SET operation_id = 'other'").run();
+            await h.reconciler.tick();
+            expect(h.fills.get("f1")!.state).toBe("submitting");
+            expect(h.reconciler.status().quarantined).toBe(0);
+            expect(h.reconciler.status().blockers).toContain("fill_liability_unresolved");
+        },
+    );
     it("cancels a never-invoked crash and releases its linked liability", async () => {
         const h = setup({ submitInvoked: false });
         await h.reconciler.tick();
@@ -280,6 +337,26 @@ describe("generic fill reconciliation", () => {
         h.setFail();
         await h.reconciler.tick();
         expect(h.reconciler.status().blockers).toEqual(["fill_liability_unresolved"]);
+        expect(h.reservations()).toEqual([TAXI]);
+        expect(h.reconciler.status().quarantined).toBe(0);
+    });
+    it("requires a complete observation before quarantining a fill", async () => {
+        const h = setup();
+        expect(h.reconciler.status().quarantined).toBe(0);
+        h.coins.delete(point(FOREIGN));
+        await h.reconciler.tick();
+        expect(h.reconciler.status().quarantined).toBe(0);
+        expect(h.reservations()).toEqual([TAXI]);
+    });
+    it("revokes quarantine admission when a later indexer read becomes unavailable", async () => {
+        const h = setup();
+        await h.reconciler.tick();
+        expect(h.reconciler.status().quarantined).toBe(1);
+        h.setFail();
+        await h.reconciler.tick();
+        expect(h.reconciler.status().quarantined).toBe(0);
+        expect(h.reconciler.status().blockers).toEqual(["fill_liability_unresolved"]);
+        expect(h.fills.get("f1")!.state).toBe("submitting");
         expect(h.reservations()).toEqual([TAXI]);
     });
     it("refuses unexpected own bytes when the provider was never invoked", async () => {
@@ -353,6 +430,10 @@ describe("generic fill reconciliation", () => {
         expect(h.fills.get("f1")!.state).toBe("submitting");
         expect(h.reconciler.status().blockers).toContain("fill_unexpected_spend");
         expect(h.reservations()).toEqual([TAXI]);
+        h.setFail();
+        await h.reconciler.tick();
+        expect(h.reconciler.status().blockers).toContain("fill_unexpected_spend");
+        expect(h.reconciler.status().quarantined).toBe(0);
     });
     it("keeps liability when one spent coin reports both own and foreign spenders", async () => {
         const h = setup();

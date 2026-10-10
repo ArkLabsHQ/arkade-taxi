@@ -23,7 +23,8 @@ export interface DerivedJointOutput {
     readonly assets: readonly DerivedJointOutputAsset[];
 }
 
-const decodeTx = (psbt: string, label: string): Transaction => {
+const decodeTx = (psbt: string | Transaction, label: string): Transaction => {
+    if (typeof psbt !== "string") return psbt;
     try {
         return Transaction.fromPSBT(base64.decode(psbt));
     } catch (cause) {
@@ -33,8 +34,8 @@ const decodeTx = (psbt: string, label: string): Transaction => {
 
 /** Ark input i spends checkpoint i's output 0; the coin is what that checkpoint spends. */
 export function deriveJointInputs(graph: {
-    arkTx: string;
-    checkpoints: readonly string[];
+    arkTx: string | Transaction;
+    checkpoints: readonly (string | Transaction)[];
     inputOwners: readonly (string | null)[];
 }): DerivedJointInput[] {
     const tx = decodeTx(graph.arkTx, "graph.arkTx");
@@ -45,6 +46,7 @@ export function deriveJointInputs(graph: {
         throw new JointGraphDerivationError(
             "graph inputOwners, checkpoints and arkTx inputs must agree",
         );
+    const seen = new Set<string>();
     return graph.inputOwners.map((owner, index) => {
         const checkpoint = decodeTx(graph.checkpoints[index]!, `graph.checkpoints[${index}]`);
         const edge = tx.getInput(index);
@@ -57,6 +59,10 @@ export function deriveJointInputs(graph: {
             throw new JointGraphDerivationError(
                 `graph checkpoint ${index} does not spend exactly one outpoint`,
             );
+        const outpoint = `${hex.encode(input.txid)}:${input.index}`;
+        if (seen.has(outpoint))
+            throw new JointGraphDerivationError(`graph repeats outpoint ${outpoint}`);
+        seen.add(outpoint);
         return {
             owner,
             txid: hex.encode(input.txid).toLowerCase(),
@@ -69,9 +75,19 @@ const assetsByVout = (tx: Transaction): Map<number, DerivedJointOutputAsset[]> =
     const byVout = new Map<number, DerivedJointOutputAsset[]>();
     let packet;
     try {
+        let extensions = 0;
+        for (let i = 0; i < tx.outputsLength; i++) {
+            const output = tx.getOutput(i);
+            if (!output.script || !Extension.isExtension(output.script)) continue;
+            if (++extensions > 1 || output.amount !== 0n)
+                throw new JointGraphDerivationError(
+                    "graph extension must be unique and zero-value",
+                );
+        }
         packet = Extension.fromTx(tx).getAssetPacket();
     } catch (cause) {
         if (cause instanceof ExtensionNotFoundError) return byVout;
+        if (cause instanceof JointGraphDerivationError) throw cause;
         throw new JointGraphDerivationError("graph asset packet is not parsable", { cause });
     }
     if (!packet) return byVout;
@@ -88,7 +104,7 @@ const assetsByVout = (tx: Transaction): Map<number, DerivedJointOutputAsset[]> =
     return byVout;
 };
 
-export function deriveJointOutputs(graph: { arkTx: string }): DerivedJointOutput[] {
+export function deriveJointOutputs(graph: { arkTx: string | Transaction }): DerivedJointOutput[] {
     const tx = decodeTx(graph.arkTx, "graph.arkTx");
     const assets = assetsByVout(tx);
     const outputs: DerivedJointOutput[] = [];

@@ -55,6 +55,8 @@ import {
     type DerivedJointOutput,
 } from "./arkade/jointGraphDerivation.js";
 import { assertCheckpointForInput } from "./arkade/psbt.js";
+import { assertForeignInput, assertTaxiUnsigned } from "./arkade/fillForeignInputs.js";
+import { createArkFillSubmitter } from "./arkade/arkFillSubmitter.js";
 import { normalizeExpiry, withinVtxoMaxAmount } from "./arkade/providers.js";
 
 export interface FillGraphArgs {
@@ -111,6 +113,9 @@ const assetPacket = (tx: Transaction): asset.Packet | null => {
 export function assertFillGraph(args: FillGraphArgs): void {
     const { graph, quote, observed, operatorScript } = args;
     const arkTx = decode(graph.arkTx, "arkTx");
+    const checkpoints = graph.checkpoints.map((psbt, index) =>
+        decode(psbt, `checkpoints[${index}]`),
+    );
     const taxi = new Set(args.taxiInputIndexes);
 
     // V1 — per-input identity: without it no per-input rule binds to anything.
@@ -125,9 +130,9 @@ export function assertFillGraph(args: FillGraphArgs): void {
     let inputs;
     try {
         inputs = deriveJointInputs({
-            arkTx: graph.arkTx,
-            checkpoints: graph.checkpoints,
-            inputOwners: Array.from({ length: graph.checkpoints.length }, (_, i) =>
+            arkTx,
+            checkpoints,
+            inputOwners: Array.from({ length: checkpoints.length }, (_, i) =>
                 taxi.has(i) ? "taxi" : null,
             ),
         });
@@ -188,7 +193,7 @@ export function assertFillGraph(args: FillGraphArgs): void {
     for (const [index, snapshot] of taxiSnapshots) {
         const tree = VtxoScript.decode(snapshot.tapTree);
         const { arkInput } = assertCheckpointForInput(
-            decode(graph.checkpoints[index]!, `checkpoints[${index}]`),
+            checkpoints[index]!,
             {
                 txid: snapshot.txid,
                 vout: snapshot.vout,
@@ -220,7 +225,7 @@ export function assertFillGraph(args: FillGraphArgs): void {
 
     let outputs: DerivedJointOutput[];
     try {
-        outputs = deriveJointOutputs(graph);
+        outputs = deriveJointOutputs({ arkTx });
     } catch (cause) {
         if (cause instanceof JointGraphDerivationError)
             throw new ServiceError("fill_graph_invalid", 400, `fill graph ${cause.message}`, {
@@ -316,11 +321,30 @@ export function assertFillGraph(args: FillGraphArgs): void {
     // consume units at a Taxi vin is the half that is about the Taxi's money.
     const packet = assetPacket(arkTx);
     const valueVouts = new Set(outputs.map((output) => output.vout));
+    const declared = new Map<string, bigint>();
+    const groups = new Set<string>();
     for (const group of packet?.groups ?? []) {
         if (!group.assetId) refuse("fill_asset_not_conserved", 400, "mints an asset without an id");
-        for (const input of group.inputs)
+        const id = group.assetId!.toString();
+        if (groups.has(id)) refuse("fill_asset_not_conserved", 400, "repeats an asset group");
+        groups.add(id);
+        for (const input of group.inputs) {
             if (taxi.has(input.vin))
                 refuse("fill_taxi_input_assets", 400, "declares asset units at a Taxi input");
+            const key = `${input.vin}:${id}`;
+            if (
+                input.input.type !== asset.AssetInputType.Local ||
+                !inputs[input.vin] ||
+                input.amount <= 0n ||
+                declared.has(key)
+            )
+                refuse(
+                    "fill_asset_not_conserved",
+                    400,
+                    "declares an invalid or repeated asset input",
+                );
+            declared.set(key, input.amount);
+        }
         const into = group.inputs.reduce((sum, input) => sum + input.amount, 0n);
         const outOf = group.outputs.reduce((sum, output) => sum + output.amount, 0n);
         if (into !== outOf)
@@ -333,6 +357,29 @@ export function assertFillGraph(args: FillGraphArgs): void {
             if (!valueVouts.has(output.vout))
                 refuse("fill_asset_not_conserved", 400, "allocates an asset to a non-value output");
     }
+    for (const [index, input] of inputs.entries()) {
+        const held = new Map<string, bigint>();
+        for (const holding of observed.get(point(input))?.assets ?? []) {
+            const id = holding.assetId.toLowerCase();
+            held.set(id, (held.get(id) ?? 0n) + BigInt(holding.amount));
+        }
+        for (const [id, units] of held) {
+            const key = `${index}:${id}`;
+            if (declared.get(key) !== units)
+                refuse(
+                    "fill_asset_not_conserved",
+                    400,
+                    "asset input differs from observed holdings",
+                );
+            declared.delete(key);
+        }
+    }
+    if (declared.size)
+        refuse(
+            "fill_asset_not_conserved",
+            400,
+            "declares asset units absent from observed holdings",
+        );
 
     // V10 — the covenant coin inherits the earliest batch expiry of its inputs
     // while the Taxi's recovery is a wall-clock CLTV, so a short foreign input
@@ -365,17 +412,53 @@ export function assertFillGraph(args: FillGraphArgs): void {
             );
     }
 
-    // V11 — the Taxi signs last. A pre-signed Taxi input means the caller holds
-    // a signature the Taxi never issued. Foreign signatures are not checked:
-    // with one call there is no substitution window, and an under-signed foreign
-    // input only makes submission fail, atomically.
+    if (
+        arkTx.version !== 3 ||
+        arkTx.lockTime !== 0 ||
+        inputs.some((_, index) => arkTx.getInput(index).sequence !== 0xffffffff)
+    )
+        refuse("fill_graph_invalid", 400, "uses an unsupported Ark version, locktime or sequence");
+    const inputSats = inputs.reduce(
+        (sum, input) => sum + BigInt(observed.get(point(input))!.value),
+        0n,
+    );
+    const outputSats = Array.from({ length: arkTx.outputsLength }, (_, index) =>
+        arkTx.getOutput(index),
+    ).reduce((sum, output) => sum + output.amount!, 0n);
+    if (inputSats !== outputSats)
+        refuse("fill_sats_not_conserved", 400, "Bitcoin input and output values differ");
+
+    // Provider signatures arrive later; caller authorization must already be complete.
     for (const index of taxi) {
-        const checkpoint = decode(graph.checkpoints[index]!, `checkpoints[${index}]`);
-        if (
-            arkTx.getInput(index).tapScriptSig?.length ||
-            checkpoint.getInput(0).tapScriptSig?.length
-        )
-            refuse("fill_taxi_input_signed", 400, `Taxi input ${index} arrives already signed`);
+        const checkpoint = checkpoints[index]!;
+        assertTaxiUnsigned(arkTx, index);
+        assertTaxiUnsigned(checkpoint, 0);
+    }
+    let cosigners;
+    try {
+        cosigners = fillCosignerKeys({
+            expected: sealFillGraph({ ...graph, taxiInputIndexes: args.taxiInputIndexes }),
+            emulatorXOnly: hex.encode(args.emulatorKey),
+        });
+    } catch (cause) {
+        throw new ServiceError(
+            "fill_foreign_input_invalid",
+            400,
+            "fill graph has invalid provider gates",
+            { cause },
+        );
+    }
+    for (const [index, input] of inputs.entries()) {
+        if (taxi.has(index)) continue;
+        assertForeignInput({
+            arkTx,
+            checkpoint: checkpoints[index]!,
+            index,
+            coin: observed.get(point(input))!,
+            serverKey: args.serverKey,
+            serverUnroll: args.serverUnroll,
+            emulatorCosigner: cosigners.get(index),
+        });
     }
 }
 
@@ -437,12 +520,12 @@ function decodeFillBody(body: unknown): FillRequestBody {
         if (!BASE64.test(value)) bad(`${label} is not base64`);
         return value;
     };
-    if (!Array.isArray(raw.checkpoints) || !raw.checkpoints.length || raw.checkpoints.length > 256)
+    if (!Array.isArray(raw.checkpoints) || !raw.checkpoints.length || raw.checkpoints.length > 32)
         bad("checkpoints must be a bounded array");
     if (
         !Array.isArray(raw.taxiInputIndexes) ||
         !raw.taxiInputIndexes.length ||
-        raw.taxiInputIndexes.length > 256
+        raw.taxiInputIndexes.length > 32
     )
         bad("taxiInputIndexes must be a bounded array");
     for (const index of raw.taxiInputIndexes as unknown[])
@@ -457,11 +540,15 @@ function decodeFillBody(body: unknown): FillRequestBody {
         (!Number.isSafeInteger(raw.validUntil) || (raw.validUntil as number) <= 0)
     )
         bad("validUntil must be a positive integer when present");
+    const arkTx = psbt(raw.arkTx, "arkTx");
+    const checkpoints = (raw.checkpoints as unknown[]).map((c, i) => psbt(c, `checkpoints[${i}]`));
+    if (arkTx.length + checkpoints.reduce((sum, value) => sum + value.length, 0) > 4 * 1024 * 1024)
+        bad("graph exceeds the aggregate PSBT size limit");
     return {
         operationId: text("operationId", 128),
         quoteId: text("quoteId", 128),
-        arkTx: psbt(raw.arkTx, "arkTx"),
-        checkpoints: (raw.checkpoints as unknown[]).map((c, i) => psbt(c, `checkpoints[${i}]`)),
+        arkTx,
+        checkpoints,
         taxiInputIndexes: [...(raw.taxiInputIndexes as number[])],
         covenantOutputIndex: raw.covenantOutputIndex as number,
         assetUnits: raw.assetUnits as string,
@@ -816,6 +903,7 @@ async function signAndSubmit(
 ): Promise<FillStatusResponse> {
     const { config } = deps;
     const taxi = new Set(row.taxiInputs.map((input) => point(input)));
+    // The empty owner list derives outpoints before ownership is reconstructed from the ledger.
     const taxiInputIndexes = fillOutpoints(row.graph, [])
         .map((outpoint, index) => ({ outpoint, index }))
         .filter(({ outpoint }) => taxi.has(point(outpoint)))
@@ -891,7 +979,7 @@ async function signAndSubmit(
             `fill ${row.id} lease lost before submission (not submitted)`,
         );
     const provider: Pick<EmulatorProvider, "submitTx"> =
-        gated.size > 0 ? deps.emulator : arkSubmitter(deps.arkProvider);
+        gated.size > 0 ? deps.emulator : createArkFillSubmitter(deps.arkProvider);
     try {
         const submitted = await submitFillGraph({
             expected: sealed,
@@ -917,17 +1005,3 @@ async function signAndSubmit(
         throw new ServiceError("fill_submission_ambiguous", 503, message, { cause });
     }
 }
-
-/** arkd in the emulator's submit shape, so one submission path serves both. */
-const arkSubmitter = (
-    ark: Pick<ArkProvider, "submitTx" | "finalizeTx">,
-): Pick<EmulatorProvider, "submitTx"> => ({
-    submitTx: async (arkTx: string, checkpointTxs: string[]) => {
-        const response = await ark.submitTx(arkTx, checkpointTxs);
-        await ark.finalizeTx(response.arkTxid, [...response.signedCheckpointTxs]);
-        return {
-            signedArkTx: response.finalArkTx,
-            signedCheckpointTxs: [...response.signedCheckpointTxs],
-        };
-    },
-});

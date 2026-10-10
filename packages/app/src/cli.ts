@@ -228,6 +228,7 @@ async function runServe(): Promise<void> {
     const fillReconciler = createFillReconciler({
         fills,
         advances,
+        receiveQuotes,
         indexer: runtime.providers.indexerProvider,
         now: seconds,
     });

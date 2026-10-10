@@ -158,7 +158,7 @@ export function operationalSnapshot(
         | "startup"
         | "proceeds"
     >,
-    options: { ignoreManualPause?: boolean } = {},
+    options: { ignoreManualPause?: boolean; allowQuarantinedFills?: boolean } = {},
 ): OperationalSnapshot {
     const s = deps.sweeper.status();
     const now = deps.now();
@@ -166,6 +166,11 @@ export function operationalSnapshot(
     const runtime = deps.runtime?.safety();
     const reconciler = deps.reconciler.status();
     const fills = deps.fillReconciler?.status();
+    const quarantined =
+        options.allowQuarantinedFills &&
+        fills !== undefined &&
+        fills.submitting > 0 &&
+        fills.quarantined === fills.submitting;
     const paused = deps.policy.get().paused;
     const startup = deps.startup?.();
     const proceeds = deps.proceeds?.();
@@ -181,7 +186,9 @@ export function operationalSnapshot(
         ...s.blockers.map(({ code }) => safeCode(code, "recovery_blocked")),
         ...reconciler.blockers.map((code) => safeCode(code, "reconciler_blocked")),
         ...(reconciler.lastTickAt === null ? ["reconciler_not_started"] : []),
-        ...(fills?.blockers ?? []).map((code) => safeCode(code, "reconciler_blocked")),
+        ...(fills?.blockers ?? [])
+            .filter((code) => !quarantined || code !== "fill_liability_unresolved")
+            .map((code) => safeCode(code, "reconciler_blocked")),
         ...(fills && fills.lastTickAt === null ? ["fill_reconciler_not_started"] : []),
         ...(age === null
             ? ["sweeper_not_started"]
@@ -343,10 +350,52 @@ export function operationalSnapshot(
     };
 }
 
+const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024;
+
 async function readJson(c: Context): Promise<unknown> {
     try {
-        return await c.req.json();
+        const tooLarge = () =>
+            new ServiceError("request_body_too_large", 413, "request body exceeds 4 MiB");
+        const declared = c.req.header("content-length");
+        if (declared !== undefined) {
+            const length = Number(declared);
+            if (
+                !/^\d+$/.test(declared) ||
+                !Number.isSafeInteger(length) ||
+                length > MAX_JSON_BODY_BYTES
+            )
+                throw tooLarge();
+        }
+        const reader = c.req.raw.body?.getReader();
+        let bytes = new Uint8Array(0);
+        let length = 0;
+        if (reader) {
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const nextLength = length + value.byteLength;
+                    if (nextLength > MAX_JSON_BODY_BYTES) {
+                        void reader.cancel().catch(() => {});
+                        throw tooLarge();
+                    }
+                    if (nextLength > bytes.length) {
+                        const grown = new Uint8Array(
+                            Math.min(MAX_JSON_BODY_BYTES, Math.max(nextLength, bytes.length * 2)),
+                        );
+                        grown.set(bytes.subarray(0, length));
+                        bytes = grown;
+                    }
+                    bytes.set(value, length);
+                    length = nextLength;
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        }
+        return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
     } catch (cause) {
+        if (cause instanceof ServiceError) throw cause;
         throw new ServiceError(ErrorCode.InvalidRequest, 400, "request body is not valid JSON", {
             cause,
         });
@@ -366,7 +415,10 @@ const signedTxOf = (body: unknown): string => {
 };
 
 const assertFinancialMutationReady = (deps: RouteDeps): void => {
-    const state = operationalSnapshot(deps, { ignoreManualPause: true });
+    const state = operationalSnapshot(deps, {
+        ignoreManualPause: true,
+        allowQuarantinedFills: true,
+    });
     if (!state.ready)
         throw new ServiceError("not_ready", 503, state.body.reason ?? "service is not ready");
 };

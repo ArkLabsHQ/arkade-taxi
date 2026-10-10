@@ -4,6 +4,8 @@ import {
     ArkAddress,
     Extension,
     P2A,
+    MultisigTapscript,
+    SingleKey,
     Transaction,
     VtxoScript,
     VtxoTaprootTree,
@@ -16,6 +18,7 @@ import {
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade-taxi/db";
 import { assertFillGraph, type FillGraphArgs } from "../src/fills.js";
+import { assertForeignInput } from "../src/arkade/fillForeignInputs.js";
 import type { ServiceError } from "../src/errors.js";
 import { runtimeSafety, serverUnroll } from "./fixtures.js";
 import { WANTED_ASSET } from "./jointFillFixtures.js";
@@ -66,7 +69,11 @@ const repointArkInput = (arkTx: Transaction, index: number, txid: string): Trans
     const out = new Transaction({ version: 3, lockTime: 0 });
     for (let i = 0; i < arkTx.inputsLength; i++) {
         const input = arkTx.getInput(i);
-        out.addInput(i === index ? { ...input, txid: hex.decode(txid) } : input);
+        out.addInput({
+            ...input,
+            tapScriptSig: undefined,
+            ...(i === index ? { txid: hex.decode(txid) } : {}),
+        });
     }
     for (let i = 0; i < arkTx.outputsLength; i++) out.addOutput(arkTx.getOutput(i));
     return out;
@@ -105,7 +112,8 @@ const withPacket = (arkTx: Transaction, next: asset.Packet): Transaction => {
         .map((packet) => (packet.type() === asset.Packet.PACKET_TYPE ? next : packet));
     const replacement = Extension.create([...packets]).txOut();
     const out = new Transaction({ version: 3, lockTime: 0 });
-    for (let i = 0; i < arkTx.inputsLength; i++) out.addInput(arkTx.getInput(i));
+    for (let i = 0; i < arkTx.inputsLength; i++)
+        out.addInput({ ...arkTx.getInput(i), tapScriptSig: undefined });
     for (let i = 0; i < arkTx.outputsLength; i++) {
         const output = arkTx.getOutput(i);
         out.addOutput(output.script && Extension.isExtension(output.script) ? replacement : output);
@@ -120,7 +128,8 @@ const appendValueOutput = (
     output: { script: Uint8Array; amount: bigint },
 ): { tx: Transaction; vout: number } => {
     const out = new Transaction({ version: 3, lockTime: 0 });
-    for (let i = 0; i < arkTx.inputsLength; i++) out.addInput(arkTx.getInput(i));
+    for (let i = 0; i < arkTx.inputsLength; i++)
+        out.addInput({ ...arkTx.getInput(i), tapScriptSig: undefined });
     const tail: ReturnType<Transaction["getOutput"]>[] = [];
     for (let i = 0; i < arkTx.outputsLength; i++) {
         const existing = arkTx.getOutput(i);
@@ -229,9 +238,11 @@ const refused = (over: Partial<FillGraphArgs>): ServiceError => {
 };
 
 /** `over` applied to the arkTx, re-encoded back into the graph. */
-const mutated = (mutate: (arkTx: Transaction) => Transaction): Partial<FillGraphArgs> => ({
-    graph: { ...fixture.args.graph, arkTx: psbtOf(mutate(txOf(fixture.args.graph.arkTx))) },
-});
+const mutated = (mutate: (arkTx: Transaction) => Transaction): Partial<FillGraphArgs> => {
+    const tx = txOf(fixture.args.graph.arkTx);
+    for (let i = 0; i < tx.inputsLength; i++) tx.updateInput(i, { tapScriptSig: undefined });
+    return { graph: { ...fixture.args.graph, arkTx: psbtOf(mutate(tx)) } };
+};
 
 const observedWith = (index: number, over: Partial<VirtualCoin>): Partial<FillGraphArgs> => {
     const observed = new Map(fixture.args.observed);
@@ -242,6 +253,319 @@ const observedWith = (index: number, over: Partial<VirtualCoin>): Partial<FillGr
 };
 
 describe("assertFillGraph against the graph today's builder emits", () => {
+    it.each([
+        { version: 2, lockTime: 0 },
+        { version: 3, lockTime: 1 },
+    ])("refuses an unsupported Ark transaction $version/$lockTime", (options) => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    const replacement = new Transaction(options);
+                    for (let i = 0; i < tx.inputsLength; i++) replacement.addInput(tx.getInput(i));
+                    for (let i = 0; i < tx.outputsLength; i++)
+                        replacement.addOutput(tx.getOutput(i));
+                    return replacement;
+                }),
+            ).code,
+        ).toBe("fill_graph_invalid");
+    });
+
+    it("refuses an unsupported Ark sequence", () => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    tx.updateInput(fixture.foreignIndex, { sequence: 1 });
+                    return tx;
+                }),
+            ).code,
+        ).toBe("fill_graph_invalid");
+    });
+
+    it("refuses a Bitcoin imbalance even when the Taxi payout is exact", () => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    tx.updateOutput(fixture.solverVout, {
+                        amount: tx.getOutput(fixture.solverVout).amount! + 1n,
+                    });
+                    return tx;
+                }),
+            ).code,
+        ).toBe("fill_sats_not_conserved");
+    });
+    it.each(["ark", "checkpoint"])("refuses a missing caller signature on %s", (side) => {
+        const ark = txOf(fixture.args.graph.arkTx);
+        const checkpoints = [...fixture.args.graph.checkpoints];
+        const cp = txOf(checkpoints[fixture.foreignIndex]!);
+        (side === "ark" ? ark : cp).updateInput(side === "ark" ? fixture.foreignIndex : 0, {
+            tapScriptSig: undefined,
+        });
+        checkpoints[fixture.foreignIndex] = psbtOf(cp);
+        expect(refused({ graph: { arkTx: psbtOf(ark), checkpoints } }).code).toBe(
+            "fill_foreign_signature_invalid",
+        );
+    });
+
+    it("refuses a foreign witness amount that differs from observation", () => {
+        expect(refused(observedWith(fixture.foreignIndex, { value: 1001 })).code).toBe(
+            "fill_sats_not_conserved",
+        );
+    });
+
+    it("refuses asset input units that exist only in the packet", () => {
+        expect(refused(observedWith(fixture.foreignIndex, { assets: [] })).code).toBe(
+            "fill_asset_not_conserved",
+        );
+    });
+
+    it("refuses an intent reference masquerading as a local asset input", () => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    const group = packetOf(tx).groups[0]!;
+                    return withPacket(
+                        tx,
+                        regroup(group, {
+                            inputs: [
+                                asset.AssetInput.createIntent(
+                                    "12".repeat(32),
+                                    fixture.foreignIndex,
+                                    5n,
+                                ),
+                            ],
+                        }),
+                    );
+                }),
+            ).code,
+        ).toBe("fill_asset_not_conserved");
+    });
+
+    it("refuses a second extension output", () => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    const output = Array.from({ length: tx.outputsLength }, (_, i) =>
+                        tx.getOutput(i),
+                    ).find((o) => o.script && Extension.isExtension(o.script))!;
+                    tx.addOutput(output);
+                    return tx;
+                }),
+            ).code,
+        ).toBe("fill_graph_invalid");
+    });
+
+    it("refuses a funded extension output", () => {
+        expect(
+            refused(
+                mutated((tx) => {
+                    for (let i = 0; i < tx.outputsLength; i++)
+                        if (Extension.isExtension(tx.getOutput(i).script!))
+                            tx.updateOutput(i, { amount: 1n });
+                    return tx;
+                }),
+            ).code,
+        ).toBe("fill_graph_invalid");
+    });
+
+    it("refuses repeated source outpoints even with different input indexes", () => {
+        const checkpoints = [...fixture.args.graph.checkpoints];
+        checkpoints[fixture.foreignIndex] = checkpoints[fixture.taxiIndex]!;
+        const ark = repointArkInput(
+            txOf(fixture.args.graph.arkTx),
+            fixture.foreignIndex,
+            txOf(checkpoints[fixture.foreignIndex]!).id,
+        );
+        expect(refused({ graph: { arkTx: psbtOf(ark), checkpoints } }).code).toBe(
+            "fill_graph_invalid",
+        );
+    });
+
+    it.each(["signature", "leaf", "control block", "witness script"])(
+        "refuses invalid foreign %s",
+        (kind) => {
+            const ark = txOf(fixture.args.graph.arkTx);
+            const input = ark.getInput(fixture.foreignIndex);
+            ark.updateInput(fixture.foreignIndex, { tapScriptSig: undefined });
+            if (kind === "signature" || kind === "leaf") {
+                const [data, signature] = input.tapScriptSig![0]!;
+                ark.updateInput(fixture.foreignIndex, {
+                    tapScriptSig: [
+                        [
+                            {
+                                ...data,
+                                ...(kind === "leaf" ? { leafHash: new Uint8Array(32) } : {}),
+                            },
+                            kind === "signature" ? new Uint8Array(64) : signature,
+                        ],
+                    ],
+                });
+            } else if (kind === "control block") {
+                const [control, leaf] = input.tapLeafScript![0]!;
+                ark.updateInput(fixture.foreignIndex, { tapLeafScript: undefined });
+                ark.updateInput(fixture.foreignIndex, {
+                    tapLeafScript: [[{ ...control, internalKey: new Uint8Array(32) }, leaf]],
+                });
+            } else
+                ark.updateInput(fixture.foreignIndex, {
+                    witnessUtxo: { ...input.witnessUtxo!, script: SOMEONE_ELSE },
+                });
+            expect(refused({ graph: { ...fixture.args.graph, arkTx: psbtOf(ark) } }).code).toBe(
+                kind === "signature" || kind === "leaf"
+                    ? "fill_foreign_signature_invalid"
+                    : "fill_foreign_input_invalid",
+            );
+        },
+    );
+
+    it("refuses an observed asset omitted from the packet", () => {
+        const current = fixture.args.observed.get(
+            point({
+                txid: hex.encode(
+                    txOf(fixture.args.graph.checkpoints[fixture.foreignIndex]!).getInput(0).txid!,
+                ),
+                vout: txOf(fixture.args.graph.checkpoints[fixture.foreignIndex]!).getInput(0)
+                    .index!,
+            }),
+        )!;
+        expect(
+            refused(
+                observedWith(fixture.foreignIndex, {
+                    assets: [
+                        ...(current.assets ?? []),
+                        {
+                            assetId: asset.AssetId.create("88".repeat(32), 0).toString(),
+                            amount: 1n,
+                        },
+                    ],
+                }),
+            ).code,
+        ).toBe("fill_asset_not_conserved");
+    });
+
+    it.each(["amount", "script", "control block"])(
+        "binds the foreign source %s to observation",
+        (kind) => {
+            const checkpoints = [...fixture.args.graph.checkpoints];
+            const cp = txOf(checkpoints[fixture.foreignIndex]!);
+            const input = cp.getInput(0);
+            cp.updateInput(0, { tapScriptSig: undefined });
+            if (kind === "control block") {
+                const [control, leaf] = input.tapLeafScript![0]!;
+                cp.updateInput(0, { tapLeafScript: undefined });
+                cp.updateInput(0, {
+                    tapLeafScript: [[{ ...control, internalKey: new Uint8Array(32) }, leaf]],
+                });
+            } else
+                cp.updateInput(0, {
+                    witnessUtxo: {
+                        ...input.witnessUtxo!,
+                        ...(kind === "amount"
+                            ? { amount: input.witnessUtxo!.amount + 1n }
+                            : { script: SOMEONE_ELSE }),
+                    },
+                });
+            checkpoints[fixture.foreignIndex] = psbtOf(cp);
+            expect(refused({ graph: { ...fixture.args.graph, checkpoints } }).code).toBe(
+                "fill_foreign_input_invalid",
+            );
+        },
+    );
+
+    it("requires every caller key in an all-of leaf, without pinning a solver identity", async () => {
+        const first = SingleKey.fromPrivateKey(new Uint8Array(32).fill(30));
+        const second = SingleKey.fromPrivateKey(new Uint8Array(32).fill(31));
+        const leaf = MultisigTapscript.encode({
+            pubkeys: [
+                fixture.args.serverKey,
+                await first.xOnlyPublicKey(),
+                await second.xOnlyPublicKey(),
+            ],
+        }).script;
+        const source = new VtxoScript([leaf]);
+        const next = new VtxoScript([serverUnroll.script, leaf]);
+        const coin = {
+            ...fixture.args.observed.values().next().value!,
+            value: 1000,
+            script: hex.encode(source.pkScript),
+        };
+        const cp = new Transaction({ version: 3, lockTime: 0 });
+        cp.addInput({
+            txid: coin.txid,
+            index: coin.vout,
+            witnessUtxo: { amount: 1000n, script: source.pkScript },
+            tapLeafScript: source.leaves,
+        });
+        setArkPsbtField(cp, 0, VtxoTaprootTree, source.encode());
+        cp.addOutput({ amount: 1000n, script: next.pkScript });
+        cp.addOutput(P2A);
+        const ark = new Transaction({ version: 3, lockTime: 0 });
+        ark.addInput({
+            txid: cp.id,
+            index: 0,
+            witnessUtxo: { amount: cp.getOutput(0).amount!, script: cp.getOutput(0).script! },
+            tapLeafScript: [next.findLeaf(hex.encode(leaf))],
+        });
+        ark.addOutput({ amount: 1000n, script: source.pkScript });
+        const partial = {
+            arkTx: await first.sign(ark, [0]),
+            checkpoint: await first.sign(cp, [0]),
+            index: 0,
+            coin,
+            serverKey: fixture.args.serverKey,
+            serverUnroll,
+        };
+        expect(() => assertForeignInput(partial)).toThrow(/lacks valid caller authorization/);
+        const complete = {
+            ...partial,
+            arkTx: await second.sign(partial.arkTx, [0]),
+            checkpoint: await second.sign(partial.checkpoint, [0]),
+        };
+        expect(() => assertForeignInput(complete)).not.toThrow();
+    });
+    it("refuses a committed conditional leaf whose full witness is unverifiable", () => {
+        const leaf = new Uint8Array([0x51, 0x69, ...fixture.args.serverUnroll.script]);
+        const source = new VtxoScript([leaf]);
+        const next = new VtxoScript([serverUnroll.script, leaf]);
+        const coin = {
+            ...fixture.args.observed.values().next().value!,
+            value: 1000,
+            script: hex.encode(source.pkScript),
+        };
+        const cp = new Transaction({ version: 3, lockTime: 0 });
+        cp.addInput({
+            txid: coin.txid,
+            index: coin.vout,
+            witnessUtxo: { amount: 1000n, script: source.pkScript },
+            tapLeafScript: source.leaves,
+        });
+        setArkPsbtField(cp, 0, VtxoTaprootTree, source.encode());
+        cp.addOutput({ amount: 1000n, script: next.pkScript });
+        cp.addOutput(P2A);
+        const ark = new Transaction({ version: 3, lockTime: 0 });
+        ark.addInput({
+            txid: cp.id,
+            index: 0,
+            witnessUtxo: { amount: 1000n, script: next.pkScript },
+            tapLeafScript: [next.findLeaf(hex.encode(leaf))],
+        });
+        ark.addOutput({ amount: 1000n, script: source.pkScript });
+        let error: ServiceError | undefined;
+        try {
+            assertForeignInput({
+                arkTx: ark,
+                checkpoint: cp,
+                index: 0,
+                coin,
+                serverKey: fixture.args.serverKey,
+                serverUnroll,
+            });
+        } catch (cause) {
+            error = cause as ServiceError;
+        }
+        expect(error?.code).toBe("fill_foreign_signature_invalid");
+        expect((error?.cause as Error).message).toContain("Failed to decode");
+    });
+
     it("accepts the production builder's own fill unchanged", () => {
         expect(fixture.taxiIndex).toBeGreaterThanOrEqual(0);
         expect(fixture.foreignIndex).toBeGreaterThanOrEqual(0);
