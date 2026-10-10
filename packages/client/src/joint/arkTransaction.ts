@@ -38,25 +38,28 @@ export function tapLeavesOfInput(tx: Transaction, inputIndex: number): TapLeafRe
 }
 
 /** Reject any input carrying a signature, finalization, or non-DEFAULT declared sighash. */
-export function assertUnsignedPsbt(tx: Transaction, context: string): void {
-    for (let i = 0; i < tx.inputsLength; i++) {
-        const input = tx.getInput(i);
-        if (input.tapKeySig && input.tapKeySig.length > 0) {
-            throw new Error(`${context}: input ${i} carries a key-path signature`);
-        }
-        if (input.tapScriptSig && input.tapScriptSig.length > 0) {
-            throw new Error(`${context}: input ${i} carries script-path signatures`);
-        }
-        if (input.partialSig && input.partialSig.length > 0) {
-            throw new Error(`${context}: input ${i} carries partial signatures`);
-        }
-        if (input.finalScriptSig && input.finalScriptSig.length > 0) {
-            throw new Error(`${context}: input ${i} is finalized`);
-        }
-        if (input.finalScriptWitness && input.finalScriptWitness.length > 0) {
-            throw new Error(`${context}: input ${i} is finalized`);
-        }
+/** One input carries nothing a signer has added yet. */
+export function assertUnsignedInput(tx: Transaction, index: number, context: string): void {
+    const input = tx.getInput(index);
+    if (input.tapKeySig && input.tapKeySig.length > 0) {
+        throw new Error(`${context}: carries a key-path signature`);
     }
+    if (input.tapScriptSig && input.tapScriptSig.length > 0) {
+        throw new Error(`${context}: carries script-path signatures`);
+    }
+    if (input.partialSig && input.partialSig.length > 0) {
+        throw new Error(`${context}: carries partial signatures`);
+    }
+    if (input.finalScriptSig && input.finalScriptSig.length > 0) {
+        throw new Error(`${context}: is finalized`);
+    }
+    if (input.finalScriptWitness && input.finalScriptWitness.length > 0) {
+        throw new Error(`${context}: is finalized`);
+    }
+}
+
+export function assertUnsignedPsbt(tx: Transaction, context: string): void {
+    for (let i = 0; i < tx.inputsLength; i++) assertUnsignedInput(tx, i, `${context}: input ${i}`);
     assertAllowedSighashTypes(tx, [SigHash.DEFAULT]);
 }
 

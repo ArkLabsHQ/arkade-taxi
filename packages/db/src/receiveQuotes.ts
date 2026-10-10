@@ -14,10 +14,9 @@ import {
     PolicyRevisionConflictError,
     allReservedOutpoints,
     expireReceiveQuotes,
-    expireUnboundSwapFills,
     totalExposure,
 } from "./reservations.js";
-import { SwapFillRepository, type SwapFill } from "./swapFills.js";
+import { FillRepository, type Fill } from "./fills.js";
 
 export type ReceiveQuoteState = "quoted" | "bound" | "expired";
 
@@ -51,7 +50,7 @@ export interface ReceiveQuote {
     id: string;
     state: ReceiveQuoteState;
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: ReceiveQuoteParams;
     covenantAddress: string;
     fare: FareSpec;
@@ -77,9 +76,9 @@ export interface InsertReceiveQuoteRequest {
     expectedReservedOutpoints?: readonly Outpoint[];
 }
 
-export interface BindReceiveQuoteRequest {
+export interface BindFillRequest {
     quoteId: string;
-    fill: SwapFill;
+    fill: Fill;
     advance: Advance;
     expectedPolicyRevision: bigint;
     now: number;
@@ -96,7 +95,7 @@ type Row = {
     id: string;
     state: string;
     receiver_address: string;
-    maker_public_key: string;
+    sender_key: string;
     params_json: string;
     covenant_address: string;
     fare_json: string;
@@ -364,7 +363,7 @@ const decodeInputs = (json: string): ReceiveQuoteInputSnapshot[] => {
 
 const decodeRow = (row: Row): ReceiveQuote => {
     if (row.state !== "quoted" && row.state !== "bound" && row.state !== "expired") fail("state");
-    if (!row.receiver_address || !/^[0-9a-f]{64}$/.test(row.maker_public_key)) fail("identity");
+    if (!row.receiver_address || !/^[0-9a-f]{64}$/.test(row.sender_key)) fail("identity");
     const params = decodeParams(row.params_json);
     const fare = decodeFare(row.fare_json);
     if (row.payer !== null && row.payer !== "receiver") fail("payer");
@@ -388,7 +387,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
     );
     const operatorInputs = decodeInputs(row.operator_inputs_json);
     if (
-        hex(params.senderKey) !== row.maker_public_key ||
+        hex(params.senderKey) !== row.sender_key ||
         params.topup !== row.loan_sats ||
         params.dust !== params.topup ||
         params.locktime !== recoveryLocktime.value ||
@@ -417,7 +416,7 @@ const decodeRow = (row: Row): ReceiveQuote => {
         id: row.id,
         state: row.state as ReceiveQuoteState,
         receiverAddress: row.receiver_address,
-        makerPublicKey: row.maker_public_key,
+        senderKey: row.sender_key,
         params,
         covenantAddress: row.covenant_address,
         fare,
@@ -449,7 +448,7 @@ export class ReceiveQuoteRepository {
             id: request.quote.id,
             state: request.quote.state,
             receiver_address: request.quote.receiverAddress,
-            maker_public_key: request.quote.makerPublicKey,
+            sender_key: request.quote.senderKey,
             params_json: encodeParams(request.quote.params),
             covenant_address: request.quote.covenantAddress,
             fare_json: encodeFare(request.quote.fare),
@@ -475,7 +474,6 @@ export class ReceiveQuoteRepository {
         this.db
             .transaction(() => {
                 expireReceiveQuotes(this.db, q.createdAt);
-                expireUnboundSwapFills(this.db, q.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (
                     revision !== request.expectedPolicyRevision ||
@@ -526,7 +524,7 @@ export class ReceiveQuoteRepository {
                 this.db
                     .prepare(
                         `INSERT INTO receive_quotes (
-                            id, state, receiver_address, maker_public_key, params_json,
+                            id, state, receiver_address, sender_key, params_json,
                             covenant_address, fare_json, payer, receiver_fare_json,
                             batch_expiry_kind, batch_expiry_value,
                             input_expiry_floor_kind, input_expiry_floor_value,
@@ -538,7 +536,7 @@ export class ReceiveQuoteRepository {
                         q.id,
                         q.state,
                         q.receiverAddress,
-                        q.makerPublicKey,
+                        q.senderKey,
                         encodeParams(q.params),
                         q.covenantAddress,
                         encodeFare(q.fare),
@@ -566,13 +564,12 @@ export class ReceiveQuoteRepository {
             .immediate();
     }
 
-    bind(request: BindReceiveQuoteRequest): void {
+    bindFill(request: BindFillRequest): void {
         assertNativeAccess(this.db);
         if (!Number.isSafeInteger(request.now) || request.now < 0) fail("binding clock");
         this.db
             .transaction(() => {
                 expireReceiveQuotes(this.db, request.now);
-                expireUnboundSwapFills(this.db, request.now);
                 const quote = this.get(request.quoteId);
                 if (!quote || quote.state !== "quoted" || quote.boundFillId !== undefined)
                     throw new Error("receive quote: state is not bindable");
@@ -602,17 +599,18 @@ export class ReceiveQuoteRepository {
                     (first === undefined ||
                         (first.currency === second!.currency && first.units === second!.units));
                 if (
-                    fill.receiveQuoteId !== quote.id ||
+                    fill.quoteId !== quote.id ||
                     advance.id !== quote.id ||
                     advance.state !== "locking" ||
-                    fill.state !== "quoted" ||
+                    fill.state !== "submitting" ||
                     fill.contributionSats !== quote.loanSats ||
-                    fill.fare.currency !== "sats" ||
+                    fill.fare.currency !== quote.fare.currency ||
                     fill.fare.units !== quote.fare.units ||
+                    fill.assetUnits <= 0n ||
+                    fill.covenantOutputIndex < 0 ||
                     advance.topup !== quote.loanSats ||
                     advance.dust !== quote.params.dust ||
-                    advance.assetUnits === undefined ||
-                    advance.assetUnits <= 0n ||
+                    advance.assetUnits !== fill.assetUnits ||
                     !advance.assetId ||
                     !sameBytes(advance.receiverKey, quote.params.receiverKey) ||
                     !sameBytes(advance.senderKey, quote.params.senderKey) ||
@@ -624,13 +622,11 @@ export class ReceiveQuoteRepository {
                     advance.assetId.groupIndex !== quote.params.assetId.groupIndex ||
                     advance.locktime !== quote.params.locktime ||
                     !sameReceiverFare(advance.receiverFare, quote.params.receiverFare) ||
-                    advance.covenantAddress !== quote.covenantAddress ||
-                    advance.fare.currency !== "sats" ||
+                    advance.fare.currency !== quote.fare.currency ||
                     advance.fare.units !== quote.fare.units ||
+                    advance.covenantAddress !== quote.covenantAddress ||
                     advance.recoveryLocktime?.kind !== quote.recoveryLocktime.kind ||
                     advance.recoveryLocktime.value !== quote.recoveryLocktime.value ||
-                    // A covenant advance keeps no batch expiry, so there is
-                    // nothing to hold the quote's funding snapshot against.
                     advance.batchExpiry !== undefined ||
                     advance.expiresAt !== fill.expiresAt ||
                     !sameOutpoints(fill.taxiInputs) ||
@@ -640,10 +636,8 @@ export class ReceiveQuoteRepository {
                 this.db
                     .prepare("DELETE FROM receive_quote_reservations WHERE quote_id = ?")
                     .run(quote.id);
-                new SwapFillRepository(this.db).insert(fill);
-                this.db
-                    .prepare("DELETE FROM swap_fill_reservations WHERE fill_id = ?")
-                    .run(fill.id);
+                new FillRepository(this.db).insert(fill);
+                this.db.prepare("DELETE FROM fill_reservations WHERE fill_id = ?").run(fill.id);
                 new AdvanceRepository(this.db).insert(advance);
                 const reserve = this.db.prepare(
                     "INSERT INTO operator_input_reservations (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",

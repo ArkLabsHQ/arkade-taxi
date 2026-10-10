@@ -86,7 +86,7 @@ export function listReceiverClaims(
                 try {
                     const source = readFundingSource(advance.unsignedLockupTx);
                     const covenantOutputIndex =
-                        source.kind === "joint-fill"
+                        source.kind === "fill"
                             ? source.covenantOutpoint.vout
                             : validatePersistedLockupGraph(advance, deps.config)
                                   .covenantOutputIndex;
@@ -110,7 +110,7 @@ export function listReceiverClaims(
                         !recoveryLocktime ||
                         recoveryLocktime.kind !== "time" ||
                         recoveryLocktime.value !== advance.locktime ||
-                        (source.kind === "joint-fill"
+                        (source.kind === "fill"
                             ? source.assetUnits
                             : (() => {
                                   const envelope = validatePersistedLockupGraph(

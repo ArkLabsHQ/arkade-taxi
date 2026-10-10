@@ -7,6 +7,7 @@
 import type {
     AssetIdWire,
     AssetRuleWire,
+    FundingInputValue,
     ClaimsChangedEvent,
     ClaimsSnapshotResponse,
     FareWire,
@@ -23,22 +24,17 @@ import type {
 import {
     assetIdFromWire,
     fareFromWire,
+    fundingInputFromWire,
     hexToBytes,
     quoteParamsFromWire,
     satsFromWire,
     sponsoredParamsFromWire,
-    SWAP_FILL_TEMPLATE,
-    swapFillGraphFromWire,
-    swapFillStatusFromWire,
     type AssetIdValue,
     type CovenantParamsValue,
     type InfoResponse,
     type LockupResponse,
     type QuoteResponse,
     type SponsoredParamsValue,
-    type SwapFillGraph,
-    type SwapFillQuoteResponse,
-    type SwapFillStatusResponse,
     type TransferStatusResponse,
 } from "@arkade-taxi/protocol";
 import { ClientErrorCode, TaxiError } from "./errors.js";
@@ -78,20 +74,11 @@ export interface DecodedSponsoredQuote {
     commitment: SponsoredCommitment;
 }
 
-export interface DecodedSwapFillQuote {
-    fillId: string;
-    operationId: string;
-    expiresAt: number;
-    contributionSats: bigint;
-    fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
-    graph: SwapFillGraph;
-}
-
 export interface DecodedReceiveQuote {
     quoteId: string;
     state: "quoted" | "bound" | "expired";
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: CovenantParamsValue;
     covenantAddress: string;
     fare: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
@@ -100,6 +87,8 @@ export interface DecodedReceiveQuote {
     recoveryLocktime: { kind: "height" | "time"; value: bigint };
     createdAt: number;
     expiresAt: number;
+    operatorInputs: FundingInputValue[];
+    operatorScript: Uint8Array;
     boundFillId?: string;
     payer?: "receiver";
     receiverFare?: { currency: "sats" | "asset"; units: bigint; assetId?: AssetIdValue };
@@ -485,7 +474,7 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "quoteId",
                 "state",
                 "receiverAddress",
-                "makerPublicKey",
+                "senderKey",
                 "params",
                 "covenantAddress",
                 "fare",
@@ -494,6 +483,8 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
                 "recoveryLocktime",
                 "createdAt",
                 "expiresAt",
+                "operatorInputs",
+                "operatorScript",
             ],
             ["boundFillId", "payer", "receiverFare", "unclaimedMode"],
             "receive quote",
@@ -513,9 +504,9 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             if (!boundFillId.length || boundFillId.length > 128)
                 invalid("receive quote.boundFillId is not a bounded identifier");
         }
-        const makerPublicKey = str(quote.makerPublicKey, "receive quote.makerPublicKey");
-        if (!/^[0-9a-f]{64}$/.test(makerPublicKey))
-            invalid("receive quote.makerPublicKey must be lowercase x-only hex");
+        const senderKey = str(quote.senderKey, "receive quote.senderKey");
+        if (!/^[0-9a-f]{64}$/.test(senderKey))
+            invalid("receive quote.senderKey must be lowercase x-only hex");
         const deadline = (field: "batchExpiry" | "inputExpiryFloor" | "recoveryLocktime") => {
             const wire = taggedLocktime(quote[field], `receive quote.${field}`);
             const parsed = satsFromWire(wire.value, `receive quote.${field}.value`);
@@ -524,11 +515,16 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
         };
         const quoteId = str(quote.quoteId, "receive quote.quoteId");
         if (quoteId.length > 128) invalid("receive quote.quoteId is too long");
+        if (!Array.isArray(quote.operatorInputs))
+            invalid("receive quote.operatorInputs must be an array");
+        const operatorInputs = (quote.operatorInputs as unknown[]).map((input, i) =>
+            fundingInputFromWire(input, `receive quote.operatorInputs[${i}]`),
+        );
         return {
             quoteId,
             state,
             receiverAddress: str(quote.receiverAddress, "receive quote.receiverAddress"),
-            makerPublicKey,
+            senderKey,
             params: quoteParamsFromWire(
                 quoteParams(quote.params, "receive quote.params"),
                 "receive quote.params",
@@ -540,6 +536,11 @@ export function decodeReceiveQuote(value: unknown): DecodedReceiveQuote {
             recoveryLocktime: deadline("recoveryLocktime"),
             createdAt: uint(quote.createdAt, "receive quote.createdAt"),
             expiresAt: uint(quote.expiresAt, "receive quote.expiresAt"),
+            operatorInputs,
+            operatorScript: hexToBytes(
+                quote.operatorScript as string,
+                "receive quote.operatorScript",
+            ),
             ...(boundFillId === undefined ? {} : { boundFillId }),
             ...(quote.payer === undefined
                 ? {}
@@ -592,33 +593,4 @@ export function decodeClaimsSnapshot(value: unknown): ClaimsSnapshotResponse {
 
 export function decodeClaimsChanged(value: unknown): ClaimsChangedEvent {
     return decodeClaimsSnapshot(value);
-}
-
-export function decodeSwapFillQuote(quote: SwapFillQuoteResponse): DecodedSwapFillQuote {
-    return wrap("swap-fill quote", () => {
-        if (quote === null || typeof quote !== "object")
-            invalid("swap-fill quote must be an object");
-        if (quote.template !== SWAP_FILL_TEMPLATE)
-            invalid("swap-fill quote.template must be taxi-fill/1");
-        return {
-            fillId: str(quote.fillId, "swap-fill quote.fillId"),
-            operationId: str(quote.operationId, "swap-fill quote.operationId"),
-            expiresAt: uint(quote.expiresAt, "swap-fill quote.expiresAt"),
-            contributionSats: satsFromWire(
-                quote.contributionSats,
-                "swap-fill quote.contributionSats",
-            ),
-            fare: fareFromWire(quote.fare, "swap-fill quote.fare"),
-            graph: swapFillGraphFromWire(quote.graph),
-        };
-    });
-}
-
-export function decodeSwapFillStatus(value: unknown): SwapFillStatusResponse {
-    return wrap("swap-fill status", () => {
-        const decoded = swapFillStatusFromWire(value);
-        if (decoded.fillId === "" || decoded.operationId === "")
-            invalid("swap-fill status ids must be non-empty");
-        return decoded;
-    });
 }

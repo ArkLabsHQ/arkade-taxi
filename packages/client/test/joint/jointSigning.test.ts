@@ -23,6 +23,12 @@ import {
     type IWallet,
 } from "@arkade-os/sdk";
 import { tapLeavesOfInput } from "../../src/joint/arkTransaction.js";
+import {
+    JointSigningError,
+    JointSubmissionAmbiguousError,
+    type JointSignerBinding,
+    providerCosignerKeys,
+} from "../../src/joint/jointSigning.js";
 import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
 import {
@@ -30,16 +36,13 @@ import {
     buildOfferFillPlan,
     verifyOfferFillPlan,
     type JointGraph,
-} from "../../src/joint/offerFillPlan.js";
+} from "@arkade-os/swap";
 import {
-    JointSigningError,
-    JointSubmissionAmbiguousError,
     providerCosignerKey,
     prepareJointSubmission,
     signJointGraphForOwner,
     submitJointFill,
-    type JointSignerBinding,
-} from "../../src/joint/offerFillSigning.js";
+} from "./offerSigning.js";
 
 const state = vi.hoisted(() => ({
     vtxos: [] as unknown[],
@@ -1389,5 +1392,77 @@ describe("providerCosignerKey", () => {
         expect(() =>
             providerCosignerKey({ expected: tampered, emulatorXOnly: pins.emulatorXOnly }),
         ).toThrow(/fails integrity/);
+    });
+});
+
+const withoutEmulatorPacket = (graph: JointGraph): JointGraph => {
+    const tx = arkOf(graph);
+    const out = new Transaction({ version: 3, lockTime: 0 });
+    for (let i = 0; i < tx.inputsLength; i++) out.addInput(tx.getInput(i));
+    const kept = Extension.fromTx(tx)
+        .getPackets()
+        .filter((packet) => packet.type() === asset.Packet.PACKET_TYPE);
+    const replacement = kept.length ? Extension.create([...kept]).txOut() : undefined;
+    for (let i = 0; i < tx.outputsLength; i++) {
+        const output = tx.getOutput(i);
+        const isExtension = output.script && Extension.isExtension(output.script);
+        if (!isExtension) out.addOutput(output);
+        else if (replacement) out.addOutput(replacement);
+    }
+    const next = {
+        arkTx: base64.encode(out.toPSBT()),
+        checkpoints: [...graph.checkpoints],
+        inputOwners: [...graph.inputOwners],
+    };
+    return { ...next, graphId: recomputeId({ ...next, graphId: "" }) };
+};
+
+describe("providerCosignerKeys", () => {
+    const resealed = (graph: JointGraph, owners: (string | null)[]): JointGraph => {
+        const next = { ...structuredClone(graph), inputOwners: owners };
+        return { ...next, graphId: recomputeId(next) };
+    };
+
+    it("keys the cosigner by vin for the graph's one provider input", async () => {
+        const expected = await trustedGraph();
+        const keys = providerCosignerKeys({
+            expected,
+            emulatorXOnly: pins.emulatorXOnly,
+            template: OFFER_FILL_TEMPLATE,
+        });
+        expect([...keys.keys()]).toEqual([0]);
+        expect(keys.get(0)).toBe(
+            providerCosignerKey({ expected, emulatorXOnly: pins.emulatorXOnly }),
+        );
+    });
+
+    // The arkd route's case, and the reason the generic rail asks for the map:
+    // the gate is the emulator packet, so an unowned input with no entry of its
+    // own is an ordinary VTXO its holder signed, not something to pin.
+    it("returns an empty map when the graph carries no emulator packet", async () => {
+        const expected = await trustedGraph();
+        const ungated = withoutEmulatorPacket(expected);
+        expect(
+            providerCosignerKeys({
+                expected: ungated,
+                emulatorXOnly: pins.emulatorXOnly,
+                template: OFFER_FILL_TEMPLATE,
+            }).size,
+        ).toBe(0);
+        expect(() =>
+            providerCosignerKey({ expected: ungated, emulatorXOnly: pins.emulatorXOnly }),
+        ).toThrow(/names no provider-signed input/);
+    });
+
+    it("refuses a packet that gates an input the graph says we own", async () => {
+        const expected = await trustedGraph();
+        const owned = resealed(expected, ["taxi", "solver", "sponsor"]);
+        expect(() =>
+            providerCosignerKeys({
+                expected: owned,
+                emulatorXOnly: pins.emulatorXOnly,
+                template: OFFER_FILL_TEMPLATE,
+            }),
+        ).toThrow(/gates input 0, which it owns/);
     });
 });

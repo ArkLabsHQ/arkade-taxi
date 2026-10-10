@@ -43,7 +43,6 @@ import {
     LockupClaimError,
     type ReservationRepository,
     type ReceiveQuoteRepository,
-    type SwapFillRepository,
     type PolicySnapshot,
 } from "@arkade-taxi/db";
 import {
@@ -182,12 +181,6 @@ export interface QuoteDeps {
     reservations: Pick<
         ReservationRepository,
         "reserveQuote" | "listReservedOutpoints" | "expireQuotes" | "claimLockup"
-    >;
-    /** Swap-fill reservations also tie up Taxi coins; unioned into funding
-     * selection so an advance never double-spends a fill's coin. */
-    swapFills?: Pick<
-        SwapFillRepository,
-        "listReservedOutpoints" | "exposureTotals" | "expireQuotes"
     >;
     receiveQuotes?: Pick<
         ReceiveQuoteRepository,
@@ -534,7 +527,6 @@ export async function createAdmittedQuote<T>(
     assertFreshSafety(initialSafety, initialNowMs, deps.config.reconcileIntervalMs);
     trace?.observe("quote.initial-guard", "ok");
     deps.reservations.expireQuotes(deps.now());
-    deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes?.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -580,7 +572,7 @@ async function createReservedQuote(
     );
     trace?.observe("quote.sender.first", "ok");
 
-    const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
+    const exposure = totalExposure(deps.advances, deps.receiveQuotes);
     const decision = admit(
         req,
         policy,
@@ -625,7 +617,7 @@ async function createReservedQuote(
         );
     }
     trace?.observe("quote.selection.first", "start");
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.receiveQuotes);
     const selectionOptions = {
         spendable,
         reserved: [...reserved, ...intentLocks],
@@ -780,7 +772,7 @@ async function createReservedQuote(
         ...selectionOptions,
         spendable: currentSpendable,
         reserved: [
-            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...unionReservedOutpoints(deps.reservations, deps.receiveQuotes),
             ...currentLocks,
         ],
         safety: latestSafety,

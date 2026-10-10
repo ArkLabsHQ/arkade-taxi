@@ -105,8 +105,8 @@ const BLOCKER_GROUPS = [
         "reconciler_not_started",
     ],
     [
-        "The Taxi has not finished its first check of swap fills in progress.",
-        "swap_fill_reconciler_not_started",
+        "The Taxi has not finished its first check of fills in progress.",
+        "fill_reconciler_not_started",
     ],
     ["The recovery sweeper has not run yet.", "sweeper_not_started"],
     [
@@ -186,8 +186,18 @@ const BLOCKER_GROUPS = [
         "The Taxi could not re-read the coin of a payment it already settled, so it will try again. Nothing is paused.",
         "covenant_terminal_evidence_unavailable",
     ],
-    ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
-    ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
+    [
+        "A fill has an unresolved submission. Its coins stay reserved until reconciled.",
+        "fill_liability_unresolved",
+    ],
+    [
+        "The request exceeds the 4 MiB body limit. Reduce its transaction graph before retrying.",
+        "request_body_too_large",
+    ],
+    [
+        "A fill's inputs have contradictory spend evidence. Keep its coins reserved and investigate.",
+        "fill_unexpected_spend",
+    ],
     [
         "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",
         "covenant_unspent_at_expiry",

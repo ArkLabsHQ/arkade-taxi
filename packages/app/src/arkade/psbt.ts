@@ -190,6 +190,48 @@ export function parseLockupEnvelope(
     );
 }
 
+export type CheckpointInput = ArkTxInput & { spendLeaf: Uint8Array };
+
+/**
+ * The only checkpoint the Taxi accepts for one of its own inputs: one input
+ * spending the reserved outpoint under its own tap tree, the `VtxoTaprootTree`
+ * field, then the coin's full value to `[serverUnroll, spendLeaf]` and P2A.
+ *
+ * Returns that tree and the arkTx edge spending its output 0, so a byte-exact
+ * envelope rebuild and a constraint check on a caller-built graph share one
+ * reconstruction instead of two that can drift.
+ */
+export function assertCheckpointForInput(
+    checkpoint: Transaction,
+    input: CheckpointInput,
+    serverUnroll: CSVMultisigTapscript.Type,
+    fail: () => never,
+): { tree: VtxoScript; arkInput: Parameters<Transaction["addInput"]>[0] } {
+    const source = VtxoScript.decode(input.tapTree);
+    const tree = new VtxoScript([serverUnroll.script, input.spendLeaf]);
+    const value = BigInt(input.value);
+    const expected = new Transaction({ version: 3, lockTime: 0 });
+    expected.addInput({
+        txid: input.txid,
+        index: input.vout,
+        witnessUtxo: { script: source.pkScript, amount: value },
+        tapLeafScript: [input.tapLeafScript],
+    });
+    setArkPsbtField(expected, 0, VtxoTaprootTree, input.tapTree);
+    expected.addOutput({ amount: value, script: tree.pkScript });
+    expected.addOutput(P2A);
+    if (hex.encode(checkpoint.toPSBT()) !== hex.encode(expected.toPSBT())) fail();
+    return {
+        tree,
+        arkInput: {
+            txid: checkpoint.id,
+            index: 0,
+            witnessUtxo: { script: tree.pkScript, amount: value },
+            tapLeafScript: [tree.findLeaf(hex.encode(input.spendLeaf))],
+        },
+    };
+}
+
 /** The joint-graph facts both the covenant and the sponsored direct-send
  * builders produce. One parser verifies both envelopes; only the plan that
  * built the expected graph differs. */
@@ -293,33 +335,18 @@ export function parseJointEnvelope(
     const checkpoints = wire.checkpoints.map((s) => Transaction.fromPSBT(decodeBase64(s)));
     const expectedArk = new Transaction({ version: 3, lockTime: 0 });
     for (const [i, input] of plan.arkInputs.entries()) {
-        const source = VtxoScript.decode(input.tapTree);
-        const checkpointTree = new VtxoScript([unroll.script, plan.inputs[i].spendLeaf]);
-        const expectedCheckpoint = new Transaction({ version: 3, lockTime: 0 });
-        expectedCheckpoint.addInput({
-            txid: input.txid,
-            index: input.vout,
-            witnessUtxo: { script: source.pkScript, amount: BigInt(input.value) },
-            tapLeafScript: [input.tapLeafScript],
-        });
-        setArkPsbtField(expectedCheckpoint, 0, VtxoTaprootTree, input.tapTree);
-        expectedCheckpoint.addOutput({
-            amount: BigInt(input.value),
-            script: checkpointTree.pkScript,
-        });
-        expectedCheckpoint.addOutput(P2A);
-        same(
-            hex.encode(checkpoints[i].toPSBT()),
-            hex.encode(expectedCheckpoint.toPSBT()),
-            `checkpoint ${i} transaction and metadata`,
+        const { tree, arkInput } = assertCheckpointForInput(
+            checkpoints[i],
+            { ...input, spendLeaf: plan.inputs[i].spendLeaf },
+            unroll,
+            () => {
+                throw new LockupShapeError(
+                    `lockup checkpoint ${i} transaction and metadata mismatch`,
+                );
+            },
         );
-        expectedArk.addInput({
-            txid: checkpoints[i].id,
-            index: 0,
-            witnessUtxo: { script: checkpointTree.pkScript, amount: BigInt(input.value) },
-            tapLeafScript: [checkpointTree.findLeaf(hex.encode(plan.inputs[i].spendLeaf))],
-        });
-        setArkPsbtField(expectedArk, i, VtxoTaprootTree, checkpointTree.encode());
+        expectedArk.addInput(arkInput);
+        setArkPsbtField(expectedArk, i, VtxoTaprootTree, tree.encode());
     }
     for (const output of plan.outputs) expectedArk.addOutput(output);
     expectedArk.addOutput(P2A);

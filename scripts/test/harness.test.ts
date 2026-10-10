@@ -412,6 +412,7 @@ describe("package manager process boundary", () => {
         "e2e/sponsored.e2e.test.ts",
         "e2e/joint-fill.e2e.test.ts",
         "e2e/receiver-paid.e2e.test.ts",
+        "e2e/receiver-paid-fill.e2e.test.ts",
         "e2e/exposure.e2e.test.ts",
         "e2e/verify-quote.e2e.test.ts",
         "e2e/renewal.e2e.test.ts",
@@ -434,10 +435,15 @@ describe("package manager process boundary", () => {
         expect(direct.mode).toBe("direct");
         expect(direct.emulatorImage).toBe("emulator:local");
         expect(direct.tests).toEqual(
-            task12Tests.filter((path) => !/\/(joint-fill|receiver-paid)\./.test(path)),
+            task12Tests.filter(
+                (path) => !/\/(joint-fill|receiver-paid|receiver-paid-fill)\.e2e\./.test(path),
+            ),
         );
         for (const options of [resolveE2eOptions([], { ci: "true" }), direct])
-            expect(options.isolatedTests).toEqual(["e2e/unilateral-exit.e2e.test.ts"]);
+            expect(options.isolatedTests).toEqual([
+                "e2e/unilateral-exit.e2e.test.ts",
+                "e2e/fill-undersigned.e2e.test.ts",
+            ]);
         for (const args of [
             ["--direct", task12Tests[0]],
             ["--direct", "--direct"],
@@ -629,9 +635,14 @@ describe("package manager process boundary", () => {
     it("isolates package manager config for builds and live test processes", () => {
         const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
         expect(stack).toMatch(
-            /async function main\(isolated = false\) \{\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
+            /async function main\(isolatedFile = undefined\) \{\s*const isolated = isolatedFile !== undefined;\s*const options = resolveE2eOptions\(process\.argv\.slice\(2\)\);/,
         );
-        expect(stack).toMatch(/main\(true\)\s*\.then\(\(\) => main\(\)\)/);
+        // One stack per isolated test, then the shared suite: a single shared
+        // isolated stack cannot host two scenarios that each end it.
+        expect(stack).toMatch(
+            /\.isolatedTests\.reduce\(\(chain, file\) => chain\.then\(\(\) => main\(file\)\), Promise\.resolve\(\)\)\s*\.then\(\(\) => main\(\)\)/,
+        );
+        expect(stack).toMatch(/\["isolated", isolatedLabel\(isolatedFile\)\]/);
         expect(stack).not.toContain('run("pnpm"');
         expect(stack.match(/await runPnpm\(/g)).toHaveLength(4);
         expect(stack).toContain("NPM_CONFIG_USERCONFIG: packs.npmUserConfig");

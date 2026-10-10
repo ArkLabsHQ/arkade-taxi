@@ -29,7 +29,7 @@ import {
 import { assetRuleToWire } from "../rulesWire.js";
 import type { BoardingDeposits } from "../boarding.js";
 import { sanitizeOperationalError } from "../errors.js";
-import { swapIdToTaxiAssetId } from "../arkade/swapFillBuilder.js";
+import { taxiAssetId } from "@arkade-taxi/client";
 import type { RuntimeSafety } from "../arkade/types.js";
 import {
     ACTOR_CONTROL_CHARS,
@@ -60,9 +60,6 @@ export interface SweeperStatus {
 export interface AdminDeps {
     advances: AdvanceRepository;
     policy: PolicyRepository;
-    /** Swap fills and open receive quotes tie up capital too, so the status
-     * under-reports what the operator has lent without them. */
-    swapFills?: ExposureSource;
     receiveQuotes?: ExposureSource;
     recoveryExecutionBudget: { height: bigint; time: bigint };
     dust: bigint;
@@ -520,7 +517,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
         const active = byState.flatMap(([, rows]) =>
             rows.filter((row) => ACTIVE_EXPOSURE_STATES.has(row.state) && isExposed(row)),
         );
-        const exposure = totalExposure(deps.advances, deps.swapFills, deps.receiveQuotes);
+        const exposure = totalExposure(deps.advances, deps.receiveQuotes);
         const oldest = { height: null as bigint | null, time: null as bigint | null };
         for (const row of active) {
             // Sponsored advances have no recovery deadline; their locktime is
@@ -571,7 +568,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                 usableSats: inventory ? satsToWire(inventory.usableSats) : null,
                 reservedSats: inventory ? satsToWire(inventory.reservedSats) : null,
                 assets: holdings(coins).map(({ assetId, amount }) => ({
-                    assetId: assetIdToWire(swapIdToTaxiAssetId(assetId)),
+                    assetId: assetIdToWire(taxiAssetId(assetId)),
                     amount,
                 })),
                 boarding: {

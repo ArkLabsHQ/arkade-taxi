@@ -6,16 +6,14 @@ import {
     ArkAddress,
     Extension,
     asset,
-    scriptFromTapLeafScript,
+    VtxoScript,
     type ExtendedVirtualCoin,
     type Transaction,
 } from "@arkade-os/sdk";
-import { createOffer, decodeOffer } from "@arkade-os/swap";
-import {
-    signJointGraphForOwner,
-    type CovenantTransfer,
-    type JointGraph,
-} from "@arkade-taxi/client";
+import { buildOfferFillPlan, createOffer, decodeOffer } from "@arkade-os/swap";
+import { type CovenantTransfer, type JointGraph } from "@arkade-taxi/client";
+import { signJointGraphForOwner } from "./offerSigning.js";
+import { deriveJointOutputs } from "../packages/app/src/arkade/jointGraphDerivation.js";
 import { hex } from "@scure/base";
 import { loadConfig } from "../packages/app/src/config.js";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
@@ -26,12 +24,17 @@ import { liveScenario } from "./scenarios.js";
 import {
     admin,
     artifactPath,
+    claimFromFeed as claimFromFeedAt,
     expectReceipt,
+    freshCoin,
     fundingOf,
     health,
+    jumpPast,
     openLive,
     poll,
     ready,
+    recycleWith,
+    releaseBound,
     required,
     terminal,
     walletBalance,
@@ -40,6 +43,13 @@ import {
 } from "./fixtures.js";
 
 type Fare = { id: string; currency: "sats" | "asset"; units: bigint };
+
+const claimFromFeed = (
+    live: Live,
+    transferId: string,
+    receiverAddress: string,
+    assetId: { txid: Uint8Array; groupIndex: number },
+) => claimFromFeedAt(live, transferId, receiverAddress, assetId, DELIVERED);
 
 const SATS_FARE: Fare = { id: "receiver-sats", currency: "sats", units: 7n };
 const ASSET_FARE: Fare = { id: "receiver-asset", currency: "asset", units: 9n };
@@ -65,118 +75,6 @@ const assetOutputs = (tx: Transaction, assetId: string) =>
         .getAssetPacket()!
         .groups.filter((group) => group.assetId?.toString() === assetId)
         .flatMap((group) => group.outputs.map((output) => [output.vout, output.amount]));
-
-async function freshCoin(live: Live, name: string, amount: number) {
-    const actor = live.actors[name];
-    const txid = await live.actors.receiverWithAsset.wallet.send({
-        address: await actor.wallet.getAddress(),
-        amount,
-    });
-    return poll(
-        `fresh ${amount}-sat coin for ${name}`,
-        async () =>
-            (await actor.wallet.getSpendableVtxos({ withRecoverable: false })).find(
-                (coin) => coin.txid === txid && coin.value === amount && !coin.assets?.length,
-            ),
-        (coin) => coin !== undefined,
-        120_000,
-    ).then((coin) => coin!);
-}
-
-async function claimFromFeed(
-    live: Live,
-    transferId: string,
-    receiverAddress: string,
-    assetId: { txid: Uint8Array; groupIndex: number },
-) {
-    const claim = await poll(
-        "claim feed serves the locked covenant",
-        async () =>
-            (await live.client.listClaims({ receiverAddresses: [receiverAddress] })).claims.find(
-                (item) => item.transferId === transferId && item.state === "locked",
-            ),
-        (item) => item !== undefined,
-    ).then((item) => item!);
-    const transfer = await live.client.verifyIncomingClaim(
-        claim,
-        {
-            receiverAddress,
-            assetId,
-            assetUnits: DELIVERED,
-            claimMode: "recycle",
-            recoveryRecipient: "receiver",
-        },
-        {
-            serverKey: hex.decode(live.info.serverKey),
-            emulatorKey: hex.decode(live.info.emulatorKey),
-            operatorKey: hex.decode(live.info.operatorKey),
-            vtxoMinAmount: BigInt(live.info.vtxoMinAmount),
-            hrp: "tark",
-        },
-        live.config,
-    );
-    return { claim, transfer };
-}
-
-async function recycleWith(
-    live: Live,
-    transfer: CovenantTransfer,
-    coin: ExtendedVirtualCoin,
-    destination: Uint8Array,
-) {
-    return live.client.recycle(
-        transfer,
-        {
-            input: {
-                txid: coin.txid,
-                vout: coin.vout,
-                value: BigInt(coin.value),
-                tapTree: coin.tapTree,
-                tapLeafScript: coin.forfeitTapLeafScript,
-            },
-            expiry: fundingOf(coin).expiry,
-            identity: live.actors.receiverSats.identity,
-        },
-        destination,
-    );
-}
-
-async function jumpPast(locktime: bigint) {
-    execFileSync(
-        process.execPath,
-        [required("ARKADE_REGTEST_CLI"), "rpc", "setmocktime", String(locktime + 1n)],
-        { stdio: "pipe", timeout: 30_000 },
-    );
-    await mineBlocks(11);
-}
-
-// A failed scenario must not hand the next one an active advance: a bound fill
-// stays `locking` until it expires, past the fixture's 90s wait.
-async function releaseBound(live: Live, id: string, unlock: () => Promise<unknown>) {
-    let { state } = await live.client.status(id);
-    if (state === "locking") {
-        const row = (await admin("advances")).advances.find((item: any) => item.id === id);
-        if (!row)
-            throw new Error(
-                `bound advance ${id} (receive quote ${id}) reports locking but is missing from /admin/api/advances`,
-            );
-        state = (
-            await poll(
-                `bound fill ${id} settles or expires`,
-                () => live.client.status(id),
-                (value) => value.state !== "locking",
-                Math.max(90_000, row.expiresAt * 1000 - Date.now() + 30_000),
-            )
-        ).state;
-    }
-    if (state === "locked") await unlock();
-    await poll(
-        `bound advance ${id} leaves the active states`,
-        () => live.client.status(id),
-        (value) => !["locking", "locked", "recovering"].includes(value.state),
-        120_000,
-    );
-}
 
 async function receiverPaidCarrier(
     live: Live,
@@ -245,7 +143,7 @@ async function receiverPaidCarrier(
         () =>
             live.client.requestVerifiedReceiveQuote({
                 receiverAddress: bobAddress,
-                makerPublicKey: makerKey,
+                senderKey: makerKey,
                 assetId,
                 fareId: fare.id,
                 fundingExpiry: { kind: "time", value: floor },
@@ -314,32 +212,39 @@ async function receiverPaidCarrier(
     const operatorBefore = await walletBalance(operator, minted.assetId);
     const operationId = randomUUID();
     const solverScript = ArkAddress.decode(await solver.wallet.getAddress()).pkScript;
-    const solverKey = hex.encode(await solver.identity.xOnlyPublicKey());
-    const { verified: fill } = await preEffectRequest(
-        () =>
-            live.client.requestVerifiedSwapFillQuote({
-                operationId,
-                receiveQuoteId: quote.quoteId,
-                offerHex: offer.offerHex,
-                solverInputs: solverFund.map((coin) => ({
-                    txid: coin.txid,
-                    vout: coin.vout,
-                    value: BigInt(coin.value),
-                    tapTree: coin.tapTree,
-                    spendLeaf: scriptFromTapLeafScript(coin.forfeitTapLeafScript),
-                    assets: coin.assets!.map((held) => ({
-                        assetId: taxiAssetId(held.assetId),
-                        amount: held.amount,
-                    })),
+    const graph = await buildOfferFillPlan(
+        solver.wallet,
+        required("TAXI_E2E_ARKD_URL"),
+        offer.offerHex,
+        {
+            fund: solverFund.map((coin) => ({
+                txid: coin.txid,
+                vout: coin.vout,
+                value: coin.value,
+                tapTree: coin.tapTree,
+                tapLeafScript: coin.forfeitTapLeafScript,
+                assets: coin.assets!.map((held) => ({
+                    assetId: held.assetId,
+                    amount: held.amount,
                 })),
-                solverProceedsScript: solverScript,
-                solverKeys: [solverKey],
-                contributionSats: dust,
-                maxFare: { currency: "sats", units: 0n },
-                fundingTxid: deposit.txid,
-                fundingVout: deposit.vout,
-            }),
-        { readyUrl: readyUrl(), expiresAt: quote.expiresAt },
+            })),
+            payoutScript: solverScript,
+            fundingTxid: deposit.txid,
+            fundingOutpoint: { txid: deposit.txid, vout: deposit.vout },
+            sponsor: {
+                fund: quote.operatorInputs.map((input) => ({
+                    txid: input.txid,
+                    vout: input.vout,
+                    value: Number(input.value),
+                    tapTree: hex.decode(input.tapTree),
+                    tapLeafScript: VtxoScript.decode(hex.decode(input.tapTree)).findLeaf(
+                        input.spendLeaf,
+                    ),
+                })),
+                netContributionSats: BigInt(quote.params.topup),
+                changeScript: hex.decode(quote.operatorScript),
+            },
+        },
     );
     live.owned.set(quote.quoteId, {});
     bound.release = ownCleanup(() =>
@@ -350,24 +255,20 @@ async function receiverPaidCarrier(
             await recycleWith(live, transfer, coin, ArkAddress.decode(bobAddress).pkScript);
         }),
     );
-    const graph = fill.quote.graph;
-    expect(graph.outputs.filter((output) => output.role === "sponsor-fare")).toEqual([]);
-    expect(graph.outputs[0]).toEqual({
-        role: "receiver",
+    const outputs = deriveJointOutputs(graph);
+    expect(
+        outputs.filter((output) => hex.encode(output.script) === quote.operatorScript),
+    ).toHaveLength(1);
+    expect(outputs[0]).toEqual({
         vout: 0,
-        script: hex.encode(ArkAddress.decode(quote.covenantAddress).pkScript),
-        sats: dust.toString(),
-        assets: [{ assetId: wireAssetId, units: DELIVERED.toString() }],
+        script: ArkAddress.decode(quote.covenantAddress).pkScript,
+        sats: dust,
+        assets: [{ assetId: minted.assetId, units: DELIVERED }],
     });
-
-    const expected: JointGraph = {
-        arkTx: graph.arkTx,
-        checkpoints: [...graph.checkpoints],
-        graphId: graph.graphId,
-        inputOwners: graph.inputs.map((input) =>
-            input.owner === "offer-covenant" ? null : input.owner,
-        ),
-    };
+    const expected: JointGraph = graph;
+    const taxiInputIndexes = expected.inputOwners.flatMap((owner, index) =>
+        owner === "sponsor" ? [index] : [],
+    );
     const signed = await signJointGraphForOwner({
         expected,
         owner: "solver",
@@ -380,25 +281,29 @@ async function receiverPaidCarrier(
         async () => {
             const startedAt = Date.now();
             try {
-                return await live.client.submitSwapFill(fill, {
-                    ...graph,
+                return await live.client.submitFill({
+                    operationId,
+                    quoteId: quote.quoteId,
                     arkTx: signed.arkTx,
                     checkpoints: [...signed.checkpoints],
+                    taxiInputIndexes,
+                    covenantOutputIndex: 0,
+                    assetUnits: DELIVERED,
                 });
             } finally {
                 submitAttempts.push({ startedAt, ms: Date.now() - startedAt });
             }
         },
-        { readyUrl: readyUrl(), expiresAt: fill.expiresAt },
+        { readyUrl: readyUrl(), expiresAt: quote.expiresAt },
         async () => {
-            const status = await live.client.swapFillStatus(fill.fillId);
-            if (status.state !== "quoted" || status.txid !== undefined)
-                throw new Error("swap fill is not an unchanged quote");
+            const status = await live.client.getReceiveQuote(quote.quoteId);
+            if (status.state !== "quoted")
+                throw new Error("receive quote is not an unchanged quote");
         },
     );
     await poll(
-        "swap fill settles",
-        () => live.client.swapFillStatus(fill.fillId),
+        "generic fill settles",
+        () => live.client.fillStatus(submitted.fillId),
         (status) => status.state === "settled" && status.txid === submitted.txid,
         120_000,
     );

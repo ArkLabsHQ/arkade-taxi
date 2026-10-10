@@ -49,6 +49,8 @@ export const VerificationErrorCode = {
     InvalidParams: "INVALID_COVENANT_PARAMS",
     Address: "COVENANT_ADDRESS_MISMATCH",
     PaymentOutput: "PAYMENT_OUTPUT_MISMATCH",
+    /** The funding a receive quote publishes does not hold up on its own terms. */
+    OperatorFunding: "OPERATOR_FUNDING_INVALID",
     Expired: "QUOTE_EXPIRED",
     Malformed: "MALFORMED_QUOTE",
     MalformedInfo: "MALFORMED_INFO",

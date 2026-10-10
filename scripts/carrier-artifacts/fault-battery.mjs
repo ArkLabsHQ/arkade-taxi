@@ -60,7 +60,11 @@ const faults = [
         "root override of swap back to a registry coordinate",
         [ROOT],
         () =>
-            sub(ROOT, `"@arkade-os/swap": "${SWAP_SPEC}"`, `"@arkade-os/swap": "${swap.version}"`),
+            sub(
+                ROOT,
+                `"overrides": {\n            "@arkade-os/sdk": "${SDK_SPEC}",\n            "@arkade-os/swap": "${SWAP_SPEC}"`,
+                `"overrides": {\n            "@arkade-os/sdk": "${SDK_SPEC}",\n            "@arkade-os/swap": "${swap.version}"`,
+            ),
     ],
     [
         "C",
@@ -80,8 +84,8 @@ const faults = [
         () =>
             sub(
                 ROOT,
-                `"@arkade-os/sdk": "${SDK_SPEC}",\n        "@noble/curves"`,
-                `"@arkade-os/sdk": "${sdk.version}",\n        "@noble/curves"`,
+                `"devDependencies": {\n        "@arkade-os/sdk": "${SDK_SPEC}"`,
+                `"devDependencies": {\n        "@arkade-os/sdk": "${sdk.version}"`,
             ),
     ],
     [
@@ -91,8 +95,8 @@ const faults = [
         () =>
             sub(
                 CLIENT,
-                `"@arkade-os/swap": "${swap.version}"`,
-                `"@arkade-os/swap": "file:../../.reference/vendor/arkade-os-swap-${swap.version}.tgz"`,
+                `"@arkade-os/sdk": "${sdk.version}"`,
+                `"@arkade-os/sdk": "file:../../.reference/vendor/arkade-os-sdk-${sdk.version}.tgz"`,
             ),
     ],
     ["F", "ci.yml gates verify step deleted", [CI], () => sub(CI, `${VERIFY_CI}\n`, "")],
@@ -233,14 +237,17 @@ const faults = [
     ],
     [
         "V",
-        "a declared candidate that does not resolve",
+        "a declared candidate whose importer-local export does not resolve",
         [CORE],
-        () =>
+        () => {
+            sub(CORE, '"name": "@arkade-taxi/core"', '"name": "@arkade-os/swap"');
+            sub(CORE, '"default": "./dist/index.js"', '"default": "./missing-candidate.js"');
             sub(
                 CORE,
                 '"@arkade-taxi/covenant": "workspace:*"',
                 `"@arkade-taxi/covenant": "workspace:*",\n        "@arkade-os/swap": "${swap.version}"`,
-            ),
+            );
+        },
     ],
 
     // --- consequence: the verify runs and its failure stops nothing ---
@@ -335,8 +342,8 @@ const faults = [
         () =>
             sub(
                 CLIENT,
-                `"@arkade-os/swap": "${swap.version}"`,
-                `"@arkade-os/swap": "^${swap.version}"`,
+                `"@arkade-os/sdk": "${sdk.version}"`,
+                `"@arkade-os/sdk": "^${sdk.version}"`,
             ),
     ],
     [
@@ -346,8 +353,8 @@ const faults = [
         () =>
             sub(
                 CLIENT,
-                `"@arkade-os/swap": "${swap.version}",`,
-                `"@noble/hashes": "^2.0.1"\n    },\n    "peerDependencies": {\n        "@arkade-os/swap": "file:../../${VENDOR_DIR}/${swap.file}",`,
+                `"@arkade-os/sdk": "${sdk.version}",`,
+                `"@noble/hashes": "^2.0.1"\n    },\n    "peerDependencies": {\n        "@arkade-os/sdk": "file:../../${VENDOR_DIR}/${sdk.file}",`,
             ),
     ],
     // --- the scan unit: a `- ` line is not always a step ---

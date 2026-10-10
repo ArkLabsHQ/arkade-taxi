@@ -7,9 +7,16 @@ const SWAP_SCENARIOS = [
     "receiver-paid-sats-fare-claim",
     "receiver-paid-asset-fare-claim",
     "receiver-paid-mode1-reclaim",
+    "receiver-paid-fill-claim",
+    "fill-undersigned-foreign-input",
 ];
-// Each leaves its stack unusable for later scenarios, so it runs on a stack of its own.
-const ISOLATED_SCENARIOS = ["covenant-unilateral-exit-with-arkd-down"];
+// Each leaves its stack unusable for later scenarios, so each runs on a stack
+// of its own: they are mutually exclusive as well as terminal, so one shared
+// isolated stack is not enough.
+const ISOLATED_SCENARIOS = [
+    "covenant-unilateral-exit-with-arkd-down",
+    "fill-undersigned-foreign-input",
+];
 
 export function readScenarioIds(mode = "full") {
     if (!["full", "direct", "isolated"].includes(mode))
@@ -33,6 +40,27 @@ export function readScenarioIds(mode = "full") {
     if (mode === "isolated") return [...ISOLATED_SCENARIOS];
     const shared = ids.filter((id) => !ISOLATED_SCENARIOS.includes(id));
     return mode === "direct" ? shared.filter((id) => !SWAP_SCENARIOS.includes(id)) : shared;
+}
+
+/**
+ * The scenarios one isolated test file registers, read from the file rather than
+ * a second list that could drift from it. Each isolated stack is validated
+ * against exactly these, so a file that silently stops registering one fails.
+ */
+export function isolatedScenarioIds(file) {
+    const source = readFileSync(
+        resolve(dirname(fileURLToPath(import.meta.url)), "..", file),
+        "utf8",
+    );
+    const ids = [...source.matchAll(/\bliveScenario\(\s*"([^"]+)"/g)].map((match) => match[1]);
+    const known = readScenarioIds("isolated");
+    if (
+        ids.length === 0 ||
+        new Set(ids).size !== ids.length ||
+        ids.some((id) => !known.includes(id))
+    )
+        throw new Error(`isolated test ${file} registers no classified isolated scenario`);
+    return ids;
 }
 
 export function validateResults(result, ids, integrityCount = 0) {
@@ -68,9 +96,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         const mode =
             args[0] === "--direct" ? "direct" : args[0] === "--isolated" ? "isolated" : "full";
         if (mode !== "full") args.shift();
+        // One stack per isolated file: the whole isolated class would demand
+        // scenarios this stack never ran.
+        const isolatedFile = mode === "isolated" ? args.shift() : undefined;
+        if (mode === "isolated" && !isolatedFile?.endsWith(".e2e.test.ts"))
+            throw new Error("usage: assert-ran.mjs --isolated <test> [results.json]");
         if (args.length > 1 || args[0]?.startsWith("--"))
-            throw new Error("usage: assert-ran.mjs [--direct|--isolated] [results.json]");
-        const ids = readScenarioIds(mode);
+            throw new Error("usage: assert-ran.mjs [--direct|--isolated <test>] [results.json]");
+        const ids = isolatedFile ? isolatedScenarioIds(isolatedFile) : readScenarioIds(mode);
         const results = JSON.parse(readFileSync(args[0] ?? "e2e-results.json", "utf8"));
         // The integrity file runs with the shared suite only.
         const problems = validateResults(results, ids, mode === "isolated" ? 0 : 2);

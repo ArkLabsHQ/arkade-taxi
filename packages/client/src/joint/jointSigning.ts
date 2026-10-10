@@ -3,6 +3,7 @@ import { SigHash } from "@scure/btc-signer";
 import { tapLeafHash } from "@scure/btc-signer/payment.js";
 import {
     Extension,
+    ExtensionNotFoundError,
     Transaction,
     arkade,
     assertAllowedSighashTypes,
@@ -15,6 +16,7 @@ import {
 } from "@arkade-os/sdk";
 import {
     assertSameUnsignedTx,
+    assertUnsignedInput,
     assertUnsignedPsbt,
     setTapScriptSigEntries,
     tapLeavesOfInput,
@@ -144,7 +146,21 @@ interface TrustedGraphs {
     ark: Transaction;
     checkpoints: Transaction[];
     owners: readonly (string | null)[];
+    /** Unowned inputs the emulator packet gates. The rest are unowned because
+     * they are someone else's ordinary coin, and that holder signs them. */
+    gated: ReadonlySet<number>;
 }
+
+const gatedInputs = (ark: Transaction, owners: readonly (string | null)[]): Set<number> => {
+    let entries: { vin: number }[];
+    try {
+        entries = Extension.fromTx(ark).getEmulatorPacket()?.entries ?? [];
+    } catch (error) {
+        if (error instanceof ExtensionNotFoundError) entries = [];
+        else return fail("graph carries no emulator packet", error);
+    }
+    return new Set(entries.filter((e) => owners[e.vin] === null).map((e) => e.vin));
+};
 
 const loadGraphs = (graph: JointGraph, what: string): TrustedGraphs => {
     const ark = parseTx(graph.arkTx, `${what} arkTx`);
@@ -152,7 +168,8 @@ const loadGraphs = (graph: JointGraph, what: string): TrustedGraphs => {
     if (graph.inputOwners.length !== ark.inputsLength || checkpoints.length !== ark.inputsLength) {
         fail(`${what} metadata does not match its transaction`);
     }
-    return { ark, checkpoints, owners: [...graph.inputOwners] };
+    const owners = [...graph.inputOwners];
+    return { ark, checkpoints, owners, gated: gatedInputs(ark, owners) };
 };
 
 const loadTrustedForSigning = async (
@@ -194,8 +211,18 @@ const loadTrustedForSigning = async (
         }
     }
     try {
-        assertUnsignedPsbt(trusted.ark, "trusted arkTx");
-        trusted.checkpoints.forEach((c, i) => assertUnsignedPsbt(c, `trusted checkpoint ${i}`));
+        // Only where a signature would be ours to add or the emulator's: an
+        // ungated foreign input arrives signed, and that is the point of it.
+        for (let i = 0; i < trusted.ark.inputsLength; i++) {
+            if (trusted.owners[i] === null && !trusted.gated.has(i)) continue;
+            assertUnsignedInput(trusted.ark, i, `trusted arkTx input ${i}`);
+            assertUnsignedInput(trusted.checkpoints[i], 0, `trusted checkpoint ${i}`);
+        }
+        // Transaction-level and nothing to do with ownership: a non-DEFAULT
+        // declared sighash is refused on every input, signed or not.
+        assertAllowedSighashTypes(trusted.ark, [SigHash.DEFAULT]);
+        for (const checkpoint of trusted.checkpoints)
+            assertAllowedSighashTypes(checkpoint, [SigHash.DEFAULT]);
     } catch (error) {
         fail("trusted graph must be unsigned", error);
     }
@@ -365,6 +392,10 @@ const assertAccumulatedSigs = (
 ): void => {
     for (let i = 0; i < trusted.ark.inputsLength; i++) {
         if (trusted.owners[i] === null) {
+            // A gated input is the emulator's to sign and nobody else's. An
+            // ungated one is someone else's ordinary coin, which arrives signed
+            // by its holder under a key we were never told, so it is left alone.
+            if (!trusted.gated.has(i)) continue;
             if (tapScriptSigEntries(acc.ark, i).length > 0) {
                 fail(`${context} signs the provider input`);
             }
@@ -628,26 +659,60 @@ const assertPinnedComplete = (
     }
 };
 
+/**
+ * The tweaked emulator cosigner for every provider-gated input, keyed by vin.
+ *
+ * The gating signal is the emulator packet, not the owner label: an unowned
+ * input is simply "not ours", and a generic fill carries unowned inputs that
+ * are ordinary VTXOs their own holder signed. Each gated input is tweaked by
+ * its OWN script, so one key cannot stand in for all of them — a chained rail
+ * (an LN covenant and a FixedFloat covenant in one transaction) carries two.
+ *
+ * Empty means no input is gated, which is the arkd route and not an error. An
+ * entry naming an input we own is a refusal: our coins are never emulator-gated.
+ */
+export function providerCosignerKeys(args: {
+    expected: JointGraph;
+    emulatorXOnly: string;
+    template: string;
+}): Map<number, string> {
+    checkIntegrity(args.expected, args.template);
+    const ark = parseTx(args.expected.arkTx, "trusted arkTx");
+    const read = (): { vin: number; script: Uint8Array }[] => {
+        try {
+            return Extension.fromTx(ark).getEmulatorPacket()?.entries ?? [];
+        } catch (error) {
+            if (error instanceof ExtensionNotFoundError) return [];
+            return fail("trusted graph carries no emulator packet", error);
+        }
+    };
+    const entries = read();
+    const keys = new Map<number, string>();
+    if (entries.length === 0) return keys;
+    const base = pinHex(args.emulatorXOnly, "emulator pin");
+    for (const entry of entries) {
+        if (args.expected.inputOwners[entry.vin] !== null)
+            return fail(`trusted graph gates input ${entry.vin}, which it owns`);
+        if (!entry.script || entry.script.length === 0)
+            return fail("trusted graph carries no provider script");
+        keys.set(
+            entry.vin,
+            hex.encode(computeArkadeScriptPublicKey(hex.decode(base), entry.script)),
+        );
+    }
+    return keys;
+}
+
+/** The first gated input's cosigner; use the map for multiple gated inputs. */
 export function providerCosignerKey(args: {
     expected: JointGraph;
     emulatorXOnly: string;
     template: string;
 }): string {
-    checkIntegrity(args.expected, args.template);
-    const ark = parseTx(args.expected.arkTx, "trusted arkTx");
-    const vin = args.expected.inputOwners.findIndex((o) => o === null);
-    if (vin === -1) fail("trusted graph names no provider-signed input");
-    let script: Uint8Array | undefined;
-    try {
-        script = Extension.fromTx(ark)
-            .getEmulatorPacket()
-            ?.entries.find((e) => e.vin === vin)?.script;
-    } catch (error) {
-        return fail("trusted graph carries no emulator packet", error);
-    }
-    if (!script || script.length === 0) fail("trusted graph carries no provider script");
-    const base = pinHex(args.emulatorXOnly, "emulator pin");
-    return hex.encode(computeArkadeScriptPublicKey(hex.decode(base), script as Uint8Array));
+    const keys = providerCosignerKeys(args);
+    const first = keys.values().next();
+    if (first.done) return fail("trusted graph names no provider-signed input");
+    return first.value;
 }
 
 export async function submitJointFill(args: {
@@ -683,7 +748,7 @@ export async function submitJointFill(args: {
     const ownerPins = normalizeOwnerKeys(args.ownerKeys, expected.inputOwners);
     const emulatorPin = pinHex(pins.emulatorXOnly, "emulator pin");
     const serverPin = pinHex(pins.serverXOnly, "server pin");
-    const providerPin = providerCosignerKey({
+    const providerPins = providerCosignerKeys({
         expected,
         emulatorXOnly: pins.emulatorXOnly,
         template,
@@ -749,7 +814,7 @@ export async function submitJointFill(args: {
             ownerPins,
             emulatorPin,
             serverPin,
-            providerPin,
+            providerPins,
         });
     } catch (error) {
         if (error instanceof JointSubmissionAmbiguousError) throw error;
@@ -780,7 +845,7 @@ const assertResponseSigs = (args: {
     ownerPins: Map<string, Set<string>>;
     emulatorPin: string;
     serverPin: string;
-    providerPin: string;
+    providerPins: ReadonlyMap<number, string>;
 }): void => {
     const {
         signedArk,
@@ -791,7 +856,7 @@ const assertResponseSigs = (args: {
         ownerPins,
         emulatorPin,
         serverPin,
-        providerPin,
+        providerPins,
     } = args;
     for (let i = 0; i < signedArk.inputsLength; i++) {
         if (owners[i] === null) continue;
@@ -810,12 +875,20 @@ const assertResponseSigs = (args: {
             assertEntryValid(signedArk, trustedArk, i, entry, "emulator arkTx");
         }
     }
-    const providerInputs = owners.flatMap((o, i) => (o === null ? [i] : []));
-    if (providerInputs.length === 0) {
-        throw new Error("trusted graph names no provider-signed input");
-    }
-    for (const i of providerInputs) {
+    for (const [i, owner] of owners.entries()) {
+        if (owner !== null) continue;
         const entries = tapScriptSigEntries(signedArk, i);
+        const providerPin = providerPins.get(i);
+        if (providerPin === undefined) {
+            // An unowned, ungated input: whoever holds it signed it, with a key
+            // we were never told. Its signatures are checked for validity, not
+            // against a pin — an under-signed one only fails submission, and it
+            // fails atomically, so the loan is never half-made.
+            for (const entry of entries) {
+                assertEntryValid(signedArk, trustedArk, i, entry, `emulator arkTx foreign ${i}`);
+            }
+            continue;
+        }
         if (entries.length === 0) {
             throw new Error(`provider input ${i} carries no server or provider signature`);
         }
@@ -836,6 +909,12 @@ const assertResponseSigs = (args: {
         if (!server) throw new Error(`emulator checkpoint ${i} is missing from the response`);
         if (owners[i] === null) {
             const cpEntries = tapScriptSigEntries(server, 0);
+            const providerPin = providerPins.get(i);
+            if (providerPin === undefined) {
+                for (const entry of cpEntries)
+                    assertEntryValid(server, local, 0, entry, `emulator checkpoint ${i}`);
+                return;
+            }
             if (cpEntries.length === 0) {
                 throw new Error(`emulator checkpoint ${i} carries no server or emulator signature`);
             }

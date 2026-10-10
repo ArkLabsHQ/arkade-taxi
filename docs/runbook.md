@@ -71,6 +71,23 @@ raw claims, receiver keys, proofs and exception payloads are not logged.
 
 ## Deployment
 
+### Fill cutover and rollback
+
+Migration 18 replaces the swap-fill rail and drops its legacy tables. Before
+starting the new image, stop admission, resolve existing swap-fill liabilities,
+and capture the complete SQLite database, operator policy and current image
+digest. Deploy clients that understand `senderKey`, published operator funding
+and `/v1/fills` together with the server. The strict decoder rejects old quotes.
+
+Keep the backup until settlement and recovery are verified. Rollback stops the
+new process and restores the database, policy and previous image together;
+running the previous image against the migrated database is not a rollback.
+Restore this backup before reopening admission. If new fills have been admitted,
+pause and reconcile their liabilities first; restoring older state would erase
+their submission evidence.
+Merging to `main` triggers deployment, so merge and deployment require the
+operator's explicit go after these artifacts and checks are reviewed.
+
 Build and verify the release before admitting funds:
 
 ```bash

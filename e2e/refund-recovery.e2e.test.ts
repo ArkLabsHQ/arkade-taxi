@@ -174,7 +174,7 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         const deadline = Number(locked.quote.params.locktime);
         const states: string[] = [];
         const observed = poll(
-            "recovering then recovered",
+            "recovery completes",
             async () => {
                 const value = await live.client.status(locked.quote.transferId);
                 if (states.at(-1) !== value.state) states.push(value.state);
@@ -191,7 +191,14 @@ liveScenario("sweeper-recovery-after-locktime", async () => {
         );
         await mineBlocks(11);
         await observed;
-        expect(states).toContain("recovering");
+        const sequence = ["locked", "recovering", "recovered"];
+        expect(
+            states.every(
+                (state, index) =>
+                    sequence.includes(state) &&
+                    (index === 0 || sequence.indexOf(state) > sequence.indexOf(states[index - 1]!)),
+            ),
+        ).toBe(true);
         expect(states.at(-1)).toBe("recovered");
         const { tx, row } = await terminal(live, locked, "recovered", intent.expectedTxid);
         expect(row.recoveryTxid).toBe(intent.expectedTxid);

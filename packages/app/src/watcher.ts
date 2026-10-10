@@ -416,14 +416,11 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     const tagged = readFundingSource(advance.unsignedLockupTx);
     const envelope =
         tagged.kind === "legacy" ? decodeLockupEnvelope(advance.unsignedLockupTx) : undefined;
-    const graphId =
-        tagged.kind === "joint-fill" ? tagged.source.graph.graphId : envelope!.unsignedTxId;
+    const graphId = tagged.kind === "fill" ? tagged.source.graph.graphId : envelope!.unsignedTxId;
     const covenantOutputIndex =
-        tagged.kind === "joint-fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
+        tagged.kind === "fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
     const serverUnrollScript =
-        tagged.kind === "joint-fill"
-            ? tagged.source.serverUnrollScript
-            : envelope!.serverUnrollScript;
+        tagged.kind === "fill" ? tagged.source.serverUnrollScript : envelope!.serverUnrollScript;
     if (
         graphId !== advance.unsignedLockupId ||
         covenantOutputIndex !== outpoint.vout ||
@@ -432,7 +429,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     )
         fail("persisted lockup commitments are inconsistent");
     const lockup = Transaction.fromPSBT(
-        base64.decode(tagged.kind === "joint-fill" ? tagged.source.graph.arkTx : envelope!.arkTx),
+        base64.decode(tagged.kind === "fill" ? tagged.source.graph.arkTx : envelope!.arkTx),
     );
     if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
         fail("persisted covenant outpoint does not belong to the lockup graph");
@@ -442,7 +439,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);
     const units =
-        tagged.kind === "joint-fill"
+        tagged.kind === "fill"
             ? tagged.assetUnits
             : envelope!.assetUnits === undefined
               ? undefined
@@ -529,7 +526,7 @@ const exactSuccessor = async (
 
 const lockingOutpoint = (advance: Advance): { txid: string; vout: number } => {
     const tagged = readFundingSource(advance.unsignedLockupTx);
-    if (tagged.kind === "joint-fill") {
+    if (tagged.kind === "fill") {
         if (tagged.source.graph.graphId !== advance.unsignedLockupId)
             fail("persisted lockup commitments are inconsistent");
         return tagged.covenantOutpoint;

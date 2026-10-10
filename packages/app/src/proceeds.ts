@@ -23,7 +23,6 @@ import type {
     ProceedsPlan,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
 import {
@@ -510,7 +509,6 @@ interface Deps {
     runtime: ReturnType<typeof createOperatorRuntime>;
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
-    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
     receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
@@ -607,16 +605,14 @@ export async function discoverProceeds(
         const fare = { txid: advance.arkTxid, vout: 1 };
         const repayment = { txid: advance.spentTxid, vout: 0 };
         if (
-            (source.kind === "joint-fill" || !candidates.has(key(fare))) &&
+            (source.kind === "fill" || !candidates.has(key(fare))) &&
             !candidates.has(key(repayment))
         )
             continue;
         const envelope =
             source.kind === "legacy" ? validatePersistedLockupGraph(advance, config) : undefined;
         const tx = Transaction.fromPSBT(
-            base64.decode(
-                source.kind === "joint-fill" ? source.source.graph.arkTx : envelope!.arkTx,
-            ),
+            base64.decode(source.kind === "fill" ? source.source.graph.arkTx : envelope!.arkTx),
         );
         if (tx.id !== advance.arkTxid) fail("proceeds_lockup_mismatch");
         const covenant = await timed("proceeds.discovery.covenant", () =>
@@ -675,8 +671,7 @@ export async function discoverProceeds(
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
     const timed = phaseTimer(deps.phaseLogger);
-    const taxiLocksOf = () =>
-        unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
+    const taxiLocksOf = () => unionReservedOutpoints(reservations, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
@@ -832,7 +827,6 @@ export function createProceedsCollector(deps: Deps) {
             const own = jobs.active();
             const locks = [
                 ...reservations.listReservedOutpoints(),
-                ...(deps.swapFills?.listReservedOutpoints() ?? []),
                 ...(deps.receiveQuotes?.listReservedOutpoints() ?? []),
             ];
             if (

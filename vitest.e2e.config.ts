@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { defineConfig } from "vitest/config";
 import { BaseSequencer } from "vitest/node";
 
@@ -12,6 +13,7 @@ class LiveSequencer extends BaseSequencer {
             // that jump chain time past every wallet's expiry headroom.
             "joint-fill",
             "receiver-paid",
+            "receiver-paid-fill",
             "exposure",
             "verify-quote",
             // Its own operator key and ledger, but it settles a batch, so it
@@ -32,9 +34,8 @@ class LiveSequencer extends BaseSequencer {
 const src = (name: string) =>
     fileURLToPath(new URL(`./packages/${name}/src/index.ts`, import.meta.url));
 const clientEntry = process.env.TAXI_E2E_CLIENT_ENTRY || src("client");
-// A dependency of the client package, not of the workspace root; same artifact.
-const swapEntry = fileURLToPath(
-    new URL("./packages/client/node_modules/@arkade-os/swap/dist/index.js", import.meta.url),
+const swapEntry = createRequire(process.env.TAXI_E2E_CONSUMER_PACKAGE || import.meta.url).resolve(
+    "@arkade-os/swap",
 );
 
 export default defineConfig({

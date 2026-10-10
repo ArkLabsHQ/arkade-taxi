@@ -47,6 +47,7 @@ import {
     redactSecrets,
     resolveMasterSha,
     resolveInstalledClientEntry,
+    isolatedLabel,
     resolveE2eOptions,
     resolveWalletTimeoutMs,
     reserveWalletPorts,
@@ -56,7 +57,7 @@ import {
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
-import { readScenarioIds } from "../e2e/assert-ran.mjs";
+import { isolatedScenarioIds, readScenarioIds } from "../e2e/assert-ran.mjs";
 import {
     VENDOR_DIR,
     assertFrozenResolutions,
@@ -654,7 +655,10 @@ export const packClient = async (root, env) => {
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);
     const manifest = buildConsumerManifest(tarballs, consumer);
-    for (const [name, spec] of vendoredClientDependencies()) manifest.pnpm.overrides[name] = spec;
+    for (const [name, spec] of vendoredClientDependencies()) {
+        manifest.dependencies[name] = spec;
+        manifest.pnpm.overrides[name] = spec;
+    }
     writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
@@ -687,9 +691,11 @@ export const packClient = async (root, env) => {
     const lock = readFileSync(join(consumer, "pnpm-lock.yaml"), "utf8");
     assertLocalConsumerResolution(manifest, lock, listed);
     // This consumer reaches the real registry, and a bare import cannot tell it apart.
+    const artifacts = frozenArtifacts();
+    await assertFrozenResolutions(join(consumer, "package.json"), artifacts);
     await assertFrozenResolutions(
         join(consumer, "node_modules", "@arkade-taxi", "client", "package.json"),
-        frozenArtifacts(),
+        artifacts.filter((artifact) => artifact.package === "@arkade-os/sdk"),
     );
     await import(pathToFileURL(entry).href);
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };
@@ -730,11 +736,14 @@ const patchPolicy = async (adminUrl) => {
         throw new Error(`policy bootstrap failed: ${response.status} ${await response.text()}`);
 };
 
-async function main(isolated = false) {
+async function main(isolatedFile = undefined) {
+    const isolated = isolatedFile !== undefined;
     const options = resolveE2eOptions(process.argv.slice(2));
     const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);
-    const tests = isolated ? options.isolatedTests : options.tests;
-    const scenarioIds = readScenarioIds(isolated ? "isolated" : options.mode);
+    const tests = isolated ? [isolatedFile] : options.tests;
+    const scenarioIds = isolated
+        ? isolatedScenarioIds(isolatedFile)
+        : readScenarioIds(options.mode);
     const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
     if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
         throw new Error("--wallet checkout requires playwright.taxi.config.ts");
@@ -756,7 +765,11 @@ async function main(isolated = false) {
     const artifacts = join(
         REPO,
         "e2e-artifacts",
-        ...(options.mode === "direct" ? [`direct-${id}`] : isolated ? ["isolated"] : []),
+        ...(options.mode === "direct"
+            ? [`direct-${id}`]
+            : isolated
+              ? ["isolated", isolatedLabel(isolatedFile)]
+              : []),
     );
     const secretDir = join(root, "secrets");
     const secretFile = join(secretDir, "actors.json");
@@ -1234,6 +1247,7 @@ await import("/app/dist/cli.js");
             TAXI_E2E_FIXTURE_FILE: fixtureFile,
             TAXI_E2E_SECRET_FILE: secretFile,
             TAXI_E2E_CLIENT_ENTRY: packs.entry,
+            TAXI_E2E_CONSUMER_PACKAGE: join(packs.consumer, "package.json"),
             TAXI_E2E_ARTIFACTS: artifacts,
             TAXI_DB_PATH: ":memory:",
             TAXI_ARKD_URL: arkdUrl,
@@ -1308,7 +1322,11 @@ await import("/app/dist/cli.js");
             process.execPath,
             [
                 join(REPO, "e2e", "assert-ran.mjs"),
-                ...(isolated ? ["--isolated"] : options.mode === "direct" ? ["--direct"] : []),
+                ...(isolated
+                    ? ["--isolated", isolatedFile]
+                    : options.mode === "direct"
+                      ? ["--direct"]
+                      : []),
                 resultsFile,
             ],
             {
@@ -1580,7 +1598,9 @@ await import("/app/dist/cli.js");
 
 const mainPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (mainPath && fileURLToPath(import.meta.url) === mainPath)
-    main(true)
+    // One stack per isolated test, then the shared suite.
+    resolveE2eOptions(process.argv.slice(2))
+        .isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve())
         .then(() => main())
         .catch((error) => {
             process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

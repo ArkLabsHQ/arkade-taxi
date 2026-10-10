@@ -1,4 +1,4 @@
-import { ArkAddress, asset } from "@arkade-os/sdk";
+import { ArkAddress, VtxoScript, asset } from "@arkade-os/sdk";
 import {
     DustCovenantScript,
     type DustCovenantParams,
@@ -23,7 +23,7 @@ declare const verifiedReceive: unique symbol;
 export interface RecycleCarrierQuote {
     quoteId: string;
     receiveAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     assetId: string;
     physicalSats: bigint;
     loanSats: bigint;
@@ -34,7 +34,7 @@ export interface RecycleCarrierQuote {
 
 export interface ReceiveQuoteExpectation {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -122,10 +122,10 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         reject(VerificationErrorCode.ReceiverKey, "receive quote substituted the receiver address");
     if (!sameBytes(quote.params.receiverKey, receiver!.vtxoTaprootKey))
         reject(VerificationErrorCode.ReceiverKey, "receive quote substituted the receiver key");
-    if (!sameBytes(quote.params.senderKey, expect.makerPublicKey))
+    if (!sameBytes(quote.params.senderKey, expect.senderKey))
         reject(VerificationErrorCode.SenderKey, "receive quote substituted the maker key");
-    if (quote.makerPublicKey !== hex.encode(expect.makerPublicKey))
-        reject(VerificationErrorCode.SenderKey, "receive quote substituted makerPublicKey");
+    if (quote.senderKey !== hex.encode(expect.senderKey))
+        reject(VerificationErrorCode.SenderKey, "receive quote substituted senderKey");
     if (!quote.params.assetId || !sameAsset(quote.params.assetId, expect.assetId))
         reject(VerificationErrorCode.AssetId, "receive quote substituted the asset");
     if (!sameBytes(quote.params.operatorKey, info.operatorKey))
@@ -209,6 +209,51 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
             reject(VerificationErrorCode.Locktime, `${label} is below the caller minimum`);
     assertExitDelayFloor(quote.params.exitDelay, expect.minExitDelay);
 
+    // The reserved coins and the script every Taxi output must pay. Checked on
+    // the quote's own terms, not re-derived from `info.operatorKey`: the Taxi
+    // may legitimately pay a different script later, and what matters is that a
+    // builder builds against the script the Taxi said it would accept.
+    if (!quote.operatorInputs.length)
+        reject(VerificationErrorCode.OperatorFunding, "receive quote reserves no operator funding");
+    if (
+        quote.operatorScript.length !== 34 ||
+        quote.operatorScript[0] !== 0x51 ||
+        quote.operatorScript[1] !== 0x20
+    )
+        reject(
+            VerificationErrorCode.OperatorFunding,
+            "receive quote operatorScript is not a taproot output script",
+        );
+    const seen = new Set<string>();
+    for (const [index, input] of quote.operatorInputs.entries()) {
+        const at = `operator input ${index}`;
+        const outpoint = `${input.txid}:${input.vout}`;
+        if (seen.has(outpoint))
+            reject(VerificationErrorCode.OperatorFunding, `${at} repeats an outpoint`);
+        seen.add(outpoint);
+        if (input.value <= 0n)
+            reject(VerificationErrorCode.OperatorFunding, `${at} reserves no value`);
+        let leaf: unknown;
+        try {
+            leaf = VtxoScript.decode(input.tapTree).findLeaf(hex.encode(input.spendLeaf));
+        } catch {
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} spend leaf is not in its own tap tree`,
+            );
+        }
+        if (!leaf)
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} spend leaf is not in its own tap tree`,
+            );
+        if (input.expiry.kind !== floor.kind || input.expiry.value < floor.value)
+            reject(
+                VerificationErrorCode.OperatorFunding,
+                `${at} expires before the quote's own input expiry floor`,
+            );
+    }
+
     const now = args.now ?? Math.floor(Date.now() / 1000);
     if (quote.createdAt >= quote.expiresAt || now >= quote.expiresAt)
         reject(VerificationErrorCode.Expired, "receive quote has expired or invalid timestamps");
@@ -233,7 +278,7 @@ export function verifyReceiveQuote(raw: VerifyReceiveQuoteArgs): VerifiedReceive
         {
             quoteId: quote.quoteId,
             receiveAddress: quote.covenantAddress,
-            makerPublicKey: quote.makerPublicKey,
+            senderKey: quote.senderKey,
             assetId: asset.AssetId.create(
                 hex.encode(Uint8Array.from(expect.assetId.txid).reverse()),
                 expect.assetId.groupIndex,

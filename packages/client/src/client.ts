@@ -13,6 +13,9 @@ import {
     type QuoteResponse,
     type ReceiveQuoteRequestBody,
     type ReceiveQuoteResponse,
+    fillRequestToWire,
+    fillStatusFromWire,
+    type FillStatusResponse,
     type ReceiverClaimWire,
     type SponsoredQuoteRequestBody,
     type SponsoredQuoteResponse,
@@ -29,8 +32,6 @@ import {
     decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
-    decodeSwapFillQuote,
-    decodeSwapFillStatus,
 } from "./decode.js";
 import { ClientErrorCode, QuoteVerificationError, TaxiError } from "./errors.js";
 import { assertSignedLockup, signLockup } from "./lockup.js";
@@ -65,21 +66,7 @@ import {
     type VerifiedSponsoredQuote,
     type VerifySponsoredQuoteArgs,
 } from "./sponsored.js";
-import {
-    assertSubmittableSwapFill,
-    encodeSwapFillQuoteBody,
-    SWAP_FILL_AMBIGUOUS_CODE,
-    SwapFillSubmitAmbiguousError,
-    verifySwapFillQuote,
-    type RequestSwapFillQuoteArgs,
-    type RequestVerifiedSwapFillQuoteArgs,
-    type VerifiedSwapFillQuote,
-} from "./swapFill.js";
-import type {
-    SwapFillGraphWire,
-    SwapFillQuoteResponse,
-    SwapFillStatusResponse,
-} from "@arkade-taxi/protocol";
+import type {} from "@arkade-taxi/protocol";
 import {
     verifyReceiveQuote,
     type ReceiveQuoteExpectation,
@@ -167,7 +154,7 @@ export interface SponsoredQuoteRequest {
 
 export interface ReceiveQuoteRequest {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -180,7 +167,7 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     "quote" | "info" | "expect" | "now"
 > {
     receiverAddress: string;
-    makerPublicKey: Uint8Array;
+    senderKey: Uint8Array;
     assetId: AssetIdValue;
     fareId?: string;
     fundingExpiry?: { kind: "height" | "time"; value: bigint };
@@ -188,7 +175,7 @@ export interface RequestVerifiedReceiveQuoteArgs extends Omit<
     payer?: "receiver";
     expect: Omit<
         ReceiveQuoteExpectation,
-        "receiverAddress" | "makerPublicKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
+        "receiverAddress" | "senderKey" | "assetId" | "fareId" | "fundingExpiry" | "payer"
     >;
 }
 
@@ -327,7 +314,7 @@ export class TaxiClient {
     async requestReceiveQuote(req: ReceiveQuoteRequest): Promise<ReceiveQuoteResponse> {
         const wire: ReceiveQuoteRequestBody = {
             receiverAddress: req.receiverAddress,
-            makerPublicKey: bytesToHex(req.makerPublicKey),
+            senderKey: bytesToHex(req.senderKey),
             assetId: assetIdToWire(req.assetId),
         };
         if (req.fareId !== undefined) wire.fareId = req.fareId;
@@ -371,7 +358,7 @@ export class TaxiClient {
                         expect: {
                             ...request.expect,
                             receiverAddress: request.receiverAddress,
-                            makerPublicKey: request.makerPublicKey,
+                            senderKey: request.senderKey,
                             assetId: request.assetId,
                             ...(request.fareId === undefined ? {} : { fareId: request.fareId }),
                             ...(request.fundingExpiry === undefined
@@ -546,64 +533,26 @@ export class TaxiClient {
         return decodeStatus((await this.request("GET", path)) as TransferStatusResponse);
     }
 
-    async requestSwapFillQuote(req: RequestSwapFillQuoteArgs): Promise<SwapFillQuoteResponse> {
-        const body = (await this.request(
-            "POST",
-            "/v1/swap-fills",
-            encodeSwapFillQuoteBody(req),
-        )) as SwapFillQuoteResponse;
-        decodeSwapFillQuote(body);
-        return body;
+    /** One liable call: the Taxi validates, binds, signs last and submits.
+     * `fill_submission_ambiguous` means the outcome is unknown — poll, never
+     * resubmit. The response carries no PSBT bytes. */
+    async submitFill(req: {
+        operationId: string;
+        quoteId: string;
+        arkTx: string;
+        checkpoints: readonly string[];
+        taxiInputIndexes: readonly number[];
+        covenantOutputIndex: number;
+        assetUnits: bigint;
+        validUntil?: number;
+    }): Promise<FillStatusResponse> {
+        const body = await this.request("POST", "/v1/fills", fillRequestToWire(req));
+        return fillStatusFromWire(body);
     }
 
-    async requestVerifiedSwapFillQuote(
-        args: RequestVerifiedSwapFillQuoteArgs,
-    ): Promise<{ verified: VerifiedSwapFillQuote }> {
-        const request = immutablePlainCopy(args, "verified swap-fill quote request");
-        const { now, ...body } = request;
-        const quote = await this.requestSwapFillQuote(body);
-        const verified = verifySwapFillQuote({
-            quote,
-            expect: {
-                operationId: body.operationId,
-                solverProceedsScript: body.solverProceedsScript,
-                solverInputs: body.solverInputs.map(({ txid, vout }) => ({ txid, vout })),
-                contributionSats: body.contributionSats,
-                maxFare: body.maxFare,
-                ...(body.fundingTxid !== undefined ? { fundingTxid: body.fundingTxid } : {}),
-                ...(body.fundingVout !== undefined ? { fundingVout: body.fundingVout } : {}),
-                ...(body.validUntil !== undefined ? { validUntil: body.validUntil } : {}),
-            },
-            ...(now !== undefined ? { now } : {}),
-        });
-        return { verified };
-    }
-
-    /** Takes a `VerifiedSwapFillQuote`: only `verifySwapFillQuote` produces
-     * one, so an unverified fill cannot be submitted. Makes exactly one
-     * attempt and never retries: an ambiguous outcome throws
-     * `SwapFillSubmitAmbiguousError`, every earlier failure a plain
-     * `TaxiError` carrying the server's code. */
-    async submitSwapFill(
-        verified: VerifiedSwapFillQuote,
-        solverGraph: SwapFillGraphWire,
-    ): Promise<SwapFillStatusResponse> {
-        const fillId = assertSubmittableSwapFill(verified, solverGraph);
-        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}/submit`;
-        let body: unknown;
-        try {
-            body = await this.request("POST", path, { solverGraph });
-        } catch (error) {
-            if (error instanceof TaxiError && error.code === SWAP_FILL_AMBIGUOUS_CODE)
-                throw new SwapFillSubmitAmbiguousError(fillId, error);
-            throw error;
-        }
-        return decodeSwapFillStatus(body);
-    }
-
-    async swapFillStatus(fillId: string): Promise<SwapFillStatusResponse> {
-        const path = `/v1/swap-fills/${encodeURIComponent(fillId)}`;
-        return decodeSwapFillStatus((await this.request("GET", path)) as SwapFillStatusResponse);
+    async fillStatus(fillId: string): Promise<FillStatusResponse> {
+        const path = `/v1/fills/${encodeURIComponent(fillId)}`;
+        return fillStatusFromWire(await this.request("GET", path));
     }
 
     async status(transferId: string): Promise<TransferStatusResponse> {
@@ -807,10 +756,10 @@ async function preflightReceiveRequest(request: RequestVerifiedReceiveQuoteArgs)
             ClientErrorCode.InvalidResponse,
             "taxi: receiver address must be canonical and match the trusted network and server",
         );
-    if (!(request.makerPublicKey instanceof Uint8Array) || request.makerPublicKey.length !== 32)
+    if (!(request.senderKey instanceof Uint8Array) || request.senderKey.length !== 32)
         throw new TaxiError(ClientErrorCode.InvalidResponse, "taxi: maker key must be 32 bytes");
     try {
-        validatePubkey(request.makerPublicKey, PubT.schnorr);
+        validatePubkey(request.senderKey, PubT.schnorr);
     } catch (cause) {
         throw new TaxiError(
             ClientErrorCode.InvalidResponse,

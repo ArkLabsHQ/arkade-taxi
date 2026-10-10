@@ -11,15 +11,14 @@ import {
     toXOnly,
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
-import { createOffer, decodeOffer, type FillFunding } from "@arkade-os/swap";
+import { buildOfferFillPlan, createOffer, decodeOffer, type FillFunding } from "@arkade-os/swap";
+import { tapScriptSigEntries } from "@arkade-taxi/client";
 import {
-    buildOfferFillPlan,
     prepareJointSubmission,
     providerCosignerKey,
     signJointGraphForOwner,
     submitJointFill,
-    tapScriptSigEntries,
-} from "@arkade-taxi/client";
+} from "./offerSigning.js";
 import { liveScenario } from "./scenarios.js";
 import { openLive, poll, required, walletBalance } from "./fixtures.js";
 

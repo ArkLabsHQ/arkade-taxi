@@ -1,19 +1,23 @@
-import { ArkAddress } from "@arkade-os/sdk";
+import { ArkAddress, VtxoScript } from "@arkade-os/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     assetIdToWire,
     bytesToHex,
+    fundingInputToWire,
     quoteParamsToWire,
     type InfoResponse,
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
+import { hex } from "@scure/base";
 import { TaxiClient } from "../src/client.js";
 import { verifyReceiveQuote } from "../src/receiveQuote.js";
 import {
     emulatorKey,
+    fundingInputs,
     HRP,
+    senderTree,
     jsonResponse,
     operatorKey,
     operatorSignerKey,
@@ -48,11 +52,12 @@ const address = new DustCovenantScript({
 })
     .address(HRP, serverKey)
     .encode();
+const operatorScript = bytesToHex(new ArkAddress(serverKey, operatorKey, HRP).pkScript);
 const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse => ({
     quoteId: "receive-1",
     state: "quoted",
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     params: quoteParamsToWire(params),
     covenantAddress: address,
     fare: { currency: "sats", units: "3" },
@@ -61,6 +66,8 @@ const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse =
     recoveryLocktime: { kind: "time", value: DEADLINE.toString() },
     createdAt: CREATED_AT,
     expiresAt: CREATED_AT + 60,
+    operatorInputs: fundingInputs().map(fundingInputToWire),
+    operatorScript,
     ...over,
 });
 const info = (): InfoResponse => ({
@@ -90,7 +97,7 @@ const args = () => ({
     info: info(),
     expect: {
         receiverAddress,
-        makerPublicKey: senderKey,
+        senderKey: senderKey,
         assetId: ASSET,
         fareId: "receive",
         fundingExpiry: { kind: "height" as const, value: 850_000n },
@@ -236,7 +243,7 @@ describe("verifyReceiveQuote", () => {
         expect(verified.descriptor).toEqual({
             quoteId: "receive-1",
             receiveAddress: address,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: "12121212121212121212121212121212121212121212121212121212121212120700",
             physicalSats: 330n,
             loanSats: 330n,
@@ -300,7 +307,7 @@ describe("verifyReceiveQuote", () => {
 
     it.each([
         ["receiverAddress", { receiverAddress: `${receiverAddress}x` }],
-        ["maker", { makerPublicKey: "00".repeat(32) }],
+        ["maker", { senderKey: "00".repeat(32) }],
         [
             "asset",
             { params: { ...quote().params, assetId: { txid: "13".repeat(32), groupIndex: 7 } } },
@@ -419,14 +426,14 @@ describe("TaxiClient receive quotes", () => {
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
         await taxi.requestReceiveQuote({
             receiverAddress,
-            makerPublicKey: senderKey,
+            senderKey: senderKey,
             assetId: ASSET,
             fareId: "receive",
             fundingExpiry: { kind: "height", value: 850_000n },
         });
         expect(JSON.parse(fetch.calls[0]!.init.body as string)).toEqual({
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: assetIdToWire(ASSET),
             fareId: "receive",
             fundingExpiry: { kind: "height", value: "850000" },
@@ -450,7 +457,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -481,7 +488,7 @@ describe("TaxiClient receive quotes", () => {
             return {
                 ...trust,
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: expected.fundingExpiry,
@@ -533,7 +540,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: new Uint8Array(32).fill(0xff),
+                senderKey: new Uint8Array(32).fill(0xff),
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -580,7 +587,7 @@ describe("receive quotes from an operator on another protocol version", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -597,5 +604,50 @@ describe("receive quotes from an operator on another protocol version", () => {
             }),
         ).rejects.toMatchObject({ code: "PROTOCOL_VERSION_MISMATCH" });
         expect(fetch.calls).toHaveLength(1);
+    });
+});
+
+describe("the funding a receive quote publishes", () => {
+    const published = () => fundingInputs().map(fundingInputToWire);
+
+    it("re-derives every published input's own spend leaf from its own tap tree", () => {
+        const verified = verifyReceiveQuote(args());
+        expect(verified.quote.operatorInputs).toHaveLength(1);
+        for (const input of verified.quote.operatorInputs) {
+            const tree = VtxoScript.decode(hex.decode(input.tapTree));
+            expect(tree.findLeaf(input.spendLeaf)).toBeDefined();
+        }
+        expect(verified.quote.operatorScript).toBe(operatorScript);
+    });
+
+    it("refuses an input whose spend leaf its tap tree does not carry", () => {
+        const operatorInputs = published();
+        operatorInputs[0]!.spendLeaf = bytesToHex(senderTree.scripts[0]!).replace(/^../, "51");
+        expect(() => verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs }) })).toThrow(
+            /spend leaf/,
+        );
+    });
+
+    it("refuses an input that expires before the floor it publishes", () => {
+        const operatorInputs = published();
+        operatorInputs[0]!.expiry = { kind: "height", value: "849999" };
+        expect(() => verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs }) })).toThrow(
+            /expiry floor/,
+        );
+    });
+
+    it("refuses an operator script that is not a taproot output", () => {
+        expect(() =>
+            verifyReceiveQuote({
+                ...args(),
+                quote: quote({ operatorScript: "0014" + "11".repeat(20) }),
+            }),
+        ).toThrow(/taproot/);
+    });
+
+    it("refuses a quote that reserves nothing", () => {
+        expect(() =>
+            verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs: [] }) }),
+        ).toThrow(/reserves no/);
     });
 });
