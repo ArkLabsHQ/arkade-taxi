@@ -98,7 +98,7 @@ function startupRecoveryAdvance(advance: Advance): Advance {
     if (advance.outpoint || advance.state !== "locking") return advance;
     try {
         const tagged = readFundingSource(advance.unsignedLockupTx);
-        if (tagged.kind === "joint-fill") return { ...advance, outpoint: tagged.covenantOutpoint };
+        if (tagged.kind === "fill") return { ...advance, outpoint: tagged.covenantOutpoint };
         const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
         const source = exactBase64(envelope.arkTx);
         return {
@@ -260,7 +260,7 @@ export function assertRecoveryStartupInvariants(
         const preflight = buildRecoveryIntent(startupRecoveryAdvance(advance), config);
         const source = readFundingSource(advance.unsignedLockupTx);
         if (
-            source.kind === "joint-fill" &&
+            source.kind === "fill" &&
             (source.source.recoveryPreflight.digest !== preflight.digest ||
                 source.source.recoveryPreflight.expectedTxid !== preflight.expectedTxid ||
                 source.source.recoveryPreflight.arkTx !== preflight.arkTx ||
@@ -322,7 +322,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     let serverUnrollScript: string;
     let units: bigint | undefined;
     let farePayout = fareHosting;
-    if (tagged.kind === "joint-fill") {
+    if (tagged.kind === "fill") {
         if (
             tagged.source.receiveQuoteId !== advance.id ||
             tagged.source.graph.graphId !== advance.unsignedLockupId ||
@@ -331,9 +331,9 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
             tagged.source.covenantSats !== advance.dust.toString(10) ||
             tagged.assetUnits !== advance.assetUnits
         )
-            fail(`advance ${advance.id}: persisted joint-fill commitments are inconsistent`);
+            fail(`advance ${advance.id}: persisted fill commitments are inconsistent`);
         const operatorOutpoints = tagged.source.inputs
-            .filter((input) => input.role === "sponsor")
+            .filter((input) => input.role === "taxi")
             .map(({ txid, vout }) => ({ txid, vout }));
         if (!isDeepStrictEqual(operatorOutpoints, advance.operatorInputs))
             fail(`advance ${advance.id}: persisted operator funding mismatch`);

@@ -16,6 +16,7 @@ import {
     type EmulatorProvider,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import { hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
@@ -27,6 +28,9 @@ import {
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import { fundingInputToWire } from "@arkade-taxi/protocol";
 import { covenantParamsOf, type Advance } from "@arkade-taxi/core";
+import type { RuntimeConfig } from "../../src/config.js";
+import { readFundingSource } from "../../src/arkade/fundingSource.js";
+import { sealGraph } from "../graphFixtures.js";
 import {
     advance,
     config,
@@ -648,15 +652,6 @@ describe("startup recovery invariant", () => {
             },
         ],
         [
-            "checkpoint script",
-            (_arkTx: Transaction, checkpoints: Transaction[]) => {
-                const input = checkpoints[0]!.getInput(0);
-                checkpoints[0]!.updateInput(0, {
-                    witnessUtxo: { ...input.witnessUtxo!, script: new Uint8Array([0x51]) },
-                });
-            },
-        ],
-        [
             "checkpoint input",
             (_arkTx: Transaction, checkpoints: Transaction[]) =>
                 checkpoints[0]!.updateInput(0, { index: 17 }),
@@ -664,6 +659,22 @@ describe("startup recovery invariant", () => {
     ] as const)("rejects a self-consistent graph with mutated %s", (_label, mutate) => {
         const row = mutateLockupGraph(sourceAdvance(), mutate);
         expect(() => assertRecoveryStartupInvariants([row], config())).toThrow(
+            new RegExp(`${row.id}.*persisted lockup graph`),
+        );
+    });
+
+    it("rejects a self-consistent graph with mutated checkpoint script", () => {
+        const row = sourceAdvance();
+        const envelope = decodeLockupEnvelope(row.unsignedLockupTx);
+        const checkpoint = RawPSBTV0.decode(base64.decode(envelope.checkpoints[0]!));
+        checkpoint.inputs[0]!.witnessUtxo!.script = new Uint8Array([0x51]);
+        const checkpoints = [...envelope.checkpoints];
+        checkpoints[0] = base64.encode(RawPSBTV0.encode(checkpoint));
+        const corrupted = {
+            ...row,
+            unsignedLockupTx: encodeLockupEnvelope({ ...envelope, checkpoints }),
+        };
+        expect(() => assertRecoveryStartupInvariants([corrupted], config())).toThrow(
             new RegExp(`${row.id}.*persisted lockup graph`),
         );
     });
@@ -1135,6 +1146,70 @@ describe("startup recovery invariant", () => {
     });
 });
 
+/** The same bound fill with its covenant output swapped to `target`, every
+ * vout-bearing fact remapped, the graph resealed and the preflight rebuilt. */
+const movedCovenant = (advance: Advance, target: number, cfg: RuntimeConfig): Advance => {
+    const swap = (vout: number): number => (vout === 0 ? target : vout === target ? 0 : vout);
+    const moved = patchJointSource(advance, (source) => {
+        const tx = Transaction.fromPSBT(base64.decode(source.graph.arkTx));
+        const next = new Transaction({ version: 3, lockTime: 0 });
+        for (let i = 0; i < tx.inputsLength; i++) next.addInput(tx.getInput(i));
+        const outputs = Array.from({ length: tx.outputsLength }, (_, i) => tx.getOutput(i));
+        const packet = Extension.fromTx(tx).getAssetPacket();
+        const remapped =
+            packet &&
+            Extension.create([
+                asset.Packet.create(
+                    packet.groups.map((group) =>
+                        asset.AssetGroup.create(
+                            group.assetId,
+                            group.controlAsset,
+                            group.inputs,
+                            group.outputs.map((output) =>
+                                asset.AssetOutput.create(swap(output.vout), output.amount),
+                            ),
+                            [],
+                        ),
+                    ),
+                ),
+            ]).txOut();
+        for (let i = 0; i < outputs.length; i++) {
+            const output = outputs[swap(i)]!;
+            const isPacket = output.script && Extension.isExtension(output.script);
+            next.addOutput(isPacket && remapped ? remapped : output);
+        }
+        source.graph = sealGraph({ ...source.graph, arkTx: base64.encode(next.toPSBT()) });
+        source.covenantOutputIndex = target;
+        source.operatorPayouts = source.operatorPayouts.map((payout) => ({
+            ...payout,
+            vout: swap(payout.vout),
+        }));
+    });
+    const graphId = readFundingSource(moved.unsignedLockupTx);
+    const rebound: Advance = {
+        ...moved,
+        unsignedLockupId: graphId.kind === "fill" ? graphId.graphId : advance.unsignedLockupId,
+    };
+    const preflight = buildRecoveryIntent(
+        {
+            ...rebound,
+            outpoint: {
+                txid: graphId.kind === "fill" ? graphId.covenantOutpoint.txid : "",
+                vout: target,
+            },
+        },
+        cfg,
+    );
+    return patchJointSource(rebound, (source) => {
+        source.recoveryPreflight = {
+            digest: preflight.digest,
+            expectedTxid: preflight.expectedTxid,
+            arkTx: preflight.arkTx,
+            checkpoints: [...preflight.checkpoints],
+        };
+    });
+};
+
 describe("joint-fill startup invariants", () => {
     let world: BoundJointFill;
 
@@ -1166,10 +1241,29 @@ describe("joint-fill startup invariants", () => {
         );
     });
 
+    // OD-4: the covenant sits where the fill declares, not at output 0. Only a
+    // non-zero index surviving a rebuild from persisted bytes proves that.
+    it("rebuilds the recovery intent for a covenant recorded away from output 0", () => {
+        const moved = movedCovenant(world.advance, 2, world.config);
+        const source = readFundingSource(moved.unsignedLockupTx);
+        expect(source.kind).toBe("fill");
+        if (source.kind !== "fill") return;
+        expect(source.source.covenantOutputIndex).toBe(2);
+        expect(source.covenantOutpoint.vout).toBe(2);
+
+        const intent = buildRecoveryIntent(
+            { ...moved, outpoint: source.covenantOutpoint },
+            world.config,
+        );
+        const checkpoint = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!));
+        expect(checkpoint.getInput(0).index).toBe(2);
+        expect(() => assertRecoveryStartupInvariants([moved], world.config)).not.toThrow();
+    });
+
     it("fails closed on an unreadable joint tag instead of retrying it as legacy", () => {
         const unknown = {
             ...world.advance,
-            unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":9}',
+            unsignedLockupTx: 'taxi-source:{"tag":"fill","version":9}',
         };
         expect(() => assertRecoveryStartupInvariants([unknown], world.config)).toThrow(
             /receive-1.*persisted lockup graph is invalid/,

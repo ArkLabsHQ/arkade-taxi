@@ -15,11 +15,7 @@ import {
 export function fundingInputsFromVtxos(vtxos: readonly ExtendedVirtualCoin[]): FundingInputValue[] {
     const seen = new Set<string>();
     return vtxos.map((coin) => {
-        if (
-            !canSpendOffchain(coin, { timestamp: new Date() }) ||
-            coin.virtualStatus.state === "spent" ||
-            coin.virtualStatus.state === "swept"
-        )
+        if (!canSpendOffchain(coin, { timestamp: new Date() }))
             throw new Error("taxi: selected VTXO is not spendable");
         if (!Number.isSafeInteger(coin.value) || coin.value <= 0)
             throw new Error("taxi: invalid selected VTXO value");

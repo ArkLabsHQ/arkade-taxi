@@ -32,7 +32,6 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     openDatabase,
 } from "@arkade-taxi/db";
 import {
@@ -152,11 +151,10 @@ liveScenario("v2-covenant-batch-renewal", async () => {
     });
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
-    const swapFills = new SwapFillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
     const runtime = createOperatorRuntime(config, db, {
         onchainProvider: new EsploraProvider(esploraUrl),
-        reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+        reservedOutpoints: () => unionReservedOutpoints(reservations, receiveQuotes),
         heldOutpoints: () => [],
     });
     const actors = (await createActorWallets(

@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
+import { ArkAddress, type ArkadeInfo, type Wallet } from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
+    FillRepository,
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
 } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
@@ -15,8 +15,8 @@ import { createServiceLifecycle } from "../src/lifecycle.js";
 import { ServiceError } from "../src/errors.js";
 import { createRoutes, type RouteDeps } from "../src/routes.js";
 import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
+import { idleFillDeps } from "./fillFixtures.js";
 import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
-import { FakeSwapFillGraphBuilder, fakeOfferTerms } from "./swapFillFixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 import {
     config,
@@ -48,13 +48,12 @@ function setup() {
     const db = openDatabase(":memory:");
     const advances = new AdvanceRepository(db);
     const reservations = new ReservationRepository(db);
-    const swapFills = new SwapFillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
     const terms = new PolicyRepository(db);
     terms.update(policy(), "test");
     const cfg = config({ addressHrp: "tark", reconcileIntervalMs: 1_000 });
     let now = NOW * 1_000;
-    let info: ArkInfo = arkInfo({ checkpointTapscript: bytesToHex(serverUnroll.script) });
+    let info: ArkadeInfo = arkInfo({ checkpointTapscript: bytesToHex(serverUnroll.script) });
     let providerFails = false;
     let checkGate: Promise<void> | undefined;
     let walletGate: Promise<void> | undefined;
@@ -169,24 +168,16 @@ function setup() {
             ...deps,
             sponsoredBuilder: new FakeSponsoredLockupBuilder(cfg, serverUnroll),
             receiveQuotes,
-            swapFills,
-            swapFillBuilder: new FakeSwapFillGraphBuilder("bd".repeat(34), 5000n),
-            swapFillSubmit: {
-                swapFills,
-                taxiIdentity: () => {
-                    throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
-                },
-                emulator: {
-                    submitTx: async () => {
-                        throw new Error("emulator unavailable");
-                    },
-                },
+            fill: idleFillDeps({
+                runtime: deps.runtime,
+                policy: terms,
+                fills: new FillRepository(db),
+                receiveQuotes,
                 config: cfg,
-                now: () => Math.floor(now / 1_000),
-                randomId: () => "submit-stub",
-                leaseSeconds: 60,
-            },
-            offerCodec: { decodeOffer: () => fakeOfferTerms() },
+                now: deps.now,
+                randomId: deps.randomId,
+                getServerUnroll: () => serverUnroll,
+            }),
             startup: lifecycle.status,
             reconciler: {
                 status: () => ({ lastTickAt: Math.floor(now / 1_000), locking: 0, blockers: [] }),
@@ -225,7 +216,7 @@ function setup() {
         databaseSnapshot: () => db.serialize(),
         router,
         setNow: (value: number) => (now = value),
-        setInfo: (value: ArkInfo) => (info = value),
+        setInfo: (value: ArkadeInfo) => (info = value),
         failProvider: () => (providerFails = true),
         setOnline: (value: boolean) => (online = value),
         setHeight: (value: number) => (height = value),

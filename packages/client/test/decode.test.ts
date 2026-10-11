@@ -72,7 +72,7 @@ const receiveQuoteWire = (): ReceiveQuoteResponse => ({
     quoteId: "receive-1",
     state: "quoted",
     receiverAddress: "ark1qreceiver",
-    makerPublicKey: senderKey,
+    senderKey: senderKey,
     params: paramsWire(),
     covenantAddress: "ark1qcovenant",
     fare: { currency: "sats", units: "3" },
@@ -81,6 +81,17 @@ const receiveQuoteWire = (): ReceiveQuoteResponse => ({
     recoveryLocktime: { kind: "height", value: "849856" },
     createdAt: 1_000_000_000,
     expiresAt: 1_000_000_060,
+    operatorInputs: [
+        {
+            txid: hex32("cc"),
+            vout: 0,
+            value: "20000",
+            tapTree: hex32("ee"),
+            spendLeaf: hex32("ef"),
+            expiry: { kind: "height", value: "900000" },
+        },
+    ],
+    operatorScript: `5120${"ab".repeat(32)}`,
 });
 
 const receiverPaidQuoteWire = (): ReceiveQuoteResponse => ({

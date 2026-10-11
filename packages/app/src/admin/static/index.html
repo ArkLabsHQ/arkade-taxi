@@ -448,8 +448,18 @@
                                     max per payment), Max per payment, Max outstanding, Max payments
                                     at once, both locktime margins and Quote lifetime.
                                 </dd>
+                                <dt>Fills</dt>
+                                <dd id="help-route-fills">
+                                    Anyone hands over a finished transaction that creates a receive
+                                    quote's covenant, and the Taxi signs in the coins that quote
+                                    lends once it has checked they all come back, less the loan and
+                                    plus its fare. It does not check what the fill delivers; the
+                                    receiver checks that. Uses Pause and the Bitcoin rule (on, max
+                                    per payment), Max per payment, Max outstanding and Max payments
+                                    at once.
+                                </dd>
                                 <dt>Swap fills</dt>
-                                <dd id="help-route-swap-fills">
+                                <dd id="help-route-fills">
                                     A solver fills a swap offer into a receive quote's covenant, and
                                     the Taxi puts in the sats that quote lends, on its terms. Uses
                                     Pause and the Bitcoin rule (on, max per payment) whatever is

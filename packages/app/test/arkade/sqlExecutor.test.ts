@@ -7,7 +7,14 @@ import {
     type Database,
 } from "@arkade-taxi/db";
 import { SQLiteIntentRepository } from "@arkade-os/sdk/repositories/sqlite";
-import { CSVMultisigTapscript, VtxoScript, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import {
+    collectContracts,
+    collectIntents,
+    collectVtxos,
+    CSVMultisigTapscript,
+    VtxoScript,
+    type ExtendedVirtualCoin,
+} from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { serverKey, advance } from "../fixtures.js";
 import { createSqlExecutor, createOperatorStorage } from "../../src/arkade/sqlExecutor.js";
@@ -130,13 +137,15 @@ describe("SQLite SDK boundary", () => {
             isSwept: false,
             isPreconfirmed: true,
             expiresAtHeight: 999,
-            virtualStatus: { state: "preconfirmed", batchExpiry: 999000 },
             tapTree: tree.encode(),
             forfeitTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
             intentTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
         };
         await createOperatorStorage(db).walletRepository.saveVtxos(address.encode(), [coin]);
-        const saved = await createOperatorStorage(db).walletRepository.getVtxos(address.encode());
+        const saved = await collectVtxos(
+            createOperatorStorage(db).walletRepository,
+            address.encode(),
+        );
         expect(saved[0]).toMatchObject({
             value: 12345,
             vout: 0,
@@ -174,8 +183,8 @@ describe("SQLite SDK boundary", () => {
         for (let i = 0; i < 2; i++) {
             const storage = createOperatorStorage(db);
             await storage.walletRepository.getWalletState();
-            await storage.contractRepository.getContracts();
-            await storage.intentRepository.getIntents();
+            await collectContracts(storage.contractRepository);
+            await collectIntents(storage.intentRepository);
             await storage.virtualTxRepository.getVirtualTx("aa".repeat(32));
             await storage.walletRepository[Symbol.asyncDispose]();
         }

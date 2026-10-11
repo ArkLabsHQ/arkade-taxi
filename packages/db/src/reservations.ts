@@ -95,7 +95,7 @@ export function allReservedOutpoints(db: Database): Outpoint[] {
         .prepare<[], { txid: string; vout: bigint }>(
             `SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM operator_input_reservations
              UNION ALL SELECT outpoint_txid, outpoint_vout FROM proceeds_inputs
-             UNION ALL SELECT outpoint_txid, outpoint_vout FROM swap_fill_reservations
+             UNION ALL SELECT outpoint_txid, outpoint_vout FROM fill_reservations
              UNION ALL SELECT outpoint_txid, outpoint_vout FROM receive_quote_reservations
              ORDER BY txid, vout`,
         )
@@ -112,26 +112,13 @@ export function totalExposure(db: Database): { total: bigint; count: bigint } {
             `SELECT
                 (SELECT coalesce(sum(topup), 0) FROM advances
                  WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                + (SELECT coalesce(sum(contribution_sats), 0) FROM swap_fills
-                   WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                 + (SELECT coalesce(sum(loan_sats), 0) FROM receive_quotes WHERE state = 'quoted') AS total,
                 (SELECT count(*) FROM advances
                  WHERE state = 'locking' OR (kind = 'covenant' AND state IN ('locked', 'recovering')))
-                + (SELECT count(*) FROM swap_fills
-                   WHERE state IN ('quoted', 'submitting') AND receive_quote_id IS NULL)
                 + (SELECT count(*) FROM receive_quotes WHERE state = 'quoted') AS count`,
         )
         .safeIntegers(true)
         .get()!;
-}
-
-export function expireUnboundSwapFills(db: Database, at: number): void {
-    db.prepare(
-        "UPDATE swap_fills SET state = 'expired', updated_at = max(updated_at, ?) WHERE state = 'quoted' AND receive_quote_id IS NULL AND expires_at <= ?",
-    ).run(at, at);
-    db.prepare(
-        "DELETE FROM swap_fill_reservations WHERE fill_id IN (SELECT id FROM swap_fills WHERE state = 'expired' AND expires_at <= ?)",
-    ).run(at);
 }
 
 export function expireReceiveQuotes(db: Database, at: number): number {
@@ -167,7 +154,6 @@ export class ReservationRepository {
         assertNativeAccess(this.#db);
         this.#db
             .transaction(() => {
-                expireUnboundSwapFills(this.#db, advance.createdAt);
                 expireReceiveQuotes(this.#db, advance.createdAt);
                 const { policy, revision } = this.#policy.getSnapshot();
                 if (revision !== expectedPolicyRevision) throw new PolicyRevisionConflictError();
@@ -254,12 +240,12 @@ export class ReservationRepository {
                             .get(input.txid, input.vout)
                     )
                         throw new ReservationConflictError();
-                    // Cross-flow fence: a swap fill may hold this coin; the
+                    // Cross-flow fence: a fill may hold this coin; the
                     // selection-layer union cannot close the SELECT/INSERT race.
                     if (
                         this.#db
                             .prepare(
-                                "SELECT 1 FROM swap_fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
+                                "SELECT 1 FROM fill_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
                             )
                             .get(input.txid, input.vout)
                     )
@@ -294,7 +280,6 @@ export class ReservationRepository {
         const result = this.#db
             .transaction(() => {
                 const at = now();
-                expireUnboundSwapFills(this.#db, at);
                 expireReceiveQuotes(this.#db, at);
                 this.#expireAdvances(at);
                 const advance = this.#advances.get(id);

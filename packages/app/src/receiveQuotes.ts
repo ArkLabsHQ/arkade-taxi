@@ -17,11 +17,12 @@ import {
     type ReceiveQuote,
     type ReceiveQuoteRepository,
     type ReservationRepository,
-    type SwapFillRepository,
 } from "@arkade-taxi/db";
 import {
     assetIdFromWire,
+    bytesToHex,
     fareToWire,
+    fundingInputToWire,
     hexToBytes,
     quoteParamsToWire,
     satsFromWire,
@@ -47,13 +48,9 @@ export interface ReceiveQuoteDeps {
     policy: { get(): Policy; getSnapshot(): PolicySnapshot };
     advances: Pick<AdvanceStore, "exposureTotals">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints" | "expireQuotes">;
-    swapFills?: Pick<
-        SwapFillRepository,
-        "listReservedOutpoints" | "expireQuotes" | "exposureTotals"
-    >;
     receiveQuotes: Pick<
         ReceiveQuoteRepository,
-        "insert" | "get" | "bind" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
+        "insert" | "get" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
     >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
@@ -68,7 +65,7 @@ export interface ReceiveQuoteDeps {
 type DecodedRequest = {
     receiverAddress: string;
     receiverKey: Uint8Array;
-    makerPublicKey: string;
+    senderKey: string;
     makerKey: Uint8Array;
     assetId: { txid: Uint8Array; groupIndex: number };
     fareId?: string;
@@ -91,15 +88,8 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     if (prototype !== Object.prototype && prototype !== null)
         throw badRequest("request body must be a plain JSON object");
     const raw = body as Record<string, unknown>;
-    exactKeys(raw, [
-        "receiverAddress",
-        "makerPublicKey",
-        "assetId",
-        "fareId",
-        "fundingExpiry",
-        "payer",
-    ]);
-    for (const required of ["receiverAddress", "makerPublicKey", "assetId"])
+    exactKeys(raw, ["receiverAddress", "senderKey", "assetId", "fareId", "fundingExpiry", "payer"]);
+    for (const required of ["receiverAddress", "senderKey", "assetId"])
         if (!Object.prototype.hasOwnProperty.call(raw, required))
             throw badRequest(`missing request field ${required}`);
 
@@ -118,9 +108,9 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     if (!equalBytes(receiver.serverPubKey, config.serverPubkey))
         throw badRequest("receiverAddress names the wrong Arkade server key");
 
-    if (typeof raw.makerPublicKey !== "string" || !HEX_32.test(raw.makerPublicKey))
-        throw badRequest("makerPublicKey must be a 32-byte lowercase hex key");
-    const makerKey = hexToBytes(raw.makerPublicKey, "makerPublicKey");
+    if (typeof raw.senderKey !== "string" || !HEX_32.test(raw.senderKey))
+        throw badRequest("senderKey must be a 32-byte lowercase hex key");
+    const makerKey = hexToBytes(raw.senderKey, "senderKey");
 
     if (!raw.assetId || typeof raw.assetId !== "object" || Array.isArray(raw.assetId))
         throw badRequest("assetId must be an object");
@@ -175,7 +165,7 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     return {
         receiverAddress: raw.receiverAddress,
         receiverKey: receiver.vtxoTaprootKey,
-        makerPublicKey: raw.makerPublicKey,
+        senderKey: raw.senderKey,
         makerKey,
         assetId,
         payer,
@@ -298,10 +288,9 @@ async function createAdmitted(
                 : {}),
         });
     } catch (cause) {
-        throw badRequest("makerPublicKey or receiverAddress is not a valid covenant identity");
+        throw badRequest("senderKey or receiverAddress is not a valid covenant identity");
     }
     deps.reservations.expireQuotes(deps.now());
-    deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -346,7 +335,7 @@ async function createReserved(
             },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.receiveQuotes);
     const options = {
         spendable,
         reserved: [...reserved, ...locks],
@@ -403,7 +392,7 @@ async function createReserved(
         ...options,
         spendable: latestSpendable,
         reserved: [
-            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...unionReservedOutpoints(deps.reservations, deps.receiveQuotes),
             ...latestLocks,
         ],
         safety: latestSafety,
@@ -434,7 +423,7 @@ async function createReserved(
         id: deps.randomId(),
         state: "quoted",
         receiverAddress: req.receiverAddress,
-        makerPublicKey: req.makerPublicKey,
+        senderKey: req.senderKey,
         params,
         covenantAddress,
         fare: terms.fare,
@@ -459,7 +448,7 @@ async function createReserved(
         },
         expectedReservedOutpoints: reserved,
     });
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }
 
 function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadline {
@@ -485,17 +474,10 @@ function assertFloorHeadroom(
 
 function enforceExposure(deps: ReceiveQuoteDeps, policy: Policy, loan: bigint): void {
     const advance = deps.advances.exposureTotals();
-    const swaps = deps.swapFills?.exposureTotals() ?? { outstandingSats: 0n, activeCount: 0 };
     const receive = deps.receiveQuotes.exposureTotals();
-    if (
-        advance.outstandingSats + swaps.outstandingSats + receive.outstandingSats + loan >
-        policy.maxOutstandingSats
-    )
+    if (advance.outstandingSats + receive.outstandingSats + loan > policy.maxOutstandingSats)
         throw admissionError("exceeds_max_outstanding");
-    if (
-        advance.lockedCount + swaps.activeCount + receive.activeCount >=
-        policy.maxConcurrentAdvances
-    )
+    if (advance.lockedCount + receive.activeCount >= policy.maxConcurrentAdvances)
         throw admissionError("max_concurrent_advances");
 }
 
@@ -522,12 +504,12 @@ const sameOutpoints = (a: readonly Outpoint[], b: readonly Outpoint[]): boolean 
     return first.size === b.length && b.every(({ txid, vout }) => first.has(`${txid}:${vout}`));
 };
 
-function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
+function toResponse(quote: ReceiveQuote, config: RuntimeConfig): ReceiveQuoteResponse {
     return {
         quoteId: quote.id,
         state: quote.state,
         receiverAddress: quote.receiverAddress,
-        makerPublicKey: quote.makerPublicKey,
+        senderKey: quote.senderKey,
         params: quoteParamsToWire(quote.params),
         covenantAddress: quote.covenantAddress,
         fare: fareToWire(quote.fare),
@@ -542,6 +524,10 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
         },
         createdAt: quote.createdAt,
         expiresAt: quote.expiresAt,
+        operatorInputs: quote.operatorInputs.map(fundingInputToWire),
+        operatorScript: bytesToHex(
+            new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).pkScript,
+        ),
         ...(quote.boundFillId === undefined ? {} : { boundFillId: quote.boundFillId }),
         ...(quote.payer === "receiver"
             ? {
@@ -554,11 +540,11 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
 }
 
 export function getReceiveQuote(
-    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now">,
+    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now" | "config">,
     id: string,
 ): ReceiveQuoteResponse {
     deps.receiveQuotes.expireQuotes(deps.now());
     const quote = deps.receiveQuotes.get(id);
     if (!quote) throw new ServiceError(ErrorCode.NotFound, 404, `receive quote ${id} not found`);
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }

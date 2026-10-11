@@ -67,10 +67,9 @@ describe("release gate", () => {
         const run = gate(REPO);
         expect(run.status).toBe(1);
         for (const [dir, name] of [
+            ["app", "@arkade-os/sdk"],
             ["client", "@arkade-os/sdk"],
-            ["client", "@arkade-os/swap"],
             ["covenant", "@arkade-os/sdk"],
-            ["app", "@arkade-os/swap"],
         ])
             expect(run.stderr).toContain(`packages/${dir}/package.json dependencies ${name}@`);
     });

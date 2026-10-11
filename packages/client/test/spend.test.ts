@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runInNewContext } from "node:vm";
+
 import {
     ArkAddress,
     CSVMultisigTapscript,
@@ -16,7 +18,7 @@ import {
     asset,
     arkade,
     buildOffchainTx,
-    type ArkInfo,
+    type ArkadeInfo,
     type ExtendedVirtualCoin,
     type Identity,
     type VirtualCoin,
@@ -81,6 +83,8 @@ import {
     VTXO_MIN,
 } from "./fixtures.js";
 
+afterEach(() => yieldToEventLoop());
+
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
 const numberToBytes = (value: bigint): Uint8Array =>
     hex.decode(value.toString(16).padStart(64, "0"));
@@ -132,7 +136,7 @@ const json = (value: unknown): Response =>
         headers: { "content-type": "application/json" },
     });
 
-const arkInfoWire = (value: ArkInfo): Record<string, unknown> => ({
+const arkInfoWire = (value: ArkadeInfo): Record<string, unknown> => ({
     network: value.network,
     signerPubkey: value.signerPubkey,
     forfeitPubkey: value.forfeitPubkey,
@@ -203,7 +207,6 @@ const setup = async (
         spentBy: "",
         commitmentTxIds: [],
         expiresAtHeight: 900_000,
-        virtualStatus: { state: "preconfirmed" },
         assets: coinAssets,
     } as VirtualCoin;
     let submitted: Transaction | undefined;
@@ -246,7 +249,7 @@ const setup = async (
         dust: 330n,
         vtxoMinAmount: 10n,
         ...providerLimits,
-    } as ArkInfo;
+    } as ArkadeInfo;
     const arkProvider = {
         getInfo: vi.fn(async () => ({ ...arkInfo })),
     };
@@ -959,7 +962,6 @@ const receiverFunding = async (
         spentBy: "",
         commitmentTxIds: [],
         expiresAtHeight: 900_000,
-        virtualStatus: { state: "preconfirmed" },
         assets: [],
     } as VirtualCoin;
     return {
@@ -996,7 +998,6 @@ const refunderFunding = async (identity: Identity = senderIdentity, value = 500n
         spentBy: "",
         commitmentTxIds: [],
         expiresAtHeight: 900_000,
-        virtualStatus: { state: "preconfirmed" },
         assets: [],
     } as VirtualCoin;
     return {
@@ -1452,18 +1453,18 @@ describe("fresh provider authorization", () => {
     const distinctKeyDrifts = [
         [
             "forfeit key replaced by regular signer",
-            (base: ArkInfo) => ({ ...base, forfeitPubkey: base.signerPubkey }),
+            (base: ArkadeInfo) => ({ ...base, forfeitPubkey: base.signerPubkey }),
         ],
         [
             "rogue forfeit key",
-            (base: ArkInfo) => ({ ...base, forfeitPubkey: hex.encode(receiverKey) }),
+            (base: ArkadeInfo) => ({ ...base, forfeitPubkey: hex.encode(receiverKey) }),
         ],
-        ["malformed forfeit key", (base: ArkInfo) => ({ ...base, forfeitPubkey: "01" })],
-        ["regular signer", (base: ArkInfo) => ({ ...base, signerPubkey: hex.encode(otherKey) })],
-        ["network", (base: ArkInfo) => ({ ...base, network: "bitcoin" })],
+        ["malformed forfeit key", (base: ArkadeInfo) => ({ ...base, forfeitPubkey: "01" })],
+        ["regular signer", (base: ArkadeInfo) => ({ ...base, signerPubkey: hex.encode(otherKey) })],
+        ["network", (base: ArkadeInfo) => ({ ...base, network: "bitcoin" })],
         [
             "checkpoint delay",
-            (base: ArkInfo) => ({
+            (base: ArkadeInfo) => ({
                 ...base,
                 checkpointTapscript: hex.encode(
                     CSVMultisigTapscript.encode({
@@ -1475,7 +1476,7 @@ describe("fresh provider authorization", () => {
         ],
         [
             "forfeit key and matching rogue checkpoint",
-            (base: ArkInfo) => ({
+            (base: ArkadeInfo) => ({
                 ...base,
                 forfeitPubkey: hex.encode(receiverKey),
                 checkpointTapscript: hex.encode(
@@ -1517,16 +1518,16 @@ describe("fresh provider authorization", () => {
     );
 
     it.each([
-        ["network", (base: ArkInfo) => ({ ...base, network: "bitcoin" })],
+        ["network", (base: ArkadeInfo) => ({ ...base, network: "bitcoin" })],
         [
             "server key",
-            (base: ArkInfo) => ({
+            (base: ArkadeInfo) => ({
                 ...base,
                 signerPubkey: "02" + hex.encode(otherKey),
                 forfeitPubkey: "02" + hex.encode(otherKey),
             }),
         ],
-        ["checkpoint", (base: ArkInfo) => ({ ...base, checkpointTapscript: "51" })],
+        ["checkpoint", (base: ArkadeInfo) => ({ ...base, checkpointTapscript: "51" })],
     ])("rejects %s drift before the emulator effect", async (_name, drift) => {
         const base = await setup();
         vi.mocked(base.arkProvider.getInfo).mockResolvedValueOnce(drift(base.arkInfo));

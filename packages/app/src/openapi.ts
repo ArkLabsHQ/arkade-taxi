@@ -352,7 +352,7 @@ const schemas: Record<string, Schema> = {
                 maxLength: 512,
                 description: "Canonical Arkade address on this server's network and server key.",
             },
-            makerPublicKey: key32,
+            senderKey: key32,
             assetId: ref("AssetId"),
         },
         {
@@ -376,7 +376,7 @@ const schemas: Record<string, Schema> = {
                 quoteId: { ...text, maxLength: 128 },
                 state: oneOfStrings("quoted", "bound", "expired"),
                 receiverAddress: str,
-                makerPublicKey: key32,
+                senderKey: key32,
                 params: ref("QuoteParams"),
                 covenantAddress: str,
                 fare: ref("Fare"),
@@ -385,6 +385,19 @@ const schemas: Record<string, Schema> = {
                 recoveryLocktime: ref("TaggedLocktime"),
                 createdAt: unixSeconds,
                 expiresAt,
+                operatorInputs: {
+                    type: "array",
+                    items: ref("FundingInput"),
+                    minItems: 1,
+                    maxItems: 256,
+                    description:
+                        "The Taxi coins this quote reserved. A builder spends exactly these and no other Taxi coin.",
+                },
+                operatorScript: {
+                    ...hex,
+                    description:
+                        "The one scriptPubKey every Taxi output must pay: its change and any sats fare.",
+                },
             },
             {
                 boundFillId: {
@@ -395,6 +408,63 @@ const schemas: Record<string, Schema> = {
                 payer: constant("receiver"),
                 receiverFare: ref("Fare"),
                 unclaimedMode: constant("reclaim"),
+            },
+        ),
+    },
+    FillRequest: {
+        description:
+            "A complete graph the caller built. Every input outpoint is read off the checkpoints, so none is declared.",
+        ...object(
+            {
+                operationId: { ...text, maxLength: 128 },
+                quoteId: { ...text, maxLength: 128 },
+                arkTx: {
+                    ...text,
+                    maxLength: 4000000,
+                    description: "base64 PSBT. Every non-Taxi input signed; the Taxi's unsigned.",
+                },
+                checkpoints: {
+                    type: "array",
+                    items: { ...text, maxLength: 4000000 },
+                    minItems: 1,
+                    maxItems: 256,
+                    description: "base64 PSBTs, one per arkTx input, index-aligned.",
+                },
+                taxiInputIndexes: {
+                    type: "array",
+                    items: { type: "integer", minimum: 0 },
+                    minItems: 1,
+                    maxItems: 256,
+                    description: "Which arkTx inputs are the Taxi's reserved coins.",
+                },
+                covenantOutputIndex: {
+                    type: "integer",
+                    minimum: 0,
+                    description: "Where the quoted covenant output sits. Any index.",
+                },
+                assetUnits: {
+                    ...decimal,
+                    description: "Units the covenant output must carry.",
+                },
+            },
+            { validUntil: unixSeconds },
+        ),
+    },
+    FillStatus: {
+        description: "Carries no PSBT bytes: the caller never holds a Taxi-signed graph.",
+        ...object(
+            {
+                fillId: { ...text, maxLength: 128 },
+                operationId: { ...text, maxLength: 128 },
+                state: oneOfStrings("submitting", "settled", "expired", "cancelled"),
+                updatedAt: unixSeconds,
+                expiresAt,
+            },
+            {
+                txid,
+                outpoint: ref("Outpoint"),
+                spentTxid: txid,
+                failureCode: text,
             },
         ),
     },
@@ -462,109 +532,6 @@ const schemas: Record<string, Schema> = {
         },
         commitment: ref("SponsoredCommitment"),
     }),
-    SolverInput: object(
-        { txid, vout, value: decimal, tapTree: hex, spendLeaf: hex },
-        {
-            assets: {
-                type: "array",
-                items: object({ assetId: ref("AssetId"), amount: decimal }),
-            },
-        },
-    ),
-    SwapFillQuoteRequest: object(
-        {
-            operationId: {
-                ...text,
-                maxLength: 128,
-                description:
-                    "Idempotency key: a replay with identical terms returns the same fill.",
-            },
-            receiveQuoteId: { ...text, description: "The receive quote this fill binds." },
-            offerHex: hex,
-            solverInputs: { type: "array", items: ref("SolverInput"), minItems: 1, maxItems: 256 },
-            solverProceedsScript: hex,
-            solverKeys: {
-                type: "array",
-                items: { type: "string", pattern: "^(0[23])?[0-9a-fA-F]{64}$" },
-                minItems: 1,
-                maxItems: 256,
-                description: "x-only or compressed public keys, hex.",
-            },
-            contributionSats: {
-                ...decimal,
-                description: "Positive; must equal the bound receive quote's `params.topup`.",
-            },
-            maxFare: {
-                ...ref("Fare"),
-                description: "Highest fare accepted; at least the receive quote's sats fare.",
-            },
-            fundingTxid: { ...txid, description: "The offer's outpoint txid." },
-            fundingVout: vout,
-        },
-        {
-            swapAddress: str,
-            validUntil: {
-                ...unixSeconds,
-                minimum: 1,
-                description: "Caller's deadline, unix seconds.",
-            },
-        },
-    ),
-    SwapFillGraph: object({
-        arkTx: { ...base64, description: "Ark transaction PSBT." },
-        checkpoints: { type: "array", items: base64 },
-        graphId: { type: "string", pattern: "^[0-9a-f]{64}$" },
-        template: constant("taxi-fill/1"),
-        inputs: {
-            type: "array",
-            minItems: 1,
-            items: object({
-                owner: oneOfStrings("offer-covenant", "solver", "sponsor"),
-                txid,
-                vout,
-            }),
-        },
-        outputs: {
-            type: "array",
-            minItems: 1,
-            description: "Derived from `arkTx`; the server re-checks it against the transaction.",
-            items: object({
-                role: oneOfStrings("receiver", "solver", "sponsor-fare", "sponsor-change"),
-                vout,
-                script: hex,
-                sats: decimal,
-                assets: {
-                    type: "array",
-                    items: object({ assetId: ref("AssetId"), units: decimal }),
-                },
-            }),
-        },
-    }),
-    SwapFillQuoteResponse: object({
-        fillId: text,
-        operationId: text,
-        expiresAt,
-        template: constant("taxi-fill/1"),
-        contributionSats: decimal,
-        fare: ref("Fare"),
-        graph: ref("SwapFillGraph"),
-    }),
-    SwapFillSubmitRequest: object({
-        solverGraph: {
-            ...ref("SwapFillGraph"),
-            description: "The quoted graph with the solver's signatures.",
-        },
-    }),
-    SwapFillStatus: object(
-        {
-            fillId: text,
-            operationId: text,
-            state: oneOfStrings("quoted", "submitting", "settled", "expired", "cancelled"),
-            updatedAt: unixSeconds,
-            expiresAt: unixSeconds,
-        },
-        { txid, outpoint: ref("Outpoint"), spentTxid: txid, failureCode: text },
-    ),
     ClaimDescriptor: {
         description: "Everything a receiver needs to verify and claim a locked covenant.",
         ...object(
@@ -655,7 +622,7 @@ const schemas: Record<string, Schema> = {
                     activelyScanned: count,
                 },
                 {
-                    swapFills: object({
+                    fills: object({
                         lastTickAt: nullable(unixSeconds),
                         submitting: count,
                         blockers: strings,
@@ -808,7 +775,7 @@ const examples = {
         state: "quoted",
         receiverAddress:
             "ark1qprzw7ddf2knj52xz3635uggtuh3pcw85kf7fcpsa76msusuu4dskxuyc4t8kynygzv460k442aq2ewhrcvrgczgr8lec9l4a82a6pu0ezudfg",
-        makerPublicKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+        senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
         params: {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -845,13 +812,33 @@ const examples = {
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
+        operatorInputs: [
+            {
+                txid: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                vout: 0,
+                value: "20000",
+                tapTree:
+                    "0100455120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                spendLeaf: "20531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337ac",
+                expiry: { kind: "height", value: "900000" },
+            },
+        ],
+        operatorScript: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+    },
+    fillSubmitted: {
+        fillId: "fill-1",
+        operationId: "op-1",
+        state: "submitting",
+        txid: "9f3c1f2e7a5b4d6c8e0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60",
+        updatedAt: 1757000001,
+        expiresAt: 1757000060,
     },
     receiverPaidQuote: {
         quoteId: "adv-1",
         state: "quoted",
         receiverAddress:
             "ark1qprzw7ddf2knj52xz3635uggtuh3pcw85kf7fcpsa76msusuu4dskxuyc4t8kynygzv460k442aq2ewhrcvrgczgr8lec9l4a82a6pu0ezudfg",
-        makerPublicKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
+        senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
         params: {
             receiverKey: "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
             senderKey: "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -892,6 +879,18 @@ const examples = {
         },
         createdAt: 1757000000,
         expiresAt: 1757000060,
+        operatorInputs: [
+            {
+                txid: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                vout: 0,
+                value: "20000",
+                tapTree:
+                    "0100455120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
+                spendLeaf: "20531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337ac",
+                expiry: { kind: "height", value: "900000" },
+            },
+        ],
+        operatorScript: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
         payer: "receiver",
         receiverFare: {
             currency: "sats",
@@ -923,109 +922,6 @@ const examples = {
             operatorInputIndexes: [1],
             unsignedTxId: "4734261a43c11a9d5efd83a2f7bdba346b7e07426ece05b043aa1cf08c4da147",
         },
-    },
-    swapFill: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        expiresAt: 1757000060,
-        template: "taxi-fill/1",
-        contributionSats: "330",
-        fare: {
-            currency: "asset",
-            units: "5",
-            assetId: {
-                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                groupIndex: 0,
-            },
-        },
-        graph: {
-            arkTx: "cHNidP8BAP1SAQMAAAADwXUOI1Uz1BYe3iWZ1qYfCxVI2W5xw5KDojEUHdYvKSgAAAAAAP////8XHk1lVnYFhAixVjGhY/HKCzPJvhVqKWs9YNC5/H6VpwAAAAAA/////yClXW+ZI9CeT87JgI3nyJR+k4ow/umLoGHiJNY2wWGrAAAAAAD/////BYgTAAAAAAAAIlEgG4TFVnsSZECZXT7VqroFZdceGDRgSBn/nBf16dXdB4/oAwAAAAAAAAFRSgEAAAAAAAAiUSBTH+YGgTRQPScjEzInyGesj6bIPFN+mkTDxb29yx/jN9ZMAAAAAAAAIlEgUx/mBoE0UD0nIxMyJ8hnrI+myDxTfppEw8W9vcsf4zcAAAAAAAAAADlqN0FSSwAyAQESNBI0EjQSNBI0EjQSNBI0EjQSNBI0EjQSNBI0EjQSNAAAAQEBAGQCAQIABQEBAF8AAAAAAAAAAAAAAAAA",
-            checkpoints: [
-                "cHNidP8BAD0DAAAAAd3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3dAwAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-                "cHNidP8BAD0DAAAAAe7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7uAQAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-                "cHNidP8BAD0DAAAAAbu7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7AAAAAAD/////AegDAAAAAAAAAVEAAAAAAAAA",
-            ],
-            graphId: "e057ce6c6f8809ce08d16a6a4a73f7a1dc3b0015c15c9ad3ba343496e3ba4f62",
-            template: "taxi-fill/1",
-            inputs: [
-                {
-                    owner: "offer-covenant",
-                    txid: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-                    vout: 3,
-                },
-                {
-                    owner: "solver",
-                    txid: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                    vout: 1,
-                },
-                {
-                    owner: "sponsor",
-                    txid: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    vout: 0,
-                },
-            ],
-            outputs: [
-                {
-                    role: "receiver",
-                    vout: 0,
-                    script: "51201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
-                    sats: "5000",
-                    assets: [],
-                },
-                {
-                    role: "solver",
-                    vout: 1,
-                    script: "51",
-                    sats: "1000",
-                    assets: [
-                        {
-                            assetId: {
-                                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                                groupIndex: 0,
-                            },
-                            units: "95",
-                        },
-                    ],
-                },
-                {
-                    role: "sponsor-fare",
-                    vout: 2,
-                    script: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
-                    sats: "330",
-                    assets: [
-                        {
-                            assetId: {
-                                txid: "3412341234123412341234123412341234123412341234123412341234123412",
-                                groupIndex: 0,
-                            },
-                            units: "5",
-                        },
-                    ],
-                },
-                {
-                    role: "sponsor-change",
-                    vout: 3,
-                    script: "5120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337",
-                    sats: "19670",
-                    assets: [],
-                },
-            ],
-        },
-    },
-    swapFillStatus: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        state: "quoted",
-        updatedAt: 1757000000,
-        expiresAt: 1757000060,
-    },
-    swapFillSubmitted: {
-        fillId: "adv-1",
-        operationId: "op-1",
-        state: "submitting",
-        txid: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-        updatedAt: 1757000000,
-        expiresAt: 1757000060,
     },
     claims: {
         claims: [
@@ -1163,11 +1059,6 @@ const examples = {
             lastWatcherScanAt: null,
             watching: 0,
             activelyScanned: 0,
-            swapFills: {
-                lastTickAt: 1757000000,
-                submitting: 0,
-                blockers: [],
-            },
         },
     },
 };
@@ -1300,7 +1191,7 @@ export const openApiDocument: {
                 tags: ["Receive quotes"],
                 summary: "Quote a receive",
                 description:
-                    "Reserves operator funding for a recycle covenant paying `receiverAddress`, for a swap fill to bind. Unknown request fields are rejected.",
+                    "Reserves operator funding for a recycle covenant paying `receiverAddress`, for a caller-built fill to bind. Unknown request fields are rejected.",
                 requestBody: body("ReceiveQuoteRequest"),
                 responses: {
                     200: ok("ReceiveQuote", examples.receiveQuote),
@@ -1351,66 +1242,39 @@ export const openApiDocument: {
         },
         "/v1/sponsored-transfers/{id}/lockup": { post: lockup("Sponsored transfers") },
         "/v1/sponsored-transfers/{id}": { get: transferStatus("Sponsored transfers") },
-        "/v1/swap-fills": {
+        "/v1/fills": {
             post: {
-                tags: ["Swap fills"],
-                summary: "Quote a swap fill",
+                tags: ["Fills"],
+                summary: "Fill a receive quote with a graph you built",
                 description:
-                    "Builds the joint fill graph for a swap offer, bound to a receive quote. Idempotent per `operationId`; different terms get `operation_conflict`.",
-                requestBody: body("SwapFillQuoteRequest"),
+                    "One call: validates the graph against the quote, binds the quote, signs the Taxi's inputs last and submits. The Taxi checks only that it gets its reserved coins back, its fare paid and the quoted covenant created.",
+                requestBody: body("FillRequest"),
                 responses: {
-                    200: ok("SwapFillQuoteResponse", examples.swapFill),
+                    202: ok("FillStatus", examples.fillSubmitted, "Submitted: `submitting`."),
                     400: error(
-                        "Codes include `invalid_request`, `receive_quote_required`, `swap_fill_funding_outpoint_required` and `swap_fill_offer_invalid`.",
+                        "Codes include `invalid_request`, `fill_graph_invalid`, `fill_taxi_inputs_differ`, `fill_foreign_taxi_coin`, `fill_checkpoint_mismatch`, `fill_covenant_output_mismatch`, `fill_covenant_asset_mismatch`, `fill_asset_units_invalid`, `fill_fare_exceeds_delivery`, `fill_operator_payout_mismatch`, `fill_unpriced_fare`, `fill_two_fares`, `fill_output_below_floor`, `fill_asset_not_conserved`, `fill_taxi_input_assets`, `fill_input_unspendable` and `fill_taxi_input_signed`.",
                     ),
-                    409: quoteRefused(
-                        "`operation_conflict`, `receive_quote_unavailable`, `receive_quote_funding_changed`, `swap_fill_deadline_expired` and the admission refusals",
+                    404: error("`not_found`: no such receive quote."),
+                    409: error(
+                        "Codes include `quote_expired`, `invalid_state`, `operation_conflict`, `policy_changed`, `fill_input_expiry_floor`, `fill_output_limit_exceeded` and `fill_bind_failed`.",
                     ),
-                    500: error("Codes include `receive_quote_invalid` and `internal_error`."),
-                    503: notQuoting(
-                        "`paused`, `not_ready`, `runtime_unsafe`, `database_busy` and `shutting_down`",
+                    500: internal,
+                    503: error(
+                        "Codes include `not_ready`, `runtime_unsafe`, `fill_signing_failed`, `database_busy` and `shutting_down`. `fill_submission_ambiguous` means the outcome is unknown: poll the fill status, never resubmit blindly.",
                     ),
                 },
             },
         },
-        "/v1/swap-fills/{id}": {
+        "/v1/fills/{id}": {
             get: {
-                tags: ["Swap fills"],
-                summary: "Swap fill status",
-                parameters: byId("`fillId` from the quote."),
+                tags: ["Fills"],
+                summary: "Fill status",
+                parameters: byId("`fillId` from the submission."),
                 responses: {
-                    200: ok("SwapFillStatus", examples.swapFillStatus),
+                    200: ok("FillStatus", examples.fillSubmitted),
                     404: error("`not_found`."),
                     500: internal,
                     503: unavailable,
-                },
-            },
-        },
-        "/v1/swap-fills/{id}/submit": {
-            post: {
-                tags: ["Swap fills"],
-                summary: "Submit the solver-signed fill",
-                description:
-                    "Verifies the solver's graph against the quote, co-signs and submits it.",
-                parameters: byId("`fillId` from the quote."),
-                requestBody: body("SwapFillSubmitRequest"),
-                responses: {
-                    202: ok(
-                        "SwapFillStatus",
-                        examples.swapFillSubmitted,
-                        "Submitted: `submitting`.",
-                    ),
-                    400: error("`invalid_request`."),
-                    404: error("`not_found`."),
-                    409: error(
-                        "Codes include `quote_expired`, `invalid_state`, `swap_fill_graph_conflict`, `swap_fill_solver_unauthorised` and `swap_fill_bound_unsafe`.",
-                    ),
-                    500: error(
-                        "Codes include `swap_fill_graph_integrity`, `swap_fill_covenant_pin_invalid` and `internal_error`.",
-                    ),
-                    503: error(
-                        "Codes include `not_ready`, `swap_fill_signing_failed`, `database_busy` and `shutting_down`. `swap_fill_submission_ambiguous` means the outcome is unknown: poll the fill status, never resubmit blindly.",
-                    ),
                 },
             },
         },

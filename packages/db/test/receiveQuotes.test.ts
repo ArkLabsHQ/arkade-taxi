@@ -9,12 +9,20 @@ import {
     ReceiveQuoteRepository,
     ReceiveQuoteReservationConflictError,
     ReservationRepository,
-    SwapFillRepository,
+    FillRepository,
     type Database,
     type ReceiveQuote,
-    type SwapFill,
+    type Fill,
 } from "../src/index.js";
 import type { Advance } from "@arkade-taxi/core";
+
+const fillReservations = (db: Database) =>
+    db
+        .prepare<[], { txid: string; vout: bigint }>(
+            "SELECT outpoint_txid AS txid, outpoint_vout AS vout FROM fill_reservations ORDER BY txid, vout",
+        )
+        .all()
+        .map(({ txid, vout }) => ({ txid, vout: Number(vout) }));
 
 const NOW = 1_757_000_000;
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
@@ -25,7 +33,7 @@ const quote = (over: Partial<ReceiveQuote> = {}): ReceiveQuote => ({
     id: "receive-1",
     state: "quoted",
     receiverAddress: "ark1receiver",
-    makerPublicKey: "22".repeat(32),
+    senderKey: "22".repeat(32),
     params: {
         receiverKey: new Uint8Array(32).fill(0x11),
         senderKey: new Uint8Array(32).fill(0x22),
@@ -94,26 +102,18 @@ const insert = (repo: ReceiveQuoteRepository, policy: PolicyRepository, value = 
 const graph = {
     arkTx: "aGVsbG8=",
     checkpoints: ["d29ybGQ="],
-    graphId: new Uint8Array(32).fill(0xab),
-    inputOwners: [null, "solver", "sponsor"] as (string | null)[],
 };
 
-const boundFill = (over: Partial<SwapFill> = {}): SwapFill => ({
+const boundFill = (over: Partial<Fill> = {}): Fill => ({
     id: "fill-1",
-    receiveQuoteId: "receive-1",
+    quoteId: "receive-1",
     operationId: "op-1",
-    state: "quoted",
-    offerHex: "deadbeef",
-    offerTxid: "bb".repeat(32),
-    offerVout: 0,
-    solverInputs: [{ txid: "cc".repeat(32), vout: 0, value: 1n }],
-    solverProceedsScript: new Uint8Array([0x51]),
-    solverKeys: ["44".repeat(32)],
+    state: "submitting",
+    covenantOutputIndex: 0,
+    assetUnits: 5n,
     taxiInputs: [INPUT],
     contributionSats: 330n,
-    sponsorScript: new Uint8Array([0x52]),
     fare: { currency: "sats", units: 3n },
-    maxFare: { currency: "sats", units: 30n },
     graph: structuredClone(graph),
     graphId: new Uint8Array(32).fill(0xab),
     submitInvoked: false,
@@ -146,7 +146,7 @@ const boundAdvance = (over: Partial<Advance> = {}): Advance => ({
     expiresAt: NOW + 60,
     recoveryLocktime: { kind: "time", value: DEADLINE },
     operatorInputs: [INPUT],
-    unsignedLockupTx: 'taxi-source:{"tag":"joint-fill","version":1}',
+    unsignedLockupTx: 'taxi-source:{"tag":"fill","version":1}',
     unsignedLockupId: "ab".repeat(32),
     ...over,
 });
@@ -273,7 +273,7 @@ describe("receive quote repository", () => {
         insert(repo, policy);
         if (state === "expired") repo.expireQuotes(NOW + 60);
         if (state === "bound")
-            repo.bind({
+            repo.bindFill({
                 quoteId: "receive-1",
                 fill: boundFill(),
                 advance: boundAdvance(),
@@ -303,7 +303,7 @@ describe("receive quote repository", () => {
             }),
         );
         insert(repo, policy);
-        repo.bind({
+        repo.bindFill({
             quoteId: "receive-1",
             fill: boundFill(),
             advance: boundAdvance(),
@@ -374,7 +374,7 @@ describe("receive quote repository", () => {
         const repo = new ReceiveQuoteRepository(db);
         insert(repo, policy);
         const revision = policy.getSnapshot().revision;
-        repo.bind({
+        repo.bindFill({
             quoteId: "receive-1",
             fill: boundFill(),
             advance: boundAdvance(),
@@ -382,19 +382,19 @@ describe("receive quote repository", () => {
             now: NOW,
         });
         expect(repo.get("receive-1")).toMatchObject({ state: "bound", boundFillId: "fill-1" });
-        expect(new SwapFillRepository(db).get("fill-1")?.receiveQuoteId).toBe("receive-1");
+        expect(new FillRepository(db).get("fill-1")?.quoteId).toBe("receive-1");
         expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("locking");
         expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
         expect(new AdvanceRepository(db).exposureTotals()).toEqual({
             outstandingSats: 330n,
             lockedCount: 1,
         });
-        expect(new SwapFillRepository(db).exposureTotals()).toEqual({
+        expect(repo.exposureTotals()).toEqual({
             outstandingSats: 0n,
             activeCount: 0,
         });
         expect(() =>
-            repo.bind({
+            repo.bindFill({
                 quoteId: "receive-1",
                 fill: { ...boundFill(), id: "fill-2", operationId: "op-2" },
                 advance: boundAdvance(),
@@ -402,8 +402,8 @@ describe("receive quote repository", () => {
                 now: NOW,
             }),
         ).toThrow(/bound|state/);
-        expect(new SwapFillRepository(db).expireQuotes(NOW + 60)).toBe(1);
-        expect(repo.get("receive-1")?.state).toBe("expired");
+        expect(new FillRepository(db).expire(NOW + 60)).toBe(1);
+        expect(repo.get("receive-1")?.state).toBe("bound");
         expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("expired");
         expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([]);
         db.close();
@@ -436,7 +436,7 @@ describe("receive quote repository", () => {
             const repo = new ReceiveQuoteRepository(db);
             insert(repo, policy, receiverPaidQuote());
             expect(() =>
-                repo.bind({
+                repo.bindFill({
                     quoteId: "receive-1",
                     fill: boundFill({
                         contributionSats: 330n,
@@ -456,7 +456,7 @@ describe("receive quote repository", () => {
             const repo = new ReceiveQuoteRepository(db);
             insert(repo, policy);
             expect(() =>
-                repo.bind({
+                repo.bindFill({
                     quoteId: "receive-1",
                     fill: boundFill(),
                     advance: boundAdvance({ receiverFare: receiverPaidFare }),
@@ -478,7 +478,7 @@ describe("receive quote repository", () => {
                 const repo = new ReceiveQuoteRepository(db);
                 insert(repo, policy, receiverPaidQuote());
                 expect(() =>
-                    repo.bind({
+                    repo.bindFill({
                         quoteId: "receive-1",
                         fill: boundFill({
                             contributionSats: 330n,
@@ -499,7 +499,7 @@ describe("receive quote repository", () => {
             const repo = new ReceiveQuoteRepository(db);
             insert(repo, policy, receiverPaidQuote());
             expect(() =>
-                repo.bind({
+                repo.bindFill({
                     quoteId: "receive-1",
                     fill: boundFill({
                         contributionSats: 330n,
@@ -512,6 +512,29 @@ describe("receive quote repository", () => {
             ).not.toThrow();
             db.close();
         });
+    });
+
+    it.each([
+        { currency: "asset" as const, units: 3n, assetId: ASSET },
+        { currency: "sats" as const, units: 4n },
+    ])("refuses binding when the advance fare differs from the quote", (fare) => {
+        const db = openDatabase(":memory:");
+        const policy = configure(db);
+        const repo = new ReceiveQuoteRepository(db);
+        insert(repo, policy);
+        expect(() =>
+            repo.bindFill({
+                quoteId: "receive-1",
+                fill: boundFill(),
+                advance: boundAdvance({ fare }),
+                expectedPolicyRevision: policy.getSnapshot().revision,
+                now: NOW,
+            }),
+        ).toThrow(/economics mismatch/);
+        expect(repo.get("receive-1")?.state).toBe("quoted");
+        expect(new FillRepository(db).get("fill-1")).toBeUndefined();
+        expect(new AdvanceRepository(db).get("receive-1")).toBeUndefined();
+        db.close();
     });
 
     describe("bind: exit params agreement", () => {
@@ -527,7 +550,7 @@ describe("receive quote repository", () => {
                 const repo = new ReceiveQuoteRepository(db);
                 insert(repo, policy);
                 expect(() =>
-                    repo.bind({
+                    repo.bindFill({
                         quoteId: "receive-1",
                         fill: boundFill(),
                         advance: boundAdvance(over),
@@ -544,14 +567,14 @@ describe("receive quote repository", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);
         const quotes = new ReceiveQuoteRepository(db);
-        const fills = new SwapFillRepository(db);
+        const fills = new FillRepository(db);
         const advances = new AdvanceRepository(db);
         const reservations = new ReservationRepository(db);
         const SECOND = { txid: "ee".repeat(32), vout: 2 };
         const UNBOUND = { txid: "ff".repeat(32), vout: 0 };
         const LIVE = { txid: "ff".repeat(32), vout: 1 };
         insert(quotes, policy);
-        quotes.bind({
+        quotes.bindFill({
             quoteId: "receive-1",
             fill: boundFill(),
             advance: boundAdvance(),
@@ -566,11 +589,11 @@ describe("receive quote repository", () => {
                 operatorInputs: [{ ...quote().operatorInputs[0]!, ...SECOND }],
             }),
         );
-        quotes.bind({
+        quotes.bindFill({
             quoteId: "receive-2",
             fill: boundFill({
                 id: "fill-2",
-                receiveQuoteId: "receive-2",
+                quoteId: "receive-2",
                 operationId: "op-2",
                 taxiInputs: [SECOND],
             }),
@@ -581,7 +604,7 @@ describe("receive quote repository", () => {
         fills.insert(
             boundFill({
                 id: "fill-3",
-                receiveQuoteId: undefined,
+                quoteId: "missing",
                 operationId: "op-3",
                 taxiInputs: [UNBOUND],
             }),
@@ -589,7 +612,7 @@ describe("receive quote repository", () => {
         fills.insert(
             boundFill({
                 id: "fill-4",
-                receiveQuoteId: undefined,
+                quoteId: "missing",
                 operationId: "op-4",
                 taxiInputs: [LIVE],
                 expiresAt: NOW + 600,
@@ -599,40 +622,35 @@ describe("receive quote repository", () => {
             "UPDATE receive_quotes SET state = 'expired', bound_fill_id = NULL WHERE id = 'receive-2'",
         ).run();
 
-        expect(fills.expireQuotes(NOW + 60)).toBe(2);
+        expect(fills.expire(NOW + 60)).toBe(1);
         expect(fills.get("fill-1")?.state).toBe("expired");
         expect(advances.get("receive-1")?.state).toBe("expired");
         expect(reservations.listForAdvance("receive-1")).toEqual([]);
-        expect(fills.get("fill-3")?.state).toBe("expired");
-        expect(fills.get("fill-4")?.state).toBe("quoted");
-        expect(fills.listReservedOutpoints()).toEqual([LIVE]);
+        expect(fills.get("fill-3")).toMatchObject({
+            state: "submitting",
+            failureCode: "fill_bound_expiry_unsafe",
+        });
+        expect(fills.get("fill-4")?.state).toBe("submitting");
+        expect(fillReservations(db)).toEqual([UNBOUND, LIVE]);
 
         const stuck = fills.get("fill-2")!;
-        expect(stuck.state).toBe("quoted");
-        expect(stuck.failureCode).toBe("swap_fill_bound_expiry_unsafe");
+        expect(stuck.state).toBe("submitting");
+        expect(stuck.failureCode).toBe("fill_bound_expiry_unsafe");
         expect(stuck.failureDetail).toMatch(/receive-2/);
         expect(advances.get("receive-2")?.state).toBe("locking");
         expect(reservations.listForAdvance("receive-2")).toEqual([SECOND]);
 
-        expect(
-            fills.claimSubmit("fill-4", {
-                leaseOwner: "w1",
-                leaseToken: "t1",
-                leaseUntil: NOW + 90,
-                solverGraph: structuredClone(graph),
-                now: NOW + 60,
-            }).state,
-        ).toBe("submitting");
+        expect(fills.reconcileCandidates(NOW + 60).map(({ id }) => id)).toContain("fill-4");
         db.close();
     });
 
-    it("refuses to claim a bound fill the sweep could not expire", () => {
+    it("refuses to cancel a bound fill the sweep could not expire", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);
         const quotes = new ReceiveQuoteRepository(db);
-        const fills = new SwapFillRepository(db);
+        const fills = new FillRepository(db);
         insert(quotes, policy);
-        quotes.bind({
+        quotes.bindFill({
             quoteId: "receive-1",
             fill: boundFill(),
             advance: boundAdvance(),
@@ -642,16 +660,12 @@ describe("receive quote repository", () => {
         db.prepare(
             "UPDATE receive_quotes SET state = 'expired', bound_fill_id = NULL WHERE id = 'receive-1'",
         ).run();
-        expect(fills.expireQuotes(NOW + 60)).toBe(0);
+        expect(fills.expire(NOW + 60)).toBe(0);
         expect(() =>
-            fills.claimSubmit("fill-1", {
-                leaseOwner: "w1",
-                leaseToken: "t1",
-                leaseUntil: NOW + 90,
-                solverGraph: structuredClone(graph),
-                now: NOW + 60,
-            }),
-        ).toThrow(/quote_expired/);
+            fills.reconcileCancelled(fills.get("fill-1")!, "never_invoked", NOW + 60),
+        ).toThrow(/binding disagrees/);
+        expect(new AdvanceRepository(db).get("receive-1")?.state).toBe("locking");
+        expect(new ReservationRepository(db).listForAdvance("receive-1")).toEqual([INPUT]);
         db.close();
     });
 
@@ -660,20 +674,18 @@ describe("receive quote repository", () => {
         const policy = configure(db);
         const quotes = new ReceiveQuoteRepository(db);
         insert(quotes, policy);
-        quotes.bind({
+        quotes.bindFill({
             quoteId: "receive-1",
             fill: boundFill(),
             advance: boundAdvance(),
             expectedPolicyRevision: policy.getSnapshot().revision,
             now: NOW,
         });
-        db.prepare(
-            "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = 'fill-1'",
-        ).run();
-        const fills = new SwapFillRepository(db);
+        db.prepare("UPDATE fills SET submit_invoked = 1 WHERE id = 'fill-1'").run();
+        const fills = new FillRepository(db);
         expect(
             fills.reconcileSettled(
-                "fill-1",
+                fills.get("fill-1")!,
                 "ab".repeat(32),
                 { txid: "ab".repeat(32), vout: 0 },
                 NOW + 1,

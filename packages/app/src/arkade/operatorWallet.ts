@@ -6,10 +6,11 @@ import {
     EsploraProvider,
     Transaction,
     canSpendOffchain,
+    collectIntents,
     isSubdust,
     isVtxoSpent,
     type WalletConfig,
-    type ArkInfo,
+    type ArkadeInfo,
     type ArkIntentState,
     type ArkProvider,
     type ExtendedVirtualCoin,
@@ -141,7 +142,7 @@ export function createOperatorRuntime(
         const span = Math.floor((new Date(coin.expiresAt).getTime() - born) / 1000);
         return Number.isSafeInteger(span) && tooShort(BigInt(span));
     };
-    const advertisesShortLife = (info?: ArkInfo) =>
+    const advertisesShortLife = (info?: ArkadeInfo) =>
         info?.vtxoTreeExpiry !== undefined &&
         info.vtxoTreeExpiry >= 512n &&
         tooShort(info.vtxoTreeExpiry);
@@ -153,12 +154,12 @@ export function createOperatorRuntime(
     // batch locks its coins for good, since nobody here signs that batch. Once quiet for a few
     // sessions it is cancelled, unless every VTXO it spends was consumed. A boarding input is
     // on-chain, unknown to the indexer, and can't be double-spent, so it never stops this.
-    const handleEarlierIntents = async (info: ArkInfo) => {
+    const handleEarlierIntents = async (info: ArkadeInfo) => {
         const taken = await timed("runtime.earlier.held", held);
         const quiet = Math.max(60_000, 3 * Number(info.sessionDuration) * 1000);
         const earlier = (
             await timed("runtime.earlier.storage", () =>
-                storage.intentRepository.getIntents({
+                collectIntents(storage.intentRepository, {
                     states: ["waiting_for_batch", "batch_in_progress"],
                 }),
             )
@@ -282,7 +283,7 @@ export function createOperatorRuntime(
                 retired.catch(() => {});
                 const created = await sdkBackground.run(true, async () => {
                     const made = await timed("runtime.wallet.create", () =>
-                        (options.walletFactory ?? Wallet.create)({
+                        (options.walletFactory ?? Wallet.create.bind(Wallet))({
                             identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
                             arkProvider: Object.assign(Object.create(providers.arkProvider), {
                                 getInfo: async () => verified.info!,
@@ -415,7 +416,7 @@ export function createOperatorRuntime(
                     return result;
                 }
                 const waiting = await timed("runtime.storage.waitingIntents", () =>
-                    storage.intentRepository.getIntents({ states: WAITING }),
+                    collectIntents(storage.intentRepository, { states: WAITING }),
                 ).catch(() => []);
                 if (
                     waiting.some(

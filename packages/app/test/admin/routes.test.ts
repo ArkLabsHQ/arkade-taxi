@@ -14,7 +14,7 @@ import {
 } from "../fixtures.js";
 import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
 import { SHOWN_CONFIG } from "../../src/config.js";
-import { taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { sdkAssetId } from "@arkade-taxi/client";
 
 const INT64_MAX = "9223372036854775807";
 
@@ -203,7 +203,7 @@ describe("GET /admin/api/funding", () => {
     it("derives the operator address and totals each asset across spendable coins", async () => {
         const txid = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
         const held = (groupIndex: number, amount: bigint) => ({
-            assetId: taxiAssetIdToSwapId({ txid, groupIndex }),
+            assetId: sdkAssetId({ txid, groupIndex }),
             amount,
         });
         const boarding = boardingView({

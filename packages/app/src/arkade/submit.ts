@@ -277,7 +277,6 @@ function assertPersistedGraph(
             forfeitTapLeafScript: leaf,
             intentTapLeafScript: leaf,
             isPreconfirmed: true,
-            virtualStatus: { state: "preconfirmed" },
             ...(input.expiry.kind === "height"
                 ? { expiresAtHeight: Number(input.expiry.value) }
                 : { expiresAt: new Date(Number(input.expiry.value) * 1000) }),

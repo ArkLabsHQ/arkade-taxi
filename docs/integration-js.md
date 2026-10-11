@@ -252,7 +252,7 @@ Alice can also verify her retained quote and lockup with `verifyTransfer`
 and use `refund(transfer, aliceIdentity)`. There are no Taxi claim/refund
 HTTP endpoints; covenant spends go directly through the public SDK providers.
 
-## Advanced reference
+## Advanced reference and [caller-built fills](fills-js.md)
 
 ### Trust facts
 

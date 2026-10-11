@@ -124,6 +124,20 @@ describe("service lifecycle", () => {
         expect(h.lifecycle.status()).toEqual({ phase: "ready", complete: true, blocker: null });
     });
 
+    it("preserves completed startup when a successful refresh reports a fill liability", async () => {
+        let blockers: string[] = [];
+        const h = harness({ reconcile: async () => ({ blockers }) });
+        await h.lifecycle.start();
+        await h.lifecycle.refresh();
+        expect(h.lifecycle.status()).toEqual({ phase: "ready", complete: true, blocker: null });
+
+        blockers = ["fill_liability_unresolved"];
+        await h.lifecycle.refresh();
+
+        expect(h.lifecycle.status()).toEqual({ phase: "ready", complete: true, blocker: null });
+        expect(h.calls.filter((call) => call === "background")).toHaveLength(1);
+    });
+
     it.each(["verifyRuntime", "reconcile", "firstRecoveryTick", "startStreams"] as const)(
         "preserves completed startup during a routine %s refresh",
         async (method) => {

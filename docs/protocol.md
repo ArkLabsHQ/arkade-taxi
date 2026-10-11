@@ -120,6 +120,56 @@ facts. The lifecycle is `quoted` → `locking` → `locked`, then an observed
 `recovered`. Unsubmitted quotes can become `expired`. A candidate transaction
 ID, HTTP success or stream notification is not a terminal-state proof.
 
+## `POST /v1/receive-quotes`
+
+Request `receiverAddress`, `senderKey`, `assetId`, optional `fareId`, funding
+expiry and `payer: "receiver"`. The quote reserves sats-only operator inputs and
+returns their outpoints, values, taproot evidence and expiry as `operatorInputs`,
+plus `operatorScript`, covenant params, fare and deadlines. Verify the quote
+against trusted provider keys and the receiver's expected economics before
+building a graph. `senderKey` replaces `makerPublicKey`.
+
+## `POST /v1/fills`
+
+The caller builds the complete Arkade graph and signs its own inputs. Submit
+`operationId`, `quoteId`, base64 `arkTx` and index-aligned `checkpoints`,
+`taxiInputIndexes`, `covenantOutputIndex`, decimal `assetUnits` and optional Unix
+`validUntil`. The Taxi validates its economics, binds the quote atomically,
+signs only its reserved inputs and submits. The response contains `fillId`,
+state and available transaction information; it never returns Taxi-signed bytes.
+
+The validator's contract is:
+
+1. V1: derive every input from the checkpoints; declared Taxi indexes are unique and in range.
+2. V2: Taxi inputs exactly match the reservation and its indexed snapshots.
+3. V3: no other operator coin appears as a foreign input.
+4. V4: Taxi checkpoints and their Arkade input edges match the accepted spend.
+5. V5: the declared covenant output has the quoted script and sats.
+6. V6: the covenant carries exactly the declared asset units and a spendable receiver fare.
+7. V7: total operator payout equals its input sats minus the loan plus the quoted fare.
+8. V8: every output respects dust, asset-hosting floors and provider limits.
+9. V9: asset packets conserve units and consume none at Taxi inputs.
+10. V10: every indexed input is spendable and satisfies the quote's expiry floor.
+11. V11: Taxi inputs arrive unsigned. Provider consensus enforces foreign authorization.
+12. V12: admission, policy, reservations, safety and deadlines are checked before binding and submission.
+13. V13: Taxi signs last, submits through the applicable provider and returns status only.
+
+The caller verifies its own proceeds; the receiver verifies the incoming
+covenant before claiming. Swaps are built by the caller's swap integration.
+Transfers and sponsored transfers retain their existing builders and routes.
+The former `/v1/swap-fills` quote/submit rail is removed.
+
+## `GET /v1/fills/{id}`
+
+Returns `submitting`, `settled`, `expired` or `cancelled`, with an observed
+covenant outpoint when settled. Repeating an operation with changed terms is
+an `operation_conflict`. A lost reply or `fill_submission_ambiguous` requires
+status polling and reconciliation. Unspent inputs or elapsed quote time do not
+prove an invoked submission failed; its reservations stay held. Unresolved
+liabilities appear on `/health` and block `/ready`. Settlement requires exact
+indexed covenant and operator payouts; a confirmed conflicting spend proves
+the original graph cannot settle.
+
 ## `GET /v1/claims`
 
 Read-only receiver discovery. Pass repeated URL-encoded `receiver` query keys,

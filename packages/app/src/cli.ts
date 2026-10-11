@@ -11,17 +11,12 @@ import {
     ReservationRepository,
     ProceedsRepository,
     ReceiveQuoteRepository,
-    SwapFillRepository,
+    FillRepository,
 } from "@arkade-taxi/db";
 import { loadConfig, resolveRuntimeConfig } from "./config.js";
 import { sanitizeOperationalError, ServiceError } from "./errors.js";
 import { ProductionLockupBuilder } from "./arkade/lockupBuilder.js";
 import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes.js";
-import {
-    admitBoundSwapFill,
-    createSwapOfferCodec,
-    ProductionSwapFillGraphBuilder,
-} from "./swapFillQuotes.js";
 import { createSweeper } from "./sweeper.js";
 import { createAdminApp, createApp, type ServerDeps } from "./server.js";
 import { createOperatorRuntime } from "./arkade/operatorWallet.js";
@@ -31,7 +26,7 @@ import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/sub
 import { createLockupReconciler } from "./reconciler.js";
 import { custodySolvencyView } from "./custody.js";
 import { DelegateeClient } from "./delegatee.js";
-import { createSwapFillReconciler } from "./swapFillReconciler.js";
+import { createFillReconciler } from "./fillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle.js";
@@ -75,7 +70,7 @@ async function runServe(): Promise<void> {
     });
     const policy = new PolicyRepository(db);
     const reservations = new ReservationRepository(db);
-    const swapFills = new SwapFillRepository(db);
+    const fills = new FillRepository(db);
     const receiveQuotes = new ReceiveQuoteRepository(db);
     const custody = new CustodyRepository(db);
     advances.assertExitParamsPresent();
@@ -95,12 +90,12 @@ async function runServe(): Promise<void> {
     };
     const runtime = createOperatorRuntime(config, db, {
         phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
-        reservedOutpoints: () => unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+        reservedOutpoints: () => unionReservedOutpoints(reservations, receiveQuotes),
         // A `held` custody row binds no coin: the reclaimed coin is inventory,
         // which the SDK renews by merging. Only the coins an in-flight release
         // graph already spends are withheld from background settlement.
         heldOutpoints: () => [
-            ...unionReservedOutpoints(reservations, swapFills, receiveQuotes),
+            ...unionReservedOutpoints(reservations, receiveQuotes),
             ...custody.listHeldOutpoints(),
             ...(jobs.active()?.plan.inputs ?? []),
         ],
@@ -110,7 +105,6 @@ async function runServe(): Promise<void> {
         runtime,
         advances,
         reservations,
-        swapFills,
         receiveQuotes,
         jobs,
         phaseLogger: log.isLevelEnabled("debug") ? log : undefined,
@@ -231,8 +225,10 @@ async function runServe(): Promise<void> {
             return { height, timestamp: new Date(timestamp * 1000) };
         },
     });
-    const swapFillReconciler = createSwapFillReconciler({
-        swapFills,
+    const fillReconciler = createFillReconciler({
+        fills,
+        advances,
+        receiveQuotes,
         indexer: runtime.providers.indexerProvider,
         now: seconds,
     });
@@ -263,12 +259,6 @@ async function runServe(): Promise<void> {
               return { client, registration };
           })()
         : undefined;
-    const swapFillBuilder = new ProductionSwapFillGraphBuilder(() => {
-        const wallet = runtime.wallet;
-        if (!wallet) throw new ServiceError("runtime_unsafe", 503, "operator wallet unavailable");
-        return wallet;
-    }, config.arkdUrl);
-    const offerCodec = createSwapOfferCodec(config.serverPubkey);
     const providerLimits = async () => {
         const info = await runtime.providers.arkProvider.getInfo();
         return { vtxoMaxAmount: info.vtxoMaxAmount };
@@ -302,12 +292,18 @@ async function runServe(): Promise<void> {
         inventory,
         lockupBuilder: new ProductionLockupBuilder(config, runtime.getServerUnroll),
         sponsoredBuilder: new ProductionSponsoredLockupBuilder(config, runtime.getServerUnroll),
-        swapFills,
-        swapFillBuilder,
         ...(delegatee ? { delegatee } : {}),
-        swapFillSubmit: {
-            swapFills,
+        fill: {
+            runtime,
             policy,
+            fills,
+            receiveQuotes,
+            inventory,
+            senderInventory: runtime.providers.indexerProvider,
+            config,
+            now: seconds,
+            nowMs: () => Date.now(),
+            randomId: () => randomUUID(),
             taxiIdentity: () => {
                 const wallet = runtime.wallet;
                 if (!wallet)
@@ -315,35 +311,11 @@ async function runServe(): Promise<void> {
                 return wallet.identity;
             },
             emulator: runtime.providers.emulatorProvider,
-            config,
-            now: seconds,
-            randomId: () => randomUUID(),
+            arkProvider: runtime.providers.arkProvider,
+            providerLimits,
+            getServerUnroll: runtime.getServerUnroll,
             leaseSeconds: Math.max(30, intervalSeconds * 2),
-            advances,
-            withBoundAdmission: (work) =>
-                admitBoundSwapFill(
-                    {
-                        runtime,
-                        policy,
-                        advances,
-                        reservations,
-                        swapFills,
-                        receiveQuotes,
-                        inventory,
-                        senderInventory: runtime.providers.indexerProvider,
-                        config,
-                        now: seconds,
-                        nowMs: Date.now,
-                        randomId: () => randomUUID(),
-                        swapFillBuilder,
-                        offerCodec,
-                        providerLimits,
-                        getServerUnroll: runtime.getServerUnroll,
-                    },
-                    work,
-                ),
         },
-        offerCodec,
         providerLimits,
         lockupSubmitter,
         onLockupClaimed: (id) => submission.prompt(id),
@@ -351,7 +323,7 @@ async function runServe(): Promise<void> {
         senderInventory: runtime.providers.indexerProvider,
         sweeper,
         reconciler,
-        swapFillReconciler,
+        fillReconciler,
         sweeperStaleAfterSeconds: intervalSeconds * 3,
         sweeperIntervalMs: config.reconcileIntervalMs,
         sweeperRunning: () => running,
@@ -398,17 +370,13 @@ async function runServe(): Promise<void> {
         },
         reconcile: async () => {
             await timed("lifecycle.reconcile", () => reconciler.tick());
-            await timed("lifecycle.swapFills", () => swapFillReconciler.tick());
+            await timed("lifecycle.fills", () => fillReconciler.tick());
             return {
-                blockers: [
-                    ...reconciler.status().blockers,
-                    ...swapFillReconciler.status().blockers,
-                ],
+                blockers: [...reconciler.status().blockers, ...fillReconciler.status().blockers],
             };
         },
         firstRecoveryTick: async () => {
             reservations.expireQuotes(seconds());
-            swapFills.expireQuotes(seconds());
             receiveQuotes.expireQuotes(seconds());
             const safety = await timed("lifecycle.recoveryRuntime", () => runtime.assertRecovery());
             const result = await timed("lifecycle.sweep", () =>

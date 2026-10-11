@@ -6,11 +6,10 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     type Database,
 } from "@arkade-taxi/db";
 import { DustCovenantScript, payoutPkScript } from "@arkade-taxi/covenant";
-import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
+import { assetIdToWire, bytesToHex, fundingInputToWire } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
 import {
     createReceiveQuote,
@@ -43,7 +42,7 @@ const TOKEN_ASSET = { txid: new Uint8Array(32).fill(0x77), groupIndex: 3 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const body = (over: Record<string, unknown> = {}) => ({
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     assetId: assetIdToWire(ASSET),
     ...over,
 });
@@ -88,7 +87,6 @@ const deps = (over: Partial<ReceiveQuoteDeps> = {}): ReceiveQuoteDeps => ({
     policy,
     advances,
     reservations: new ReservationRepository(db),
-    swapFills: new SwapFillRepository(db),
     receiveQuotes: quotes,
     inventory: {
         getSpendableVtxos: async () => [
@@ -150,7 +148,7 @@ describe("createReceiveQuote", () => {
             quoteId: "receive-1",
             state: "quoted",
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             params: {
                 dust: "330",
                 topup: "330",
@@ -172,7 +170,9 @@ describe("createReceiveQuote", () => {
                 "expiresAt",
                 "fare",
                 "inputExpiryFloor",
-                "makerPublicKey",
+                "senderKey",
+                "operatorInputs",
+                "operatorScript",
                 "params",
                 "quoteId",
                 "receiverAddress",
@@ -185,6 +185,16 @@ describe("createReceiveQuote", () => {
             value: 20_000n,
             expiry: { kind: "height", value: 900_000n },
         });
+        // Published verbatim from the reservation, so a builder spends exactly these.
+        expect(response.operatorInputs).toEqual([
+            fundingInputToWire(quotes.get("receive-1")!.operatorInputs[0]!),
+        ]);
+        expect(response.operatorScript).toBe(
+            bytesToHex(
+                new ArkAddress(config().serverPubkey, config().operatorKey, config().addressHrp)
+                    .pkScript,
+            ),
+        );
         expect(advances.rows.size).toBe(0);
     });
 
@@ -312,8 +322,8 @@ describe("createReceiveQuote", () => {
 
     it.each([
         [body({ extra: true }), /unexpected/],
-        [body({ makerPublicKey: "FF".repeat(32) }), /makerPublicKey/],
-        [body({ makerPublicKey: "ff".repeat(32) }), /makerPublicKey/],
+        [body({ senderKey: "FF".repeat(32) }), /senderKey/],
+        [body({ senderKey: "ff".repeat(32) }), /senderKey/],
         [
             body({ receiverAddress: new ArkAddress(serverKey, receiverKey, "tark").encode() }),
             /network/,
@@ -599,7 +609,7 @@ describe("getReceiveQuote", () => {
         const world = await createBoundJointFill();
         try {
             const read = getReceiveQuote(
-                { receiveQuotes: world.receiveQuotes, now: () => NOW },
+                { receiveQuotes: world.receiveQuotes, now: () => NOW, config: world.config },
                 "receive-1",
             );
             expect(read.state).toBe("bound");

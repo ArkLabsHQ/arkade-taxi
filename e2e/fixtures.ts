@@ -1,3 +1,6 @@
+import type { CovenantTransfer } from "@arkade-taxi/client";
+import { mineBlocks } from "../scripts/e2e-mine.mjs";
+import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect } from "vitest";
@@ -590,3 +593,117 @@ export const assetOutputs = (tx: Transaction, assetId: string) => {
     expect(packet.groups[0]!.assetId!.toString()).toBe(assetId);
     return packet.groups[0]!.outputs.map((output) => [output.vout, output.amount]);
 };
+
+/** A clean sats coin for `name`, sent from the asset holder's wallet. */
+export async function freshCoin(live: Live, name: string, amount: number) {
+    const actor = live.actors[name];
+    const txid = await live.actors.receiverWithAsset.wallet.send({
+        address: await actor.wallet.getAddress(),
+        amount,
+    });
+    return poll(
+        `fresh ${amount}-sat coin for ${name}`,
+        async () =>
+            (await actor.wallet.getSpendableVtxos({ withRecoverable: false })).find(
+                (coin) => coin.txid === txid && coin.value === amount && !coin.assets?.length,
+            ),
+        (coin) => coin !== undefined,
+        120_000,
+    ).then((coin) => coin!);
+}
+
+export async function claimFromFeed(
+    live: Live,
+    transferId: string,
+    receiverAddress: string,
+    assetId: { txid: Uint8Array; groupIndex: number },
+    assetUnits: bigint,
+) {
+    const claim = await poll(
+        "claim feed serves the locked covenant",
+        async () =>
+            (await live.client.listClaims({ receiverAddresses: [receiverAddress] })).claims.find(
+                (item) => item.transferId === transferId && item.state === "locked",
+            ),
+        (item) => item !== undefined,
+    ).then((item) => item!);
+    const transfer = await live.client.verifyIncomingClaim(
+        claim,
+        {
+            receiverAddress,
+            assetId,
+            assetUnits,
+            claimMode: "recycle",
+            recoveryRecipient: "receiver",
+        },
+        {
+            serverKey: hex.decode(live.info.serverKey),
+            emulatorKey: hex.decode(live.info.emulatorKey),
+            operatorKey: hex.decode(live.info.operatorKey),
+            vtxoMinAmount: BigInt(live.info.vtxoMinAmount),
+            hrp: "tark",
+        },
+        live.config,
+    );
+    return { claim, transfer };
+}
+
+export async function recycleWith(
+    live: Live,
+    transfer: CovenantTransfer,
+    coin: ExtendedVirtualCoin,
+    destination: Uint8Array,
+) {
+    return live.client.recycle(
+        transfer,
+        {
+            input: {
+                txid: coin.txid,
+                vout: coin.vout,
+                value: BigInt(coin.value),
+                tapTree: coin.tapTree,
+                tapLeafScript: coin.forfeitTapLeafScript,
+            },
+            expiry: fundingOf(coin).expiry,
+            identity: live.actors.receiverSats.identity,
+        },
+        destination,
+    );
+}
+
+export async function jumpPast(locktime: bigint) {
+    execFileSync(
+        process.execPath,
+        [required("ARKADE_REGTEST_CLI"), "rpc", "setmocktime", String(locktime + 1n)],
+        { stdio: "pipe", timeout: 30_000 },
+    );
+    await mineBlocks(11);
+}
+
+/** A failed scenario must not hand the next one an active advance: a bound fill
+ * stays `locking` until it expires, past the fixture's 90s wait. */
+export async function releaseBound(live: Live, id: string, unlock: () => Promise<unknown>) {
+    let { state } = await live.client.status(id);
+    if (state === "locking") {
+        const row = (await admin("advances")).advances.find((item: any) => item.id === id);
+        if (!row)
+            throw new Error(
+                `bound advance ${id} (receive quote ${id}) reports locking but is missing from /admin/api/advances`,
+            );
+        state = (
+            await poll(
+                `bound fill ${id} settles or expires`,
+                () => live.client.status(id),
+                (value) => value.state !== "locking",
+                Math.max(90_000, row.expiresAt * 1000 - Date.now() + 30_000),
+            )
+        ).state;
+    }
+    if (state === "locked") await unlock();
+    await poll(
+        `bound advance ${id} leaves the active states`,
+        () => live.client.status(id),
+        (value) => !["locking", "locked", "recovering"].includes(value.state),
+        120_000,
+    );
+}

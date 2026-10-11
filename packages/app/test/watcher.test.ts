@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,6 +28,7 @@ import {
 import { arkade } from "@arkade-os/sdk";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { base64, hex } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import {
     DustCovenantScript,
     Leaf,
@@ -72,8 +74,9 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
 });
 
 const directories: string[] = [];
-afterEach(() => {
+afterEach(async () => {
     while (directories.length) rmSync(directories.pop()!, { recursive: true, force: true });
+    await yieldToEventLoop();
 });
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
@@ -126,6 +129,7 @@ const reencodeTapTrees = (txs: Iterable<Transaction>): void => {
         for (let index = 0; index < tx.inputsLength; index++) {
             const entries = tx.getInput(index).unknown;
             if (!entries) continue;
+            tx.updateInput(index, { unknown: undefined });
             tx.updateInput(index, {
                 unknown: entries.map((entry) => {
                     const raw = VtxoTaprootTree.decode(entry);
@@ -2080,10 +2084,7 @@ describe("canonical covenant observation", () => {
             const tx = state.finalArk!;
             const id = tx.id;
             tx.updateInput(0, {
-                unknown: [
-                    ...(tx.getInput(0).unknown ?? []),
-                    [{ type: 0xfc, key: new Uint8Array([1]) }, new Uint8Array([2])],
-                ],
+                proprietary: [[new Uint8Array([1, 0x74, 0]), new Uint8Array([2])]],
             });
             expect(tx.id).toBe(id);
             await reprove();
@@ -2149,32 +2150,36 @@ describe("canonical covenant observation", () => {
         const verify = vi.mocked(verifyTapscriptSignatures).mockClear();
         const implementation = verify.getMockImplementation()!;
         const tx = state.finalArk!;
-        const unknown = tx.getInput(0).unknown;
+        const encoded = new Map(
+            [...state.txs].map(([id, value]) => [id, base64.encode(value.toPSBT())]),
+        );
+        const original = encoded.get(tx.id)!;
+        const raw = RawPSBTV0.decode(base64.decode(original));
+        const proprietary = raw.inputs[0]!.proprietary;
+        const getVirtualTxs = state.indexer.getVirtualTxs;
+        state.indexer.getVirtualTxs = async (ids) => ({
+            txs: ids.flatMap((id) => (encoded.has(id) ? [encoded.get(id)!] : [])),
+        });
         const { watcher, reprove } = await reprover(state);
         try {
             await reprove();
             expect(verify).toHaveBeenCalledTimes(2);
             verify.mockImplementation(() => {});
             for (let nonce = 0; nonce < 1024; nonce++) {
-                tx.updateInput(0, { unknown: undefined });
-                tx.updateInput(0, {
-                    unknown: [
-                        ...(unknown ?? []),
-                        [
-                            { type: 0xfc, key: new Uint8Array([1]) },
-                            new Uint8Array([nonce >>> 8, nonce & 255]),
-                        ],
-                    ],
-                });
+                raw.inputs[0]!.proprietary = [
+                    ...(proprietary ?? []),
+                    [new Uint8Array([1, 0x74, 0]), new Uint8Array([nonce >>> 8, nonce & 255])],
+                ];
+                encoded.set(tx.id, base64.encode(RawPSBTV0.encode(raw)));
                 await reprove();
             }
-            tx.updateInput(0, { unknown: undefined });
-            tx.updateInput(0, { unknown });
+            encoded.set(tx.id, original);
             verify.mockImplementation(implementation).mockClear();
             await reprove();
             expect(verify).toHaveBeenCalled();
             expect(state.advances.get(state.advance.id)?.failureCode).toBeUndefined();
         } finally {
+            state.indexer.getVirtualTxs = getVirtualTxs;
             verify.mockImplementation(implementation);
             await watcher.stop();
             state.db.close();
@@ -2864,7 +2869,7 @@ describe("proceeds of a receiver-paid recycle", () => {
                 },
                 storage: {
                     intentRepository: {
-                        getIntents: async () => [],
+                        getIntentsPage: async () => ({ items: [] }),
                         getLockedVtxoOutpoints: async () => [],
                     },
                 },

@@ -43,6 +43,9 @@ const canonicalEntry = (entry: [{ type: number; key: Uint8Array }, Uint8Array]) 
 export const canonicalCheckpointPsbt = (tx: Transaction): Uint8Array => {
     const copy = Transaction.fromPSBT(tx.toPSBT());
     const entries = copy.getInput(0).unknown;
-    if (entries) copy.updateInput(0, { unknown: entries.map(canonicalEntry) });
+    if (entries) {
+        copy.updateInput(0, { unknown: undefined });
+        copy.updateInput(0, { unknown: entries.map(canonicalEntry) });
+    }
     return copy.toPSBT();
 };

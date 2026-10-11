@@ -92,6 +92,22 @@ export const SCENARIOS = [
         title: "unclaimed receiver-paid covenant reclaimed at its locktime without a fare",
     },
     {
+        id: "receiver-paid-fill-claim",
+        title: "a caller-built graph fills a receive quote through POST /v1/fills and is claimed",
+    },
+    {
+        id: "receiver-paid-direct-fill-claim",
+        title: "ordinary native multisig inputs fill a receive quote without an emulator submission",
+    },
+    {
+        id: "fill-pending-accepted-quarantine",
+        title: "a lost accepted arkd reply quarantines its funding until the original transaction is finalized",
+    },
+    {
+        id: "fill-undersigned-foreign-input",
+        title: "an under-signed foreign input fails the whole fill and moves no Taxi coin",
+    },
+    {
         id: "v2-covenant-batch-renewal",
         title: "a funded v2 covenant is renewed into a new batch and the Taxi follows it",
         timeout: 600_000,
@@ -103,7 +119,7 @@ export const SCENARIOS = [
     },
 ] as const;
 
-export const EXPECTED_TOTAL = 25;
+export const EXPECTED_TOTAL = 29;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

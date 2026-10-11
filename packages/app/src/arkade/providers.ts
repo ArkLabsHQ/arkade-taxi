@@ -10,7 +10,7 @@ import {
     type ExtendedVirtualCoin,
     type ArkProvider,
     type EmulatorProvider,
-    type ArkInfo,
+    type ArkadeInfo,
     type CSVMultisigTapscript,
     type Network,
     type NetworkName,
@@ -57,7 +57,7 @@ export function createProviders(config: TaxiConfig) {
 }
 
 interface VerifiedProviders {
-    info?: ArkInfo;
+    info?: ArkadeInfo;
     network?: Network;
     serverPubkey?: Uint8Array;
     emulatorPubkey?: Uint8Array;

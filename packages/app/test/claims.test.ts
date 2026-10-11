@@ -306,15 +306,18 @@ describe("listReceiverClaims", () => {
 
         const settle = (bound: Awaited<ReturnType<typeof createBoundJointFill>>) => {
             bound.db
-                .prepare(
-                    "UPDATE swap_fills SET state = 'submitting', submit_invoked = 1 WHERE id = ?",
-                )
+                .prepare("UPDATE fills SET state = 'submitting', submit_invoked = 1 WHERE id = ?")
                 .run(bound.fill.id);
             const txid = Transaction.fromPSBT(
                 base64.decode(bound.fill.graph.arkTx),
             ).id.toLowerCase();
             expect(
-                bound.swapFills.reconcileSettled(bound.fill.id, txid, { txid, vout: 0 }, NOW + 1),
+                bound.fills.reconcileSettled(
+                    bound.fills.get(bound.fill.id)!,
+                    txid,
+                    { txid, vout: 0 },
+                    NOW + 1,
+                ),
             ).toBe(true);
         };
 

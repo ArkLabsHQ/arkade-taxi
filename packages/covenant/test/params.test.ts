@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { pubSchnorr } from "@scure/btc-signer/utils.js";
 import {
     exitDelayEncodable,
     exitTimelock,
@@ -7,9 +8,9 @@ import {
     validateParams,
     type DustCovenantParams,
 } from "../src/params.js";
-import { receiverPaid } from "./fixtures.js";
+import { receiverPaid as receiverPaidFixture } from "./fixtures.js";
 
-const key = (fill: number) => new Uint8Array(32).fill(fill);
+const key = (fill: number) => pubSchnorr(new Uint8Array(32).fill(fill));
 const assetId = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 
 const base = (): DustCovenantParams => ({
@@ -23,6 +24,9 @@ const base = (): DustCovenantParams => ({
     locktime: 1_800_000_000n,
 });
 
+const receiverPaid = (over: Partial<DustCovenantParams> = {}) =>
+    receiverPaidFixture({ ...base(), ...over });
+
 const MIN = 1n;
 
 describe("validateParams", () => {
@@ -34,6 +38,16 @@ describe("validateParams", () => {
         expect(() => validateParams({ ...base(), senderKey: new Uint8Array(33) }, MIN)).toThrow(
             /32 bytes/,
         );
+    });
+
+    it.each(
+        (["receiverKey", "senderKey", "operatorKey", "operatorSignerKey"] as const).flatMap(
+            (role) => [0, 255].map((fill) => ({ role, fill })),
+        ),
+    )("rejects a 32-byte invalid x-only point for $role (byte=$fill)", ({ role, fill }) => {
+        expect(() =>
+            validateParams({ ...base(), [role]: new Uint8Array(32).fill(fill) }, MIN),
+        ).toThrow();
     });
 
     it("rejects non-positive dust", () => {
