@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { expect } from "vitest";
@@ -12,12 +11,11 @@ import {
 } from "@arkade-os/sdk";
 import { buildOfferFillPlan } from "@arkade-os/swap";
 import { createOffer, decodeOffer } from "@arkade-os/swap/protocol";
-import { type CovenantTransfer, type JointGraph } from "@arkade-taxi/client";
+import { type JointGraph } from "@arkade-taxi/client";
 import { signJointGraphForOwner } from "./offerSigning";
 import { deriveJointOutputs } from "../packages/app/src/arkade/jointGraphDerivation";
 import { hex } from "@scure/base";
 import { loadConfig } from "../packages/app/src/config";
-import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
 import { preEffectRequest } from "./admission";

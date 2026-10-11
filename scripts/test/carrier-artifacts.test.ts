@@ -999,6 +999,31 @@ describe("what a package packs", () => {
         }
     });
 
+    it("refuses unmapped output left by an earlier compiler build", () => {
+        const root = fixture(["index"], ["index"]);
+        try {
+            writeFileSync(join(root, "dist", "gone.js"), "export const old = true;");
+            expect(distMismatch(root)).toContain("gone.js has no source map");
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it("traces nested wallet bundles relative to their source maps", () => {
+        const root = fixture(["index", "wallet/index"], ["index"]);
+        try {
+            const wallet = join(root, "dist", "wallet");
+            mkdirSync(wallet);
+            const map = join(wallet, "index.js.map");
+            writeFileSync(map, JSON.stringify({ sources: ["../../src/wallet/index.ts"] }));
+            expect(distMismatch(root)).toBeUndefined();
+            writeFileSync(map, JSON.stringify({ sources: ["../../src/wallet/gone.ts"] }));
+            expect(distMismatch(root)).toContain("gone.ts, which is not in");
+        } finally {
+            rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it("holds for every package this repository builds", () => {
         for (const entry of readdirSync(at("packages"), { withFileTypes: true }))
             if (entry.isDirectory())

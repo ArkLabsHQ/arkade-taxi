@@ -29,7 +29,6 @@ import {
     NOW,
     policy as basePolicy,
     receiverKey,
-    runtimeSafety,
     serverUnroll,
 } from "./fixtures";
 import { checkpointSpending, sealGraph, solverCoin } from "./graphFixtures";

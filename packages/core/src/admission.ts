@@ -1,10 +1,4 @@
-import type {
-    AdmissionDecision,
-    AdmissionWarning,
-    Exposure,
-    Policy,
-    QuoteRequest,
-} from "./types";
+import type { AdmissionDecision, AdmissionWarning, Exposure, Policy, QuoteRequest } from "./types";
 import type { CustodySolvency } from "./solvency";
 import {
     FareError,

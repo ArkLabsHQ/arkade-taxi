@@ -14,7 +14,6 @@ import {
     type ArkProvider,
     type CSVMultisigTapscript,
     type EmulatorProvider,
-    type ExtendedVirtualCoin,
     type Identity,
     type VirtualCoin,
 } from "@arkade-os/sdk";

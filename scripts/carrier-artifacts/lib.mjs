@@ -107,23 +107,32 @@ const sourcesUnder = (root) => {
 
 const mappedSources = (dist) => {
     const mapped = new Set();
-    if (existsSync(dist))
-        for (const entry of readdirSync(dist))
-            if (entry.endsWith(".js.map"))
-                for (const source of readJson(join(dist, entry)).sources)
-                    mapped.add(resolve(dist, source));
-    return mapped;
+    const unmapped = [];
+    const walk = (dir) => {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            if (entry.isDirectory()) walk(join(dir, entry.name));
+            else if (entry.name.endsWith(".js") && !existsSync(join(dir, `${entry.name}.map`)))
+                unmapped.push(join(dir, entry.name));
+            else if (entry.name.endsWith(".js.map"))
+                for (const source of readJson(join(dir, entry.name)).sources)
+                    mapped.add(resolve(dir, source));
+        }
+    };
+    if (existsSync(dist)) walk(dist);
+    return { mapped, unmapped };
 };
 
 /** Why this package's `dist/` does not correspond to its `src/`, or `undefined`. */
 export function distMismatch(packageRoot) {
     const src = join(packageRoot, "src");
     const sources = sourcesUnder(src);
-    const mapped = mappedSources(join(packageRoot, "dist"));
+    const { mapped, unmapped } = mappedSources(join(packageRoot, "dist"));
+    if (unmapped.length)
+        return `${unmapped[0].replaceAll("\\", "/")} has no source map to trace it to src/`;
     const known = new Set(sources.map((name) => join(src, name)));
     const orphan = [...mapped].find((file) => !known.has(file) && !file.includes("node_modules"));
     if (orphan !== undefined)
-        return `dist/ maps ${orphan}, which is not in src/, so it is output from another tree`;
+        return `dist/ maps ${orphan.replaceAll("\\", "/")}, which is not in src/, so it is output from another tree`;
     return sources.length ? undefined : `${packageRoot} has no src/ to trace dist/ back to`;
 }
 

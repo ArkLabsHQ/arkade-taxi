@@ -17,7 +17,6 @@ import {
 import {
     assertSameUnsignedTx,
     assertUnsignedInput,
-    assertUnsignedPsbt,
     setTapScriptSigEntries,
     tapLeavesOfInput,
     tapScriptSigEntries,

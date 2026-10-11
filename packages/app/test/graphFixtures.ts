@@ -1,8 +1,8 @@
-import { base64, hex } from "@scure/base";
+import { hex } from "@scure/base";
+import type { VtxoScript } from "@arkade-os/sdk";
 import {
     DefaultVtxo,
     Transaction,
-    VtxoScript,
     type ExtendedVirtualCoin,
     type VirtualCoin,
 } from "@arkade-os/sdk";

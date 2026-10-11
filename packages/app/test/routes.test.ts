@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { idleFillDeps, MemoryFills } from "./fillFixtures";
-import { ArkAddress, asset } from "@arkade-os/sdk";
+import { ArkAddress } from "@arkade-os/sdk";
 import { SSEStreamingApi } from "hono/streaming";
 import { serve } from "@hono/node-server";
 import {
@@ -67,7 +67,6 @@ import {
     signedEnvelope,
 } from "./fixtures";
 import type { Policy } from "@arkade-taxi/core";
-import { asIndexed } from "./graphFixtures";
 
 const ASSET = { txid: new Uint8Array(32).fill(0xbe), groupIndex: 1 };
 const STALE_AFTER = 120;

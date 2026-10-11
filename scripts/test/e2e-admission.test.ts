@@ -4,11 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaxiClient, TaxiError, verifyQuote } from "@arkade-taxi/client";
 import type { Identity } from "@arkade-os/sdk";
 import { args, senderIdentity } from "../../packages/client/test/fixtures";
-import {
-    preEffectRequest,
-    submitWithReadiness,
-    type AdmissionTiming,
-} from "../../e2e/admission";
+import { preEffectRequest, submitWithReadiness, type AdmissionTiming } from "../../e2e/admission";
 
 const ready = { status: "ok", paused: false, blockers: [] };
 

@@ -26,6 +26,7 @@ import {
     sponsoredAddress,
     sponsoredArgs,
     sponsoredAssetArgs,
+    sponsoredParams,
     sponsoredQuote,
     withExtraPacket,
 } from "./fixtures";

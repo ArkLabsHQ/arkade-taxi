@@ -26,7 +26,7 @@ export default tseslint.config(
             ],
             "no-empty": ["error", { allowEmptyCatch: true }],
             "no-regex-spaces": "off",
-            "no-unsafe-finally": "off",
+            "no-unsafe-finally": "warn",
             "prefer-const": "warn",
             "no-control-regex": "warn",
             "preserve-caught-error": "warn",

@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Transaction } from "@arkade-os/sdk";
 import {
     MultisigTapscript,
     P2A,
-    Transaction,
     VtxoScript,
     VtxoTaprootTree,
     getArkPsbtFields,

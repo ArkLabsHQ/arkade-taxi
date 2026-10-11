@@ -19,12 +19,7 @@ import type { RuntimeConfig } from "../config";
 import type { LockupBuilder, LockupBuildRequest, QuotePhaseObserver } from "../quotes";
 import { normalizeExpiry } from "./providers";
 import { LockupShapeError, assertDistinctScripts, operatorPayoutSats } from "../lockup";
-import {
-    encodeLockupEnvelope,
-    parseLockupEnvelope,
-    unsignedGraphId,
-    type JointPlan,
-} from "./psbt";
+import { encodeLockupEnvelope, parseLockupEnvelope, unsignedGraphId, type JointPlan } from "./psbt";
 import { isDeepStrictEqual } from "node:util";
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 

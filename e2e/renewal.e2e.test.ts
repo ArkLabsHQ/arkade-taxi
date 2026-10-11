@@ -41,11 +41,7 @@ import {
     type DustCovenantParams,
 } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
-import {
-    loadConfig,
-    resolveRuntimeConfig,
-    type RuntimeConfig,
-} from "../packages/app/src/config";
+import { loadConfig, resolveRuntimeConfig, type RuntimeConfig } from "../packages/app/src/config";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet";
 import { ProductionLockupBuilder } from "../packages/app/src/arkade/lockupBuilder";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../packages/app/src/arkade/psbt";

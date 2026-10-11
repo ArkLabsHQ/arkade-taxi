@@ -12,7 +12,6 @@ import {
     type IndexerProvider,
     type VirtualCoin,
 } from "@arkade-os/sdk";
-import type { AssetIdRef } from "@arkade-taxi/covenant";
 import type { CustodySolvency } from "@arkade-taxi/core";
 import { base64, hex } from "@scure/base";
 import { decodeLockupEnvelope } from "./arkade/psbt";

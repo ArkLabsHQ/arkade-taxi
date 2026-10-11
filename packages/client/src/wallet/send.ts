@@ -29,7 +29,6 @@ import { retryDelay } from "../client";
 import type { Bip21Taxi } from "./requests";
 import {
     boundedFetch,
-    callerMinimum,
     callerRecoveryMinimum,
     ruleFor,
     taxiAssetId,

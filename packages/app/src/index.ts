@@ -4,13 +4,7 @@ export {
     type FillReconcilerDeps,
     type FillReconcilerStatus,
 } from "./fillReconciler";
-export {
-    getFill,
-    submitFill,
-    assertFillGraph,
-    type FillDeps,
-    type FillGraphArgs,
-} from "./fills";
+export { getFill, submitFill, assertFillGraph, type FillDeps, type FillGraphArgs } from "./fills";
 export {
     ConfigError,
     LOG_LEVELS,

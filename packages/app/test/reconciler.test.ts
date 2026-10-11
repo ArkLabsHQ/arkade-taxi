@@ -15,22 +15,12 @@ import {
 } from "@arkade-taxi/db";
 import type { Advance } from "@arkade-taxi/core";
 import { buildLockupEnvelope } from "../src/arkade/lockupBuilder";
-import {
-    buildSponsoredEnvelope,
-    type SponsoredBuildRequest,
-} from "../src/arkade/sponsoredBuilder";
+import { buildSponsoredEnvelope, type SponsoredBuildRequest } from "../src/arkade/sponsoredBuilder";
 import { decodeLockupEnvelope } from "../src/arkade/psbt";
 import { createLockupReconciler } from "../src/reconciler";
 import { custodySolvencyView } from "../src/custody";
 import { swapAssetId } from "../src/proceeds";
-import {
-    config,
-    fundingCoin,
-    NOW,
-    policy as basePolicy,
-    receiverKey,
-    senderKey,
-} from "./fixtures";
+import { config, fundingCoin, NOW, policy as basePolicy, receiverKey, senderKey } from "./fixtures";
 import { buildRequest, senderTree, unroll } from "./arkade/lockupFixtures";
 
 const directories: string[] = [];

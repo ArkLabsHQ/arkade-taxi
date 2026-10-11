@@ -32,7 +32,7 @@ import {
     type JointSignerBinding,
     providerCosignerKeys,
 } from "../../src/joint/jointSigning";
-import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph";
+import { digestJointGraph } from "../../src/joint/jointGraph";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap/protocol";
 import {
     OFFER_FILL_TEMPLATE,

@@ -17,7 +17,6 @@ import {
     createCustodyReleaser,
     custodySolvencyView,
     CustodyAwaitingLiquidityError,
-    CustodyReleaseError,
     planCustodyRelease,
 } from "../src/custody";
 import { swapAssetId } from "../src/proceeds";
