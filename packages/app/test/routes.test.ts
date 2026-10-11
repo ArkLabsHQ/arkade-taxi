@@ -1718,6 +1718,69 @@ describe("GET /ready", () => {
         },
     );
 
+    it.each([
+        { quarantined: 1, extraBlockers: [], admitted: true },
+        { quarantined: 0, extraBlockers: [], admitted: false },
+        { quarantined: 1, extraBlockers: ["fill_unexpected_spend"], admitted: false },
+        { quarantined: 1, extraBlockers: ["reserved_input_conflict"], admitted: false },
+    ])(
+        "preserves readiness and admission for a completed lifecycle with quarantine $quarantined and blockers $extraBlockers",
+        async ({ quarantined, extraBlockers, admitted }) => {
+            let pending = false;
+            const fillStatus = () => ({
+                lastTickAt: NOW,
+                submitting: pending ? 1 : 0,
+                quarantined: pending ? quarantined : 0,
+                blockers: pending ? ["fill_liability_unresolved", ...extraBlockers] : [],
+            });
+            const lifecycle = createServiceLifecycle({
+                listen: async () => ({ stopAccepting() {}, finished: async () => {} }),
+                verifyRuntime: async () => {},
+                reconcile: async () => ({ blockers: fillStatus().blockers }),
+                firstRecoveryTick: async () => {},
+                startStreams: async () => {},
+                startBackground() {},
+                stopBackground() {},
+                stopRuntime() {},
+                abort() {},
+                drain: async () => {},
+                disposeProviders: async () => {},
+                closeDatabase() {},
+                shutdownTimeoutMs: 50,
+                forceTerminate() {},
+            });
+            const router = createRoutes({
+                ...deps(),
+                startup: lifecycle.status,
+                fillReconciler: { status: fillStatus },
+            });
+            await lifecycle.start();
+            await lifecycle.refresh();
+            expect((await router.request("/ready")).status).toBe(200);
+            pending = true;
+            await lifecycle.refresh();
+
+            const ready = await router.request("/ready");
+            expect(ready.status).toBe(503);
+            expect(await ready.json()).toMatchObject({
+                startup: { phase: "ready", complete: true, blocker: null },
+                blockers: ["fill_liability_unresolved", ...extraBlockers],
+                reconciler: {
+                    fills: { lastTickAt: NOW, submitting: 1, blockers: fillStatus().blockers },
+                },
+            });
+            const response = await router.request("/v1/transfers", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(quoteBody()),
+            });
+            expect(response.status).toBe(admitted ? 200 : 503);
+            expect(advances.rows.size).toBe(admitted ? 1 : 0);
+            expect(lockupBuilder.built).toHaveLength(admitted ? 1 : 0);
+            if (!admitted) expect(await response.json()).toMatchObject({ code: "not_ready" });
+        },
+    );
+
     it("blocks unrelated mutations on unexpected spends despite intact fill reservations", async () => {
         const router = createRoutes({
             ...deps(),
