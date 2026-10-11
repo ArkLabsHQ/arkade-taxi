@@ -155,6 +155,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
             expect(operatorInputs.every((input) => !held.has(point(input)))).toBe(true);
             return next.transferId;
         };
+        await admin("policy", { quoteTtlSeconds: 10 });
         const admitted = await unrelatedQuote();
         expect((await directReady()).status).toBe(503);
         const outageAt = Math.floor(Date.now() / 1000);
