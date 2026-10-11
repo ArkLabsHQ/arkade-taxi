@@ -400,7 +400,7 @@ describe("durable receiver documentation implementation", () => {
             new Function("exports", "require", output)(exports, (name: string) =>
                 name === "@arkade-taxi/client"
                     ? { ...client, TaxiClient: Taxi }
-                    : name === "./receiver-store"
+                    : name === "./receiver-store.js"
                       ? loadReceiverStore()
                       : sdk,
             );
@@ -507,7 +507,7 @@ describe("durable receiver documentation implementation", () => {
         new Function("exports", "require", output)(exports, (name: string) =>
             name === "@arkade-taxi/client"
                 ? { ...client, TaxiClient: Taxi }
-                : name === "./receiver-store"
+                : name === "./receiver-store.js"
                   ? loadReceiverStore()
                   : sdk,
         );
