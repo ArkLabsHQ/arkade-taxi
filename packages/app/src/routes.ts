@@ -8,22 +8,22 @@ import {
     type InfoResponse,
     type LockupRequestBody,
 } from "@arkade-taxi/protocol";
-import { ErrorCode, sanitizeOperationalError, ServiceError, toErrorResponse } from "./errors.js";
-import { assetRuleToWire } from "./rulesWire.js";
-import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
-import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
-import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
-import { getFill, submitFill, type FillDeps } from "./fills.js";
-import type { DelegateeClient, DelegateeRegistration } from "./delegatee.js";
-import type { Sweeper } from "./sweeper.js";
-import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
-import type { LockupReconciler } from "./reconciler.js";
-import type { WatcherBlocker } from "./watcher.js";
-import type { FillReconciler } from "./fillReconciler.js";
-import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
-import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
-import type { ProceedsStatus } from "./proceeds.js";
-import { DOCS_HTML, openApiDocument } from "./openapi.js";
+import { ErrorCode, sanitizeOperationalError, ServiceError, toErrorResponse } from "./errors";
+import { assetRuleToWire } from "./rulesWire";
+import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes";
+import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes";
+import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes";
+import { getFill, submitFill, type FillDeps } from "./fills";
+import type { DelegateeClient, DelegateeRegistration } from "./delegatee";
+import type { Sweeper } from "./sweeper";
+import type { RecoveryDeadline, SweeperStatus } from "./sweeper";
+import type { LockupReconciler } from "./reconciler";
+import type { WatcherBlocker } from "./watcher";
+import type { FillReconciler } from "./fillReconciler";
+import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims";
+import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed";
+import type { ProceedsStatus } from "./proceeds";
+import { DOCS_HTML, openApiDocument } from "./openapi";
 
 export interface RouteDeps extends QuoteDeps {
     receiveQuotes: ReceiveQuoteDeps["receiveQuotes"];

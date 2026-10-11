@@ -7,16 +7,16 @@ import {
     type Outpoint,
     type Advance,
 } from "@arkade-taxi/core";
-import { assertNativeAccess } from "./coordination.js";
-import { AdvanceRepository } from "./advances.js";
-import { PolicyRepository } from "./policy.js";
+import { assertNativeAccess } from "./coordination";
+import { AdvanceRepository } from "./advances";
+import { PolicyRepository } from "./policy";
 import {
     PolicyRevisionConflictError,
     allReservedOutpoints,
     expireReceiveQuotes,
     totalExposure,
-} from "./reservations.js";
-import { FillRepository, type Fill } from "./fills.js";
+} from "./reservations";
+import { FillRepository, type Fill } from "./fills";
 
 export type ReceiveQuoteState = "quoted" | "bound" | "expired";
 

@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import type { Transaction } from "@arkade-os/sdk";
 import {
     MultisigTapscript,
     P2A,
-    Transaction,
     VtxoScript,
     VtxoTaprootTree,
     getArkPsbtFields,
@@ -12,7 +12,7 @@ import {
 } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import { assertDefaultTapScriptSigs, tapLeavesOfInput } from "@arkade-taxi/client";
-import { ServiceError } from "../errors.js";
+import { ServiceError } from "../errors";
 
 const fail = (detail: string): never => {
     throw new ServiceError("fill_foreign_input_invalid", 400, `fill graph ${detail}`);

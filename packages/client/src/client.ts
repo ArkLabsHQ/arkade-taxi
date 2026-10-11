@@ -32,11 +32,11 @@ import {
     decodeReceiveQuote,
     decodeSponsoredQuote,
     decodeStatus,
-} from "./decode.js";
-import { ClientErrorCode, QuoteVerificationError, TaxiError } from "./errors.js";
-import { assertSignedLockup, signLockup } from "./lockup.js";
-import { activeQuoteStateFor, immutablePlainCopy } from "./lockup.js";
-import { fundingInputsFromVtxos } from "./funding.js";
+} from "./decode";
+import { ClientErrorCode, QuoteVerificationError, TaxiError } from "./errors";
+import { assertSignedLockup, signLockup } from "./lockup";
+import { activeQuoteStateFor, immutablePlainCopy } from "./lockup";
+import { fundingInputsFromVtxos } from "./funding";
 import {
     purchase,
     recycle,
@@ -48,7 +48,7 @@ import {
     type IncomingClaimExpectation,
     type IncomingClaimTrust,
     type ReceiverWalletInput,
-} from "./spend.js";
+} from "./spend";
 import { ArkAddress, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
 import { PubT, validatePubkey } from "@scure/btc-signer/utils.js";
 import {
@@ -57,7 +57,7 @@ import {
     type QuoteExpectation,
     type VerifiedQuote,
     type VerifyQuoteArgs,
-} from "./verify.js";
+} from "./verify";
 import {
     assertSignedSponsoredPayment,
     signSponsoredPayment,
@@ -65,14 +65,14 @@ import {
     type SponsoredQuoteExpectation,
     type VerifiedSponsoredQuote,
     type VerifySponsoredQuoteArgs,
-} from "./sponsored.js";
+} from "./sponsored";
 import type {} from "@arkade-taxi/protocol";
 import {
     verifyReceiveQuote,
     type ReceiveQuoteExpectation,
     type VerifiedReceiveQuote,
     type VerifyReceiveQuoteArgs,
-} from "./receiveQuote.js";
+} from "./receiveQuote";
 
 export interface TaxiClientOptions {
     baseUrl: string;

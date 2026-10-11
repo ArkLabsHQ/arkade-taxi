@@ -11,13 +11,9 @@ import {
 import { DustCovenantScript, payoutPkScript } from "@arkade-taxi/covenant";
 import { assetIdToWire, bytesToHex, fundingInputToWire } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
-import {
-    createReceiveQuote,
-    getReceiveQuote,
-    type ReceiveQuoteDeps,
-} from "../src/receiveQuotes.js";
-import { assetRuleToWire } from "../src/rulesWire.js";
-import { selectOperatorFunding } from "../src/arkade/inventory.js";
+import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "../src/receiveQuotes";
+import { assetRuleToWire } from "../src/rulesWire";
+import { selectOperatorFunding } from "../src/arkade/inventory";
 import {
     advance,
     config,
@@ -28,12 +24,12 @@ import {
     runtimeSafety,
     senderKey,
     serverKey,
-} from "./fixtures.js";
-import { createBoundJointFill } from "./jointFillFixtures.js";
-import type { ServiceError } from "../src/errors.js";
+} from "./fixtures";
+import { createBoundJointFill } from "./jointFillFixtures";
+import type { ServiceError } from "../src/errors";
 
-vi.mock("../src/arkade/inventory.js", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("../src/arkade/inventory.js")>();
+vi.mock("../src/arkade/inventory", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../src/arkade/inventory")>();
     return { ...actual, selectOperatorFunding: vi.fn(actual.selectOperatorFunding) };
 });
 

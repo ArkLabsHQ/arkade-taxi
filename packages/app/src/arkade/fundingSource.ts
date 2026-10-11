@@ -4,7 +4,7 @@ import { FILL_TEMPLATE, verifyJointGraph, type JointGraph } from "@arkade-taxi/c
 
 const sealedGraph = (graph: JointGraph): boolean => verifyJointGraph(graph, FILL_TEMPLATE);
 import { base64, hex } from "@scure/base";
-import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation.js";
+import { deriveJointInputs, deriveJointOutputs } from "./jointGraphDerivation";
 
 export interface FillFundingSource {
     tag: "fill";

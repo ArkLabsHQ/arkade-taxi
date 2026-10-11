@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Extension, Transaction, asset } from "@arkade-os/sdk";
 import { verifyQuote } from "@arkade-taxi/client";
 import { base64 } from "@scure/base";
-import { args, fundingInputs, params, quote, senderTree } from "../../client/test/fixtures.js";
+import { args, fundingInputs, params, quote, senderTree } from "../../client/test/fixtures";
 
 const usdt = asset.AssetId.create("12".repeat(32), 0);
 const aas = asset.AssetId.create("34".repeat(32), 1);

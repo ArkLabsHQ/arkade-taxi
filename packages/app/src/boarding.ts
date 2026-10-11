@@ -6,8 +6,8 @@ import {
     type Wallet,
 } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import type { createOperatorRuntime } from "./arkade/operatorWallet.js";
-import { ServiceError } from "./errors.js";
+import type { createOperatorRuntime } from "./arkade/operatorWallet";
+import { ServiceError } from "./errors";
 
 export interface BoardingDeposits {
     confirmedSats: bigint;

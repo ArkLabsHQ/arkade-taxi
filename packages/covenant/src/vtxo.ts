@@ -1,6 +1,6 @@
 import { arkade, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
-import { compileV2 } from "./v2-artifact.js";
-import { validateParams, type DustCovenantParams } from "./params.js";
+import { compileV2 } from "./v2-artifact";
+import { validateParams, type DustCovenantParams } from "./params";
 
 /** Order fixes the merkle root, so it is part of the address. Do not reorder. */
 export enum Leaf {

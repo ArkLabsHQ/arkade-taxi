@@ -1,7 +1,7 @@
 import { TERMINAL_STATES, type Advance } from "@arkade-taxi/core";
 import { bytesToHex, type ClaimsChangedEvent, type ReceiverClaimWire } from "@arkade-taxi/protocol";
-import { ACTIVE_CLAIM_STATES, listReceiverClaims } from "./claims.js";
-import { ServiceError } from "./errors.js";
+import { ACTIVE_CLAIM_STATES, listReceiverClaims } from "./claims";
+import { ServiceError } from "./errors";
 
 export interface ClaimFeedLogger {
     error(

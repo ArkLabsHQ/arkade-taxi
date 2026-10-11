@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { AdvanceRepository, applyMigrations, FillRepository, type Fill } from "../src/index.js";
+import { AdvanceRepository, applyMigrations, FillRepository, type Fill } from "../src/index";
 
 const NOW = 100;
 const INPUT = { txid: "aa".repeat(32), vout: 1 };

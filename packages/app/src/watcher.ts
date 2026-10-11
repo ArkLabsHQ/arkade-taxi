@@ -34,11 +34,11 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { createHash } from "node:crypto";
-import type { RuntimeConfig } from "./config.js";
-import { decodeLockupEnvelope } from "./arkade/psbt.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import { normalizeExpiry } from "./arkade/providers.js";
-import { sameTapTree } from "./arkade/tapTree.js";
+import type { RuntimeConfig } from "./config";
+import { decodeLockupEnvelope } from "./arkade/psbt";
+import { readFundingSource } from "./arkade/fundingSource";
+import { normalizeExpiry } from "./arkade/providers";
+import { sameTapTree } from "./arkade/tapTree";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 const DEFAULT_SIGHASH = 0;

@@ -17,11 +17,11 @@ import {
     ReceiveQuoteRepository,
     ReservationRepository,
 } from "@arkade-taxi/db";
-import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config.js";
-import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet.js";
-import { selectOperatorFunding } from "../packages/app/src/arkade/inventory.js";
-import { unionReservedOutpoints } from "../packages/app/src/arkade/reservedOutpoints.js";
-import { createProceedsCollector } from "../packages/app/src/proceeds.js";
+import { loadConfig, resolveRuntimeConfig } from "../packages/app/src/config";
+import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet";
+import { selectOperatorFunding } from "../packages/app/src/arkade/inventory";
+import { unionReservedOutpoints } from "../packages/app/src/arkade/reservedOutpoints";
+import { createProceedsCollector } from "../packages/app/src/proceeds";
 import {
     assertVtxoSnapshotContains,
     buildArkFundingArgs,
@@ -31,10 +31,10 @@ import {
     normalizeSigner,
     normalizeExpiry,
     verifyProviders,
-} from "../packages/app/src/arkade/providers.js";
+} from "../packages/app/src/arkade/providers";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
-import { admin, poll, required } from "./fixtures.js";
-import { liveScenario } from "./scenarios.js";
+import { admin, poll, required } from "./fixtures";
+import { liveScenario } from "./scenarios";
 
 liveScenario("provider-contract", async () => {
     const config = await resolveRuntimeConfig(

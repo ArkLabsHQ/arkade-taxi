@@ -19,22 +19,21 @@ import {
     type Database,
     type Fill,
 } from "@arkade-taxi/db";
-import type { RuntimeConfig } from "../src/config.js";
-import { operatorFundingInput } from "../src/arkade/lockupBuilder.js";
-import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource.js";
-import { buildRecoveryIntent } from "../src/arkade/recovery.js";
+import type { RuntimeConfig } from "../src/config";
+import { operatorFundingInput } from "../src/arkade/lockupBuilder";
+import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource";
+import { buildRecoveryIntent } from "../src/arkade/recovery";
 import {
     config,
     fundingCoin,
     NOW,
     policy as basePolicy,
     receiverKey,
-    runtimeSafety,
     serverUnroll,
-} from "./fixtures.js";
-import { checkpointSpending, sealGraph, solverCoin } from "./graphFixtures.js";
+} from "./fixtures";
+import { checkpointSpending, sealGraph, solverCoin } from "./graphFixtures";
 import { scriptFromTapLeafScript, Extension, P2A } from "@arkade-os/sdk";
-import { normalizeExpiry } from "../src/arkade/providers.js";
+import { normalizeExpiry } from "../src/arkade/providers";
 
 export const BOUND_DEPOSIT = { txid: "dd".repeat(32), vout: 3 };
 export const BOUND_SOLVER = { txid: "ee".repeat(32), vout: 1 };

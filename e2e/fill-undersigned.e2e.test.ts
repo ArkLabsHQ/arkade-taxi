@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
 import { TaxiClient } from "@arkade-taxi/client";
-import { admin, health, openLive, poll, required } from "./fixtures.js";
-import { liveScenario } from "./scenarios.js";
-import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport.js";
+import { admin, health, openLive, poll, required } from "./fixtures";
+import { liveScenario } from "./scenarios";
+import { DELIVERED, evidence, quotedFill, signAsCaller } from "./fillSupport";
 
 liveScenario("fill-undersigned-foreign-input", async () => {
     const live = await openLive();

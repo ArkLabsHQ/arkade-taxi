@@ -19,7 +19,7 @@ import {
     tapLeavesOfInput,
     tapScriptSigEntries,
     unsignedPsbtBytes,
-} from "../../src/joint/arkTransaction.js";
+} from "../../src/joint/arkTransaction";
 
 const userSeed = new Uint8Array(32).fill(0x11);
 const serverSeed = new Uint8Array(32).fill(0x22);

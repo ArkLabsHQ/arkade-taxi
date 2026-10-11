@@ -5,8 +5,8 @@ import { CustodyError, CustodySweptError, type CustodyRecord } from "@arkade-tax
 import type { CustodyLiabilities, CustodyRepository } from "@arkade-taxi/db";
 import { base64, hex } from "@scure/base";
 import { randomUUID } from "node:crypto";
-import { deriveJointInputs, JointGraphDerivationError } from "./arkade/jointGraphDerivation.js";
-import { holdings, swapAssetId } from "./proceeds.js";
+import { deriveJointInputs, JointGraphDerivationError } from "./arkade/jointGraphDerivation";
+import { holdings, swapAssetId } from "./proceeds";
 
 export type CustodyReleaseCode =
     | "custody_change_below_dust"

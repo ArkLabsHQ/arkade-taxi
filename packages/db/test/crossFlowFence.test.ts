@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Advance } from "@arkade-taxi/core";
-import { totalExposure } from "../src/reservations.js";
+import { totalExposure } from "../src/reservations";
 import {
     AdvanceRepository,
     CustodyRepository,
@@ -18,7 +18,7 @@ import {
     type Database,
     type Fill,
     type ReceiveQuote,
-} from "../src/index.js";
+} from "../src/index";
 
 const COIN = { txid: "aa".repeat(32), vout: 0 };
 const fillReservations = (db: Database) =>

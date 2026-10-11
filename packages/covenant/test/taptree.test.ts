@@ -3,9 +3,9 @@ import { CSVMultisigTapscript, MultisigTapscript, VtxoScript, arkade } from "@ar
 import { p2tr, TAPROOT_UNSPENDABLE_KEY, taprootListToTree } from "@scure/btc-signer";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
-import { DustCovenantScript, Leaf } from "../src/vtxo.js";
-import { compileV2 } from "../src/v2-artifact.js";
-import type { DustCovenantParams } from "../src/params.js";
+import { DustCovenantScript, Leaf } from "../src/vtxo";
+import { compileV2 } from "../src/v2-artifact";
+import type { DustCovenantParams } from "../src/params";
 
 // Real curve points. computeArkadeScriptPublicKey lifts the emulator key to do
 // point addition, so 32 arbitrary bytes fail with "cannot find square root".

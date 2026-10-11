@@ -10,7 +10,7 @@ import {
     openDatabase,
     PolicyRepository,
     applyMigrations,
-} from "../src/index.js";
+} from "../src/index";
 
 const dir = mkdtempSync(join(tmpdir(), "arkade-taxi-db-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

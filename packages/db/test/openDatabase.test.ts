@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { applyMigrations, MIGRATIONS, openDatabase, PolicyRepository } from "../src/index.js";
+import { applyMigrations, MIGRATIONS, openDatabase, PolicyRepository } from "../src/index";
 
 const dir = mkdtempSync(join(tmpdir(), "taxi-database-durability-"));
 afterAll(() => {

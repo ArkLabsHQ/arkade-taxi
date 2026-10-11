@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { vetBitcoinTaxi, type TaxiInfo } from "../src/wallet/context.js";
+import { vetBitcoinTaxi, type TaxiInfo } from "../src/wallet/context";
 
 const serverKey = new Uint8Array(32).fill(1);
 const emulatorKey = new Uint8Array(32).fill(2);

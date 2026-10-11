@@ -7,8 +7,8 @@ import {
 } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
-import { covenantSpendInput } from "../src/spend.js";
-import { DustCovenantScript, Leaf } from "../src/vtxo.js";
+import { covenantSpendInput } from "../src/spend";
+import { DustCovenantScript, Leaf } from "../src/vtxo";
 
 const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
 

@@ -9,15 +9,15 @@ import {
     ReservationRepository,
 } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { createOperatorRuntime } from "../src/arkade/operatorWallet.js";
-import { validateLockupSubmission } from "../src/arkade/submit.js";
-import { createServiceLifecycle } from "../src/lifecycle.js";
-import { ServiceError } from "../src/errors.js";
-import { createRoutes, type RouteDeps } from "../src/routes.js";
-import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes.js";
-import { idleFillDeps } from "./fillFixtures.js";
-import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes.js";
-import { arkInfo } from "./arkade/fixtures.js";
+import { createOperatorRuntime } from "../src/arkade/operatorWallet";
+import { validateLockupSubmission } from "../src/arkade/submit";
+import { createServiceLifecycle } from "../src/lifecycle";
+import { ServiceError } from "../src/errors";
+import { createRoutes, type RouteDeps } from "../src/routes";
+import { createQuote, FakeLockupBuilder, type QuoteDeps } from "../src/quotes";
+import { idleFillDeps } from "./fillFixtures";
+import { FakeSponsoredLockupBuilder } from "../src/sponsoredQuotes";
+import { arkInfo } from "./arkade/fixtures";
 import {
     config,
     emulatorKey,
@@ -30,7 +30,7 @@ import {
     quoteInfrastructure,
     serverUnroll,
     signedEnvelope,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {

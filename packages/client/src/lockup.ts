@@ -25,9 +25,9 @@ import {
 import { sha256 } from "@noble/hashes/sha2.js";
 import { base64, hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
-import { causeMessage } from "./decode.js";
-import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
-import type { VerifiedQuote, VerifyQuoteArgs } from "./verify.js";
+import { causeMessage } from "./decode";
+import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors";
+import type { VerifiedQuote, VerifyQuoteArgs } from "./verify";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 

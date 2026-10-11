@@ -837,8 +837,8 @@ const faults = [
         () =>
             sub(
                 CI,
-                "            - run: pnpm install --frozen-lockfile\n            # Run all four",
-                "            # carrier-artifacts: not a dependency install\n            - run: pnpm install --frozen-lockfile\n            # Run all four",
+                "            - run: pnpm install --frozen-lockfile\n",
+                "            # carrier-artifacts: not a dependency install\n            - run: pnpm install --frozen-lockfile\n",
             ),
     ],
 ];
@@ -899,7 +899,7 @@ const EXPECTED = {
     V: "declared candidate resolutions were confirmed",
     W: "job gates installs at line 24",
     X: "job gates installs at line 23",
-    Y: "job vectors installs at line 46",
+    Y: "job vectors installs at line 47",
     Z: "stage build installs at line 22",
     AA: "stage build installs at line 22",
     AB: "stage build installs at line 22",
@@ -911,7 +911,7 @@ const EXPECTED = {
     AH: "1 install exemptions",
     AI: "job gates installs at line 22",
     AJ: "job packages installs at line 79",
-    AK: "job vectors installs at line 50",
+    AK: "job vectors installs at line 51",
     AL: "job e2e installs at line 66",
     AM: "stage build installs at line 23",
     AN: "job gates installs at line 25",

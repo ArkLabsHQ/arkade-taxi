@@ -4,7 +4,7 @@ import {
     prepareJointSubmission as prepareCore,
     providerCosignerKey as providerCore,
     submitJointFill as submitCore,
-} from "../../src/joint/jointSigning.js";
+} from "../../src/joint/jointSigning";
 export const signJointGraphForOwner = (args: Omit<Parameters<typeof signCore>[0], "template">) =>
     signCore({ ...args, template: OFFER_FILL_TEMPLATE });
 export const prepareJointSubmission = (args: Omit<Parameters<typeof prepareCore>[0], "template">) =>

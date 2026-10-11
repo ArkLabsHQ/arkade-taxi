@@ -9,11 +9,11 @@ import { Transaction, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkad
 import { buildOfferFillPlan } from "@arkade-os/swap";
 import { createOffer } from "@arkade-os/swap/protocol";
 import { base64, hex } from "@scure/base";
-import { loadConfig } from "../packages/app/src/config.js";
+import { loadConfig } from "../packages/app/src/config";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { preEffectRequest } from "./admission.js";
-import { admin, artifactPath, fundingOf, poll, ready, required, type Live } from "./fixtures.js";
+import { preEffectRequest } from "./admission";
+import { admin, artifactPath, fundingOf, poll, ready, required, type Live } from "./fixtures";
 
 export const DELIVERED = 1_000n;
 export const ISSUED = 10_000n;

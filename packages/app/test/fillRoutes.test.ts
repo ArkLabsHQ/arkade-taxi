@@ -18,17 +18,15 @@ import {
 import {
     AdvanceRepository,
     FillRepository,
-    openDatabase,
-    PolicyRepository,
     ReceiveQuoteRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { submitFill, getFill, type FillDeps } from "../src/fills.js";
-import type { ServiceError } from "../src/errors.js";
-import { NOW, operatorPrivkey, runtimeSafety, serverUnroll } from "./fixtures.js";
-import { insertReceiveQuote } from "./jointFillFixtures.js";
-import { asIndexed } from "./graphFixtures.js";
-import { receiverPaidFill, solverPrivkey, solverTree } from "./realFillFixtures.js";
+import { submitFill, getFill, type FillDeps } from "../src/fills";
+import type { ServiceError } from "../src/errors";
+import { NOW, operatorPrivkey, runtimeSafety, serverUnroll } from "./fixtures";
+import { insertReceiveQuote } from "./jointFillFixtures";
+import { asIndexed } from "./graphFixtures";
+import { receiverPaidFill, solverPrivkey, solverTree } from "./realFillFixtures";
 
 const state = vi.hoisted(() => ({
     contractVtxos: [] as unknown[],

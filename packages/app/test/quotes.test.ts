@@ -3,7 +3,7 @@ import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { Transaction } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
-import type { ServiceError } from "../src/errors.js";
+import type { ServiceError } from "../src/errors";
 import {
     covenantDeadline,
     createQuote,
@@ -12,7 +12,7 @@ import {
     submitLockup,
     type QuoteDeps,
     type QuotePhaseFields,
-} from "../src/quotes.js";
+} from "../src/quotes";
 import {
     advance,
     config,
@@ -33,10 +33,10 @@ import {
     quoteInfrastructure,
     serverUnroll,
     signedEnvelope,
-} from "./fixtures.js";
+} from "./fixtures";
 import type { Policy } from "@arkade-taxi/core";
-import { ProductionLockupBuilder } from "../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
+import { ProductionLockupBuilder } from "../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt";
 import {
     openDatabase,
     AdvanceRepository,

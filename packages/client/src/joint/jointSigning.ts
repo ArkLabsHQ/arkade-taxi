@@ -17,13 +17,12 @@ import {
 import {
     assertSameUnsignedTx,
     assertUnsignedInput,
-    assertUnsignedPsbt,
     setTapScriptSigEntries,
     tapLeavesOfInput,
     tapScriptSigEntries,
     type TapScriptSigEntry,
-} from "./arkTransaction.js";
-import { deepFreeze, verifyJointGraph, type JointGraph } from "./jointGraph.js";
+} from "./arkTransaction";
+import { deepFreeze, verifyJointGraph, type JointGraph } from "./jointGraph";
 
 const computeArkadeScriptPublicKey = arkade.computeArkadeScriptPublicKey;
 

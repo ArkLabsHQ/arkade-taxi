@@ -1,15 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { AdvanceRepository, type Database } from "@arkade-taxi/db";
-import type { RuntimeConfig } from "../src/config.js";
-import { advance, config } from "./fixtures.js";
-import { insertReceiveQuote } from "./jointFillFixtures.js";
+import type { RuntimeConfig } from "../src/config";
+import { advance, config } from "./fixtures";
+import { insertReceiveQuote } from "./jointFillFixtures";
 
 const current = vi.hoisted(() => ({
     config: undefined as RuntimeConfig | undefined,
     seed: undefined as ((db: Database) => void) | undefined,
 }));
-vi.mock("../src/config.js", async (original) => ({
-    ...(await original<typeof import("../src/config.js")>()),
+vi.mock("../src/config", async (original) => ({
+    ...(await original<typeof import("../src/config")>()),
     loadConfig: () => current.config!,
     resolveRuntimeConfig: async () => current.config!,
 }));
@@ -24,8 +24,8 @@ vi.mock("@arkade-taxi/db", async (original) => {
         },
     };
 });
-vi.mock("../src/arkade/operatorWallet.js", async (original) => ({
-    ...(await original<typeof import("../src/arkade/operatorWallet.js")>()),
+vi.mock("../src/arkade/operatorWallet", async (original) => ({
+    ...(await original<typeof import("../src/arkade/operatorWallet")>()),
     createOperatorRuntime: () => {
         throw new Error("startup got past the exit params check");
     },
@@ -46,7 +46,7 @@ it("refuses to start on a terminal advance written before the exit leaf", async 
     const argv = process.argv;
     process.argv = [argv[0]!, "cli", "serve"];
     try {
-        await import("../src/cli.js");
+        await import("../src/cli");
         await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
     } finally {
         process.argv = argv;
@@ -70,7 +70,7 @@ it("refuses to start on a receive quote written before the exit leaf", async () 
     const argv = process.argv;
     process.argv = [argv[0]!, "cli", "serve"];
     try {
-        await import("../src/cli.js");
+        await import("../src/cli");
         await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
     } finally {
         process.argv = argv;

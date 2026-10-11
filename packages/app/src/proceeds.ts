@@ -25,22 +25,22 @@ import type {
     ReceiveQuoteRepository,
     ReservationRepository,
 } from "@arkade-taxi/db";
-import type { RuntimeConfig } from "./config.js";
+import type { RuntimeConfig } from "./config";
 import {
     proofInputs,
     type createOperatorRuntime,
     type OperatorRuntimeOptions,
-} from "./arkade/operatorWallet.js";
-import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
-import { validatePersistedLockupGraph } from "./arkade/submit.js";
-import { readFundingSource } from "./arkade/fundingSource.js";
-import { classifyObservedSpend } from "./watcher.js";
+} from "./arkade/operatorWallet";
+import { unionReservedOutpoints } from "./arkade/reservedOutpoints";
+import { validatePersistedLockupGraph } from "./arkade/submit";
+import { readFundingSource } from "./arkade/fundingSource";
+import { classifyObservedSpend } from "./watcher";
 import {
     normalizeExpiry,
     renewing,
     verifyProviders,
     withinVtxoMaxAmount,
-} from "./arkade/providers.js";
+} from "./arkade/providers";
 
 const key = (o: Outpoint) => `${o.txid}:${o.vout}`;
 const intentDigest = (proof: string, message: string) =>
