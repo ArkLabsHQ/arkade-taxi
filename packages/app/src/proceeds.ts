@@ -8,6 +8,7 @@ import {
     VtxoScript,
     asset,
     canSpendOffchain,
+    collectIntents,
     type ExtendedVirtualCoin,
     type VirtualCoin,
     type IntentFeeConfig,
@@ -802,7 +803,7 @@ export function createProceedsCollector(deps: Deps) {
         const inputs = plan.inputs.map((p) => mapped.get(key(p))!);
         assertProceedsPlan(plan, inputs, config);
         if (!isDeepStrictEqual(inputs.map(facts), plan.coins)) fail("proceeds_input_facts_changed");
-        const intents = await runtime.storage.intentRepository.getIntents({
+        const intents = await collectIntents(runtime.storage.intentRepository, {
             containingInputs: plan.inputs,
         });
         const outcome = reconcileProceeds(inputs, intents, now(), jobs.submissionEvidence(job.id));

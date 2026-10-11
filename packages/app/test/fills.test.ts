@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { base64, hex } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import {
     ArkAddress,
     Extension,
@@ -383,36 +384,29 @@ describe("assertFillGraph against the graph today's builder emits", () => {
     it.each(["signature", "leaf", "control block", "witness script"])(
         "refuses invalid foreign %s",
         (kind) => {
-            const ark = txOf(fixture.args.graph.arkTx);
-            const input = ark.getInput(fixture.foreignIndex);
-            ark.updateInput(fixture.foreignIndex, { tapScriptSig: undefined });
+            const ark = RawPSBTV0.decode(base64.decode(fixture.args.graph.arkTx));
+            const input = ark.inputs[fixture.foreignIndex]!;
+            const signatures = input.tapScriptSig!;
+            delete input.tapScriptSig;
             if (kind === "signature" || kind === "leaf") {
-                const [data, signature] = input.tapScriptSig![0]!;
-                ark.updateInput(fixture.foreignIndex, {
-                    tapScriptSig: [
-                        [
-                            {
-                                ...data,
-                                ...(kind === "leaf" ? { leafHash: new Uint8Array(32) } : {}),
-                            },
-                            kind === "signature" ? new Uint8Array(64) : signature,
-                        ],
+                const [data, signature] = signatures[0]!;
+                input.tapScriptSig = [
+                    [
+                        { ...data, ...(kind === "leaf" ? { leafHash: new Uint8Array(32) } : {}) },
+                        kind === "signature" ? new Uint8Array(64) : signature,
                     ],
-                });
+                ];
             } else if (kind === "control block") {
-                const [control, leaf] = input.tapLeafScript![0]!;
-                ark.updateInput(fixture.foreignIndex, { tapLeafScript: undefined });
-                ark.updateInput(fixture.foreignIndex, {
-                    tapLeafScript: [[{ ...control, internalKey: new Uint8Array(32) }, leaf]],
-                });
-            } else
-                ark.updateInput(fixture.foreignIndex, {
-                    witnessUtxo: { ...input.witnessUtxo!, script: SOMEONE_ELSE },
-                });
-            expect(refused({ graph: { ...fixture.args.graph, arkTx: psbtOf(ark) } }).code).toBe(
+                input.tapLeafScript![0]![0].internalKey = new Uint8Array(32);
+            } else input.witnessUtxo!.script = SOMEONE_ELSE;
+            expect(
+                refused({
+                    graph: { ...fixture.args.graph, arkTx: base64.encode(RawPSBTV0.encode(ark)) },
+                }).code,
+            ).toBe(
                 kind === "signature" || kind === "leaf"
                     ? "fill_foreign_signature_invalid"
-                    : "fill_foreign_input_invalid",
+                    : "fill_graph_invalid",
             );
         },
     );
@@ -446,27 +440,16 @@ describe("assertFillGraph against the graph today's builder emits", () => {
         "binds the foreign source %s to observation",
         (kind) => {
             const checkpoints = [...fixture.args.graph.checkpoints];
-            const cp = txOf(checkpoints[fixture.foreignIndex]!);
-            const input = cp.getInput(0);
-            cp.updateInput(0, { tapScriptSig: undefined });
-            if (kind === "control block") {
-                const [control, leaf] = input.tapLeafScript![0]!;
-                cp.updateInput(0, { tapLeafScript: undefined });
-                cp.updateInput(0, {
-                    tapLeafScript: [[{ ...control, internalKey: new Uint8Array(32) }, leaf]],
-                });
-            } else
-                cp.updateInput(0, {
-                    witnessUtxo: {
-                        ...input.witnessUtxo!,
-                        ...(kind === "amount"
-                            ? { amount: input.witnessUtxo!.amount + 1n }
-                            : { script: SOMEONE_ELSE }),
-                    },
-                });
-            checkpoints[fixture.foreignIndex] = psbtOf(cp);
+            const cp = RawPSBTV0.decode(base64.decode(checkpoints[fixture.foreignIndex]!));
+            const input = cp.inputs[0]!;
+            delete input.tapScriptSig;
+            if (kind === "control block")
+                input.tapLeafScript![0]![0].internalKey = new Uint8Array(32);
+            else if (kind === "amount") input.witnessUtxo!.amount += 1n;
+            else input.witnessUtxo!.script = SOMEONE_ELSE;
+            checkpoints[fixture.foreignIndex] = base64.encode(RawPSBTV0.encode(cp));
             expect(refused({ graph: { ...fixture.args.graph, checkpoints } }).code).toBe(
-                "fill_foreign_input_invalid",
+                kind === "amount" ? "fill_foreign_input_invalid" : "fill_graph_invalid",
             );
         },
     );

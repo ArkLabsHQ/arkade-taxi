@@ -16,6 +16,7 @@ import {
     type EmulatorProvider,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import { hex } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import {
@@ -651,15 +652,6 @@ describe("startup recovery invariant", () => {
             },
         ],
         [
-            "checkpoint script",
-            (_arkTx: Transaction, checkpoints: Transaction[]) => {
-                const input = checkpoints[0]!.getInput(0);
-                checkpoints[0]!.updateInput(0, {
-                    witnessUtxo: { ...input.witnessUtxo!, script: new Uint8Array([0x51]) },
-                });
-            },
-        ],
-        [
             "checkpoint input",
             (_arkTx: Transaction, checkpoints: Transaction[]) =>
                 checkpoints[0]!.updateInput(0, { index: 17 }),
@@ -667,6 +659,22 @@ describe("startup recovery invariant", () => {
     ] as const)("rejects a self-consistent graph with mutated %s", (_label, mutate) => {
         const row = mutateLockupGraph(sourceAdvance(), mutate);
         expect(() => assertRecoveryStartupInvariants([row], config())).toThrow(
+            new RegExp(`${row.id}.*persisted lockup graph`),
+        );
+    });
+
+    it("rejects a self-consistent graph with mutated checkpoint script", () => {
+        const row = sourceAdvance();
+        const envelope = decodeLockupEnvelope(row.unsignedLockupTx);
+        const checkpoint = RawPSBTV0.decode(base64.decode(envelope.checkpoints[0]!));
+        checkpoint.inputs[0]!.witnessUtxo!.script = new Uint8Array([0x51]);
+        const checkpoints = [...envelope.checkpoints];
+        checkpoints[0] = base64.encode(RawPSBTV0.encode(checkpoint));
+        const corrupted = {
+            ...row,
+            unsignedLockupTx: encodeLockupEnvelope({ ...envelope, checkpoints }),
+        };
+        expect(() => assertRecoveryStartupInvariants([corrupted], config())).toThrow(
             new RegExp(`${row.id}.*persisted lockup graph`),
         );
     });

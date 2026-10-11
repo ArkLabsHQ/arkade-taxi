@@ -147,10 +147,10 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.4.78` and
-`@arkade-os/swap@0.0.24` are both published, but npm answers those coordinates
+A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.5.0-rc.18` and
+`@arkade-os/swap@0.1.0-rc.21` are both published, but npm answers those coordinates
 with a **different build**: what this repository runs against is the pair built
-from `arkade-os/ts-sdk` at `e614c953`, and no registry carries those bytes.
+from `arkade-os/ts-sdk` at `99313fa7`, and no registry carries those bytes.
 `vendor/carrier/` holds them as tracked archives named for that source commit,
 `vendor/carrier/manifest.json` records the provenance of each, and the root
 `pnpm.overrides` point every resolution — direct and transitive — at those

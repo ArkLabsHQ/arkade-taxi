@@ -10,12 +10,11 @@ const SWAP_SCENARIOS = [
     "receiver-paid-fill-claim",
     "fill-undersigned-foreign-input",
 ];
-// Each leaves its stack unusable for later scenarios, so each runs on a stack
-// of its own: they are mutually exclusive as well as terminal, so one shared
-// isolated stack is not enough.
+// Each fault scenario gets its own stack so failed cleanup cannot affect later tests.
 const ISOLATED_SCENARIOS = [
     "covenant-unilateral-exit-with-arkd-down",
     "fill-undersigned-foreign-input",
+    "fill-pending-accepted-quarantine",
 ];
 
 export function readScenarioIds(mode = "full") {

@@ -2,7 +2,7 @@ import {
     ArkAddress,
     getNetwork,
     toXOnlySignerHex,
-    type ArkInfo,
+    type ArkadeInfo,
     type NetworkName,
 } from "@arkade-os/sdk";
 import { TaxiClient, taxiAssetId } from "../index.js";
@@ -72,7 +72,10 @@ export interface TaxiProbeContext extends ArkadeContext {
 }
 
 export const arkadeContextOf = (
-    info: Pick<ArkInfo, "network" | "signerPubkey" | "dust" | "vtxoMinAmount" | "vtxoTreeExpiry">,
+    info: Pick<
+        ArkadeInfo,
+        "network" | "signerPubkey" | "dust" | "vtxoMinAmount" | "vtxoTreeExpiry"
+    >,
     tipHeight: () => Promise<number>,
     emulatorKey: Uint8Array,
 ): ArkadeContext => {

@@ -14,6 +14,7 @@ class LiveSequencer extends BaseSequencer {
             "joint-fill",
             "receiver-paid",
             "receiver-paid-fill",
+            "direct-fill",
             "exposure",
             "verify-quote",
             // Its own operator key and ledger, but it settles a batch, so it

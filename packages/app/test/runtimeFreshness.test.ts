@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArkAddress, type ArkInfo, type Wallet } from "@arkade-os/sdk";
+import { ArkAddress, type ArkadeInfo, type Wallet } from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
@@ -53,7 +53,7 @@ function setup() {
     terms.update(policy(), "test");
     const cfg = config({ addressHrp: "tark", reconcileIntervalMs: 1_000 });
     let now = NOW * 1_000;
-    let info: ArkInfo = arkInfo({ checkpointTapscript: bytesToHex(serverUnroll.script) });
+    let info: ArkadeInfo = arkInfo({ checkpointTapscript: bytesToHex(serverUnroll.script) });
     let providerFails = false;
     let checkGate: Promise<void> | undefined;
     let walletGate: Promise<void> | undefined;
@@ -216,7 +216,7 @@ function setup() {
         databaseSnapshot: () => db.serialize(),
         router,
         setNow: (value: number) => (now = value),
-        setInfo: (value: ArkInfo) => (info = value),
+        setInfo: (value: ArkadeInfo) => (info = value),
         failProvider: () => (providerFails = true),
         setOnline: (value: boolean) => (online = value),
         setHeight: (value: number) => (height = value),

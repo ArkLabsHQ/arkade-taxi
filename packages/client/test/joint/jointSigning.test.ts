@@ -3,6 +3,7 @@ import { base64, hex } from "@scure/base";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToNumberBE, numberToBytesBE } from "@noble/curves/utils.js";
 import { SigHash } from "@scure/btc-signer";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import {
     ArkAddress,
     ConditionWitness,
@@ -14,6 +15,8 @@ import {
     SingleKey,
     Transaction,
     VtxoScript,
+    VtxoTaprootTree,
+    scriptFromTapLeafScript,
     arkade,
     asset,
     getArkPsbtFields,
@@ -30,7 +33,7 @@ import {
     providerCosignerKeys,
 } from "../../src/joint/jointSigning.js";
 import { deepFreeze, digestJointGraph, verifyJointGraph } from "../../src/joint/jointGraph.js";
-import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap";
+import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap/protocol";
 import {
     OFFER_FILL_TEMPLATE,
     buildOfferFillPlan,
@@ -222,16 +225,54 @@ const recomputeId = (g: JointGraph): string =>
         OFFER_FILL_TEMPLATE,
     );
 
-const addLeaf = (tx: Transaction, inputIndex: number, script: Uint8Array, fill: number): void => {
-    const existing = tx.getInput(inputIndex).tapLeafScript!;
-    const [first] = existing;
-    const forgedKey = {
-        ...first[0],
-        merklePath: [...first[0].merklePath, new Uint8Array(32).fill(fill)],
+const withFundingLeaf = (graph: JointGraph, index: number, script: Uint8Array): JointGraph => {
+    const ark = arkOf(graph);
+    const checkpoint = cpOf(graph, index);
+    const arkTree = new VtxoScript([
+        scriptFromTapLeafScript(ark.getInput(index).tapLeafScript![0]!),
+        script,
+    ]);
+    const sourceTree = new VtxoScript([
+        scriptFromTapLeafScript(checkpoint.getInput(0).tapLeafScript![0]!),
+        script,
+    ]);
+    const replaceTree = (tx: Transaction, inputIndex: number, tree: VtxoScript): Transaction => {
+        const raw = RawPSBTV0.decode(tx.toPSBT());
+        const input = raw.inputs[inputIndex]!;
+        input.witnessUtxo!.script = Uint8Array.from(tree.pkScript);
+        input.tapLeafScript = tree.leaves.map(([control, leaf]) => [
+            {
+                version: control.version,
+                internalKey: Uint8Array.from(control.internalKey),
+                merklePath: control.merklePath.map((sibling) => Uint8Array.from(sibling)),
+            },
+            Uint8Array.from(leaf),
+        ]);
+        delete input.tapMerkleRoot;
+        delete input.tapInternalKey;
+        const [key, value] = VtxoTaprootTree.encode(tree.encode());
+        const entries: NonNullable<typeof input.unknown> = (input.unknown ?? [])
+            .filter((entry) => VtxoTaprootTree.decode(entry) === null)
+            .map(([key, value]) => [
+                { type: key.type, key: Uint8Array.from(key.key) },
+                Uint8Array.from(value),
+            ]);
+        entries.push([{ type: key.type, key: Uint8Array.from(key.key) }, Uint8Array.from(value)]);
+        input.unknown = entries;
+        return Transaction.fromPSBT(RawPSBTV0.encode(raw));
     };
-    tx.updateInput(inputIndex, {
-        tapLeafScript: [...existing, [forgedKey, new Uint8Array([...script, 0xc0])]],
-    });
+    const changedCheckpoint = replaceTree(checkpoint, 0, sourceTree);
+    changedCheckpoint.updateOutput(0, { script: arkTree.pkScript });
+    const changedArk = replaceTree(ark, index, arkTree);
+    changedArk.updateInput(index, { txid: changedCheckpoint.id });
+    const checkpoints = [...graph.checkpoints];
+    checkpoints[index] = base64.encode(changedCheckpoint.toPSBT());
+    const changed = {
+        ...structuredClone(graph),
+        arkTx: base64.encode(changedArk.toPSBT()),
+        checkpoints,
+    };
+    return { ...changed, graphId: recomputeId(changed) };
 };
 
 const providerTweakPriv = (arkTx: string): Uint8Array => {
@@ -466,18 +507,8 @@ describe("signJointGraphForOwner", () => {
 
     it("rejects an ambiguous selected leaf", async () => {
         const expected = await trustedGraph();
-        const tx = arkOf(expected);
-        const [existing] = tx.getInput(1).tapLeafScript!;
         const forgedScript = new Uint8Array([0x20, ...solverKey, 0xac]);
-        const forgedKey = {
-            ...existing[0],
-            merklePath: [...existing[0].merklePath, new Uint8Array(32).fill(7)],
-        };
-        tx.updateInput(1, {
-            tapLeafScript: [existing, [forgedKey, new Uint8Array([...forgedScript, 0xc0])]],
-        });
-        const altered = { ...structuredClone(expected), arkTx: base64.encode(tx.toPSBT()) };
-        const twoLeaf: JointGraph = { ...altered, graphId: recomputeId(altered) };
+        const twoLeaf = withFundingLeaf(expected, 1, forgedScript);
         expect(verifyOfferFillPlan(twoLeaf)).toBe(true);
         await expect(
             signJointGraphForOwner({
@@ -490,19 +521,8 @@ describe("signJointGraphForOwner", () => {
 
     it("rejects an accumulated signature on a different valid leaf", async () => {
         const base = await trustedGraph();
-        const ark = arkOf(base);
-        const otherScript = MultisigTapscript.encode({
-            pubkeys: [solverBKey, SERVER_KEY],
-        }).script;
-        addLeaf(ark, 1, otherScript, 9);
-        const cp1 = cpOf(base, 1);
-        addLeaf(cp1, 0, otherScript, 9);
-        const altered: JointGraph = {
-            ...structuredClone(base),
-            arkTx: base64.encode(ark.toPSBT()),
-            checkpoints: [base.checkpoints[0], base64.encode(cp1.toPSBT()), base.checkpoints[2]],
-        };
-        const twoLeaf: JointGraph = { ...altered, graphId: recomputeId(altered) };
+        const otherScript = MultisigTapscript.encode({ pubkeys: [solverBKey, SERVER_KEY] }).script;
+        const twoLeaf = withFundingLeaf(base, 1, otherScript);
         expect(verifyOfferFillPlan(twoLeaf)).toBe(true);
         const foreign = await signJointGraphForOwner({
             expected: twoLeaf,
@@ -523,15 +543,9 @@ describe("signJointGraphForOwner", () => {
 
     it("ignores key bytes embedded in non-pushdata", async () => {
         const base = await trustedGraph();
-        const ark = arkOf(base);
         const filler = new Uint8Array(64).fill(0x11);
         filler.set(solverKey, 5);
-        addLeaf(ark, 1, new Uint8Array([0x4c, 0x40, ...filler, 0xac]), 8);
-        const altered: JointGraph = {
-            ...structuredClone(base),
-            arkTx: base64.encode(ark.toPSBT()),
-        };
-        const twoLeaf: JointGraph = { ...altered, graphId: recomputeId(altered) };
+        const twoLeaf = withFundingLeaf(base, 1, new Uint8Array([0x4c, 0x40, ...filler, 0xac]));
         expect(verifyOfferFillPlan(twoLeaf)).toBe(true);
         const after = await signJointGraphForOwner({
             expected: twoLeaf,
@@ -616,6 +630,7 @@ describe("signJointGraphForOwner", () => {
         const unknown = tx.getInput(1).unknown ?? [];
         const stripped = unknown.filter(([k]) => hex.encode(k.key) !== prevarktx);
         expect(stripped.length).toBeLessThan(unknown.length);
+        tx.updateInput(1, { unknown: undefined });
         tx.updateInput(1, { unknown: stripped });
         const evil = { ...structuredClone(expected), arkTx: base64.encode(tx.toPSBT()) };
         expect(getArkPsbtFields(tx, 1, PrevArkTxField)).toEqual([]);
@@ -756,14 +771,11 @@ describe("signJointGraphForOwner", () => {
         });
         expect(recomputeId(repriced)).not.toBe(expected.graphId);
         expect(verifyOfferFillPlan({ ...repriced, graphId: expected.graphId })).toBe(false);
-        const leafed = withArk(expected, (tx) => {
-            addLeaf(
-                tx,
-                1,
-                MultisigTapscript.encode({ pubkeys: [solverBKey, SERVER_KEY] }).script,
-                9,
-            );
-        });
+        const leafed = withFundingLeaf(
+            expected,
+            1,
+            MultisigTapscript.encode({ pubkeys: [solverBKey, SERVER_KEY] }).script,
+        );
         expect(recomputeId(leafed)).not.toBe(expected.graphId);
         const relabeled: JointGraph = {
             ...structuredClone(expected),

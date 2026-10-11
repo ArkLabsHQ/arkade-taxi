@@ -31,12 +31,12 @@ describe("live E2E result gate", () => {
     it("requires the full manifest by default and precisely the direct scenarios locally", () => {
         const full = readScenarioIds();
         const direct = readScenarioIds("direct");
-        expect(full).toHaveLength(25);
-        expect(direct).toHaveLength(20);
+        expect(full).toHaveLength(26);
+        expect(direct).toHaveLength(21);
         const passing = {
             ...result(),
-            numTotalTests: 22,
-            numPassedTests: 22,
+            numTotalTests: 23,
+            numPassedTests: 23,
             testResults: [
                 {
                     assertionResults: [
@@ -60,6 +60,7 @@ describe("live E2E result gate", () => {
         expect(isolated).toEqual([
             "covenant-unilateral-exit-with-arkd-down",
             "fill-undersigned-foreign-input",
+            "fill-pending-accepted-quarantine",
         ]);
         expect(readScenarioIds().filter((id: string) => isolated.includes(id))).toEqual([]);
         // One stack per file, each validated against exactly what it registers,
@@ -70,10 +71,17 @@ describe("live E2E result gate", () => {
         expect(isolatedScenarioIds("e2e/fill-undersigned.e2e.test.ts")).toEqual([
             "fill-undersigned-foreign-input",
         ]);
+        expect(isolatedScenarioIds("e2e/fill-pending.e2e.test.ts")).toEqual([
+            "fill-pending-accepted-quarantine",
+        ]);
         expect(() => isolatedScenarioIds("e2e/receiver-paid-fill.e2e.test.ts")).toThrow(
             /no classified isolated scenario/,
         );
-        for (const file of ["e2e/unilateral-exit.e2e.test.ts", "e2e/fill-undersigned.e2e.test.ts"])
+        for (const file of [
+            "e2e/unilateral-exit.e2e.test.ts",
+            "e2e/fill-undersigned.e2e.test.ts",
+            "e2e/fill-pending.e2e.test.ts",
+        ])
             expect(
                 validateResults(oneOf(isolatedScenarioIds(file)), isolatedScenarioIds(file)),
             ).toEqual([]);

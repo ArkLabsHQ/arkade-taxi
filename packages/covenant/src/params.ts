@@ -1,4 +1,5 @@
 import { timelockToSequence, type RelativeTimelock } from "@arkade-os/sdk";
+import { PubT, validatePubkey } from "@scure/btc-signer/utils.js";
 
 export type { RelativeTimelock };
 
@@ -49,6 +50,7 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
         if (k?.length !== 32) {
             throw new Error(`covenant: ${name} key must be 32 bytes, got ${k?.length ?? 0}`);
         }
+        validatePubkey(k, PubT.schnorr);
     }
     if (
         p.recoveryRecipient !== undefined &&

@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
-import { DefaultVtxo, DelegateVtxo, SingleKey } from "@arkade-os/sdk";
+import { DefaultVtxo, DelegateVtxo, SingleKey, Wallet, type WalletConfig } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import {
     assertArtifactSafe,
@@ -59,7 +59,12 @@ import {
 } from "../lib/harness.mjs";
 import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
-import { assertDelegateLeaf, expiryOf, stubDelegateProvider } from "../e2e-wallets.mjs";
+import {
+    assertDelegateLeaf,
+    createActorWallets,
+    expiryOf,
+    stubDelegateProvider,
+} from "../e2e-wallets.mjs";
 
 it("reserves both wallet listeners until their ports are handed to Playwright", async () => {
     const reservation = await reserveWalletPorts();
@@ -413,6 +418,7 @@ describe("package manager process boundary", () => {
         "e2e/joint-fill.e2e.test.ts",
         "e2e/receiver-paid.e2e.test.ts",
         "e2e/receiver-paid-fill.e2e.test.ts",
+        "e2e/direct-fill.e2e.test.ts",
         "e2e/exposure.e2e.test.ts",
         "e2e/verify-quote.e2e.test.ts",
         "e2e/renewal.e2e.test.ts",
@@ -443,6 +449,7 @@ describe("package manager process boundary", () => {
             expect(options.isolatedTests).toEqual([
                 "e2e/unilateral-exit.e2e.test.ts",
                 "e2e/fill-undersigned.e2e.test.ts",
+                "e2e/fill-pending.e2e.test.ts",
             ]);
         for (const args of [
             ["--direct", task12Tests[0]],
@@ -1251,6 +1258,46 @@ export const PROFILE_DEPS = {
 });
 
 describe("wallet bootstrap", () => {
+    it("sends actor provider reads to the configured regtest endpoints", async () => {
+        let config: WalletConfig | undefined;
+        const create = vi.spyOn(Wallet, "create").mockImplementation(async (value) => {
+            config = value;
+            return {} as Wallet;
+        });
+        const urls: string[] = [];
+        const read = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+            urls.push(String(input));
+            throw new Error("captured provider request");
+        });
+        try {
+            await createActorWallets(
+                { operator: "11".repeat(32) },
+                { arkdUrl: "http://127.0.0.1:17707", esploraUrl: "http://127.0.0.1:17300/api" },
+            );
+            expect(config?.arkProvider).toBeDefined();
+            expect(config?.indexerProvider).toBeDefined();
+            expect(config?.onchainProvider).toBeDefined();
+            await expect(config!.arkProvider!.getInfo()).rejects.toThrow();
+            await expect(
+                config!.indexerProvider!.getVtxos({ scripts: ["5120" + "11".repeat(32)] }),
+            ).rejects.toThrow();
+            await expect(config!.onchainProvider!.getChainTip()).rejects.toThrow();
+            expect(urls.length).toBeGreaterThanOrEqual(3);
+            expect(urls.some((url) => url.startsWith("http://127.0.0.1:17707/"))).toBe(true);
+            expect(urls.some((url) => url.startsWith("http://127.0.0.1:17300/api/"))).toBe(true);
+            expect(
+                urls.every(
+                    (url) =>
+                        url.startsWith("http://127.0.0.1:17707/") ||
+                        url.startsWith("http://127.0.0.1:17300/api/"),
+                ),
+            ).toBe(true);
+        } finally {
+            create.mockRestore();
+            read.mockRestore();
+        }
+    });
+
     it("preserves existing actor seeds and creates only missing actors", () => {
         let generated = 0;
         const first = ensureActorSecrets({ operator: "11".repeat(32) }, () =>

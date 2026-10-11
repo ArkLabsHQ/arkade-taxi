@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-five live scenarios in the main run, two isolated scenarios each on a
+Twenty-six live scenarios in the main run, three isolated scenarios each on a
 stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
@@ -37,7 +37,7 @@ For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
 build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
 same stack before the SDK actor scenarios. This explicit local mode requires
-20 named scenarios and both integrity assertions plus the isolated run below,
+21 named scenarios and both integrity assertions plus the isolated runs below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
 The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
 (whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
@@ -69,10 +69,13 @@ depends on.
 
 `covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
-chain time a day ahead. `fill-undersigned-foreign-input` leaves a bound quote whose
-advance stays `locking` and whose operator inputs stay reserved, because nothing
-reconciles a fill. Both modes therefore run each of them before the shared suite,
-on a fresh stack of its own.
+chain time a day ahead. `fill-undersigned-foreign-input` tests pre-submit refusal
+without spending any Taxi input. `fill-pending-accepted-quarantine` drops an
+accepted arkd submit reply before finalization, retains the bound liability past
+TTL, and checks fresh observation, admission on other coins and outage refusal.
+It retrieves the original pending transaction and finalizes that same graph,
+then claims and recycles it. Both modes run each isolated scenario before the
+shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
 checks one such run, whose artifacts land in `e2e-artifacts/isolated/<test>/` (or
 its own `direct-<run>/`).
@@ -128,7 +131,7 @@ having asserted nothing is worse than no suite.
   every declared scenario is registered exactly once. It rejects direct
   skipped, todo, focused, or bare test registrations in scenario files.
 - `assert-ran.mjs` validates Vitest's JSON report independently: the shared
-  run's twenty-four scenarios and both integrity assertions, and the isolated
+  run's twenty-six scenarios and both integrity assertions, and each isolated
   run's scenario, must pass with zero failures, skips, or todos.
 
 ## What the scenarios prove
@@ -153,7 +156,11 @@ sponsor each sign only their own inputs while the offer covenant is co-signed by
 nobody but the emulator and the Arkade Service. `receiver-paid-fill-claim` builds
 the same shape for `POST /v1/fills` instead, with a receiver-paid sats fare: the
 caller's own inputs arrive signed, the Taxi's arrive unsigned and the gated
-covenant carries the emulator's tweaked key alone. With arkd and the emulator paused, the SDK's pre-signed exit
+covenant carries the emulator's tweaked key alone.
+`receiver-paid-direct-fill-claim` instead uses only ordinary owner/server
+multisig leaves and a native asset packet. It proves one arkd submit and finalize,
+zero emulator submits, both owners' actual signatures and the returned loan plus
+exact receiver fare. With arkd and the emulator paused, the SDK's pre-signed exit
 package puts a covenant on-chain and the sender and Taxi spend its exit leaf
 once the exit delay matures on median time past. The package skips the 330-sat
 covenant as uneconomic, so it reaches the chain only because the Taxi's change
@@ -219,7 +226,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The harness always clones master afresh; read the tested SHA from the current
-`stack.json` and retain it with all 27 passing assertions. Capture the existing
+`stack.json` and retain it with all 31 passing assertions. Capture the existing
 default project's container, volume and network inventory before and after, and
 verify that no resources with the run's exact ownership labels remain after
 successful cleanup.

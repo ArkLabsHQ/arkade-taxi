@@ -10,7 +10,8 @@ import {
     type ExtendedVirtualCoin,
     type Transaction,
 } from "@arkade-os/sdk";
-import { buildOfferFillPlan, createOffer, decodeOffer } from "@arkade-os/swap";
+import { buildOfferFillPlan } from "@arkade-os/swap";
+import { createOffer, decodeOffer } from "@arkade-os/swap/protocol";
 import { type CovenantTransfer, type JointGraph } from "@arkade-taxi/client";
 import { signJointGraphForOwner } from "./offerSigning.js";
 import { deriveJointOutputs } from "../packages/app/src/arkade/jointGraphDerivation.js";
@@ -186,7 +187,7 @@ async function receiverPaidCarrier(
         params: { dust: dust.toString(), topup: dust.toString(), receiverFare: covenantFare },
     });
 
-    const offer = await createOffer(maker.wallet, required("TAXI_E2E_ARKD_URL"), {
+    const offer = await createOffer(maker.wallet, {
         wantAmount: DELIVERED,
         wantAsset: sdkAssetId,
         receiveAddress: quote.covenantAddress,

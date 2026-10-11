@@ -3,6 +3,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname } from "node:path";
 import {
     ArkAddress,
+    EsploraProvider,
+    RestArkProvider,
+    RestIndexerProvider,
     DelegateVtxo,
     InMemoryContractRepository,
     InMemoryIntentRepository,
@@ -66,8 +69,9 @@ export async function createActorWallets(records, { arkdUrl, esploraUrl }) {
         const delegated = DELEGATED_ACTORS.has(name);
         const wallet = await Wallet.create({
             identity,
-            arkServerUrl: arkdUrl,
-            esploraUrl,
+            arkProvider: new RestArkProvider(arkdUrl),
+            indexerProvider: new RestIndexerProvider(arkdUrl),
+            onchainProvider: new EsploraProvider(esploraUrl),
             storage: storage(),
             settlementConfig: false,
             ...(delegated ? { delegateProvider: stubDelegateProvider } : {}),
@@ -120,7 +124,12 @@ export async function publicWalletFixture(actor) {
         vtxos: coins.map((coin) => ({
             ...fundingInputOf(coin),
             assets: safeBalance(coin.assets ?? []),
-            virtualStatus: coin.virtualStatus,
+            isSpent: coin.isSpent,
+            isSwept: coin.isSwept,
+            isPreconfirmed: coin.isPreconfirmed,
+            isUnrolled: coin.isUnrolled,
+            spentBy: coin.spentBy,
+            settledBy: coin.settledBy,
         })),
     };
 }

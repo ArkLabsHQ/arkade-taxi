@@ -5,19 +5,19 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@arkade-os/sdk': file:./vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
-  '@arkade-os/swap': file:./vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz
+  '@arkade-os/sdk': file:./vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
+  '@arkade-os/swap': file:./vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz
 
 importers:
 
   .:
     devDependencies:
       '@arkade-os/sdk':
-        specifier: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
-        version: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
+        specifier: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
+        version: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
       '@arkade-os/swap':
-        specifier: file:vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz
-        version: file:vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz
+        specifier: file:vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz
+        version: file:vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz
       '@noble/curves':
         specifier: ^2.4.0
         version: 2.4.0
@@ -40,8 +40,8 @@ importers:
   packages/app:
     dependencies:
       '@arkade-os/sdk':
-        specifier: file:../../vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
-        version: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
+        specifier: file:../../vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
+        version: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
       '@arkade-taxi/client':
         specifier: workspace:*
         version: link:../client
@@ -72,12 +72,16 @@ importers:
       zod:
         specifier: ^3.24.1
         version: 3.25.76
+    devDependencies:
+      '@scure/btc-signer':
+        specifier: 2.4.1
+        version: 2.4.1
 
   packages/client:
     dependencies:
       '@arkade-os/sdk':
-        specifier: file:../../vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
-        version: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
+        specifier: file:../../vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
+        version: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
       '@arkade-taxi/covenant':
         specifier: workspace:*
         version: link:../covenant
@@ -91,8 +95,8 @@ importers:
         specifier: ^2.0.0
         version: 2.4.0
       '@scure/btc-signer':
-        specifier: 2.0.1
-        version: 2.0.1
+        specifier: 2.4.1
+        version: 2.4.1
 
   packages/core:
     dependencies:
@@ -103,13 +107,13 @@ importers:
   packages/covenant:
     dependencies:
       '@arkade-os/sdk':
-        specifier: file:../../vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
-        version: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
+        specifier: file:../../vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
+        version: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
       '@noble/hashes':
         specifier: ^2.0.0
         version: 2.4.0
       '@scure/btc-signer':
-        specifier: ^2.0.1
+        specifier: 2.4.1
         version: 2.4.1
     devDependencies:
       '@noble/curves':
@@ -133,10 +137,10 @@ importers:
 
 packages:
 
-  '@arkade-os/sdk@file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz':
-    resolution: {integrity: sha512-xPqXM7R4Lo4N+eNthTA0gt4/4Ivc/QCr4JgettuNYX8V3ChS8AUlR3JP8gpM+i+63jiSqcQ/uT6dusDBj0wf7w==, tarball: file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz}
-    version: 0.4.78
-    engines: {node: '>=22.12.0 <27'}
+  '@arkade-os/sdk@file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz':
+    resolution: {integrity: sha512-JfmJi3r18ZP6kJOtYvqOcv7KUKIHKgcYGvdX55No+woJljT6sxvqwO4H6rXQjm1wsj++COwuQNIS1aP0DOK3Hw==, tarball: file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz}
+    version: 0.5.0-rc.18
+    engines: {node: '>=22.13.0 <27'}
     peerDependencies:
       '@react-native-async-storage/async-storage': '>=1.0.0'
       expo: '>=54.0.0'
@@ -159,9 +163,10 @@ packages:
     resolution: {integrity: sha512-T5dfiezUG5YKtzOmX1Z2E0LePF3bx6unsqq7UPgha0Zp9PQFcodYMYl6T1i0AbruaGup5XWq8Die5wusiA5qUA==}
     engines: {node: '>=18'}
 
-  '@arkade-os/swap@file:vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz':
-    resolution: {integrity: sha512-8AxdLgYzwgA62EaPdB0c8WS9V38wnZOh35h3UhqKRpvb2e9+TQR/4eIRjNr1tvTcrN03/CTdvpRzcbJh5diLhA==, tarball: file:vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz}
-    version: 0.0.24
+  '@arkade-os/swap@file:vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz':
+    resolution: {integrity: sha512-YovUa/nZhGpI8IFXGSr6BRhbw1Rp4vNhRxCzpg+aoB/dfVN+BPTi1QXCj1kUGN9sCDdoGkHPLBRBPBWYzTovnw==, tarball: file:vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz}
+    version: 0.1.0-rc.21
+    engines: {node: '>=22.13.0'}
     peerDependencies:
       nostr-tools: ^2.12.0
     peerDependenciesMeta:
@@ -394,16 +399,8 @@ packages:
     resolution: {integrity: sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw==}
     engines: {node: '>= 20.19.0'}
 
-  '@noble/curves@2.0.1':
-    resolution: {integrity: sha512-vs1Az2OOTBiP4q0pwjW5aF0xp9n4MxVrmkFBxc6EKZc6ddYx5gaZiAsZoq0uRRXWbi3AT/sBqn05eRPtn1JCPw==}
-    engines: {node: '>= 20.19.0'}
-
   '@noble/curves@2.4.0':
     resolution: {integrity: sha512-P4/62zrgfH33CneE3Dn4WhJVA22YUU0eR51wKIan4NVRvwsA0YnPTwWGpNbpuacSujmSFLvyzpyuR30+fbq2Ew==}
-    engines: {node: '>= 20.19.0'}
-
-  '@noble/hashes@2.0.1':
-    resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
     engines: {node: '>= 20.19.0'}
 
   '@noble/hashes@2.4.0':
@@ -554,8 +551,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@scure/base@2.0.0':
-    resolution: {integrity: sha512-3E1kpuZginKkek01ovG8krQ0Z44E3DHPjc5S2rjJw9lZn3KSQOs8S7wqikF/AH7iRanHypj85uGyxk0XAyC37w==}
+  '@scure/base@1.1.1':
+    resolution: {integrity: sha512-ZxOhsSyxYwLJj3pLZCefNitxsj093tb2vq90mp2txoYeBqbcjDjqFhyM8eUjq/uFm6zJ+mUuqxlS2FkuSY1MTA==}
 
   '@scure/base@2.4.0':
     resolution: {integrity: sha512-thZ1TuJwFwBblOhgsjDKvvGirBxNp+wSvY/DR6tJBJOTDhdAAcHJ8Vbr2eFnqaxeca4+t0i9KBf+uHYGWwZORg==}
@@ -563,11 +560,8 @@ packages:
   '@scure/bip32@2.4.0':
     resolution: {integrity: sha512-i3DS0CptAocyvqE4n3SUkpzeQK4vJMFwWLofTwRiiKo2aWojBOfyMCgfKw9HVpO6fSY5AK86sHS/Uzn8kK9Few==}
 
-  '@scure/bip39@2.0.1':
-    resolution: {integrity: sha512-PsxdFj/d2AcJcZDX1FXN3dDgitDDTmwf78rKZq1a6c1P1Nan1X/Sxc7667zU3U+AN60g7SxxP0YCVw2H/hBycg==}
-
-  '@scure/btc-signer@2.0.1':
-    resolution: {integrity: sha512-vk5a/16BbSFZkhh1JIJ0+4H9nceZVo5WzKvJGGWiPp3sQOExeW+L53z3dI6u0adTPoE8ZbL+XEb6hEGzVZSvvQ==}
+  '@scure/bip39@2.4.0':
+    resolution: {integrity: sha512-82dxFbZUYboyOf0AXiydsQrFQ5Q4h9mX+O2UkE91ROYmsc0BKMGZLwDmy96Jpa2+vrtoxomjUhy1RPIgH/r2nA==}
 
   '@scure/btc-signer@2.4.1':
     resolution: {integrity: sha512-ch6h66o9nPhEoe/KciMMUJeH2MBPB8UAJI1if35Fxl6885lKTsc9YoCRqTW0/RjI0Vv9GSg1tmKtHHODyAw81g==}
@@ -750,6 +744,9 @@ packages:
   js-tokens@9.0.1:
     resolution: {integrity: sha512-mxa9E9ITFOt0ban3j6L5MpjwegGz6lBQmM1IJkWeBZGcMxto50+eWdjC/52xDbS2vy0k7vIMK0Fe2wfL9OQSpQ==}
 
+  light-bolt11-decoder@3.2.0:
+    resolution: {integrity: sha512-3QEofgiBOP4Ehs9BI+RkZdXZNtSys0nsJ6fyGeSiAGCBsMwHGUDS/JQlY/sTnWs91A2Nh0S9XXfA8Sy9g6QpuQ==}
+
   lodash.memoize@4.1.2:
     resolution: {integrity: sha512-t7j+NzmgnQzTAYXcsHYLgimltOV1MXHtlOWf6GjL9Kj8GK5FInw5JotxvbOs+IvV1/Dzo04/fCGfLVs7aXb4Ag==}
 
@@ -761,10 +758,6 @@ packages:
 
   micro-packed@0.11.1:
     resolution: {integrity: sha512-agQGBnBCw8OoKQZMUxcaQPaOowdfxyEmBsq4CNAXAXCyB8KxlRG0lTl5GADJIsMEDaFb0trhXBHKYsjTWa5kuw==}
-    engines: {node: '>= 20.19.0'}
-
-  micro-packed@0.8.0:
-    resolution: {integrity: sha512-AKb8znIvg9sooythbXzyFeChEY0SkW0C6iXECpy/ls0e5BtwXO45J9wD9SLzBztnS4XmF/5kwZknsq+jyynd/A==}
     engines: {node: '>= 20.19.0'}
 
   mimic-response@3.1.0:
@@ -1071,16 +1064,17 @@ packages:
 
 snapshots:
 
-  '@arkade-os/sdk@file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz':
+  '@arkade-os/sdk@file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz':
     dependencies:
       '@bitcoinerlab/descriptors-scure': 3.1.7
       '@marcbachmann/cel-js': 8.0.0
-      '@noble/curves': 2.0.1
+      '@noble/curves': 2.4.0
       '@noble/secp256k1': 3.0.0
-      '@scure/base': 2.0.0
-      '@scure/bip39': 2.0.1
-      '@scure/btc-signer': 2.0.1
+      '@scure/base': 2.4.0
+      '@scure/bip39': 2.4.0
+      '@scure/btc-signer': 2.4.1
       bip68: 1.0.4
+      micro-packed: 0.11.1
       ws-electrumx-client: 1.0.5
     transitivePeerDependencies:
       - '@ledgerhq/ledger-bitcoin'
@@ -1092,15 +1086,16 @@ snapshots:
 
   '@arkade-os/solver-discovery@0.2.7': {}
 
-  '@arkade-os/swap@file:vendor/carrier/arkade-os-swap-0.0.24-e614c953.tgz':
+  '@arkade-os/swap@file:vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz':
     dependencies:
-      '@arkade-os/sdk': file:vendor/carrier/arkade-os-sdk-0.4.78-e614c953.tgz
+      '@arkade-os/sdk': file:vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz
       '@arkade-os/solver-discovery': 0.2.7
       '@noble/ciphers': 2.1.1
-      '@noble/curves': 2.0.1
-      '@noble/hashes': 2.0.1
-      '@scure/base': 2.0.0
-      '@scure/btc-signer': 2.0.1
+      '@noble/curves': 2.4.0
+      '@noble/hashes': 2.4.0
+      '@scure/base': 2.4.0
+      '@scure/btc-signer': 2.4.1
+      light-bolt11-decoder: 3.2.0
     transitivePeerDependencies:
       - '@ledgerhq/ledger-bitcoin'
       - '@react-native-async-storage/async-storage'
@@ -1114,7 +1109,7 @@ snapshots:
       - expo-task-manager
       - utf-8-validate
 
-  '@bitcoinerlab/descriptors-core@3.1.7(@noble/curves@2.4.0)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.0.1)':
+  '@bitcoinerlab/descriptors-core@3.1.7(@noble/curves@2.4.0)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)':
     dependencies:
       '@bitcoinerlab/miniscript': 2.0.0
       lodash.memoize: 4.1.2
@@ -1125,16 +1120,16 @@ snapshots:
       '@noble/hashes': 2.4.0
       '@scure/base': 2.4.0
       '@scure/bip32': 2.4.0
-      '@scure/btc-signer': 2.0.1
+      '@scure/btc-signer': 2.4.1
 
   '@bitcoinerlab/descriptors-scure@3.1.7':
     dependencies:
-      '@bitcoinerlab/descriptors-core': 3.1.7(@noble/curves@2.4.0)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.0.1)
+      '@bitcoinerlab/descriptors-core': 3.1.7(@noble/curves@2.4.0)(@noble/hashes@2.4.0)(@scure/base@2.4.0)(@scure/bip32@2.4.0)(@scure/btc-signer@2.4.1)
       '@noble/curves': 2.4.0
       '@noble/hashes': 2.4.0
       '@scure/base': 2.4.0
       '@scure/bip32': 2.4.0
-      '@scure/btc-signer': 2.0.1
+      '@scure/btc-signer': 2.4.1
     transitivePeerDependencies:
       - bip32
       - bitcoinjs-lib
@@ -1235,15 +1230,9 @@ snapshots:
 
   '@noble/ciphers@2.1.1': {}
 
-  '@noble/curves@2.0.1':
-    dependencies:
-      '@noble/hashes': 2.0.1
-
   '@noble/curves@2.4.0':
     dependencies:
       '@noble/hashes': 2.4.0
-
-  '@noble/hashes@2.0.1': {}
 
   '@noble/hashes@2.4.0': {}
 
@@ -1326,7 +1315,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.63.1':
     optional: true
 
-  '@scure/base@2.0.0': {}
+  '@scure/base@1.1.1': {}
 
   '@scure/base@2.4.0': {}
 
@@ -1336,17 +1325,9 @@ snapshots:
       '@noble/hashes': 2.4.0
       '@scure/base': 2.4.0
 
-  '@scure/bip39@2.0.1':
+  '@scure/bip39@2.4.0':
     dependencies:
-      '@noble/hashes': 2.0.1
-      '@scure/base': 2.0.0
-
-  '@scure/btc-signer@2.0.1':
-    dependencies:
-      '@noble/curves': 2.0.1
-      '@noble/hashes': 2.0.1
-      '@scure/base': 2.0.0
-      micro-packed: 0.8.0
+      '@noble/hashes': 2.4.0
 
   '@scure/btc-signer@2.4.1':
     dependencies:
@@ -1540,6 +1521,10 @@ snapshots:
 
   js-tokens@9.0.1: {}
 
+  light-bolt11-decoder@3.2.0:
+    dependencies:
+      '@scure/base': 1.1.1
+
   lodash.memoize@4.1.2: {}
 
   loupe@3.2.1: {}
@@ -1551,10 +1536,6 @@ snapshots:
   micro-packed@0.11.1:
     dependencies:
       '@scure/base': 2.4.0
-
-  micro-packed@0.8.0:
-    dependencies:
-      '@scure/base': 2.0.0
 
   mimic-response@3.1.0: {}
 

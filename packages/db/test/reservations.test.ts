@@ -14,6 +14,7 @@ import {
     ReservationRepository,
     ProceedsRepository,
     applyMigrations,
+    openDatabase,
 } from "../src/index.js";
 
 const input = (vout = 0) => ({ txid: "aa".repeat(32), vout });
@@ -93,8 +94,7 @@ describe("durable reservations", () => {
     it("serializes simultaneous claims on separate workers at 330 sats and one advance", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-worker-cap-"));
         const path = join(directory, "taxi.sqlite");
-        const database = new DatabaseCtor(path);
-        applyMigrations(database);
+        const database = openDatabase(path);
         const p = new PolicyRepository(database);
         p.update({ ...policy.get(), maxOutstandingSats: 330n, maxConcurrentAdvances: 1 }, "test");
         const repository = new ReservationRepository(database);

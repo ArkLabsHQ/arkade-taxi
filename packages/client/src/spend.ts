@@ -38,7 +38,7 @@ import {
     canSpendOffchain,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
-    type ArkInfo,
+    type ArkadeInfo,
     type EmulatorProvider,
     type Identity,
     type VirtualCoin,
@@ -364,7 +364,7 @@ interface ProviderTrust {
 
 const validateProviderFacts = (
     trust: ProviderTrust,
-    info: ArkInfo,
+    info: ArkadeInfo,
     emulatorInfo: { signerPubkey: string },
 ): bigint | undefined => {
     if (info.network !== trust.network) reject("Ark network identity mismatch");
@@ -901,7 +901,7 @@ async function verifyObservedClaim(
         boundDependencies.arkProvider.getInfo(),
         boundDependencies.emulator.getInfo(),
     ]);
-    const info = arkInfo as ArkInfo;
+    const info = arkInfo as ArkadeInfo;
     if (
         facts.trustedServerUnrollScript !== undefined &&
         !sameBytes(boundDependencies.serverUnrollScript.script, facts.trustedServerUnrollScript)

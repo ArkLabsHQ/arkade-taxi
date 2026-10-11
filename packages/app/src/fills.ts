@@ -803,6 +803,7 @@ function fillSource(
         const coin = observed.get(point(outpoint))!;
         const snapshot = reserved.get(point(outpoint));
         const taproot = snapshot ?? checkpointTaproot(row.graph.checkpoints[index]!, index);
+        const expiry = normalizeExpiry(coin);
         return {
             role: (taxi.has(index) ? "taxi" : "foreign") as "taxi" | "foreign",
             txid: outpoint.txid,
@@ -816,8 +817,8 @@ function fillSource(
                 amount: BigInt(held.amount).toString(10),
             })),
             expiry: {
-                kind: normalizeExpiry(coin).kind,
-                value: normalizeExpiry(coin).value.toString(10),
+                kind: expiry.kind,
+                value: expiry.value.toString(10),
             },
         };
     });

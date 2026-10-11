@@ -6,6 +6,8 @@ import {
     type Identity,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
+import { createHash } from "node:crypto";
 import {
     decodeLockupEnvelope,
     encodeLockupEnvelope,
@@ -87,17 +89,10 @@ const mutateFundingTree = (encoded: string, offset: number, value: number): stri
         const tapTree = hex.decode(wire.senderInputs[0].tapTree);
         tapTree[offset] = value;
         wire.senderInputs[0].tapTree = hex.encode(tapTree);
-        const checkpoint = Transaction.fromPSBT(base64.decode(wire.checkpoints[0]));
-        checkpoint.updateInput(0, {
-            unknown: checkpoint
-                .getInput(0)
-                .unknown?.map((entry) =>
-                    VtxoTaprootTree.decode(entry) === null
-                        ? entry
-                        : VtxoTaprootTree.encode(tapTree),
-                ),
-        });
-        wire.checkpoints[0] = base64.encode(checkpoint.toPSBT());
+        const checkpoint = RawPSBTV0.decode(base64.decode(wire.checkpoints[0]));
+        for (const entry of checkpoint.inputs[0]!.unknown ?? [])
+            if (VtxoTaprootTree.decode(entry) !== null) entry[1] = Uint8Array.from(tapTree);
+        wire.checkpoints[0] = base64.encode(RawPSBTV0.encode(checkpoint));
     });
 
 const signSpy = () => {
@@ -170,28 +165,7 @@ describe("verified lockup capability", () => {
                     witnessUtxo: { ...tx.getInput(0).witnessUtxo!, amount: 701n },
                 }),
         ],
-        [
-            "checkpoint script",
-            (tx: Transaction) =>
-                tx.updateInput(0, {
-                    witnessUtxo: {
-                        ...tx.getInput(0).witnessUtxo!,
-                        script: new Uint8Array([0x51]),
-                    },
-                }),
-        ],
         ["checkpoint leaf", (tx: Transaction) => tx.updateInput(0, { tapLeafScript: undefined })],
-        [
-            "checkpoint control proof",
-            (tx: Transaction) => {
-                const leaves = tx.getInput(0).tapLeafScript!;
-                const internalKey = Uint8Array.from(leaves[0][0].internalKey);
-                internalKey[0] ^= 1;
-                tx.updateInput(0, {
-                    tapLeafScript: [[{ ...leaves[0][0], internalKey }, leaves[0][1]]],
-                });
-            },
-        ],
         [
             "checkpoint tree metadata",
             (tx: Transaction) => tx.updateInput(0, { unknown: undefined }),
@@ -200,6 +174,18 @@ describe("verified lockup capability", () => {
     ] as const)("rejects changed %s", (_, mutate) => {
         const a = assetArgs();
         a.quote.unsignedLockupTx = mutateCheckpoint(a.quote.unsignedLockupTx, mutate);
+        expect(() => verifyQuote(a)).toThrow();
+    });
+
+    it.each(["script", "control proof"] as const)("rejects changed checkpoint %s", (mutation) => {
+        const a = assetArgs();
+        a.quote.unsignedLockupTx = rewrite(a.quote.unsignedLockupTx, (wire) => {
+            const checkpoint = RawPSBTV0.decode(base64.decode(wire.checkpoints[0]));
+            const input = checkpoint.inputs[0]!;
+            if (mutation === "script") input.witnessUtxo!.script = new Uint8Array([0x51]);
+            else input.tapLeafScript![0]![0].internalKey[0] ^= 1;
+            wire.checkpoints[0] = base64.encode(RawPSBTV0.encode(checkpoint));
+        });
         expect(() => verifyQuote(a)).toThrow();
     });
 
@@ -219,16 +205,6 @@ describe("verified lockup capability", () => {
                     witnessUtxo: {
                         ...tx.getInput(1).witnessUtxo!,
                         amount: tx.getInput(1).witnessUtxo!.amount + 1n,
-                    },
-                }),
-        ],
-        [
-            "joint input script",
-            (tx: Transaction) =>
-                tx.updateInput(0, {
-                    witnessUtxo: {
-                        ...tx.getInput(0).witnessUtxo!,
-                        script: new Uint8Array([0x51]),
                     },
                 }),
         ],
@@ -258,6 +234,22 @@ describe("verified lockup capability", () => {
         a.quote.unsignedLockupTx = mutateArk(a.quote.unsignedLockupTx, mutate, true);
         const envelope = decodeLockupEnvelope(a.quote.unsignedLockupTx);
         a.quote.lockup.unsignedTxId = envelope.unsignedTxId;
+        expect(() => verifyQuote(a)).toThrow();
+    });
+
+    it("rejects changed joint input script even with a recomputed hash", () => {
+        const a = assetArgs();
+        a.quote.unsignedLockupTx = rewrite(a.quote.unsignedLockupTx, (wire) => {
+            const tx = RawPSBTV0.decode(base64.decode(wire.arkTx));
+            tx.inputs[0]!.witnessUtxo!.script = new Uint8Array([0x51]);
+            const bytes = RawPSBTV0.encode(tx);
+            wire.arkTx = base64.encode(bytes);
+            const hash = createHash("sha256").update("arkade-taxi-lockup-v1\0").update(bytes);
+            for (const checkpoint of wire.checkpoints)
+                hash.update(hex.decode(Transaction.fromPSBT(base64.decode(checkpoint)).id));
+            wire.unsignedTxId = hash.digest("hex");
+        });
+        a.quote.lockup.unsignedTxId = decodeLockupEnvelope(a.quote.unsignedLockupTx).unsignedTxId;
         expect(() => verifyQuote(a)).toThrow();
     });
 

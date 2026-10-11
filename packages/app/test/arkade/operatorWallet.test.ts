@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import {
     Wallet,
+    collectIntents,
     ArkAddress,
     VtxoScript,
     CSVMultisigTapscript,
@@ -515,7 +516,7 @@ describe("persistent operator runtime safety", () => {
         const s = setup();
         s.setCoins([
             { vout: 0, value: 20000 },
-            { vout: 1, value: 1, isPreconfirmed: true, virtualStatus: { state: "preconfirmed" } },
+            { vout: 1, value: 1, isPreconfirmed: true },
             { vout: 2, value: 1, assets: [{ assetId: "12".repeat(34), amount: 1000000n }] },
         ]);
         expect((await s.runtime.refresh()).inventory).toEqual({
@@ -597,7 +598,6 @@ describe("persistent operator runtime safety", () => {
                     isSwept: false,
                     isSpent: false,
                     isPreconfirmed: true,
-                    virtualStatus: { state: "preconfirmed" },
                     tapTree: script.encode(),
                     forfeitTapLeafScript: script.forfeit(),
                     intentTapLeafScript: script.forfeit(),
@@ -1179,7 +1179,7 @@ describe("SDK intents left waiting", () => {
 
     const states = async (s: ReturnType<typeof setup>) =>
         Object.fromEntries(
-            (await s.runtime.storage.intentRepository.getIntents()).map((i) => [
+            (await collectIntents(s.runtime.storage.intentRepository)).map((i) => [
                 i.intentTxId.slice(0, 2),
                 i.state,
             ]),
@@ -1228,6 +1228,46 @@ describe("SDK intents left waiting", () => {
         });
     });
 
+    it("reconciles later-page intents while retaining held and settled inputs and stale admission blockers", async () => {
+        const s = setup();
+        const repository = s.runtime.storage.intentRepository;
+        const now = Date.now();
+        for (let n = 0; n < 500; n++)
+            await repository.saveIntent(
+                intent("00", {
+                    intentTxId: n.toString(16).padStart(64, "0"),
+                    createdAt: now + 4_000_000,
+                }),
+            );
+        for (const record of [intent("a1"), intent("a2"), intent("a3"), intent("a4")])
+            await repository.saveIntent(record);
+        s.setHeld([coin("a2")]);
+        indexer(s, ["a3"], ["a4"]);
+        const remove = vi
+            .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
+            .mockResolvedValue();
+        const pages = vi.spyOn(repository, "getIntentsPage");
+        s.setNow(now + 3_600_501);
+        const safety = await s.runtime.refresh();
+        expect(remove.mock.calls.map(([request]) => request.proof)).toEqual([
+            "delete-a1",
+            "delete-a4",
+        ]);
+        expect(safety.blockers).toContain("operator_intent_stale");
+        expect(pages.mock.calls.filter(([, page]) => page.after !== undefined)).toHaveLength(2);
+        expect(
+            await collectIntents(repository, {
+                intentTxIds: ["a1", "a2", "a3", "a4"].map((id) => id.repeat(32)),
+            }),
+        ).toMatchObject([
+            { state: "cancelled" },
+            { state: "waiting_for_batch" },
+            { state: "waiting_for_batch" },
+            { state: "cancelled" },
+        ]);
+        await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
+    });
+
     it("leaves an earlier process's intent alone until it has been quiet for a few sessions", async () => {
         const s = setup();
         await s.runtime.storage.intentRepository.saveIntent(intent("d1"));
@@ -1260,7 +1300,7 @@ describe("SDK intents left waiting", () => {
 
     it("keeps recovery open when the intent records cannot be read", async () => {
         const s = setup();
-        vi.spyOn(s.runtime.storage.intentRepository, "getIntents").mockRejectedValue(
+        vi.spyOn(s.runtime.storage.intentRepository, "getIntentsPage").mockRejectedValue(
             new Error("database is locked"),
         );
         await expect(s.runtime.assertRecovery()).resolves.toBeDefined();

@@ -1,19 +1,19 @@
 {
     "note": "Frozen candidate packages, built from source. These version numbers ARE published, from a different build, so a dropped or narrowed root override does not fail: it installs the registry bytes under the same number. These digests are of THIS bundle: repacking @arkade-os/sdk from the same commit emits different tsup chunk ids, so a re-pack is a deliberate re-freeze — run scripts/carrier-artifacts/pack.mjs, then pnpm install, then node scripts/carrier-artifacts/verify.mjs.",
-    "packedAtUtc": "2026-10-10T16:54:54.932Z",
+    "packedAtUtc": "2026-10-10T21:06:49.592Z",
     "artifacts": [
         {
-            "file": "arkade-os-sdk-0.4.78-e614c953.tgz",
+            "file": "arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz",
             "package": "@arkade-os/sdk",
-            "version": "0.4.78",
+            "version": "0.5.0-rc.18",
             "license": "MIT",
             "licenseFrom": "the package manifest inside the archive",
-            "sha256": "7d136be0f8bf7cfb71238f5374b8e2651d3f69f763f9a48b134943be8617a88d",
-            "bytes": 2783396,
+            "sha256": "59d55f6f568ac6143cadf0d35bf49169fe5e09bb1d2bff34a9905254bdbe0d25",
+            "bytes": 2461961,
             "source": {
                 "repository": "https://github.com/arkade-os/ts-sdk.git",
-                "commit": "e614c953d6ce929a04698d6e72bdc73f3d4bc29d",
-                "directory": "packages/ts-sdk"
+                "commit": "99313fa7f44edb835c386fb88d1fd64878059683",
+                "directory": "packages/sdk"
             },
             "toolchain": {
                 "node": "v24.16.0",
@@ -24,16 +24,16 @@
             }
         },
         {
-            "file": "arkade-os-swap-0.0.24-e614c953.tgz",
+            "file": "arkade-os-swap-0.1.0-rc.21-99313fa7.tgz",
             "package": "@arkade-os/swap",
-            "version": "0.0.24",
+            "version": "0.1.0-rc.21",
             "license": "MIT",
             "licenseFrom": "the package manifest inside the archive",
-            "sha256": "3d54a3ee4b327a16078ebc226c31fa6bec2ebe682ddde8e15b070db89f345704",
-            "bytes": 360379,
+            "sha256": "bf5a863259a5c745faef3ed6e3ffe43d1c8369fc17cdec9016f6052c393d3aa9",
+            "bytes": 599990,
             "source": {
                 "repository": "https://github.com/arkade-os/ts-sdk.git",
-                "commit": "e614c953d6ce929a04698d6e72bdc73f3d4bc29d",
+                "commit": "99313fa7f44edb835c386fb88d1fd64878059683",
                 "directory": "packages/swap"
             },
             "toolchain": {

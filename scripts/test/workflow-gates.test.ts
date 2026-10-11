@@ -49,7 +49,7 @@ describe("required E2E workflow gate", () => {
     });
 
     it("keeps the bounded full harness and publishes deterministic diagnostics always", () => {
-        expect(job(e2e, "e2e")).toMatch(/timeout-minutes: 45/);
+        expect(job(e2e, "e2e")).toMatch(/timeout-minutes: 60/);
         expect(e2e).toMatch(/AUTOMINE_INTERVAL: "0"/);
         const upload = e2e.slice(e2e.indexOf("actions/upload-artifact@v4"));
         expect(upload).toMatch(/if: \$\{\{ always\(\) \}\}/);

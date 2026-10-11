@@ -15,6 +15,7 @@ import {
     type Identity,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
+import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import type { Advance } from "@arkade-taxi/core";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
@@ -603,12 +604,6 @@ describe("public provider submission", () => {
                             amount: input.witnessUtxo!.amount + 1n,
                         },
                     });
-                if (mutation === "tapLeafScript") {
-                    const leaves = structuredClone(input.tapLeafScript!);
-                    leaves[0]![0].internalKey = new Uint8Array(32).fill(1);
-                    checkpoint.updateInput(0, { tapLeafScript: undefined });
-                    checkpoint.updateInput(0, { tapLeafScript: leaves });
-                }
                 if (mutation === "ark metadata") {
                     const entries = input.unknown!.map((entry) => {
                         const tree = VtxoTaprootTree.decode(entry);
@@ -619,11 +614,16 @@ describe("public provider submission", () => {
                         changed[changed.length - 1] ^= 1;
                         return VtxoTaprootTree.encode(changed);
                     });
+                    checkpoint.updateInput(0, { unknown: undefined });
                     checkpoint.updateInput(0, { unknown: entries });
                 }
-                response.signedCheckpointTxs[0] = base64.encode(
-                    (await serverIdentity.sign(checkpoint, [0])).toPSBT(),
-                );
+                const signed = await serverIdentity.sign(checkpoint, [0]);
+                verifyTapscriptSignatures(signed, 0, [hex.encode(serverKey)], [], [0]);
+                if (mutation === "tapLeafScript") {
+                    const raw = RawPSBTV0.decode(signed.toPSBT());
+                    raw.inputs[0]!.tapLeafScript![0]![0].internalKey = new Uint8Array(32).fill(1);
+                    response.signedCheckpointTxs[0] = base64.encode(RawPSBTV0.encode(raw));
+                } else response.signedCheckpointTxs[0] = base64.encode(signed.toPSBT());
                 if (reordered) response.signedCheckpointTxs.reverse();
                 return response;
             });
@@ -637,14 +637,18 @@ describe("public provider submission", () => {
                 .submit(validateLockupSubmission(advance(), await signedEnvelope(), config()))
                 .catch((error: unknown) => error);
             expect(result).toBeInstanceOf(Error);
+            const refusal =
+                mutation === "tapLeafScript"
+                    ? /Taproot commitment does not match previous output/
+                    : /changed unsigned fields or metadata/;
             expect((result as Error).cause).toMatchObject({
-                message: expect.stringMatching(/changed unsigned fields or metadata/),
+                message: expect.stringMatching(refusal),
             });
             expect(result).toMatchObject({
                 stage: "submit",
                 permanentCode: "lockup_submission_invalid_provider_response",
                 cause: expect.objectContaining({
-                    message: expect.stringMatching(/changed unsigned fields or metadata/),
+                    message: expect.stringMatching(refusal),
                 }),
             });
             expect(external.finalizeTx).not.toHaveBeenCalled();
@@ -667,14 +671,12 @@ describe("public provider submission", () => {
                 base64.decode(response.signedCheckpointTxs[0]!),
             );
             checkpoint.updateInput(0, { tapScriptSig: undefined });
+            const entries = checkpoint.getInput(0).unknown!;
+            checkpoint.updateInput(0, { unknown: undefined });
             checkpoint.updateInput(0, {
-                unknown: checkpoint
-                    .getInput(0)
-                    .unknown!.map((entry) =>
-                        VtxoTaprootTree.decode(entry) === null
-                            ? entry
-                            : VtxoTaprootTree.encode(arkd),
-                    ),
+                unknown: entries.map((entry) =>
+                    VtxoTaprootTree.decode(entry) === null ? entry : VtxoTaprootTree.encode(arkd),
+                ),
             });
             response.signedCheckpointTxs[0] = base64.encode(
                 (await serverIdentity.sign(checkpoint, [0])).toPSBT(),

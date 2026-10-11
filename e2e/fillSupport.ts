@@ -6,7 +6,8 @@
 import { writeFileSync } from "node:fs";
 import { expect } from "vitest";
 import { Transaction, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
-import { buildOfferFillPlan, createOffer } from "@arkade-os/swap";
+import { buildOfferFillPlan } from "@arkade-os/swap";
+import { createOffer } from "@arkade-os/swap/protocol";
 import { base64, hex } from "@scure/base";
 import { loadConfig } from "../packages/app/src/config.js";
 import { assertArtifactSafe } from "../scripts/lib/harness.mjs";
@@ -144,7 +145,7 @@ export async function quotedFill(live: Live) {
     expect(quote.operatorInputs.length).toBeGreaterThan(0);
     expect(quote.operatorScript).toMatch(/^5120[0-9a-f]{64}$/);
 
-    const offer = await createOffer(maker.wallet, required("TAXI_E2E_ARKD_URL"), {
+    const offer = await createOffer(maker.wallet, {
         wantAmount: DELIVERED,
         wantAsset: sdkAssetId,
         receiveAddress: quote.covenantAddress,

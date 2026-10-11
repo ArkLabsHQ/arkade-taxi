@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     ArkAddress,
+    collectIntents,
     Estimator,
     Extension,
     Wallet,
@@ -139,7 +140,7 @@ function setup(
         },
         storage: {
             intentRepository: {
-                getIntents: async () => intents,
+                getIntentsPage: async () => ({ items: intents }),
                 getLockedVtxoOutpoints: async () => sdkLocks,
             },
         },
@@ -204,7 +205,10 @@ function setup(
                 getContractManager: async () => ({ assertAnnotatable: async () => {} }),
                 _addPendingSpends: () => {},
                 _removePendingSpends: () => {},
-                intentRepository: { getIntents: async () => intents, saveIntent: save },
+                intentRepository: {
+                    getIntentsPage: async () => ({ items: intents }),
+                    saveIntent: save,
+                },
                 arkProvider: {
                     getEventStream: async function* () {},
                     registerIntent: async (intent: typeof sdkIntent) => {
@@ -775,7 +779,7 @@ describe("durable proceeds collector", () => {
         const collector = createProceedsCollector(s.deps);
         await collector.tick();
         expect(sdk.register).not.toHaveBeenCalled();
-        const records = await s.deps.runtime.storage.intentRepository.getIntents();
+        const records = await collectIntents(s.deps.runtime.storage.intentRepository);
         s.setIntents([{ ...records[0], registerProof: "unknown-proof" }]);
         s.setOutputs([receipt, spare, carrier]);
         await collector.tick();
@@ -804,7 +808,7 @@ describe("durable proceeds collector", () => {
             );
             expect(sdk.register).not.toHaveBeenCalled();
             expect(sdk.save).toHaveBeenCalledTimes(2);
-            const records = await s.deps.runtime.storage.intentRepository.getIntents();
+            const records = await collectIntents(s.deps.runtime.storage.intentRepository);
             expect(records).toHaveLength(1);
             expect(records[0]).toMatchObject({ state: "cancelled" });
             expect(records[0]!.validUntil).toBeUndefined();
@@ -834,7 +838,7 @@ describe("durable proceeds collector", () => {
         expect(sdk.remove).toHaveBeenCalledTimes(1);
         expect(sdk.save).toHaveBeenCalledTimes(2);
         expect(errors).toHaveBeenCalledTimes(2);
-        expect(await s.deps.runtime.storage.intentRepository.getIntents()).toEqual([]);
+        expect(await collectIntents(s.deps.runtime.storage.intentRepository)).toEqual([]);
         collector.stop();
         s.restartDatabase();
         s.setNow(365 * 86400000);
@@ -881,7 +885,7 @@ describe("durable proceeds collector", () => {
             expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
             expect(s.settle).not.toHaveBeenCalled();
             expect(
-                await s.deps.runtime.storage.intentRepository.getIntents({
+                await collectIntents(s.deps.runtime.storage.intentRepository, {
                     containingInputs: plan.inputs,
                 }),
             ).toEqual([]);
@@ -989,6 +993,46 @@ describe("durable proceeds collector", () => {
         expect(collector.status().blocker).toBeNull();
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
     });
+    it("retains proceeds reservations for a later-page indefinite intent and a subsequent page-read outage", async () => {
+        const s = setup();
+        const repository = s.deps.runtime.storage.intentRepository;
+        const record = {
+            intentTxId: "00".repeat(32),
+            state: "waiting_for_batch" as const,
+            createdAt: 0,
+            updatedAt: 0,
+            registerProof: "register",
+            registerProofMessage: "{}",
+            deleteProof: "delete",
+            deleteProofMessage: "{}",
+            partialForfeits: [],
+            intentVtxos: s.jobs.active()!.plan.inputs,
+        };
+        const pages = vi
+            .spyOn(repository, "getIntentsPage")
+            .mockImplementation(async (filter, page) => {
+                expect(filter).toEqual({ containingInputs: record.intentVtxos });
+                return page.after === undefined
+                    ? { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId }
+                    : { items: [{ ...record, intentTxId: "01".repeat(32) }] };
+            });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(pages).toHaveBeenCalledTimes(2);
+        expect(pages.mock.calls[1]![1].after).toBe(record.intentTxId);
+        expect(collector.status().blocker).toBe("proceeds_ambiguous_intent");
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        pages.mockImplementation(async (_filter, page) => {
+            if (page.after !== undefined) throw new Error("database is locked");
+            return { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId };
+        });
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_collection_failed");
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+
     it("settles explicit reserved inputs to one exact wallet output", async () => {
         const s = setup();
         const collector = createProceedsCollector(s.deps);

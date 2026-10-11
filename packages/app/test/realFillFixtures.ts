@@ -9,7 +9,8 @@ import {
     type ExtendedVirtualCoin,
     type IWallet,
 } from "@arkade-os/sdk";
-import { buildOfferFillPlan, encodeOffer, offerVtxoScript } from "@arkade-os/swap";
+import { buildOfferFillPlan } from "@arkade-os/swap";
+import { encodeOffer, offerVtxoScript } from "@arkade-os/swap/protocol";
 import { ArkAddress } from "@arkade-os/sdk";
 import { deriveJointInputs, deriveJointOutputs } from "../src/arkade/jointGraphDerivation.js";
 import { fundingCoin, serverKey, serverUnroll } from "./fixtures.js";

@@ -29,7 +29,6 @@ const coin = (): ExtendedVirtualCoin => ({
     isSpent: false,
     isSwept: false,
     isPreconfirmed: false,
-    virtualStatus: { state: "settled" },
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],
@@ -37,6 +36,12 @@ const coin = (): ExtendedVirtualCoin => ({
 });
 
 describe("fundingInputsFromVtxos", () => {
+    it("accepts canonical selected coins without legacy status metadata", () => {
+        const selected = coin();
+        expect(selected).not.toHaveProperty("virtualStatus");
+        expect(client.fundingInputsFromVtxos([selected])).toHaveLength(1);
+    });
+
     it("preserves selected outpoints, canonical leaves, assets and height expiry", () => {
         const selected = coin();
         const id = asset.AssetId.create("12".repeat(32), 7);
@@ -71,7 +76,7 @@ describe("fundingInputsFromVtxos", () => {
         { spentBy: "bb".repeat(32) },
         { isSwept: true },
         { isUnrolled: true },
-        { virtualStatus: { state: "spent" as const } },
+        { settledBy: "cc".repeat(32) },
         { value: Number.MAX_SAFE_INTEGER + 1 },
         { value: 1.5 },
         { value: -1 },

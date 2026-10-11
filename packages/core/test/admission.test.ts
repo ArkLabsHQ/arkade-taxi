@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { schnorr } from "@noble/curves/secp256k1.js";
 import { validateParams, type AssetIdRef, type DustCovenantParams } from "@arkade-taxi/covenant";
 import type { Exposure, Policy, QuoteRequest } from "../src/types.js";
 import { admit } from "../src/admission.js";
@@ -6,15 +7,16 @@ import type { CustodySolvency } from "../src/solvency.js";
 import type { AssetRule, FareOption } from "../src/fares.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
+const pubkey = (fill: number) => schnorr.getPublicKey(key(fill));
 
 const DUST = 330n;
 const MIN = 1n;
 
 const COVENANT_PARAMS: DustCovenantParams = {
-    receiverKey: key(1),
-    senderKey: key(2),
-    operatorKey: key(3),
-    operatorSignerKey: key(6),
+    receiverKey: pubkey(1),
+    senderKey: pubkey(2),
+    operatorKey: pubkey(3),
+    operatorSignerKey: pubkey(6),
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: DUST,
     topup: DUST,

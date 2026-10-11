@@ -42,7 +42,6 @@ const coin = (): ExtendedVirtualCoin => ({
     isSpent: false,
     isSwept: false,
     isPreconfirmed: false,
-    virtualStatus: { state: "settled" },
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],

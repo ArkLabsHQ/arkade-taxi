@@ -11,7 +11,8 @@ import {
     toXOnly,
     type ExtendedVirtualCoin,
 } from "@arkade-os/sdk";
-import { buildOfferFillPlan, createOffer, decodeOffer, type FillFunding } from "@arkade-os/swap";
+import { buildOfferFillPlan } from "@arkade-os/swap";
+import { createOffer, decodeOffer, type FillFunding } from "@arkade-os/swap/protocol";
 import { tapScriptSigEntries } from "@arkade-taxi/client";
 import {
     prepareJointSubmission,
@@ -94,7 +95,7 @@ liveScenario("joint-fill-two-owner", async () => {
             minted.assetId,
             WANT_UNITS + FARE_UNITS,
         );
-        const offer = await createOffer(maker.wallet, arkdUrl, {
+        const offer = await createOffer(maker.wallet, {
             wantAmount: WANT_UNITS,
             wantAsset,
         });

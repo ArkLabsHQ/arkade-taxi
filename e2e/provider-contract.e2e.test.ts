@@ -4,7 +4,12 @@ import { join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { expect } from "vitest";
-import { EsploraProvider, RestIndexerProvider, type CSVMultisigTapscript } from "@arkade-os/sdk";
+import {
+    collectVtxos,
+    EsploraProvider,
+    RestIndexerProvider,
+    type CSVMultisigTapscript,
+} from "@arkade-os/sdk";
 import {
     AdvanceRepository,
     openDatabase,
@@ -118,7 +123,12 @@ liveScenario("provider-contract", async () => {
                 vout: v.vout,
                 expiresAtHeight: v.expiresAtHeight,
                 expiresAt: v.expiresAt?.toISOString(),
-                virtualStatus: v.virtualStatus,
+                isSpent: v.isSpent,
+                isSwept: v.isSwept,
+                isPreconfirmed: v.isPreconfirmed,
+                isUnrolled: v.isUnrolled,
+                spentBy: v.spentBy,
+                settledBy: v.settledBy,
             })),
         );
         await expect
@@ -219,7 +229,7 @@ liveScenario("provider-contract", async () => {
         );
         expect(spendableBefore.length).toBeGreaterThan(0);
         const durableBeforeDispose = canonicalVtxoSnapshot(
-            await runtime.storage.walletRepository.getVtxos(address),
+            await collectVtxos(runtime.storage.walletRepository, address),
             normalizeExpiry,
         );
         collector.stop();
@@ -227,7 +237,7 @@ liveScenario("provider-contract", async () => {
         await runtime.dispose();
         expect(db.open).toBe(true);
         const durableBeforeClose = canonicalVtxoSnapshot(
-            await runtime.storage.walletRepository.getVtxos(address),
+            await collectVtxos(runtime.storage.walletRepository, address),
             normalizeExpiry,
         );
         assertVtxoSnapshotContains(durableBeforeClose, durableBeforeDispose);
@@ -240,7 +250,7 @@ liveScenario("provider-contract", async () => {
         expect(ledger.jobs.get(job.id)).toEqual(job);
         runtime = makeRuntime();
         const durableAfterReopen = canonicalVtxoSnapshot(
-            await runtime.storage.walletRepository.getVtxos(address),
+            await collectVtxos(runtime.storage.walletRepository, address),
             normalizeExpiry,
         );
         expect(durableAfterReopen).toEqual(durableBeforeClose);
@@ -252,7 +262,7 @@ liveScenario("provider-contract", async () => {
         );
         expect(spendableAfter).toEqual(spendableBefore);
         const durableAfterRefresh = canonicalVtxoSnapshot(
-            await runtime.storage.walletRepository.getVtxos(address),
+            await collectVtxos(runtime.storage.walletRepository, address),
             normalizeExpiry,
         );
         assertVtxoSnapshotContains(durableAfterRefresh, durableAfterReopen);
