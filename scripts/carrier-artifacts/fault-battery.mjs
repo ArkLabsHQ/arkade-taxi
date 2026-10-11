@@ -837,8 +837,8 @@ const faults = [
         () =>
             sub(
                 CI,
-                "            - run: pnpm install --frozen-lockfile\n            # Run all four",
-                "            # carrier-artifacts: not a dependency install\n            - run: pnpm install --frozen-lockfile\n            # Run all four",
+                "            - run: pnpm install --frozen-lockfile\n",
+                "            # carrier-artifacts: not a dependency install\n            - run: pnpm install --frozen-lockfile\n",
             ),
     ],
 ];
