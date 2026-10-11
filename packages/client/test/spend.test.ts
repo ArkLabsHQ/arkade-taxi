@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { runInNewContext } from "node:vm";
+
 import {
     ArkAddress,
     CSVMultisigTapscript,
@@ -80,6 +82,8 @@ import {
     unroll,
     VTXO_MIN,
 } from "./fixtures.js";
+
+afterEach(() => yieldToEventLoop());
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
 const numberToBytes = (value: bigint): Uint8Array =>

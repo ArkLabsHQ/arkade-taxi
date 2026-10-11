@@ -576,53 +576,60 @@ describe("persistent operator runtime safety", () => {
             },
         };
         const resolved = await resolveRuntimeConfig(config({ addressHrp: "tark" }), providers);
+        const create = Wallet.create;
+        const created = vi.spyOn(Wallet, "create").mockImplementation(async function (
+            this: typeof Wallet,
+            cfg: WalletConfig,
+        ) {
+            expect(await cfg.arkProvider!.getInfo()).toEqual(info);
+            const wallet = await create.call(this, cfg);
+            expect(this).toBe(Wallet);
+            const script = wallet.offchainTapscript;
+            coin = {
+                txid: "aa".repeat(32),
+                vout: 0,
+                value: 20000,
+                expiresAtHeight: 400,
+                status: { confirmed: false },
+                createdAt: new Date(1789132000000),
+                script: bytesToHex(script.pkScript),
+                isUnrolled: false,
+                isSwept: false,
+                isSpent: false,
+                isPreconfirmed: true,
+                tapTree: script.encode(),
+                forfeitTapLeafScript: script.forfeit(),
+                intentTapLeafScript: script.forfeit(),
+            };
+            vi.spyOn(wallet, "getContractManager").mockResolvedValue({
+                getSyncState: () => ({ mode: "online", lastSyncedAt: Date.now() }),
+                getContractsWithVtxos: async () => [
+                    {
+                        contract: {
+                            type: "default",
+                            script: coin.script,
+                            address: await wallet.getAddress(),
+                            state: "active",
+                            params: {},
+                            createdAt: Date.now(),
+                        },
+                        vtxos: [coin],
+                    },
+                ],
+            } as unknown as ContractManager);
+            return wallet;
+        });
         const runtime = createOperatorRuntime(resolved, db, {
             providers,
             heldOutpoints: () => [],
             onchainProvider: {
                 getChainTip: async () => ({ height: 100, time: 1789132000, hash: "aa".repeat(32) }),
             } as WalletConfig["onchainProvider"],
-            walletFactory: async (cfg) => {
-                expect(await cfg.arkProvider!.getInfo()).toEqual(info);
-                const wallet = await Wallet.create(cfg);
-                const script = wallet.offchainTapscript;
-                coin = {
-                    txid: "aa".repeat(32),
-                    vout: 0,
-                    value: 20000,
-                    expiresAtHeight: 400,
-                    status: { confirmed: false },
-                    createdAt: new Date(1789132000000),
-                    script: bytesToHex(script.pkScript),
-                    isUnrolled: false,
-                    isSwept: false,
-                    isSpent: false,
-                    isPreconfirmed: true,
-                    tapTree: script.encode(),
-                    forfeitTapLeafScript: script.forfeit(),
-                    intentTapLeafScript: script.forfeit(),
-                };
-                vi.spyOn(wallet, "getContractManager").mockResolvedValue({
-                    getSyncState: () => ({ mode: "online", lastSyncedAt: Date.now() }),
-                    getContractsWithVtxos: async () => [
-                        {
-                            contract: {
-                                type: "default",
-                                script: coin.script,
-                                address: await wallet.getAddress(),
-                                state: "active",
-                                params: {},
-                                createdAt: Date.now(),
-                            },
-                            vtxos: [coin],
-                        },
-                    ],
-                } as unknown as ContractManager);
-                return wallet;
-            },
         });
         try {
-            expect((await runtime.refresh()).blockers).toEqual([]);
+            const snapshot = await runtime.refresh();
+            await expect(created.mock.results[0].value).resolves.toBe(runtime.wallet);
+            expect(snapshot.blockers).toEqual([]);
             vi.spyOn(runtime.storage.intentRepository, "getLockedVtxoOutpoints").mockRejectedValue(
                 new Error("injected intent read failure"),
             );

@@ -283,7 +283,7 @@ export function createOperatorRuntime(
                 retired.catch(() => {});
                 const created = await sdkBackground.run(true, async () => {
                     const made = await timed("runtime.wallet.create", () =>
-                        (options.walletFactory ?? Wallet.create)({
+                        (options.walletFactory ?? Wallet.create.bind(Wallet))({
                             identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
                             arkProvider: Object.assign(Object.create(providers.arkProvider), {
                                 getInfo: async () => verified.info!,

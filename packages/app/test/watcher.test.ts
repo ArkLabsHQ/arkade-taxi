@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -73,8 +74,9 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
 });
 
 const directories: string[] = [];
-afterEach(() => {
+afterEach(async () => {
     while (directories.length) rmSync(directories.pop()!, { recursive: true, force: true });
+    await yieldToEventLoop();
 });
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
