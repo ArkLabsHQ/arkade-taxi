@@ -44,15 +44,12 @@ jobs:
             - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
             - run: node scripts/carrier-artifacts/verify.mjs
-            - run: pnpm vectors
-            # A committed vectors.json that no longer matches the Go reference is
-            # worse than none: every test would still pass, against stale bytes.
-            - run: git diff --exit-code packages/covenant/test/vectors.json
             # arkadec ships only as a digest-pinned pre-release asset, so the tag
-            # can move under us; this diff, not the tag, is what pins v2's bytes.
+            # can move under us; this diff, not the tag, is what pins the
+            # covenant's bytes.
             - run: pnpm artifact
             - run: git diff --exit-code packages/covenant/contracts packages/covenant/src/dust-covenant-artifact.ts
-            # Executes the v2 leaves in the emulator engine instead of comparing
+            # Executes the covenant's leaves in the emulator engine instead of comparing
             # bytes, so it fails when a leaf's semantics change while its bytes
             # still match a stale fixture. Clones the ref named in v2-vectors.json.
             - run: node packages/covenant/test/engine/run.mjs

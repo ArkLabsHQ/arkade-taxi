@@ -105,8 +105,8 @@ const BLOCKER_GROUPS = [
         "reconciler_not_started",
     ],
     [
-        "The Taxi has not finished its first check of swap fills in progress.",
-        "swap_fill_reconciler_not_started",
+        "The Taxi has not finished its first check of fills in progress.",
+        "fill_reconciler_not_started",
     ],
     ["The recovery sweeper has not run yet.", "sweeper_not_started"],
     [
@@ -186,17 +186,26 @@ const BLOCKER_GROUPS = [
         "The Taxi could not re-read the coin of a payment it already settled, so it will try again. Nothing is paused.",
         "covenant_terminal_evidence_unavailable",
     ],
-    ["Coins held for a swap fill were spent unexpectedly.", "swap_fill_unexpected_spend"],
-    ["A swap fill failed and what is owed is not settled yet.", "joint_fill_liability_unresolved"],
+    [
+        "A fill has an unresolved submission. Its coins stay reserved until reconciled.",
+        "fill_liability_unresolved",
+    ],
+    [
+        "The request exceeds the 4 MiB body limit. Reduce its transaction graph before retrying.",
+        "request_body_too_large",
+    ],
+    [
+        "A fill's inputs have contradictory spend evidence. Keep its coins reserved and investigate.",
+        "fill_unexpected_spend",
+    ],
     [
         "A payment expired before the Taxi recovered its lent sats, which may be lost. Escalate to your Arkade provider.",
         "covenant_unspent_at_expiry",
     ],
     [
-        "A payment's recovery deadline is very close, so the Taxi paused new payments.",
-        "recovery_deadline_critical",
+        "The Taxi has not yet read a payment's coin, so it cannot tell how close that coin is to expiry. Nothing is paused.",
+        "covenant_expiry_unobserved",
     ],
-    ["A payment's recovery deadline is getting close.", "recovery_deadline_warning"],
     [
         "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
         "covenant_renewal_missing",
@@ -1692,14 +1701,12 @@ const CONFIG_MEANINGS = {
         "How old, in milliseconds, a coin reading may be when the Taxi re-checks its own wallet; it never reuses one to price or fund a payment. Capped by TAXI_RECONCILE_INTERVAL_MS; 0 re-reads every time.",
     proceedsMaxFeeSats:
         "The most the Taxi pays in fees to collect its fares and repayments; at 0 it never pays one.",
-    covenantVersion:
-        "Which covenant new payments are built at. Only 1 starts: version 2 has no recovery path yet, so the Taxi refuses to run on it.",
     covenantDeadlineSeconds:
-        "How long, in seconds, the Taxi lends its dust on a version 2 payment before it may take the whole covenant back. Measured from the moment the payment is locked up, and fixed in the address, so a change only affects new payments.",
+        "How long, in seconds, the Taxi lends its dust before it may take the whole covenant back. Measured from the moment the payment is quoted, and fixed in the address, so a change only affects new payments.",
     custodyWindowSeconds:
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     delegateeUrl:
-        "The renewal service that keeps a version 2 covenant from expiring. Unset leaves those covenants unrenewed.",
+        "The renewal service that keeps a covenant from expiring. Unset leaves covenants unrenewed.",
     renewalBeforeExpirySeconds:
         "How long, in seconds, before a coin expires the renewal service is asked to renew it.",
     logLevel: "How much the Taxi writes to its logs.",

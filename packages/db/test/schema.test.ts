@@ -58,6 +58,11 @@ const RELAXED_BY_15 = new Set([
     "operator_input_reservations.batch_expiry_value",
 ]);
 
+const DROPPED_BY_17 = new Set(["advances.covenant_version", "receive_quotes.covenant_version"]);
+// Migration 18 renames it to sender_key, the covenant's own name for the signer.
+const RENAMED_BY_18 = new Set(["receive_quotes.maker_public_key"]);
+const DROPPED_TABLES_BY_18 = new Set(["swap_fills", "swap_fill_reservations"]);
+
 function at(upto: number): Database {
     const db = fresh();
     applyMigrations(
@@ -147,8 +152,27 @@ const RAW_RECEIVE_QUOTE = {
     bound_fill_id: null,
 };
 
+/** The shape every receive quote carries from migration 17 on. It also satisfies
+ * migration 15's then-conditional v1 ordering, so one fixture migrates the whole
+ * way from a pre-13 database to the head. */
+const DEADLINE_QUOTE = {
+    batch_expiry_kind: "time",
+    batch_expiry_value: 1_800_000_001n,
+    input_expiry_floor_kind: "time",
+    input_expiry_floor_value: 1_800_000_001n,
+    recovery_locktime_kind: "time",
+    recovery_locktime_value: 1_800_000_000n,
+} as const;
+
 function insertRawReceiveQuote(db: Database, overrides: Record<string, unknown> = {}): void {
-    const row = { ...RAW_RECEIVE_QUOTE, ...overrides };
+    const raw = { ...RAW_RECEIVE_QUOTE, ...overrides };
+    const renamed = db
+        .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('receive_quotes')")
+        .all()
+        .some(({ name }) => name === "sender_key");
+    const row: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(raw))
+        row[renamed && key === "maker_public_key" ? "sender_key" : key] = value;
     const cols = Object.keys(row);
     db.prepare(
         `INSERT INTO receive_quotes (${cols.join(", ")}) VALUES (${cols.map((c) => "@" + c).join(", ")})`,
@@ -201,7 +225,10 @@ describe("migration 13", () => {
         try {
             insertRaw(db);
             insertRawReceiveQuote(db);
-            applyMigrations(db);
+            applyMigrations(
+                db,
+                MIGRATIONS.filter((m) => m.id <= 16),
+            );
             expect(userVersion(db)).toBe(16);
             expect(db.prepare("SELECT id, topup, covenant_version FROM advances").all()).toEqual([
                 { id: "a1", topup: 300n, covenant_version: null },
@@ -215,17 +242,13 @@ describe("migration 13", () => {
     });
 
     it("admits a null or 2 covenant version on both tables and refuses any other", () => {
-        const db = migrated();
+        const db = at(16);
         try {
             expect(() => insertRaw(db, { id: "legacy" })).not.toThrow();
             expect(() => insertRaw(db, { id: "v2", covenant_version: 2n })).not.toThrow();
             // Since migration 15 a v2 quote also owes a time-domain deadline.
             expect(() =>
-                insertRawReceiveQuote(db, {
-                    covenant_version: 2n,
-                    recovery_locktime_kind: "time",
-                    recovery_locktime_value: 1_800_000_000n,
-                }),
+                insertRawReceiveQuote(db, { ...DEADLINE_QUOTE, covenant_version: 2n }),
             ).not.toThrow();
             for (const covenant_version of [0n, 1n, 3n]) {
                 expect(() =>
@@ -251,7 +274,7 @@ describe("migration 15", () => {
     });
 
     it("declares itself breaking, so a reader that stops at 14 is locked out", () => {
-        const db = migrated();
+        const db = at(16);
         try {
             expect(userVersion(db)).toBe(16);
             expect(MIGRATIONS.find((m) => m.id === 15)?.compat).toBe("breaking");
@@ -281,7 +304,10 @@ describe("migration 15", () => {
             quote: fourteen.prepare("SELECT * FROM receive_quotes WHERE id = 'v1-kept'").get(),
             reservation: fourteen.prepare("SELECT * FROM receive_quote_reservations").all(),
         };
-        applyMigrations(fourteen, MIGRATIONS);
+        applyMigrations(
+            fourteen,
+            MIGRATIONS.filter((m) => m.id <= 16),
+        );
         expect(userVersion(fourteen)).toBe(16);
         expect(fourteen.prepare("SELECT * FROM receive_quotes WHERE id = 'v1-kept'").get()).toEqual(
             before.quote,
@@ -309,7 +335,7 @@ describe("migration 15", () => {
         const fourteen = at(14);
         const before = shape(fourteen);
         fourteen.close();
-        const db = migrated();
+        const db = at(16);
         const after = shape(db);
         db.close();
         const changed = Object.entries(before).flatMap(([table, columns]) =>
@@ -326,7 +352,7 @@ describe("migration 15", () => {
             /CHECK constraint failed/,
         );
         fourteen.close();
-        const db = migrated();
+        const db = at(16);
         try {
             expect(() => insertRawReceiveQuote(db, v2Quote({ id: "v2" }))).not.toThrow();
         } finally {
@@ -335,7 +361,7 @@ describe("migration 15", () => {
     });
 
     it("still refuses a v1 quote that breaks the old ordering", () => {
-        const db = migrated();
+        const db = at(16);
         try {
             expect(() =>
                 insertRawReceiveQuote(db, { id: "v1-after", recovery_locktime_value: 900_001n }),
@@ -349,7 +375,7 @@ describe("migration 15", () => {
     });
 
     it("holds a v2 deadline to a future time-domain CLTV", () => {
-        const db = migrated();
+        const db = at(16);
         try {
             for (const bad of [
                 { id: "v2-height", recovery_locktime_kind: "height" },
@@ -359,6 +385,130 @@ describe("migration 15", () => {
                 expect(() => insertRawReceiveQuote(db, v2Quote(bad)), bad.id).toThrow(
                     /CHECK constraint failed/,
                 );
+        } finally {
+            db.close();
+        }
+    });
+});
+
+describe("migration 17", () => {
+    const DEADLINE = 1_800_000_000n;
+    const deadlineQuote = (over: Record<string, unknown> = {}) => ({
+        params_json: JSON.stringify({
+            ...JSON.parse(RAW_RECEIVE_QUOTE.params_json),
+            topup: "330",
+            locktime: String(DEADLINE),
+        }),
+        loan_sats: 330n,
+        recovery_locktime_kind: "time",
+        recovery_locktime_value: DEADLINE,
+        ...over,
+    });
+
+    const columnNames = (db: Database, table: string) =>
+        db
+            .prepare<[string], { name: string }>("SELECT name FROM pragma_table_info(?)")
+            .all(table)
+            .map((r) => r.name);
+
+    it("declares itself breaking, so a reader that stops at 16 is locked out", () => {
+        const db = migrated();
+        try {
+            expect(userVersion(db)).toBe(18);
+            expect(MIGRATIONS.find((m) => m.id === 17)?.compat).toBe("breaking");
+            expect(
+                db
+                    .prepare<[], { v: bigint }>(
+                        "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+                    )
+                    .get(),
+            ).toEqual({ v: 18n });
+        } finally {
+            db.close();
+        }
+    });
+
+    it("drops covenant_version from both tables, keeping a deadline row readable", () => {
+        const sixteen = at(16);
+        insertRawReceiveQuote(
+            sixteen,
+            deadlineQuote({ id: "deadline", state: "quoted", covenant_version: 2n }),
+        );
+        sixteen
+            .prepare(
+                `INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
+                 VALUES (?, 0, 'deadline', 1)`,
+            )
+            .run(hex32(5));
+        insertRaw(sixteen, { id: "adv", covenant_version: 2n });
+        applyMigrations(sixteen, MIGRATIONS);
+        try {
+            expect(userVersion(sixteen)).toBe(18);
+            expect(columnNames(sixteen, "receive_quotes")).not.toContain("covenant_version");
+            expect(columnNames(sixteen, "advances")).not.toContain("covenant_version");
+            expect(new ReceiveQuoteRepository(sixteen).get("deadline")?.recoveryLocktime).toEqual({
+                kind: "time",
+                value: DEADLINE,
+            });
+            expect(sixteen.prepare("SELECT * FROM receive_quote_reservations").all()).toHaveLength(
+                1,
+            );
+            expect(sixteen.prepare("SELECT id, topup FROM advances").all()).toEqual([
+                { id: "adv", topup: 300n },
+            ]);
+        } finally {
+            sixteen.close();
+        }
+    });
+
+    // The proof the mutinynet wipe is required, not optional: a height-domain v1
+    // quote cannot satisfy the unconditional deadline CHECK, so the rebuild
+    // refuses it and the whole migration rolls back.
+    it("refuses to migrate a v1-shaped quote and leaves the database at 16", () => {
+        const sixteen = at(16);
+        insertRawReceiveQuote(sixteen, { id: "v1" });
+        try {
+            expect(() => applyMigrations(sixteen, MIGRATIONS)).toThrow(/CHECK constraint failed/);
+            expect(userVersion(sixteen)).toBe(16);
+            expect(columnNames(sixteen, "receive_quotes")).toContain("covenant_version");
+        } finally {
+            sixteen.close();
+        }
+    });
+
+    it("holds every quote to a future time-domain CLTV", () => {
+        const db = migrated();
+        try {
+            for (const bad of [
+                { id: "height", recovery_locktime_kind: "height" },
+                { id: "low", recovery_locktime_value: 499_999_999n },
+                { id: "past", created_at: DEADLINE, expires_at: DEADLINE + 1n },
+            ])
+                expect(() => insertRawReceiveQuote(db, deadlineQuote(bad)), bad.id).toThrow(
+                    /CHECK constraint failed/,
+                );
+            expect(() => insertRawReceiveQuote(db, deadlineQuote({ id: "ok" }))).not.toThrow();
+        } finally {
+            db.close();
+        }
+    });
+
+    // Funding facts, not covenant facts: the floor still belongs to the batch.
+    it("keeps the batch expiry and input floor agreeing with each other", () => {
+        const db = migrated();
+        try {
+            expect(() =>
+                insertRawReceiveQuote(
+                    db,
+                    deadlineQuote({ id: "domain", input_expiry_floor_kind: "time" }),
+                ),
+            ).toThrow(/CHECK constraint failed/);
+            expect(() =>
+                insertRawReceiveQuote(
+                    db,
+                    deadlineQuote({ id: "order", input_expiry_floor_value: 900_001n }),
+                ),
+            ).toThrow(/CHECK constraint failed/);
         } finally {
             db.close();
         }
@@ -388,7 +538,7 @@ describe("migration 14", () => {
         const thirteen = at(13);
         const before = shape(thirteen);
         thirteen.close();
-        const fourteen = migrated();
+        const fourteen = at(14);
         const after = shape(fourteen);
         fourteen.close();
 
@@ -408,9 +558,9 @@ describe("migration 14", () => {
         try {
             insertRaw(db, { covenant_version: 2n });
             applyMigrations(db);
-            expect(userVersion(db)).toBe(16);
-            expect(db.prepare("SELECT id, covenant_version FROM advances").all()).toEqual([
-                { id: "a1", covenant_version: 2n },
+            expect(userVersion(db)).toBe(18);
+            expect(db.prepare("SELECT id, topup FROM advances").all()).toEqual([
+                { id: "a1", topup: 300n },
             ]);
             expect(db.prepare("SELECT count(*) AS n FROM custody").get()).toEqual({ n: 0n });
         } finally {
@@ -504,7 +654,7 @@ describe("migrations", () => {
         try {
             expect(() => applyMigrations(reopened)).not.toThrow();
             expect(reopened.serialize()).toEqual(before);
-            expect(userVersion(reopened)).toBe(16);
+            expect(userVersion(reopened)).toBe(18);
             expect(
                 reopened
                     .prepare(
@@ -528,15 +678,17 @@ describe("migrations", () => {
 
     it("adds proceeds storage without migrating unsupported development schemas", () => {
         expect(MIGRATIONS.map(({ id }) => id)).toEqual([
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
         ]);
         expect(MIGRATIONS[0]!.up).not.toMatch(/ALTER TABLE|advances_v2/i);
         const db = migrated();
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(tableNames(db).sort()).toEqual([
             "advances",
             "custody",
             "custody_release_inputs",
+            "fill_reservations",
+            "fills",
             "operator_input_reservations",
             "policy",
             "policy_audit",
@@ -547,8 +699,6 @@ describe("migrations", () => {
             "receive_quotes",
             "schema_compat",
             "sqlite_sequence",
-            "swap_fill_reservations",
-            "swap_fills",
         ]);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(advances)")
@@ -573,7 +723,7 @@ describe("migrations", () => {
             recovery_response_checkpoints_json recovery_lease_owner recovery_lease_token recovery_lease_until
             recovery_attempts recovery_last_attempt_at recovery_next_attempt_at
             receiver_fare_currency receiver_fare_units
-            exit_signer_key exit_delay_type exit_delay_value payment_sats covenant_version
+            exit_signer_key exit_delay_type exit_delay_value payment_sats
         `
                 .trim()
                 .split(/\s+/)
@@ -605,7 +755,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(1);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(
             db.prepare<[], { kind: string }>("SELECT kind FROM advances WHERE id = 'a1'").get(),
         ).toEqual({ kind: "covenant" });
@@ -639,26 +789,32 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(2);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(db.prepare("SELECT id, kind FROM advances").all()).toEqual([
             { id: "a1", kind: "covenant" },
         ]);
         db.close();
     });
-    it("migrates a v3 database forward with a sponsor script column on swap fills", () => {
+    it("adds the historical sponsor script before dropping swap fills at version 18", () => {
         const db = fresh();
         applyMigrations(
             db,
             MIGRATIONS.filter((m) => m.id <= 3),
         );
         expect(userVersion(db)).toBe(3);
-        applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 4),
+        );
+        expect(userVersion(db)).toBe(4);
         const columns = db
             .prepare<[], { name: string }>("PRAGMA table_info(swap_fills)")
             .all()
             .map(({ name }) => name);
         expect(columns).toContain("sponsor_script");
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(18);
+        expect(tableNames(db)).not.toContain("swap_fills");
         db.close();
     });
     it("migrates a v4 database forward adding a nullable claim mode", () => {
@@ -670,7 +826,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(4);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(
             db
                 .prepare<[], { claim_mode: string | null }>(
@@ -689,7 +845,7 @@ describe("migrations", () => {
         expect(userVersion(db)).toBe(5);
         insertRaw(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(
             db
                 .prepare<[], { recovery_recipient: string | null }>(
@@ -699,25 +855,31 @@ describe("migrations", () => {
         ).toEqual({ recovery_recipient: null });
         db.close();
     });
-    it("migrates a v8 database forward adding a nullable swap-fill deadline ceiling", () => {
+    it("adds the historical nullable swap-fill ceiling before dropping it at version 18", () => {
         const db = fresh();
         applyMigrations(
             db,
             MIGRATIONS.filter((m) => m.id <= 8),
         );
         expect(userVersion(db)).toBe(8);
-        applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        applyMigrations(
+            db,
+            MIGRATIONS.filter((m) => m.id <= 9),
+        );
+        expect(userVersion(db)).toBe(9);
         expect(
             db
                 .prepare<[], { name: string; notnull: bigint }>("PRAGMA table_info(swap_fills)")
                 .all()
                 .find(({ name }) => name === "valid_until"),
         ).toMatchObject({ notnull: 0n });
+        applyMigrations(db);
+        expect(userVersion(db)).toBe(18);
+        expect(tableNames(db)).not.toContain("swap_fills");
         db.close();
     });
     it("rejects a v9 stamp without the swap-fill deadline column", () => {
-        const db = migrated();
+        const db = at(9);
         db.exec("ALTER TABLE swap_fills DROP COLUMN valid_until");
         db.pragma("user_version = 9");
         const before = db.serialize();
@@ -733,15 +895,12 @@ describe("migrations", () => {
         );
         expect(userVersion(db)).toBe(9);
         insertRaw(db, {
-            batch_expiry_kind: "height",
-            batch_expiry_value: 900_000n,
             operator_inputs_json: JSON.stringify([{ txid: hex32(8), vout: 0 }]),
             unsigned_lockup_tx: "unsigned",
             unsigned_lockup_id: hex32(4),
         });
-        insertRawReceiveQuote(db);
         applyMigrations(db);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         expect(
             db
                 .prepare<
@@ -786,51 +945,11 @@ describe("migrations", () => {
             createdAt: 1,
             updatedAt: 1,
             expiresAt: 2,
-            batchExpiry: { kind: "height", value: 900_000n },
             operatorInputs: [{ txid: hex32(8), vout: 0 }],
             unsignedLockupTx: "unsigned",
             unsignedLockupId: hex32(4),
         });
 
-        const quote = new ReceiveQuoteRepository(db).get("q1");
-        expect(quote).toStrictEqual({
-            id: "q1",
-            state: "expired",
-            receiverAddress: "tark1qreceiverexample",
-            makerPublicKey: hex32(2),
-            params: {
-                receiverKey: new Uint8Array(32).fill(1),
-                senderKey: new Uint8Array(32).fill(2),
-                operatorKey: new Uint8Array(32).fill(3),
-                operatorSignerKey: new Uint8Array(32).fill(4),
-                exitDelay: { value: 5n, type: "blocks" },
-                dust: 330n,
-                topup: 300n,
-                assetId: { txid: new Uint8Array(32).fill(9), groupIndex: 0 },
-                locktime: 899_856n,
-                claimMode: "recycle",
-                recoveryRecipient: "receiver",
-            },
-            covenantAddress: "tark1qcovenantexample",
-            fare: { currency: "sats", units: 5n },
-            batchExpiry: { kind: "height", value: 900_000n },
-            inputExpiryFloor: { kind: "height", value: 900_000n },
-            recoveryLocktime: { kind: "height", value: 899_856n },
-            loanSats: 300n,
-            createdAt: 1,
-            expiresAt: 2,
-            policyRevision: 1n,
-            operatorInputs: [
-                {
-                    txid: hex32(5),
-                    vout: 0,
-                    value: 1000n,
-                    tapTree: new Uint8Array(32).fill(6),
-                    spendLeaf: new Uint8Array(32).fill(7),
-                    expiry: { kind: "height", value: 900_000n },
-                },
-            ],
-        });
         db.close();
     });
     it("rejects a v10 stamp without the receiver-paid advances column", () => {
@@ -849,7 +968,7 @@ describe("migrations", () => {
     it("adds the exit params at migration 11", () => {
         const db = migrated();
         try {
-            expect(userVersion(db)).toBe(16);
+            expect(userVersion(db)).toBe(18);
             for (const column of ["exit_signer_key", "exit_delay_type", "exit_delay_value"])
                 expect(
                     db
@@ -894,7 +1013,7 @@ describe("migrations", () => {
         const before = db.serialize();
         expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
         expect(db.serialize()).toEqual(before);
-        expect(userVersion(db)).toBe(16);
+        expect(userVersion(db)).toBe(18);
         db.close();
     });
     it("creates every table and stamps user_version with the highest applied id", () => {
@@ -971,13 +1090,130 @@ describe("migrations", () => {
     });
 });
 
+describe("migration 18", () => {
+    const columnNames = (db: Database, table: string) =>
+        db
+            .prepare<[string], { name: string }>("SELECT name FROM pragma_table_info(?)")
+            .all(table)
+            .map((r) => r.name);
+
+    it("declares itself breaking, so a reader that stops at 17 is locked out", () => {
+        const db = migrated();
+        try {
+            expect(userVersion(db)).toBe(18);
+            expect(MIGRATIONS.find((m) => m.id === 18)?.compat).toBe("breaking");
+            expect(
+                db
+                    .prepare<[], { v: bigint }>(
+                        "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
+                    )
+                    .get(),
+            ).toEqual({ v: 18n });
+        } finally {
+            db.close();
+        }
+    });
+
+    it("drops the obsolete swap rail and reopens without weakening fill shape guards", () => {
+        const db = migrated();
+        try {
+            expect(tableNames(db)).not.toContain("swap_fills");
+            expect(tableNames(db)).not.toContain("swap_fill_reservations");
+            expect(() => applyMigrations(db)).not.toThrow();
+            db.exec("ALTER TABLE fills DROP COLUMN covenant_output_index");
+            const before = db.serialize();
+            expect(() => applyMigrations(db)).toThrow(/incompatible.*recreate.*database/i);
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("adds a fills table carrying no offer, solver or max-fare column", () => {
+        const db = migrated();
+        try {
+            const columns = columnNames(db, "fills");
+            expect(columns).toContain("covenant_output_index");
+            expect(columns).toContain("asset_units");
+            expect(columns).toContain("quote_id");
+            for (const gone of [
+                "offer_hex",
+                "offer_txid",
+                "offer_vout",
+                "swap_address",
+                "solver_inputs_json",
+                "solver_proceeds_script",
+                "solver_keys_json",
+                "solver_graph_json",
+                "max_fare_json",
+            ])
+                expect(columns).not.toContain(gone);
+            expect(columnNames(db, "fill_reservations")).toEqual([
+                "outpoint_txid",
+                "outpoint_vout",
+                "fill_id",
+                "created_at",
+            ]);
+        } finally {
+            db.close();
+        }
+    });
+
+    // The quote table is rebuilt to rename the column, so its child reservation
+    // rows move aside and back; losing them would free a reserved coin silently.
+    it("renames maker_public_key to sender_key and keeps the quote's reservations", () => {
+        const seventeen = at(17);
+        const deadline = 1_800_000_000n;
+        insertRawReceiveQuote(seventeen, {
+            id: "renamed",
+            state: "quoted",
+            params_json: JSON.stringify({
+                ...JSON.parse(RAW_RECEIVE_QUOTE.params_json),
+                topup: "330",
+                locktime: String(deadline),
+            }),
+            loan_sats: 330n,
+            recovery_locktime_kind: "time",
+            recovery_locktime_value: deadline,
+        });
+        seventeen
+            .prepare(
+                `INSERT INTO receive_quote_reservations (outpoint_txid, outpoint_vout, quote_id, created_at)
+                 VALUES (?, 0, 'renamed', 11)`,
+            )
+            .run(hex32(5));
+        applyMigrations(seventeen, MIGRATIONS);
+        try {
+            expect(userVersion(seventeen)).toBe(18);
+            expect(columnNames(seventeen, "receive_quotes")).not.toContain("maker_public_key");
+            expect(
+                seventeen
+                    .prepare<[], { sender_key: string }>(
+                        "SELECT sender_key FROM receive_quotes WHERE id = 'renamed'",
+                    )
+                    .get(),
+            ).toEqual({ sender_key: hex32(2) });
+            expect(new ReceiveQuoteRepository(seventeen).get("renamed")?.senderKey).toBe(hex32(2));
+            expect(
+                seventeen
+                    .prepare<[], { outpoint_vout: bigint; quote_id: string }>(
+                        "SELECT outpoint_vout, quote_id FROM receive_quote_reservations",
+                    )
+                    .all(),
+            ).toEqual([{ outpoint_vout: 0n, quote_id: "renamed" }]);
+        } finally {
+            seventeen.close();
+        }
+    });
+});
+
 describe("rollback onto a newer schema", () => {
     // Plays both binaries with the real code: the explicit list is the future
     // build that migrates, the default MIGRATIONS is the one rolled back onto it.
     const ahead = (compat: Migration["compat"], up: string): Database => {
         const db = fresh();
-        applyMigrations(db, [...MIGRATIONS, { id: 17, compat, up }]);
-        expect(userVersion(db)).toBe(17);
+        applyMigrations(db, [...MIGRATIONS, { id: 19, compat, up }]);
+        expect(userVersion(db)).toBe(19);
         return db;
     };
     const ADD_COLUMN = "ALTER TABLE advances ADD COLUMN covenant_type TEXT";
@@ -986,18 +1222,31 @@ describe("rollback onto a newer schema", () => {
         const db = ahead("additive", ADD_COLUMN);
         try {
             expect(() => applyMigrations(db)).not.toThrow();
-            expect(userVersion(db)).toBe(17);
+            expect(userVersion(db)).toBe(19);
         } finally {
             db.close();
         }
     });
 
     it("refuses a newer schema that dropped a column this build reads", () => {
-        const db = ahead("additive", "ALTER TABLE advances DROP COLUMN covenant_version");
+        const db = ahead("additive", "ALTER TABLE advances DROP COLUMN renewals");
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 17, this build knows 16;[\s\S]*covenant_version/,
+                /database is at schema 19, this build knows 18;[\s\S]*renewals/,
+            );
+            expect(db.serialize()).toEqual(before);
+        } finally {
+            db.close();
+        }
+    });
+
+    it("refuses a newer schema that dropped a generic fill column", () => {
+        const db = ahead("additive", "ALTER TABLE fills DROP COLUMN covenant_output_index");
+        const before = db.serialize();
+        try {
+            expect(() => applyMigrations(db)).toThrow(
+                /schema 19[\s\S]*fills.covenant_output_index/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -1010,7 +1259,7 @@ describe("rollback onto a newer schema", () => {
         const before = db.serialize();
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 17, this build knows 16;[\s\S]*migration 17/,
+                /database is at schema 19, this build knows 18;[\s\S]*migration 19/,
             );
             expect(db.serialize()).toEqual(before);
         } finally {
@@ -1021,10 +1270,10 @@ describe("rollback onto a newer schema", () => {
     it("refuses a newer schema that records no compatibility marker", () => {
         const db = migrated();
         db.exec(`${ADD_COLUMN}; DROP TABLE schema_compat`);
-        db.pragma("user_version = 17");
+        db.pragma("user_version = 19");
         try {
             expect(() => applyMigrations(db)).toThrow(
-                /database is at schema 17, this build knows 16;[\s\S]*no forward-compatibility marker/,
+                /database is at schema 19, this build knows 18;[\s\S]*no forward-compatibility marker/,
             );
         } finally {
             db.close();
@@ -1034,7 +1283,7 @@ describe("rollback onto a newer schema", () => {
     // Both inputs a 13-era guard reads before admitting a newer database. The
     // cross-build run against origin/main's built package is the real proof;
     // this pins the preconditions that run depends on.
-    it("leaves a 13-era reader every column it reads, but migration 15 locks it out", () => {
+    it("retains historical columns except the declared breaking removals", () => {
         const db = migrated();
         const thirteen = at(13);
         const before = shape(thirteen);
@@ -1046,11 +1295,16 @@ describe("rollback onto a newer schema", () => {
                         "SELECT min_reader_version AS v FROM schema_compat WHERE id = 1",
                     )
                     .get(),
-            ).toEqual({ v: 15n });
+            ).toEqual({ v: 18n });
             const after = shape(db);
             for (const [table, columns] of Object.entries(before))
                 for (const [column, declared] of Object.entries(columns))
-                    if (!RELAXED_BY_15.has(`${table}.${column}`))
+                    if (
+                        !DROPPED_TABLES_BY_18.has(table) &&
+                        !RELAXED_BY_15.has(`${table}.${column}`) &&
+                        !DROPPED_BY_17.has(`${table}.${column}`) &&
+                        !RENAMED_BY_18.has(`${table}.${column}`)
+                    )
                         expect(after[table]?.[column], `${table}.${column}`).toBe(declared);
         } finally {
             db.close();
@@ -1168,9 +1422,10 @@ describe("receive quotes constraints", () => {
 
     it("accepts sender-paid and receiver-paid receive quotes", () => {
         const db = migrated();
-        expect(() => insertRawReceiveQuote(db, { id: "q1" })).not.toThrow();
+        expect(() => insertRawReceiveQuote(db, { ...DEADLINE_QUOTE, id: "q1" })).not.toThrow();
         expect(() =>
             insertRawReceiveQuote(db, {
+                ...DEADLINE_QUOTE,
                 id: "q2",
                 payer: "receiver",
                 receiver_fare_json: JSON.stringify({ currency: "sats", units: "5" }),

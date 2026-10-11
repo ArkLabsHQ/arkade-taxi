@@ -1,19 +1,23 @@
-import { ArkAddress } from "@arkade-os/sdk";
+import { ArkAddress, VtxoScript } from "@arkade-os/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import {
     PROTOCOL_VERSION,
     assetIdToWire,
     bytesToHex,
+    fundingInputToWire,
     quoteParamsToWire,
     type InfoResponse,
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
+import { hex } from "@scure/base";
 import { TaxiClient } from "../src/client.js";
 import { verifyReceiveQuote } from "../src/receiveQuote.js";
 import {
     emulatorKey,
+    fundingInputs,
     HRP,
+    senderTree,
     jsonResponse,
     operatorKey,
     operatorSignerKey,
@@ -24,6 +28,8 @@ import {
 } from "./fixtures.js";
 
 const ASSET = { txid: new Uint8Array(32).fill(0x12), groupIndex: 7 };
+const CREATED_AT = 1_000_000_000;
+const DEADLINE = BigInt(CREATED_AT) + 8_640_000n;
 const receiverAddress = new ArkAddress(serverKey, receiverKey, HRP).encode();
 const params = {
     receiverKey,
@@ -31,9 +37,9 @@ const params = {
     operatorKey,
     operatorSignerKey,
     dust: 330n,
-    topup: 329n,
+    topup: 330n,
     assetId: ASSET,
-    locktime: 849_856n,
+    locktime: DEADLINE,
     exitDelay: { value: 86_016n, type: "seconds" as const },
     claimMode: "recycle" as const,
     recoveryRecipient: "receiver" as const,
@@ -46,19 +52,22 @@ const address = new DustCovenantScript({
 })
     .address(HRP, serverKey)
     .encode();
+const operatorScript = bytesToHex(new ArkAddress(serverKey, operatorKey, HRP).pkScript);
 const quote = (over: Partial<ReceiveQuoteResponse> = {}): ReceiveQuoteResponse => ({
     quoteId: "receive-1",
     state: "quoted",
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     params: quoteParamsToWire(params),
     covenantAddress: address,
     fare: { currency: "sats", units: "3" },
     batchExpiry: { kind: "height", value: "900000" },
     inputExpiryFloor: { kind: "height", value: "850000" },
-    recoveryLocktime: { kind: "height", value: "849856" },
-    createdAt: 1_000_000_000,
-    expiresAt: 1_000_000_060,
+    recoveryLocktime: { kind: "time", value: DEADLINE.toString() },
+    createdAt: CREATED_AT,
+    expiresAt: CREATED_AT + 60,
+    operatorInputs: fundingInputs().map(fundingInputToWire),
+    operatorScript,
     ...over,
 });
 const info = (): InfoResponse => ({
@@ -75,12 +84,12 @@ const info = (): InfoResponse => ({
             assetId: assetIdToWire(ASSET),
             enabled: true,
             claim: "either",
-            maxTopupSats: "329",
+            maxTopupSats: "330",
             unclaimedMode: "reclaim",
             fares: [{ id: "receive", currency: "sats", pricing: { kind: "flat", units: "3" } }],
         },
     ],
-    maxPerPaymentTopupSats: "329",
+    maxPerPaymentTopupSats: "330",
     paused: false,
 });
 const args = () => ({
@@ -88,12 +97,12 @@ const args = () => ({
     info: info(),
     expect: {
         receiverAddress,
-        makerPublicKey: senderKey,
+        senderKey: senderKey,
         assetId: ASSET,
         fareId: "receive",
         fundingExpiry: { kind: "height" as const, value: 850_000n },
         maxServiceFareSats: 3n,
-        minRecoveryLocktime: { kind: "height" as const, value: 800_000n },
+        minRecoveryLocktime: { kind: "time" as const, value: BigInt(CREATED_AT) },
         minInputExpiryFloor: { kind: "height" as const, value: 850_000n },
     },
     trustedServerKey: serverKey,
@@ -104,9 +113,7 @@ const args = () => ({
     now: 1_000_000_001,
 });
 
-// The receiver pays their own fare: the operator funds the whole dust (topup
-// === dust), so the covenant tree differs from the sender-paid one above.
-const receiverParams = { ...params, topup: 330n };
+const receiverParams = { ...params };
 
 const senderPaidArgs = (
     over: { topup?: bigint; advertisedCurrency?: "sameAsset"; requestedReceiver?: boolean } = {},
@@ -204,25 +211,52 @@ const receiverPaidArgs = (
 };
 
 describe("verifyReceiveQuote", () => {
+    it("verifies a wall-clock deadline past a height-domain funding floor", () => {
+        const deadline = BigInt(args().quote.createdAt) + 8_640_000n;
+        const deadlineArgs = {
+            ...args(),
+            quote: quote({
+                params: quoteParamsToWire({ ...params, topup: 330n, locktime: deadline }),
+                recoveryLocktime: { kind: "time", value: deadline.toString() },
+                covenantAddress: new DustCovenantScript({
+                    serverKey,
+                    emulatorKey,
+                    params: { ...params, topup: 330n, locktime: deadline },
+                    vtxoMinAmount: 1n,
+                })
+                    .address(HRP, serverKey)
+                    .encode(),
+            }),
+            expect: {
+                ...args().expect,
+                minRecoveryLocktime: {
+                    kind: "time" as const,
+                    value: BigInt(args().quote.createdAt),
+                },
+            },
+        };
+        expect(() => verifyReceiveQuote(deadlineArgs)).not.toThrow();
+    });
+
     it("rebuilds the covenant and returns immutable SDK carrier terms", () => {
         const verified = verifyReceiveQuote(args());
         expect(verified.descriptor).toEqual({
             quoteId: "receive-1",
             receiveAddress: address,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: "12121212121212121212121212121212121212121212121212121212121212120700",
             physicalSats: 330n,
-            loanSats: 329n,
-            receiptSats: 1n,
+            loanSats: 330n,
+            receiptSats: 0n,
             serviceFareSats: 3n,
-            expiresAt: 1_000_000_060,
+            expiresAt: CREATED_AT + 60,
         });
         expect(Object.isFrozen(verified)).toBe(true);
         expect(Object.isFrozen(verified.descriptor)).toBe(true);
     });
 
     it("rejects a substituted floor even with a self-consistent replacement locktime", () => {
-        const changed = { ...params, locktime: 859_856n };
+        const changed = { ...params, locktime: DEADLINE + 10_000n };
         const covenantAddress = new DustCovenantScript({
             serverKey,
             emulatorKey,
@@ -238,7 +272,7 @@ describe("verifyReceiveQuote", () => {
                     params: quoteParamsToWire(changed),
                     covenantAddress,
                     inputExpiryFloor: { kind: "height", value: "860000" },
-                    recoveryLocktime: { kind: "height", value: "859856" },
+                    recoveryLocktime: { kind: "time", value: (DEADLINE + 10_000n).toString() },
                 }),
             }),
         ).toThrow(/floor/);
@@ -247,7 +281,7 @@ describe("verifyReceiveQuote", () => {
     it("verifies against the any-asset rule when the asset has no rule of its own", () => {
         const advertised = info();
         advertised.assetRules[0]!.assetId = "*";
-        expect(verifyReceiveQuote({ ...args(), info: advertised }).descriptor.loanSats).toBe(329n);
+        expect(verifyReceiveQuote({ ...args(), info: advertised }).descriptor.loanSats).toBe(330n);
     });
 
     it("holds the quote to the asset's own rule, not the any-asset one", () => {
@@ -273,7 +307,7 @@ describe("verifyReceiveQuote", () => {
 
     it.each([
         ["receiverAddress", { receiverAddress: `${receiverAddress}x` }],
-        ["maker", { makerPublicKey: "00".repeat(32) }],
+        ["maker", { senderKey: "00".repeat(32) }],
         [
             "asset",
             { params: { ...quote().params, assetId: { txid: "13".repeat(32), groupIndex: 7 } } },
@@ -294,8 +328,10 @@ describe("verifyReceiveQuote", () => {
         expect(verified.receiverFare?.units).toBe(7n);
         expect(verified.unclaimedMode).toBe("reclaim");
     });
-    it("still refuses a sender-paid quote whose topup is not dust minus the receipt", () => {
-        expect(() => verifyReceiveQuote(senderPaidArgs({ topup: 330n }))).toThrow(/carrier split/);
+    it("refuses a sender-paid quote whose loan is not the whole dust", () => {
+        expect(() => verifyReceiveQuote(senderPaidArgs({ topup: 329n }))).toThrow(
+            /one dust unit|whole-dust loan/,
+        );
     });
     it("refuses a receiver-paid quote whose fill fare is not zero", () => {
         expect(() =>
@@ -390,14 +426,14 @@ describe("TaxiClient receive quotes", () => {
         const taxi = new TaxiClient({ baseUrl: "https://taxi.example", fetch });
         await taxi.requestReceiveQuote({
             receiverAddress,
-            makerPublicKey: senderKey,
+            senderKey: senderKey,
             assetId: ASSET,
             fareId: "receive",
             fundingExpiry: { kind: "height", value: 850_000n },
         });
         expect(JSON.parse(fetch.calls[0]!.init.body as string)).toEqual({
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             assetId: assetIdToWire(ASSET),
             fareId: "receive",
             fundingExpiry: { kind: "height", value: "850000" },
@@ -421,7 +457,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -433,7 +469,7 @@ describe("TaxiClient receive quotes", () => {
                 hrp: HRP,
                 expect: {
                     maxServiceFareSats: 3n,
-                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minRecoveryLocktime: { kind: "time", value: BigInt(CREATED_AT) },
                     minInputExpiryFloor: { kind: "height", value: 850_000n },
                 },
             }),
@@ -452,7 +488,7 @@ describe("TaxiClient receive quotes", () => {
             return {
                 ...trust,
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: expected.fundingExpiry,
@@ -504,7 +540,7 @@ describe("TaxiClient receive quotes", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: new Uint8Array(32).fill(0xff),
+                senderKey: new Uint8Array(32).fill(0xff),
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -515,7 +551,7 @@ describe("TaxiClient receive quotes", () => {
                 hrp: HRP,
                 expect: {
                     maxServiceFareSats: 3n,
-                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minRecoveryLocktime: { kind: "time", value: BigInt(CREATED_AT) },
                     minInputExpiryFloor: { kind: "height", value: 850_000n },
                 },
             }),
@@ -551,7 +587,7 @@ describe("receive quotes from an operator on another protocol version", () => {
         await expect(
             taxi.requestVerifiedReceiveQuote({
                 receiverAddress,
-                makerPublicKey: senderKey,
+                senderKey: senderKey,
                 assetId: ASSET,
                 fareId: "receive",
                 fundingExpiry: { kind: "height", value: 850_000n },
@@ -562,11 +598,56 @@ describe("receive quotes from an operator on another protocol version", () => {
                 hrp: HRP,
                 expect: {
                     maxServiceFareSats: 3n,
-                    minRecoveryLocktime: { kind: "height", value: 800_000n },
+                    minRecoveryLocktime: { kind: "time", value: BigInt(CREATED_AT) },
                     minInputExpiryFloor: { kind: "height", value: 850_000n },
                 },
             }),
         ).rejects.toMatchObject({ code: "PROTOCOL_VERSION_MISMATCH" });
         expect(fetch.calls).toHaveLength(1);
+    });
+});
+
+describe("the funding a receive quote publishes", () => {
+    const published = () => fundingInputs().map(fundingInputToWire);
+
+    it("re-derives every published input's own spend leaf from its own tap tree", () => {
+        const verified = verifyReceiveQuote(args());
+        expect(verified.quote.operatorInputs).toHaveLength(1);
+        for (const input of verified.quote.operatorInputs) {
+            const tree = VtxoScript.decode(hex.decode(input.tapTree));
+            expect(tree.findLeaf(input.spendLeaf)).toBeDefined();
+        }
+        expect(verified.quote.operatorScript).toBe(operatorScript);
+    });
+
+    it("refuses an input whose spend leaf its tap tree does not carry", () => {
+        const operatorInputs = published();
+        operatorInputs[0]!.spendLeaf = bytesToHex(senderTree.scripts[0]!).replace(/^../, "51");
+        expect(() => verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs }) })).toThrow(
+            /spend leaf/,
+        );
+    });
+
+    it("refuses an input that expires before the floor it publishes", () => {
+        const operatorInputs = published();
+        operatorInputs[0]!.expiry = { kind: "height", value: "849999" };
+        expect(() => verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs }) })).toThrow(
+            /expiry floor/,
+        );
+    });
+
+    it("refuses an operator script that is not a taproot output", () => {
+        expect(() =>
+            verifyReceiveQuote({
+                ...args(),
+                quote: quote({ operatorScript: "0014" + "11".repeat(20) }),
+            }),
+        ).toThrow(/taproot/);
+    });
+
+    it("refuses a quote that reserves nothing", () => {
+        expect(() =>
+            verifyReceiveQuote({ ...args(), quote: quote({ operatorInputs: [] }) }),
+        ).toThrow(/reserves no/);
     });
 });

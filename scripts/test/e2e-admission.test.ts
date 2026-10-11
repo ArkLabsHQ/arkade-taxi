@@ -382,27 +382,29 @@ describe("pre-effect failure diagnostics", () => {
     });
 });
 
-it.each(["runtime_checking", "runtime_stale"])(
-    "retries only the exact pre-effect runtime_unsafe %s refusal",
-    async (reason) => {
-        const service = await localService(() => [200, ready]);
-        let attempts = 0;
-        try {
-            await expect(
-                preEffectRequest(
-                    async () => {
-                        if (++attempts === 1) throw new TaxiError("runtime_unsafe", reason);
-                        return "one-effect";
-                    },
-                    { readyUrl: `${service.url}/ready`, expiresAt: Date.now() / 1000 + 5 },
-                ),
-            ).resolves.toBe("one-effect");
-            expect(attempts).toBe(2);
-        } finally {
-            await service.close();
-        }
-    },
-);
+it.each([
+    "runtime_checking",
+    "runtime_stale",
+    "wallet inventory or intent locks changed or unavailable",
+    "intent locks changed during construction",
+])("retries only the exact pre-effect runtime_unsafe %s refusal", async (reason) => {
+    const service = await localService(() => [200, ready]);
+    let attempts = 0;
+    try {
+        await expect(
+            preEffectRequest(
+                async () => {
+                    if (++attempts === 1) throw new TaxiError("runtime_unsafe", reason);
+                    return "one-effect";
+                },
+                { readyUrl: `${service.url}/ready`, expiresAt: Date.now() / 1000 + 5 },
+            ),
+        ).resolves.toBe("one-effect");
+        expect(attempts).toBe(2);
+    } finally {
+        await service.close();
+    }
+});
 
 async function localService(
     respond: (
@@ -484,6 +486,7 @@ describe.each([
         new TaxiError("not_ready", "proceeds_ambiguous_intent"),
         new TaxiError("runtime_unsafe", "proceeds_collecting"),
         new TaxiError("runtime_unsafe", "proceeds_output_pending"),
+        new TaxiError("runtime_unsafe", "wallet inventory changed or unavailable"),
         new TaxiError("NETWORK_ERROR", reason),
         new TaxiError("HTTP_ERROR", reason),
         new TaxiError("ambiguous_submission", reason),

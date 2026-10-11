@@ -83,7 +83,7 @@ describe("independent envelope validation", () => {
         if (field === "checkpoint") wire.checkpoints.pop();
         if (field === "hash") wire.unsignedTxId = "00".repeat(32);
         if (field === "index") wire.covenantOutputIndex = 1;
-        if (field === "expiry") wire.senderInputs[0].expiry.kind = "time";
+        if (field === "expiry") wire.senderInputs[0].expiry.kind = "height";
         if (["outpoint", "amount", "leaf", "tree"].includes(field)) {
             const cp = Transaction.fromPSBT(base64.decode(wire.checkpoints[0]));
             if (field === "outpoint") cp.updateInput(0, { index: 1 });

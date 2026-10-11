@@ -13,21 +13,13 @@ import { assetRuleToWire } from "./rulesWire.js";
 import { createQuote, getTransfer, submitLockup, type QuoteDeps } from "./quotes.js";
 import { createReceiveQuote, getReceiveQuote, type ReceiveQuoteDeps } from "./receiveQuotes.js";
 import { createSponsoredQuote, type SponsoredLockupBuilder } from "./sponsoredQuotes.js";
-import {
-    createSwapFillQuote,
-    type SwapFillQuoteDeps,
-    getSwapFill,
-    type OfferCodec,
-    type SwapFillGraphBuilder,
-    type SwapFillStore,
-} from "./swapFillQuotes.js";
-import { submitSwapFill, type SwapFillSubmitDeps } from "./swapFillSubmit.js";
-import type { DelegateeClient } from "./delegatee.js";
+import { getFill, submitFill, type FillDeps } from "./fills.js";
+import type { DelegateeClient, DelegateeRegistration } from "./delegatee.js";
 import type { Sweeper } from "./sweeper.js";
 import type { RecoveryDeadline, SweeperStatus } from "./sweeper.js";
 import type { LockupReconciler } from "./reconciler.js";
 import type { WatcherBlocker } from "./watcher.js";
-import type { SwapFillReconciler } from "./swapFillReconciler.js";
+import type { FillReconciler } from "./fillReconciler.js";
 import { ACTIVE_CLAIM_STATES, listReceiverClaims, parseReceiverAddresses } from "./claims.js";
 import { ReceiverClaimFeed, type ClaimFeedLogger } from "./claimFeed.js";
 import type { ProceedsStatus } from "./proceeds.js";
@@ -36,21 +28,19 @@ import { DOCS_HTML, openApiDocument } from "./openapi.js";
 export interface RouteDeps extends QuoteDeps {
     receiveQuotes: ReceiveQuoteDeps["receiveQuotes"];
     sponsoredBuilder: SponsoredLockupBuilder;
-    swapFills: SwapFillStore;
-    swapFillBuilder: SwapFillGraphBuilder;
     /** The server holds the whole client: the admin view reads the renewal
      * history the quote path has no use for. */
-    delegatee?: SwapFillQuoteDeps["delegatee"] & {
-        client: Pick<DelegateeClient, "getDelegation">;
+    delegatee?: {
+        registration: DelegateeRegistration;
+        client: Pick<DelegateeClient, "delegate" | "getDelegation">;
     };
-    swapFillSubmit: SwapFillSubmitDeps;
-    offerCodec: OfferCodec;
+    fill: FillDeps;
     providerLimits?: () => Promise<{ vtxoMaxAmount: bigint }>;
     claimFeed?: Pick<ReceiverClaimFeed, "subscribe">;
     claimFeedLogger?: ClaimFeedLogger;
     sweeper: Pick<Sweeper, "status">;
     reconciler: Pick<LockupReconciler, "status">;
-    swapFillReconciler?: Pick<SwapFillReconciler, "status">;
+    fillReconciler?: Pick<FillReconciler, "status">;
     /** Seconds since the last completed tick after which /health reports
      * degraded. */
     sweeperStaleAfterSeconds: number;
@@ -117,7 +107,7 @@ export interface HealthResponse {
         lastWatcherScanAt: number | null;
         watching: number;
         activelyScanned: number;
-        swapFills?: {
+        fills?: {
             lastTickAt: number | null;
             submitting: number;
             blockers: string[];
@@ -163,19 +153,24 @@ export function operationalSnapshot(
         | "runtime"
         | "sweeper"
         | "reconciler"
-        | "swapFillReconciler"
+        | "fillReconciler"
         | "sweeperStaleAfterSeconds"
         | "startup"
         | "proceeds"
     >,
-    options: { ignoreManualPause?: boolean } = {},
+    options: { ignoreManualPause?: boolean; allowQuarantinedFills?: boolean } = {},
 ): OperationalSnapshot {
     const s = deps.sweeper.status();
     const now = deps.now();
     const age = s.lastTickAt === null ? null : now - s.lastTickAt;
     const runtime = deps.runtime?.safety();
     const reconciler = deps.reconciler.status();
-    const swapFills = deps.swapFillReconciler?.status();
+    const fills = deps.fillReconciler?.status();
+    const quarantined =
+        options.allowQuarantinedFills &&
+        fills !== undefined &&
+        fills.submitting > 0 &&
+        fills.quarantined === fills.submitting;
     const paused = deps.policy.get().paused;
     const startup = deps.startup?.();
     const proceeds = deps.proceeds?.();
@@ -191,8 +186,10 @@ export function operationalSnapshot(
         ...s.blockers.map(({ code }) => safeCode(code, "recovery_blocked")),
         ...reconciler.blockers.map((code) => safeCode(code, "reconciler_blocked")),
         ...(reconciler.lastTickAt === null ? ["reconciler_not_started"] : []),
-        ...(swapFills?.blockers ?? []).map((code) => safeCode(code, "reconciler_blocked")),
-        ...(swapFills && swapFills.lastTickAt === null ? ["swap_fill_reconciler_not_started"] : []),
+        ...(fills?.blockers ?? [])
+            .filter((code) => !quarantined || code !== "fill_liability_unresolved")
+            .map((code) => safeCode(code, "reconciler_blocked")),
+        ...(fills && fills.lastTickAt === null ? ["fill_reconciler_not_started"] : []),
         ...(age === null
             ? ["sweeper_not_started"]
             : age > deps.sweeperStaleAfterSeconds
@@ -216,8 +213,8 @@ export function operationalSnapshot(
     const reason =
         uniqueBlockers[0] === "reconciler_not_started"
             ? "the lockup reconciler has not completed a tick"
-            : uniqueBlockers[0] === "swap_fill_reconciler_not_started"
-              ? "the swap-fill reconciler has not completed a tick"
+            : uniqueBlockers[0] === "fill_reconciler_not_started"
+              ? "the fill reconciler has not completed a tick"
               : uniqueBlockers[0] === "sweeper_not_started"
                 ? "the sweeper has not completed a tick"
                 : uniqueBlockers[0] === "chain_height_unavailable"
@@ -335,12 +332,12 @@ export function operationalSnapshot(
                 lastWatcherScanAt: reconciler.lastWatcherScanAt ?? null,
                 watching: reconciler.watching ?? 0,
                 activelyScanned: reconciler.activelyScanned ?? 0,
-                ...(swapFills
+                ...(fills
                     ? {
-                          swapFills: {
-                              lastTickAt: swapFills.lastTickAt,
-                              submitting: swapFills.submitting,
-                              blockers: swapFills.blockers.map((code) =>
+                          fills: {
+                              lastTickAt: fills.lastTickAt,
+                              submitting: fills.submitting,
+                              blockers: fills.blockers.map((code) =>
                                   safeCode(code, "reconciler_blocked"),
                               ),
                           },
@@ -353,10 +350,52 @@ export function operationalSnapshot(
     };
 }
 
+const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024;
+
 async function readJson(c: Context): Promise<unknown> {
     try {
-        return await c.req.json();
+        const tooLarge = () =>
+            new ServiceError("request_body_too_large", 413, "request body exceeds 4 MiB");
+        const declared = c.req.header("content-length");
+        if (declared !== undefined) {
+            const length = Number(declared);
+            if (
+                !/^\d+$/.test(declared) ||
+                !Number.isSafeInteger(length) ||
+                length > MAX_JSON_BODY_BYTES
+            )
+                throw tooLarge();
+        }
+        const reader = c.req.raw.body?.getReader();
+        let bytes = new Uint8Array(0);
+        let length = 0;
+        if (reader) {
+            try {
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const nextLength = length + value.byteLength;
+                    if (nextLength > MAX_JSON_BODY_BYTES) {
+                        void reader.cancel().catch(() => {});
+                        throw tooLarge();
+                    }
+                    if (nextLength > bytes.length) {
+                        const grown = new Uint8Array(
+                            Math.min(MAX_JSON_BODY_BYTES, Math.max(nextLength, bytes.length * 2)),
+                        );
+                        grown.set(bytes.subarray(0, length));
+                        bytes = grown;
+                    }
+                    bytes.set(value, length);
+                    length = nextLength;
+                }
+            } finally {
+                reader.releaseLock();
+            }
+        }
+        return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
     } catch (cause) {
+        if (cause instanceof ServiceError) throw cause;
         throw new ServiceError(ErrorCode.InvalidRequest, 400, "request body is not valid JSON", {
             cause,
         });
@@ -376,7 +415,10 @@ const signedTxOf = (body: unknown): string => {
 };
 
 const assertFinancialMutationReady = (deps: RouteDeps): void => {
-    const state = operationalSnapshot(deps, { ignoreManualPause: true });
+    const state = operationalSnapshot(deps, {
+        ignoreManualPause: true,
+        allowQuarantinedFills: true,
+    });
     if (!state.ready)
         throw new ServiceError("not_ready", 503, state.body.reason ?? "service is not ready");
 };
@@ -464,23 +506,10 @@ export function createRoutes(deps: RouteDeps): Hono {
         handle(c, () => getTransfer(deps, c.req.param("id"))),
     );
 
-    app.post("/v1/swap-fills", (c) =>
-        handle(c, async () => {
-            return createSwapFillQuote(deps, await readJson(c), () =>
-                assertFinancialMutationReady(deps),
-            );
-        }),
-    );
-
-    app.get("/v1/swap-fills/:id", (c) => handle(c, () => getSwapFill(deps, c.req.param("id"))));
-
-    app.post("/v1/swap-fills/:id/submit", async (c) => {
+    app.post("/v1/fills", async (c) => {
         try {
-            const body = await submitSwapFill(
-                deps.swapFillSubmit,
-                c.req.param("id"),
-                await readJson(c),
-                () => assertFinancialMutationReady(deps),
+            const body = await submitFill(deps.fill, await readJson(c), () =>
+                assertFinancialMutationReady(deps),
             );
             return c.json(body, 202);
         } catch (e) {
@@ -488,6 +517,8 @@ export function createRoutes(deps: RouteDeps): Hono {
             return c.json(toErrorResponse(err), err.status);
         }
     });
+
+    app.get("/v1/fills/:id", (c) => handle(c, () => getFill(deps.fill, c.req.param("id"))));
 
     app.get("/v1/claims", (c) =>
         handle(c, () => ({

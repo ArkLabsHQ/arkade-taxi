@@ -10,7 +10,7 @@ export const receiverPaid = (over: Partial<DustCovenantParams> = {}): DustCovena
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
-    locktime: 900_000n,
+    locktime: 1_800_000_000n,
     assetId: { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 },
     claimMode: "recycle",
     recoveryRecipient: "receiver",

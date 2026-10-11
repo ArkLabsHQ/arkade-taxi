@@ -50,11 +50,13 @@ it.each([false, true])(
             ),
         ]).serialize();
         if (assetFare) req.fare = { currency: "asset", assetId: req.params.assetId, units: 3n };
+        req.funding.totalValue = req.params.topup + config().dust;
+        req.funding.inputs[0]!.value = Number(req.funding.totalValue);
         req.covenantAddress = new DustCovenantScript({
             params: req.params,
             serverKey: config().serverPubkey,
             emulatorKey: config().emulatorPubkey,
-            vtxoMinAmount: 10n,
+            vtxoMinAmount: config().vtxoMinAmount,
         })
             .address("ark", config().serverPubkey)
             .encode();
@@ -96,8 +98,7 @@ it.each([false, true])(
             ...funding,
             fare: req.fare,
             covenantAddress: req.covenantAddress,
-            batchExpiry: req.funding.batchExpiry,
-            recoveryLocktime: { kind: "height", value: req.params.locktime },
+            recoveryLocktime: { kind: "time", value: req.params.locktime },
             createdAt: NOW,
             updatedAt: NOW,
             expiresAt: NOW + 60,
@@ -148,7 +149,7 @@ it.each([false, true])(
         reservations.reserveQuote({
             advance: row,
             expectedPolicyRevision: p.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: "height", value: 72n },
+            recoveryExecutionBudget: { kind: "time", value: 72n },
         });
         reservations.claimLockup(
             row.id,
@@ -179,7 +180,7 @@ it.each([false, true])(
                         const tx = Transaction.fromPSBT(base64.decode(arkTx));
                         const group = Extension.fromTx(tx).getAssetPacket()!.groups[0]!;
                         expect(group.outputs.map((output) => [output.vout, output.amount])).toEqual(
-                            [[1, expected]],
+                            [[0, expected]],
                         );
                         const script = Extension.fromTx(tx).getEmulatorPacket()!.entries[0]!.script;
                         const number = (bytes: Uint8Array) => BigInt(`0x${hex.encode(bytes)}`);

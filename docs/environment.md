@@ -207,23 +207,13 @@ before the first lockup, not after.
 
 The dust unit the operator fronts and the minimum virtual-output amount also
 come from the verified arkd info. Taxi refuses startup if either is non-positive
-or the minimum exceeds dust. The minimum matters more than its name suggests,
-because it is an
-input to the covenant scripts and therefore to the address:
+or the minimum exceeds dust. The covenant lends exactly one whole dust unit and
+pins every payout of its at a dust unit or more, so the minimum no longer enters
+a covenant script: `dust` alone does, and it is persisted per advance.
 
-- `validateParams` rejects a `topup` below it.
-- `refundTopup` holds one unit back when the operator funded the whole dust unit,
-  so the sender's returned asset has an output to sit in — an asset cannot
-  occupy an output on its own.
-
-That second one means the `refundSender` and `recovery` leaves are built from
-the _current provider_ value. It is not persisted per advance. **Do not change
-arkd's minimum VTXO amount while advances are locked**: the sweeper would rebuild a
-different refund script, derive a different taptree, and be unable to satisfy the
-recovery leaf on covenants already committed to the old one. Drain to zero
-outstanding first. (The rebuild only differs where `topup > dust −
-vtxoMinAmount`, which is every pure-asset payment, since those set
-`topup = dust`.)
+The minimum still bounds what a sender may pay beside a lockup, and the
+sponsored rail — which has no covenant — still hosts its outputs at it. A
+sub-dust sats fare is refused rather than paid to an `OP_RETURN` script.
 
 `dust` and the parties are persisted per advance, along with funding and signed
 graph facts. Runtime provider pins, the provider minimum amount and recovery

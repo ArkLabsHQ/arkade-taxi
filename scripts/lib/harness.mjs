@@ -166,6 +166,8 @@ const TASK12_TESTS = [
     "e2e/sponsored.e2e.test.ts",
     "e2e/joint-fill.e2e.test.ts",
     "e2e/receiver-paid.e2e.test.ts",
+    "e2e/receiver-paid-fill.e2e.test.ts",
+    "e2e/direct-fill.e2e.test.ts",
     "e2e/exposure.e2e.test.ts",
     "e2e/verify-quote.e2e.test.ts",
     "e2e/renewal.e2e.test.ts",
@@ -173,7 +175,15 @@ const TASK12_TESTS = [
     "e2e/resilience.e2e.test.ts",
     "e2e/suite-integrity.e2e.test.ts",
 ];
-const ISOLATED_TESTS = ["e2e/unilateral-exit.e2e.test.ts"];
+// Fresh stacks keep fault recovery and chain-time changes out of the shared run.
+const ISOLATED_TESTS = [
+    "e2e/unilateral-exit.e2e.test.ts",
+    "e2e/fill-undersigned.e2e.test.ts",
+    "e2e/fill-pending.e2e.test.ts",
+];
+
+/** The artifact sub-directory one isolated run writes to. */
+export const isolatedLabel = (file) => file.replace(/^.*\//, "").replace(/\.e2e\.test\.ts$/, "");
 
 export const nodeEventSourceArgs = (script, args = []) => [EVENT_SOURCE_NODE_FLAG, script, ...args];
 
@@ -229,7 +239,12 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
         ...options,
         tests:
             options.mode === "direct"
-                ? tests.filter((path) => !/\/(joint-fill|receiver-paid)\.e2e\.test\.ts$/.test(path))
+                ? tests.filter(
+                      (path) =>
+                          !/\/(joint-fill|receiver-paid|receiver-paid-fill)\.e2e\.test\.ts$/.test(
+                              path,
+                          ),
+                  )
                 : tests,
         isolatedTests: [...ISOLATED_TESTS],
     };

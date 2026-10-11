@@ -5,6 +5,7 @@ import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { ServiceError } from "../src/errors.js";
 import {
+    covenantDeadline,
     createQuote,
     FakeLockupBuilder,
     getTransfer,
@@ -45,7 +46,7 @@ import {
 } from "@arkade-taxi/db";
 
 const MARGIN = 144;
-const LOCKTIME = EXPIRY_HEIGHT - BigInt(MARGIN);
+const LOCKTIME = BigInt(NOW) + config().covenantDeadlineSeconds;
 const ASSET = { txid: new Uint8Array(32).fill(0xde), groupIndex: 2 };
 
 let advances: MemoryAdvances;
@@ -175,7 +176,7 @@ describe("createQuote", () => {
         expect(advances.get("bob-older")?.state).toBe("quoted");
         expect(advances.byReceiverKeys([])).toEqual([]);
     });
-    it("derives timestamp CLTV using the seconds margin", async () => {
+    it("keeps the deadline off a timestamp funding expiry too", async () => {
         const testDeps = deps({ policy: { locktimeMarginBlocks: 999, locktimeMarginSeconds: 60 } });
         testDeps.inventory.getSpendableVtxos = async () => [
             fundingCoin({ expiresAtHeight: undefined, expiresAt: new Date(1789132933000) }),
@@ -189,12 +190,20 @@ describe("createQuote", () => {
             testDeps,
             quoteBody({ senderExpiry: { kind: "time", value: "1789139999" } }),
         );
-        expect(response.params.locktime).toBe("1789132873");
-        expect(advances.get(response.transferId)?.batchExpiry).toEqual({
-            kind: "time",
-            value: 1789132933n,
-        });
+        expect(response.params.locktime).toBe(LOCKTIME.toString());
+        expect(advances.get(response.transferId)?.batchExpiry).toBeUndefined();
     });
+    it("anchors the locktime to now plus the configured deadline, with no expiry", async () => {
+        const response = await createQuote(deps(), quoteBody());
+        const deadline = BigInt(NOW) + config().covenantDeadlineSeconds;
+
+        expect(response.params.locktime).toBe(deadline.toString());
+        const stored = advances.get(response.transferId)!;
+        expect(stored.locktime).toBe(deadline);
+        expect(stored.recoveryLocktime).toEqual({ kind: "time", value: deadline });
+        expect(stored.batchExpiry).toBeUndefined();
+    });
+
     it("returns the QuoteResponse shape with amounts as decimal strings", async () => {
         const res = await createQuote(deps(), quoteBody());
 
@@ -251,7 +260,7 @@ describe("createQuote", () => {
         expect(stored.topup).toBe(330n);
         expect(stored.fare).toEqual({ currency: "sats", units: 0n });
         expect(stored.locktime).toBe(LOCKTIME);
-        expect(stored.batchExpiry!.value).toBe(EXPIRY_HEIGHT);
+        expect(stored.batchExpiry).toBeUndefined();
         expect(stored.operatorInputs).toEqual([{ txid: "bb".repeat(32), vout: 0 }]);
         expect(stored.unsignedLockupId).toBe(lockupBuilder.unsignedId);
         expect(stored.unsignedLockupTx).toBe(lockupBuilder.unsignedTx);
@@ -353,13 +362,13 @@ describe("createQuote", () => {
     });
 
     it("bills a new asset lockup to the sender and lends only the loan", async () => {
-        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+        const d = deps({ policy: satsFareRule(ASSET, DUST) });
         const res = await createQuote(
             d,
-            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }),
+            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "330" }),
         );
-        expect(res.fare.units).toBe("10");
-        expect(advances.get(res.transferId)!.fare).toEqual({ currency: "sats", units: 10n });
+        expect(res.fare.units).toBe("330");
+        expect(advances.get(res.transferId)!.fare).toEqual({ currency: "sats", units: DUST });
         const built = lockupBuilder.built[0]!;
         expect(built.satsFarePayer).toBe("sender");
         const envelope = decodeLockupEnvelope(lockupBuilder.unsignedTx);
@@ -367,13 +376,13 @@ describe("createQuote", () => {
         const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
         expect([0, 1, 2].map((i) => tx.getOutput(i).amount)).toEqual([
             DUST,
-            10n,
+            DUST,
             20000n - built.params.topup,
         ]);
     });
 
     it.each([
-        [undefined, "sats", 100n, "10"],
+        [undefined, "sats", 100n, "330"],
         [undefined, "sameAsset", 90n, "0"],
         ["90", "sameAsset", 90n, "0"],
     ] as const)(
@@ -389,7 +398,10 @@ describe("createQuote", () => {
                                 {
                                     id: "sats",
                                     currency: { kind: currency },
-                                    pricing: { kind: "flat", units: 10n },
+                                    pricing: {
+                                        kind: "flat",
+                                        units: currency === "sats" ? DUST : 10n,
+                                    },
                                 },
                             ],
                             claim: "either",
@@ -415,21 +427,28 @@ describe("createQuote", () => {
         expect(lockupBuilder.built[0]!.fare).toEqual({ currency: "sats", units: 0n });
     });
 
-    it("subtracts the policy margin from the covenant VTXO expiry", async () => {
+    it("leaves the deadline untouched by the policy margin", async () => {
         const res = await createQuote(
             deps({ policy: { locktimeMarginBlocks: 1_000 }, expiry: 800_000n }),
             quoteBody(),
         );
-        expect(res.params.locktime).toBe("799000");
+        expect(res.params.locktime).toBe(LOCKTIME.toString());
     });
 
-    it("refuses to quote when the margin leaves no locktime", async () => {
-        const e = await caught(() =>
-            createQuote(deps({ policy: { locktimeMarginBlocks: 900000 } }), quoteBody()),
-        );
+    it("refuses to quote when the deadline is not a future time-domain locktime", async () => {
+        const d = deps();
+        d.config = config({ covenantDeadlineSeconds: 1n });
+        d.runtime.safety = () => runtimeSafety({ chainTime: BigInt(NOW) + 100n });
+        const e = await caught(() => createQuote(d, quoteBody()));
         expect(e.code).toBe("no_locktime_headroom");
         expect(e.status).toBe(503);
         expect(advances.rows.size).toBe(0);
+    });
+
+    it("refuses a deadline it cannot check against an unknown chain time", () => {
+        expect(() => covenantDeadline({ chainTime: null }, config(), NOW)).toThrow(
+            /not a future time-domain locktime/,
+        );
     });
 });
 
@@ -511,11 +530,12 @@ describe("createQuote admission", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(advances.rows.size).toBe(0);
     });
-    it("refuses a fare 8 below the minimum 10 before reservation", async () => {
-        const d = deps({ policy: satsFareRule(ASSET, 8n) });
+    // A sats fare IS its hosting output, so the covenant dust floor is its floor.
+    it("refuses a sats fare below the covenant dust floor before reservation", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, DUST - 1n) });
         await expect(
-            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "8" })),
-        ).rejects.toThrow(/minimum/);
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "329" })),
+        ).rejects.toThrow(/dust floor/);
         expect(advances.rows.size).toBe(0);
     });
     it("refuses a residual below dust even with a valid fare", async () => {
@@ -529,11 +549,11 @@ describe("createQuote admission", () => {
         ).rejects.toMatchObject({ code: "operator_inventory_insufficient" });
         expect(advances.rows.size).toBe(0);
     });
-    it("refuses an unrepresentable OP_RETURN shape before reserving", async () => {
-        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+    it("refuses a sub-dust payout before reserving", async () => {
+        const d = deps({ policy: satsFareRule(ASSET, DUST) });
         await expect(
-            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "20" })),
-        ).rejects.toThrow(/public SDK.*two OP_RETURN/);
+            createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "340" })),
+        ).rejects.toThrow(/dust floor/);
         expect(advances.rows.size).toBe(0);
     });
     it.each(["value", "script", "assets", "expiry", "spent", "missing"])(
@@ -562,11 +582,8 @@ describe("createQuote admission", () => {
             deps(),
             quoteBody({ senderExpiry: { kind: "height", value: "800000" } }),
         );
-        expect(response.params.locktime).toBe("799856");
-        expect(advances.get(response.transferId)?.batchExpiry).toEqual({
-            kind: "height",
-            value: 800000n,
-        });
+        expect(response.params.locktime).toBe(LOCKTIME.toString());
+        expect(advances.get(response.transferId)?.batchExpiry).toBeUndefined();
     });
     it("rejects a sender coin spent during construction", async () => {
         const d = deps();
@@ -607,7 +624,7 @@ describe("createQuote admission", () => {
         expect(advances.rows.size).toBe(0);
     });
     it("reserves the loan alone when the sender pays the sats fare", async () => {
-        const d = deps({ policy: satsFareRule(ASSET, 10n) });
+        const d = deps({ policy: satsFareRule(ASSET, DUST) });
         d.inventory.getSpendableVtxos = async () => [
             fundingCoin({ value: 330 }),
             fundingCoin({ vout: 1, value: 10, expiresAtHeight: 900001 }),
@@ -615,15 +632,12 @@ describe("createQuote admission", () => {
         ];
         const response = await createQuote(
             d,
-            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "10" }),
+            quoteBody({ assetId: assetIdToWire(ASSET), senderSats: "330" }),
         );
         expect(advances.get(response.transferId)?.operatorInputs).toEqual([
             { txid: "bb".repeat(32), vout: 0 },
         ]);
-        expect(advances.get(response.transferId)?.batchExpiry).toEqual({
-            kind: "height",
-            value: 900000n,
-        });
+        expect(advances.get(response.transferId)?.batchExpiry).toBeUndefined();
     });
     it("reserves the hosting sats an asset fare needs on top of the loan", async () => {
         const d = deps({
@@ -647,10 +661,12 @@ describe("createQuote admission", () => {
         });
         d.inventory.getSpendableVtxos = async () => [
             fundingCoin({ value: 330 }),
-            fundingCoin({ vout: 1, value: 10, expiresAtHeight: 900001 }),
-            fundingCoin({ vout: 2, value: 10000, expiresAtHeight: 900002 }),
+            fundingCoin({ vout: 1, value: 330 }),
+            fundingCoin({ vout: 2, value: 10_500 }),
         ];
         const response = await createQuote(d, quoteBody({ assetId: assetIdToWire(ASSET) }));
+        // Two coins, because an asset fare's hosting output is a whole dust unit
+        // on top of the loan and neither coin covers both.
         expect(advances.get(response.transferId)?.operatorInputs).toEqual([
             { txid: "bb".repeat(32), vout: 0 },
             { txid: "bb".repeat(32), vout: 1 },

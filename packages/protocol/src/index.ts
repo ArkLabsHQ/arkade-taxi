@@ -34,33 +34,12 @@ export {
 } from "./codec.js";
 
 export {
-    SWAP_FILL_TEMPLATE,
-    fareToWire as swapFillFareToWire,
-    swapFillGraphFromWire,
-    swapFillGraphToWire,
-    swapFillQuoteRequestFromWire,
-    swapFillStatusFromWire,
-    swapFillSubmitRequestFromWire,
-    type SwapFillGraph,
-    type SwapFillGraphAsset,
-    type SwapFillGraphAssetWire,
-    type SwapFillGraphInput,
-    type SwapFillGraphInputWire,
-    type SwapFillGraphOutput,
-    type SwapFillGraphOutputWire,
-    type SwapFillGraphWire,
-    type SwapFillInputOwner,
-    type SwapFillOutputRole,
-    type SwapFillQuoteRequest,
-    type SwapFillQuoteRequestBody,
-    type SwapFillQuoteResponse,
-    type SwapFillSolverAssetWire,
-    type SwapFillSolverInput,
-    type SwapFillSolverInputWire,
-    type SwapFillState,
-    type SwapFillStatusResponse,
-    type SwapFillSubmitRequestBody,
-} from "./swapFill.js";
+    fillRequestToWire,
+    fillStatusFromWire,
+    type FillRequestBody,
+    type FillState,
+    type FillStatusResponse,
+} from "./fill.js";
 
 export interface AssetIdWire {
     /** Genesis txid, internal byte order — NOT reversed display hex. */
@@ -153,6 +132,8 @@ export interface QuoteParams {
     dust: string;
     topup: string;
     assetId?: AssetIdWire;
+    /** The recovery deadline as a wall-clock CLTV, measured from the quote: not a
+     * margin inside the funding coins' batch expiry, and it may outlive it. */
     locktime: string;
     /** CSV on the exit leaf; `value` below 512 is blocks, otherwise seconds. */
     exitDelay: { value: string; type: "blocks" | "seconds" };
@@ -320,7 +301,7 @@ export interface TaggedLocktimeWire {
 
 export interface ReceiveQuoteRequestBody {
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     assetId: AssetIdWire;
     fareId?: string;
     fundingExpiry?: TaggedLocktimeWire;
@@ -332,7 +313,7 @@ export interface ReceiveQuoteResponse {
     quoteId: string;
     state: "quoted" | "bound" | "expired";
     receiverAddress: string;
-    makerPublicKey: string;
+    senderKey: string;
     params: QuoteParams;
     covenantAddress: string;
     fare: FareWire;
@@ -341,6 +322,12 @@ export interface ReceiveQuoteResponse {
     recoveryLocktime: TaggedLocktimeWire;
     createdAt: number;
     expiresAt: number;
+    /** The Taxi coins this quote reserved, with the taproot evidence a builder
+     * needs, and the one script every Taxi output must pay. `/v1/info` already
+     * publishes `operatorKey`, so these coins were always enumerable from the
+     * indexer; what is new is knowing which ones this quote holds. */
+    operatorInputs: FundingInputWire[];
+    operatorScript: string;
     /** Read-only: the fill this quote is bound to, present only while `bound`.
      * Recovers a lost quote-creation response; it authorises nothing. */
     boundFillId?: string;

@@ -89,13 +89,14 @@ export function createServiceLifecycle(deps: LifecycleDeps) {
                 deps.startBackground(refresh);
                 backgroundStarted = true;
             }
-            state = reconciliationBlocked
-                ? {
-                      phase: "reconciliation",
-                      complete: false,
-                      blocker: "startup_reconciliation_failed",
-                  }
-                : { phase: "ready", complete: true, blocker: null };
+            state =
+                startup && reconciliationBlocked
+                    ? {
+                          phase: "reconciliation",
+                          complete: false,
+                          blocker: "startup_reconciliation_failed",
+                      }
+                    : { phase: "ready", complete: true, blocker: null };
         } catch {
             const failedPhase = currentPhase;
             state = {

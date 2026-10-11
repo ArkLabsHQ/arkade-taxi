@@ -30,20 +30,20 @@ export function advance(over: Partial<Advance> = {}): Advance {
         operatorSignerKey: config().operatorSignerKey,
         exitDelay: config().exitDelay,
         dust: 330n,
-        topup: 300n,
-        locktime: 800_000n,
-        batchExpiry: { kind: "height", value: 9_223_372_036_854_775_807n },
+        topup: 330n,
+        locktime: 1_800_000_000n,
         operatorInputs: [{ txid: "aa".repeat(32), vout: 0 }],
         unsignedLockupTx: "unsigned",
         unsignedLockupId: "bb".repeat(32),
         covenantAddress: `tark1qcovenant${seq}`,
         fare: { currency: "sats" as const, units: 0n },
-        createdAt: 1_700_000_000_000 + seq,
-        updatedAt: 1_700_000_000_000 + seq,
-        expiresAt: 1_700_000_060_000 + seq,
+        // Below every fixture locktime: the deadline must fall after the lockup.
+        createdAt: 1_000_000 + seq,
+        updatedAt: 1_000_000 + seq,
+        expiresAt: 1_000_060 + seq,
         ...over,
     };
-    result.recoveryLocktime ??= { kind: result.batchExpiry!.kind, value: result.locktime };
+    result.recoveryLocktime ??= { kind: "time", value: result.locktime };
     return result;
 }
 

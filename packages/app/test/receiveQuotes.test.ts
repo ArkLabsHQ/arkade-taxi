@@ -6,11 +6,10 @@ import {
     PolicyRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     type Database,
 } from "@arkade-taxi/db";
-import { DustCovenantScript, payoutPkScript, subDustScript } from "@arkade-taxi/covenant";
-import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
+import { DustCovenantScript, payoutPkScript } from "@arkade-taxi/covenant";
+import { assetIdToWire, bytesToHex, fundingInputToWire } from "@arkade-taxi/protocol";
 import type { FarePricing } from "@arkade-taxi/core";
 import {
     createReceiveQuote,
@@ -43,7 +42,7 @@ const TOKEN_ASSET = { txid: new Uint8Array(32).fill(0x77), groupIndex: 3 };
 const receiverAddress = new ArkAddress(serverKey, receiverKey, "ark").encode();
 const body = (over: Record<string, unknown> = {}) => ({
     receiverAddress,
-    makerPublicKey: bytesToHex(senderKey),
+    senderKey: bytesToHex(senderKey),
     assetId: assetIdToWire(ASSET),
     ...over,
 });
@@ -88,7 +87,6 @@ const deps = (over: Partial<ReceiveQuoteDeps> = {}): ReceiveQuoteDeps => ({
     policy,
     advances,
     reservations: new ReservationRepository(db),
-    swapFills: new SwapFillRepository(db),
     receiveQuotes: quotes,
     inventory: {
         getSpendableVtxos: async () => [
@@ -141,24 +139,26 @@ const tokenFareDeps = () => {
     return deps();
 };
 
+const deadline = (): bigint => BigInt(NOW) + config().covenantDeadlineSeconds;
+
 describe("createReceiveQuote", () => {
-    it("issues and reserves an independently reconstructible 329+1 quote", async () => {
+    it("issues and reserves an independently reconstructible whole-dust quote", async () => {
         const response = await createReceiveQuote(deps(), body());
         expect(response).toMatchObject({
             quoteId: "receive-1",
             state: "quoted",
             receiverAddress,
-            makerPublicKey: bytesToHex(senderKey),
+            senderKey: bytesToHex(senderKey),
             params: {
                 dust: "330",
-                topup: "329",
+                topup: "330",
                 claimMode: "recycle",
                 recoveryRecipient: "receiver",
             },
             fare: { currency: "sats", units: "3" },
             batchExpiry: { kind: "height", value: "900000" },
             inputExpiryFloor: { kind: "height", value: "900000" },
-            recoveryLocktime: { kind: "height", value: "899856" },
+            recoveryLocktime: { kind: "time", value: deadline().toString() },
             createdAt: NOW,
             expiresAt: NOW + 60,
         });
@@ -170,7 +170,9 @@ describe("createReceiveQuote", () => {
                 "expiresAt",
                 "fare",
                 "inputExpiryFloor",
-                "makerPublicKey",
+                "senderKey",
+                "operatorInputs",
+                "operatorScript",
                 "params",
                 "quoteId",
                 "receiverAddress",
@@ -183,6 +185,16 @@ describe("createReceiveQuote", () => {
             value: 20_000n,
             expiry: { kind: "height", value: 900_000n },
         });
+        // Published verbatim from the reservation, so a builder spends exactly these.
+        expect(response.operatorInputs).toEqual([
+            fundingInputToWire(quotes.get("receive-1")!.operatorInputs[0]!),
+        ]);
+        expect(response.operatorScript).toBe(
+            bytesToHex(
+                new ArkAddress(config().serverPubkey, config().operatorKey, config().addressHrp)
+                    .pkScript,
+            ),
+        );
         expect(advances.rows.size).toBe(0);
     });
 
@@ -205,18 +217,21 @@ describe("createReceiveQuote", () => {
         });
     });
 
-    it("shortens only the input floor and recovery locktime for an older safe wallet ceiling", async () => {
+    it("shortens only the input floor for an older safe wallet ceiling", async () => {
         const response = await createReceiveQuote(
             deps(),
             body({ fundingExpiry: { kind: "height", value: "850000" } }),
         );
         expect(response.batchExpiry).toEqual({ kind: "height", value: "900000" });
         expect(response.inputExpiryFloor).toEqual({ kind: "height", value: "850000" });
-        expect(response.recoveryLocktime).toEqual({ kind: "height", value: "849856" });
+        expect(response.recoveryLocktime).toEqual({
+            kind: "time",
+            value: deadline().toString(),
+        });
         expect(quotes.get(response.quoteId)).toMatchObject({
             batchExpiry: { kind: "height", value: 900_000n },
             inputExpiryFloor: { kind: "height", value: 850_000n },
-            recoveryLocktime: { kind: "height", value: 849_856n },
+            recoveryLocktime: { kind: "time", value: deadline() },
         });
     });
 
@@ -228,16 +243,16 @@ describe("createReceiveQuote", () => {
         expect(quotes.get("receive-1")).toBeUndefined();
     });
 
-    it("derives a positive split from non-default server limits", async () => {
+    it("lends the whole dust whatever the server limits", async () => {
         const response = await createReceiveQuote(
             deps({ config: config({ dust: 1_000n, vtxoMinAmount: 100n }) }),
             body(),
         );
-        expect(response.params).toMatchObject({ dust: "1000", topup: "900" });
+        expect(response.params).toMatchObject({ dust: "1000", topup: "1000" });
     });
 
     it("lends a sender-paid v2 quote the whole dust at vtxoMinAmount = dust", async () => {
-        const cfg = config({ covenantVersion: 2, vtxoMinAmount: 330n });
+        const cfg = config({ vtxoMinAmount: 330n });
         // D2 anchors the v2 CLTV to wall-clock seconds, so a height-expiry
         // inventory cannot fund one.
         const timeCoin = (vout: number) => {
@@ -259,14 +274,14 @@ describe("createReceiveQuote", () => {
         expect(params).toMatchObject({ dust: "330", topup: "330" });
         expect(loan).toBe(cfg.dust);
         expect(payoutPkScript(cfg.operatorKey, loan, cfg.dust)).not.toEqual(
-            subDustScript(cfg.operatorKey),
+            payoutPkScript(cfg.operatorKey, 1n, cfg.dust),
         );
     });
 
     // D2: the v2 CLTV bounds how long the Taxi lends, measured from the quote,
     // so it ignores the funding floor and may outlive it.
     it("anchors a v2 deadline to now plus the configured window, past the floor", async () => {
-        const cfg = config({ covenantVersion: 2, vtxoMinAmount: 330n });
+        const cfg = config({ vtxoMinAmount: 330n });
         const { params } = await createReceiveQuote(deps({ config: cfg }), body());
         const stored = quotes.get("receive-1")!;
         const deadline = BigInt(clock) + cfg.covenantDeadlineSeconds;
@@ -280,7 +295,6 @@ describe("createReceiveQuote", () => {
 
     it("refuses a v2 deadline the window pushes past a uint32 locktime", async () => {
         const cfg = config({
-            covenantVersion: 2,
             vtxoMinAmount: 330n,
             covenantDeadlineSeconds: 4_294_967_295n,
         });
@@ -289,12 +303,12 @@ describe("createReceiveQuote", () => {
         );
     });
 
-    it("rejects an insufficient two-output split before inventory", async () => {
+    it("rejects non-positive server limits before inventory", async () => {
         const inventory = vi.fn(async () => [fundingCoin()]);
         await expect(
             createReceiveQuote(
                 deps({
-                    config: config({ dust: 10n, vtxoMinAmount: 6n }),
+                    config: config({ dust: 0n, vtxoMinAmount: 6n }),
                     inventory: {
                         getSpendableVtxos: inventory,
                         getLockedVtxoOutpoints: async () => [],
@@ -302,14 +316,14 @@ describe("createReceiveQuote", () => {
                 }),
                 body(),
             ),
-        ).rejects.toThrow(/split/);
+        ).rejects.toThrow(/positive loan/);
         expect(inventory).not.toHaveBeenCalled();
     });
 
     it.each([
         [body({ extra: true }), /unexpected/],
-        [body({ makerPublicKey: "FF".repeat(32) }), /makerPublicKey/],
-        [body({ makerPublicKey: "ff".repeat(32) }), /makerPublicKey/],
+        [body({ senderKey: "FF".repeat(32) }), /senderKey/],
+        [body({ senderKey: "ff".repeat(32) }), /senderKey/],
         [
             body({ receiverAddress: new ArkAddress(serverKey, receiverKey, "tark").encode() }),
             /network/,
@@ -333,7 +347,7 @@ describe("createReceiveQuote", () => {
     it.each<[FarePricing, string]>([
         [{ kind: "flat", units: 0n }, "0"],
         [{ kind: "flat", units: 9n }, "9"],
-        [{ kind: "proportional", bps: 1_000, minUnits: 0n, maxUnits: null }, "32"],
+        [{ kind: "proportional", bps: 1_000, minUnits: 0n, maxUnits: null }, "33"],
     ])("accepts sats fare pricing %#", async (pricing, units) => {
         configure({ assetRules: [rule(pricing)] });
         expect((await createReceiveQuote(deps(), body())).fare.units).toBe(units);
@@ -509,7 +523,7 @@ describe("createReceiveQuote: payer receiver", () => {
 
     it("omits payer, receiverFare and unclaimedMode for a sender-paid request", async () => {
         const quote = await createReceiveQuote(deps(), body());
-        expect(quote.params.topup).toBe("329");
+        expect(quote.params.topup).toBe("330");
         for (const k of ["payer", "receiverFare", "unclaimedMode"]) expect(k in quote).toBe(false);
     });
 
@@ -595,7 +609,7 @@ describe("getReceiveQuote", () => {
         const world = await createBoundJointFill();
         try {
             const read = getReceiveQuote(
-                { receiveQuotes: world.receiveQuotes, now: () => NOW },
+                { receiveQuotes: world.receiveQuotes, now: () => NOW, config: world.config },
                 "receive-1",
             );
             expect(read.state).toBe("bound");

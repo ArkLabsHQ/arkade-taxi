@@ -33,17 +33,16 @@ export {
 } from "./reservations.js";
 export { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "./schema.js";
 export {
-    SwapFillRepository,
-    SwapFillClaimError,
-    SwapFillReservationConflictError,
-    type SwapFill,
-    type SwapFillAssetId,
-    type SwapFillFare,
-    type SwapFillGraph,
-    type SwapFillOutpoint,
-    type SwapFillSolverInput,
-    type SwapFillState,
-} from "./swapFills.js";
+    FillRepository,
+    FillClaimError,
+    FillReservationConflictError,
+    type Fill,
+    type FillAssetId,
+    type FillFare,
+    type FillGraph,
+    type FillOutpoint,
+    type FillState,
+} from "./fills.js";
 export { assetRulesFromJson, assetRulesToJson } from "./assetRules.js";
 export type { Database } from "better-sqlite3";
 export { assertNativeAccess, withSdkAccess, DatabaseBusyError } from "./coordination.js";

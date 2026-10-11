@@ -93,7 +93,6 @@ const coin = (value: number, assets: ExtendedVirtualCoin["assets"] = []) =>
         expiresAtHeight: 900_000,
         createdAt: new Date(NOW * 1000),
         status: { confirmed: false },
-        virtualStatus: { state: "preconfirmed" },
         isSpent: false,
         isSwept: false,
         isUnrolled: false,

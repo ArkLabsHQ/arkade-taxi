@@ -1,9 +1,10 @@
 # Runbook
 
-Run one Taxi process with persistent SQLite storage. Taxi guarantees that its
-covenant VTXOs are recovered before batch expiry: operate the recovery worker,
-maintain its dependencies and act on headroom alerts before the execution
-budget runs out. The deployed Arkade Service's special covenant settlement is
+Run one Taxi process with persistent SQLite storage. A covenant's reclaim CLTV
+is a wall-clock deadline measured from the quote and outlives the funding coins,
+so what races their batch expiry is the renewal, not the reclaim: operate the
+recovery worker, keep renewals current, and act on headroom alerts before the
+execution budget runs out. The deployed Arkade Service's special covenant settlement is
 an external assumption. Taxi does not implement that settlement, and a
 dedicated upstream forfeit mechanism is outside this service's scope.
 
@@ -69,6 +70,23 @@ through the production logger. The stream still returns only a generic error;
 raw claims, receiver keys, proofs and exception payloads are not logged.
 
 ## Deployment
+
+### Fill cutover and rollback
+
+Migration 18 replaces the swap-fill rail and drops its legacy tables. Before
+starting the new image, stop admission, resolve existing swap-fill liabilities,
+and capture the complete SQLite database, operator policy and current image
+digest. Deploy clients that understand `senderKey`, published operator funding
+and `/v1/fills` together with the server. The strict decoder rejects old quotes.
+
+Keep the backup until settlement and recovery are verified. Rollback stops the
+new process and restores the database, policy and previous image together;
+running the previous image against the migrated database is not a rollback.
+Restore this backup before reopening admission. If new fills have been admitted,
+pause and reconcile their liabilities first; restoring older state would erase
+their submission evidence.
+Merging to `main` triggers deployment, so merge and deployment require the
+operator's explicit go after these artifacts and checks are reviewed.
 
 Build and verify the release before admitting funds:
 
@@ -188,15 +206,18 @@ reserved capacity, `lastSuccessfulObservationAt`, `lastSuccessfulRecoveryAt`,
 the latest recovery error, `sweeper.nearestDeadline`, `sweeper.blockers` and the
 admin advance list's deadline details.
 
-Deadlines are tagged `height` or `time`. Compare height with verified chain
+Deadlines are tagged `height` or `time`. A covenant's own CLTV is always
+`time`; a funding batch expiry may be either. Compare height with verified chain
 height and time with chain median time past, never wall-clock time or a guessed
 blocks-to-seconds conversion. Warning defaults are 72 blocks or 43,200 seconds
 remaining; critical defaults are 12 blocks or 7,200 seconds. The independent
 minimum admission headroom defaults are 144 blocks and 86,400 seconds.
 
-Alert on `recovery_deadline_warning` and page immediately on
-`recovery_deadline_critical`, `covenant_unspent_at_expiry`, missing clocks,
-quarantined graphs or stale recovery observations. Critical/expired deadlines
+Alert on `recovery_deadline_warning` and `covenant_renewal_missing`, and page
+immediately on `recovery_deadline_critical`, `covenant_renewal_stopped`,
+`covenant_unspent_at_expiry`, missing clocks, quarantined graphs or stale
+recovery observations. A `covenant_renewal_*` code means the coin is nearing
+batch expiry while the reclaim CLTV is still ahead: the remedy is a renewal. Critical/expired deadlines
 automatically pause new admission. Recovery continues while admission is paused
 or inventory is unsafe, provided recovery identities and chain clocks verify.
 

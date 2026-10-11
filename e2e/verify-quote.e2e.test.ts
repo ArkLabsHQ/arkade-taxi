@@ -82,7 +82,7 @@ liveScenario("verify-quote-rejects-tampered-params", async () => {
             [
                 "fare units",
                 (q) => {
-                    q.fare.units = "2";
+                    q.fare.units = "331";
                 },
                 Code.Fee,
             ],

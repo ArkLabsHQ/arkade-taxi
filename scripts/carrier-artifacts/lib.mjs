@@ -21,12 +21,12 @@ export const MANIFEST_PATH = `${VENDOR_DIR}/manifest.json`;
 export const WORKSPACE_FILE = "pnpm-workspace.yaml";
 
 const TS_SDK = "https://github.com/arkade-os/ts-sdk.git";
-const SDK_COMMIT = "f49395ac0c2de9b68a59db54335fe1155f3027d6";
+const SDK_COMMIT = "99313fa7f44edb835c386fb88d1fd64878059683";
 
 // Moving to a new candidate is an edit HERE, so `verify.mjs` refuses an archive
 // whose manifest names any other source.
 export const PINNED_SOURCES = {
-    "@arkade-os/sdk": { repository: TS_SDK, commit: SDK_COMMIT, directory: "packages/ts-sdk" },
+    "@arkade-os/sdk": { repository: TS_SDK, commit: SDK_COMMIT, directory: "packages/sdk" },
     "@arkade-os/swap": { repository: TS_SDK, commit: SDK_COMMIT, directory: "packages/swap" },
 };
 
@@ -52,11 +52,9 @@ export function pinnedSourceMismatch(artifact) {
 
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-// What separates each candidate from the REGISTRY build, and from the stale
-// pre-adc6b329 archives this directory replaces: both symbols were added in
-// adc6b329 and neither older build exports one.
+// These capabilities distinguish the pinned candidates from registry builds.
 export const CANDIDATE_SDK_SYMBOL = "SendDeadlineExceededError";
-export const CANDIDATE_SWAP_SYMBOL = "FundingOutputMismatchError";
+export const CANDIDATE_SWAP_SYMBOL = "buildOfferFillPlan";
 
 export const CANDIDATE_SYMBOLS = {
     "@arkade-os/sdk": CANDIDATE_SDK_SYMBOL,

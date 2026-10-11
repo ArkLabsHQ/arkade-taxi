@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
-import { buildRecycle } from "../src/scripts.js";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { compileV2 } from "../src/v2-artifact.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
 
-const key = (fill: number) => new Uint8Array(32).fill(fill);
+const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
 const assetId: AssetIdRef = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 
 const params: DustCovenantParams = {
@@ -14,45 +15,58 @@ const params: DustCovenantParams = {
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
-    locktime: 800_000n,
+    locktime: 1_800_000_000n,
     assetId,
 };
 
-const decoded = () => arkade.ArkadeScript.decode(buildRecycle(params));
+const ops = (name: string) =>
+    arkade.ArkadeScript.decode(
+        compileV2(params, key(4), key(5)).functionByName(name)!.arkadeScript!,
+    );
 
 /**
- * A miss returns (0, 0). If every lookup DROPped its flag, a wrong AssetID would
- * miss on all three reads, the sum would degenerate to 0 == 0 + 0, and the
- * covenant would pass with the asset clause silently unenforced.
+ * A miss returns (0, 0). If a lookup discarded its flag, a wrong AssetID would
+ * miss on every read, the sum would degenerate to 0 == 0 + 0, and the covenant
+ * would pass with the asset clause silently unenforced.
  */
 describe("asset found-flag consumption", () => {
-    it("VERIFYs exactly the two lookups that must find the asset", () => {
-        expect(decoded().filter((o) => o === "VERIFY")).toHaveLength(2);
+    const consumption = (name: string) => {
+        const o = ops(name);
+        return o.flatMap((op, i) =>
+            op === "INSPECTINASSETLOOKUP" || op === "INSPECTOUTASSETLOOKUP"
+                ? [o[i + 1] === "VERIFY" ? "verify" : `${String(o[i + 1])},${String(o[i + 2])}`]
+                : [],
+        );
+    };
+
+    it("verifies or branches on every recycle lookup's flag, never drops one", () => {
+        expect(consumption("recycle")).toEqual(["verify", "NIP,IF", "verify", "verify", "verify"]);
     });
 
-    it("DROPs exactly the one lookup that may legitimately miss", () => {
-        expect(decoded().filter((o) => o === "DROP")).toHaveLength(1);
+    it("verifies or branches on every repayRefund lookup's flag", () => {
+        expect(consumption("repayRefund")).toEqual(["NIP,IF", "verify", "verify", "verify"]);
     });
 
-    it("DROPs the receiver's prior-balance lookup, not a required one", () => {
-        const ops = decoded();
-        const dropIndex = ops.indexOf("DROP");
-        expect(ops[dropIndex - 1]).toBe("INSPECTINASSETLOOKUP");
-        expect(ops[dropIndex - 4]).toBe(1);
+    it.each(["purchase", "reclaimWhole"])("verifies both %s lookups", (name) => {
+        expect(consumption(name)).toEqual(["verify", "verify"]);
     });
 });
 
 /**
- * recycle reads a second input, so without this guard a spender could add an
- * input and divert the covenant. purchase deliberately omits it because it reads
- * only in[0].
+ * recycle and repayRefund read a second input, so without this guard a spender
+ * could add an input and divert the covenant. purchase and reclaimWhole
+ * deliberately omit it because they read only in[0].
  */
 describe("input count guard", () => {
-    it("pins numInputs to exactly 2", () => {
-        const ops = decoded();
-        const i = ops.indexOf("INSPECTNUMINPUTS");
+    it.each(["recycle", "repayRefund"])("pins %s to exactly 2 inputs", (name) => {
+        const o = ops(name);
+        const i = o.indexOf("INSPECTNUMINPUTS");
         expect(i).toBeGreaterThanOrEqual(0);
-        expect(ops[i + 1]).toBe(2);
-        expect(ops[i + 2]).toBe("EQUALVERIFY");
+        expect(o[i + 1]).toBe(2);
+        expect(o[i + 2]).toBe("EQUALVERIFY");
+    });
+
+    it.each(["purchase", "reclaimWhole"])("leaves %s unpinned", (name) => {
+        expect(ops(name)).not.toContain("INSPECTNUMINPUTS");
     });
 });

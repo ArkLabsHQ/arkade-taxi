@@ -12,7 +12,7 @@ import { PolicyRepository } from "../src/policy.js";
 const ABOVE_MAX_SAFE = 9_007_199_254_740_993n; // 2^53 + 1
 const INT64_MAX = 9_223_372_036_854_775_807n;
 
-const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
+const DEADLINE = 1_757_000_000n + 8_640_000n;
 
 function advance(overrides: Partial<Advance> = {}): Advance {
     const result: Advance = {
@@ -25,8 +25,7 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         exitDelay: { value: 5n, type: "blocks" },
         dust: 330n,
         topup: 300n,
-        locktime: 850_000n,
-        batchExpiry: { kind: "height", value: INT64_MAX },
+        locktime: DEADLINE,
         operatorInputs: [{ txid: "ab".repeat(32), vout: 7 }],
         unsignedLockupTx: "unsigned-lockup",
         unsignedLockupId: "cd".repeat(32),
@@ -37,13 +36,6 @@ function advance(overrides: Partial<Advance> = {}): Advance {
         expiresAt: 1_757_000_600,
         ...overrides,
     };
-    // A v2 advance keeps no batch expiry and its CLTV is wall-clock, so the two
-    // move together: a fixture cannot pick one without the other.
-    if (result.covenantVersion === 2 && overrides.locktime === undefined) {
-        result.locktime = V2_DEADLINE;
-        delete result.batchExpiry;
-        delete result.recoveryLocktime;
-    }
     result.recoveryLocktime ??= {
         kind: result.batchExpiry?.kind ?? "time",
         value: result.locktime,
@@ -76,20 +68,15 @@ describe("round-trip fidelity", () => {
         expect(repo.get("receiver")?.recoveryRecipient).toBe("receiver");
     });
 
-    it("round-trips the covenant version, leaving a legacy advance without one", () => {
-        repo.insert(advance({ id: "legacy" }));
-        repo.insert(advance({ id: "v2", covenantVersion: 2 }));
+    it("stores no covenant version column, there being one covenant", () => {
+        repo.insert(advance({ id: "adv" }));
 
-        expect(repo.get("legacy")?.covenantVersion).toBeUndefined();
-        expect(repo.get("v2")?.covenantVersion).toBe(2);
         expect(
             db
-                .prepare<[], { covenant_version: bigint | null }>(
-                    "SELECT covenant_version FROM advances WHERE id = 'v2'",
-                )
-                .safeIntegers(true)
-                .get(),
-        ).toEqual({ covenant_version: 2n });
+                .prepare<[string], { name: string }>("SELECT name FROM pragma_table_info(?)")
+                .all("advances")
+                .map((r) => r.name),
+        ).not.toContain("covenant_version");
     });
 
     it("round-trips a receiver fare through the advance row", () => {
@@ -472,14 +459,14 @@ describe("round-trip fidelity", () => {
         },
     );
 
-    it.each([849_999n, 850_000n])(
-        "refuses expiry at or before locktime: %s",
-        (batchExpiryHeight) => {
-            expect(() =>
-                repo.insert(advance({ batchExpiry: { kind: "height", value: batchExpiryHeight } })),
-            ).toThrow(/batch.*expiry/i);
-        },
-    );
+    it.each([
+        ["height", 850_000n],
+        ["time", INT64_MAX],
+    ] as const)("refuses a covenant advance carrying a %s batch expiry", (kind, value) => {
+        expect(() => repo.insert(advance({ batchExpiry: { kind, value } }))).toThrow(
+            /batch.*expiry/i,
+        );
+    });
     it("returns every field of a bitcoin-variant advance unchanged", () => {
         const a = advance({
             outpoint: { txid: "ab".repeat(32), vout: 3 },
@@ -497,7 +484,6 @@ describe("round-trip fidelity", () => {
             topup: ABOVE_MAX_SAFE - 1n,
             fare: { currency: "sats" as const, units: INT64_MAX },
             locktime: ABOVE_MAX_SAFE + 2n,
-            batchExpiry: { kind: "time", value: INT64_MAX },
         });
 
         repo.insert(a);
@@ -599,17 +585,10 @@ describe("round-trip fidelity", () => {
 
 describe("queries", () => {
     it("does not compare timestamp recovery with chain height", () => {
-        repo.insert(
-            advance({
-                id: "timed",
-                state: "locked",
-                locktime: 1789132000n,
-                batchExpiry: { kind: "time", value: 1789132933n },
-            }),
-        );
-        expect(repo.listSweepable(200n)).toEqual([]);
-        expect(repo.listSweepable(200n, 1789131999n)).toEqual([]);
-        expect(repo.listSweepable(200n, 1789132000n).map((a) => a.id)).toEqual(["timed"]);
+        repo.insert(advance({ id: "timed", state: "locked" }));
+        expect(repo.listSweepable(INT64_MAX)).toEqual([]);
+        expect(repo.listSweepable(200n, DEADLINE - 1n)).toEqual([]);
+        expect(repo.listSweepable(200n, DEADLINE).map((a) => a.id)).toEqual(["timed"]);
     });
     it("selects by state", () => {
         repo.insert(advance({ id: "q1", state: "quoted" }));
@@ -636,90 +615,50 @@ describe("queries", () => {
     });
 
     it("lists sweepable advances oldest locktime first, matured only", () => {
-        repo.insert(advance({ id: "late", state: "locked", locktime: 900n }));
-        repo.insert(advance({ id: "early", state: "locked", locktime: 700n }));
-        repo.insert(advance({ id: "due", state: "locked", locktime: 800n }));
-        repo.insert(advance({ id: "unlocked", state: "quoted", locktime: 700n }));
+        repo.insert(advance({ id: "late", state: "locked", locktime: DEADLINE + 200n }));
+        repo.insert(advance({ id: "early", state: "locked", locktime: DEADLINE }));
+        repo.insert(advance({ id: "due", state: "locked", locktime: DEADLINE + 100n }));
+        repo.insert(advance({ id: "unlocked", state: "quoted", locktime: DEADLINE }));
 
-        expect(repo.listSweepable(800n).map((a) => a.id)).toEqual(["early", "due"]);
-        expect(repo.listSweepable(699n)).toEqual([]);
+        expect(repo.listSweepable(0n, DEADLINE + 100n).map((a) => a.id)).toEqual(["early", "due"]);
+        expect(repo.listSweepable(0n, DEADLINE - 1n)).toEqual([]);
     });
 
-    // D2: a v2 advance stores no batch expiry, so the sweep picks it on its own
-    // time-domain deadline. Without this it never sweeps and the Taxi never
-    // reclaims its lent dust.
-    it("sweeps a matured v2 deadline, which stores no batch expiry to agree with", () => {
-        repo.insert(advance({ id: "v2-due", state: "locked", covenantVersion: 2 }));
-        repo.insert(advance({ id: "v1-height", state: "locked", locktime: 700n }));
+    it("sweeps a matured deadline, which stores no batch expiry to agree with", () => {
+        repo.insert(advance({ id: "due", state: "locked" }));
 
-        const row = repo.get("v2-due")!;
+        const row = repo.get("due")!;
         expect(row.batchExpiry).toBeUndefined();
-        expect(row.recoveryLocktime).toEqual({ kind: "time", value: V2_DEADLINE });
-        expect(repo.listSweepable(0n, V2_DEADLINE).map((a) => a.id)).toEqual(["v2-due"]);
-        expect(repo.listSweepable(0n, V2_DEADLINE - 1n)).toEqual([]);
+        expect(row.recoveryLocktime).toEqual({ kind: "time", value: DEADLINE });
+        expect(repo.listSweepable(0n, DEADLINE).map((a) => a.id)).toEqual(["due"]);
+        expect(repo.listSweepable(0n, DEADLINE - 1n)).toEqual([]);
     });
 
-    it("quarantines a v2 row that stored a batch expiry, and not one that did not", () => {
-        repo.insert(advance({ id: "v2-ok", state: "locked", covenantVersion: 2 }));
-        repo.insert(advance({ id: "v1-ok", state: "locked" }));
+    it("quarantines a covenant row that stored a batch expiry", () => {
+        repo.insert(advance({ id: "ok", state: "locked" }));
         expect(repo.listMissingFundingSnapshotIds()).toEqual([]);
 
         db.prepare(
-            "UPDATE advances SET batch_expiry_kind = 'time', batch_expiry_value = ? WHERE id = 'v2-ok'",
-        ).run(V2_DEADLINE + 1n);
-        expect(repo.listMissingFundingSnapshotIds()).toEqual(["v2-ok"]);
+            "UPDATE advances SET batch_expiry_kind = 'time', batch_expiry_value = ? WHERE id = 'ok'",
+        ).run(DEADLINE + 1n);
+        expect(repo.listMissingFundingSnapshotIds()).toEqual(["ok"]);
     });
 
-    it("orders each tagged domain by expiry then locktime with a fixed kind tie order", () => {
-        repo.insert(
-            advance({
-                id: "height-later-expiry",
-                state: "locked",
-                locktime: 600n,
-                batchExpiry: { kind: "height", value: 1_200n },
-            }),
-        );
-        repo.insert(
-            advance({
-                id: "height-earlier-expiry",
-                state: "locked",
-                locktime: 700n,
-                batchExpiry: { kind: "height", value: 1_100n },
-            }),
-        );
-        repo.insert(
-            advance({
-                id: "time",
-                state: "locked",
-                locktime: 1_789_132_000n,
-                batchExpiry: { kind: "time", value: 1_789_133_000n },
-            }),
-        );
+    it("orders by locktime then id, one domain being all that is left", () => {
+        repo.insert(advance({ id: "b-tie", state: "locked", locktime: DEADLINE + 100n }));
+        repo.insert(advance({ id: "a-tie", state: "locked", locktime: DEADLINE + 100n }));
+        repo.insert(advance({ id: "early", state: "locked", locktime: DEADLINE }));
 
-        expect(repo.listSweepable(800n, 1_789_132_000n).map((a) => a.id)).toEqual([
-            "height-earlier-expiry",
-            "height-later-expiry",
-            "time",
+        expect(repo.listSweepable(0n, DEADLINE + 100n).map((a) => a.id)).toEqual([
+            "early",
+            "a-tie",
+            "b-tie",
         ]);
     });
 
     it("compares locktimes above 2^53 without collapsing them", () => {
-        repo.insert(
-            advance({
-                id: "under",
-                state: "locked",
-                locktime: ABOVE_MAX_SAFE,
-                batchExpiry: { kind: "time", value: INT64_MAX },
-            }),
-        );
-        repo.insert(
-            advance({
-                id: "over",
-                state: "locked",
-                locktime: ABOVE_MAX_SAFE + 1n,
-                batchExpiry: { kind: "time", value: INT64_MAX },
-            }),
-        );
+        repo.insert(advance({ id: "under", state: "locked", locktime: ABOVE_MAX_SAFE }));
+        repo.insert(advance({ id: "over", state: "locked", locktime: ABOVE_MAX_SAFE + 1n }));
 
         expect(repo.listSweepable(200n, ABOVE_MAX_SAFE).map((a) => a.id)).toEqual(["under"]);
     });
@@ -1121,7 +1060,14 @@ describe("update", () => {
 
 describe("exposureTotals", () => {
     const sponsored = (id: string, state: "locking" | "locked", topup: bigint): Advance => {
-        const row = advance({ id, state, topup, kind: "sponsored", locktime: 0n });
+        const row = advance({
+            id,
+            state,
+            topup,
+            kind: "sponsored",
+            locktime: 0n,
+            batchExpiry: { kind: "height", value: INT64_MAX },
+        });
         delete row.recoveryLocktime;
         return row;
     };

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     ArkAddress,
+    collectIntents,
     Estimator,
     Extension,
     Wallet,
@@ -139,7 +140,7 @@ function setup(
         },
         storage: {
             intentRepository: {
-                getIntents: async () => intents,
+                getIntentsPage: async () => ({ items: intents }),
                 getLockedVtxoOutpoints: async () => sdkLocks,
             },
         },
@@ -204,7 +205,10 @@ function setup(
                 getContractManager: async () => ({ assertAnnotatable: async () => {} }),
                 _addPendingSpends: () => {},
                 _removePendingSpends: () => {},
-                intentRepository: { getIntents: async () => intents, saveIntent: save },
+                intentRepository: {
+                    getIntentsPage: async () => ({ items: intents }),
+                    saveIntent: save,
+                },
                 arkProvider: {
                     getEventStream: async function* () {},
                     registerIntent: async (intent: typeof sdkIntent) => {
@@ -775,7 +779,7 @@ describe("durable proceeds collector", () => {
         const collector = createProceedsCollector(s.deps);
         await collector.tick();
         expect(sdk.register).not.toHaveBeenCalled();
-        const records = await s.deps.runtime.storage.intentRepository.getIntents();
+        const records = await collectIntents(s.deps.runtime.storage.intentRepository);
         s.setIntents([{ ...records[0], registerProof: "unknown-proof" }]);
         s.setOutputs([receipt, spare, carrier]);
         await collector.tick();
@@ -804,7 +808,7 @@ describe("durable proceeds collector", () => {
             );
             expect(sdk.register).not.toHaveBeenCalled();
             expect(sdk.save).toHaveBeenCalledTimes(2);
-            const records = await s.deps.runtime.storage.intentRepository.getIntents();
+            const records = await collectIntents(s.deps.runtime.storage.intentRepository);
             expect(records).toHaveLength(1);
             expect(records[0]).toMatchObject({ state: "cancelled" });
             expect(records[0]!.validUntil).toBeUndefined();
@@ -834,7 +838,7 @@ describe("durable proceeds collector", () => {
         expect(sdk.remove).toHaveBeenCalledTimes(1);
         expect(sdk.save).toHaveBeenCalledTimes(2);
         expect(errors).toHaveBeenCalledTimes(2);
-        expect(await s.deps.runtime.storage.intentRepository.getIntents()).toEqual([]);
+        expect(await collectIntents(s.deps.runtime.storage.intentRepository)).toEqual([]);
         collector.stop();
         s.restartDatabase();
         s.setNow(365 * 86400000);
@@ -881,7 +885,7 @@ describe("durable proceeds collector", () => {
             expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
             expect(s.settle).not.toHaveBeenCalled();
             expect(
-                await s.deps.runtime.storage.intentRepository.getIntents({
+                await collectIntents(s.deps.runtime.storage.intentRepository, {
                     containingInputs: plan.inputs,
                 }),
             ).toEqual([]);
@@ -989,6 +993,46 @@ describe("durable proceeds collector", () => {
         expect(collector.status().blocker).toBeNull();
         expect(s.deps.reservations.listReservedOutpoints()).toEqual([]);
     });
+    it("retains proceeds reservations for a later-page indefinite intent and a subsequent page-read outage", async () => {
+        const s = setup();
+        const repository = s.deps.runtime.storage.intentRepository;
+        const record = {
+            intentTxId: "00".repeat(32),
+            state: "waiting_for_batch" as const,
+            createdAt: 0,
+            updatedAt: 0,
+            registerProof: "register",
+            registerProofMessage: "{}",
+            deleteProof: "delete",
+            deleteProofMessage: "{}",
+            partialForfeits: [],
+            intentVtxos: s.jobs.active()!.plan.inputs,
+        };
+        const pages = vi
+            .spyOn(repository, "getIntentsPage")
+            .mockImplementation(async (filter, page) => {
+                expect(filter).toEqual({ containingInputs: record.intentVtxos });
+                return page.after === undefined
+                    ? { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId }
+                    : { items: [{ ...record, intentTxId: "01".repeat(32) }] };
+            });
+        const collector = createProceedsCollector(s.deps);
+        await collector.tick();
+        expect(pages).toHaveBeenCalledTimes(2);
+        expect(pages.mock.calls[1]![1].after).toBe(record.intentTxId);
+        expect(collector.status().blocker).toBe("proceeds_ambiguous_intent");
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+        pages.mockImplementation(async (_filter, page) => {
+            if (page.after !== undefined) throw new Error("database is locked");
+            return { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId };
+        });
+        await collector.tick();
+        expect(collector.status().blocker).toBe("proceeds_collection_failed");
+        expect(s.settle).not.toHaveBeenCalled();
+        expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
+    });
+
     it("settles explicit reserved inputs to one exact wallet output", async () => {
         const s = setup();
         const collector = createProceedsCollector(s.deps);
@@ -1155,118 +1199,125 @@ describe("durable proceeds collector", () => {
         expect(changed.settle).not.toHaveBeenCalled();
         expect(changed.jobs.submissionEvidence("job").state).toBe("unsubmitted");
     });
-    it("scans a legacy terminal advance and skips a v2 one", async () => {
+    it("fails closed on a terminal advance whose payout key moved", async () => {
         const s = setup();
-        const row = advance({
-            state: "refunded",
-            operatorKey: receiverKey,
-            arkTxid: receipt.txid,
-            spentTxid: "cd".repeat(32),
-            outpoint: { txid: receipt.txid, vout: 0 },
-        });
-        let rows = [row];
+        const rows = [
+            advance({
+                state: "refunded",
+                operatorKey: receiverKey,
+                arkTxid: receipt.txid,
+                spentTxid: "cd".repeat(32),
+                outpoint: { txid: receipt.txid, vout: 0 },
+            }),
+        ];
         s.deps.advances = {
             byState: (state: string) => (state === "refunded" ? rows : []),
         } as never;
         await expect(discoverProceeds(s.deps, [receipt])).rejects.toThrow(
             "proceeds_payout_key_changed",
         );
-        rows = [{ ...row, covenantVersion: 2 }];
-        expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
     });
 
-    it("discovers only the unspent fare from a verified sponsored lockup", async () => {
-        const s = setup();
-        expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
-        const receiverAddress = new ArkAddress(
-            cfg.serverPubkey,
-            receiverKey,
-            cfg.addressHrp,
-        ).encode();
-        const fare = { currency: "sats" as const, units: 10n };
-        const encoded = buildSponsoredEnvelope(
-            {
-                advanceId: "sponsored-1",
-                senderInputs: [
-                    {
-                        txid: "ac".repeat(32),
-                        vout: 0,
-                        value: 1000n,
-                        tapTree: senderTree.encode(),
-                        spendLeaf: senderTree.scripts[0],
-                        expiry: { kind: "height", value: 900000n },
+    // At 330 the fare output reaches dust, so operator change rides on it.
+    it.each([
+        [10n, 10n],
+        [330n, 2320n],
+    ])(
+        "discovers only the unspent %s-sat fare from a verified sponsored lockup",
+        async (units, receiptSats) => {
+            const s = setup();
+            expect(await discoverProceeds(s.deps, [receipt])).toEqual([]);
+            const receiverAddress = new ArkAddress(
+                cfg.serverPubkey,
+                receiverKey,
+                cfg.addressHrp,
+            ).encode();
+            const fare = { currency: "sats" as const, units };
+            const encoded = buildSponsoredEnvelope(
+                {
+                    advanceId: "sponsored-1",
+                    senderInputs: [
+                        {
+                            txid: "ac".repeat(32),
+                            vout: 0,
+                            value: 1000n,
+                            tapTree: senderTree.encode(),
+                            spendLeaf: senderTree.scripts[0],
+                            expiry: { kind: "height", value: 900000n },
+                        },
+                    ],
+                    senderSats: 1000n,
+                    funding: {
+                        inputs: [carrier],
+                        totalValue: 2000n,
+                        batchExpiry: { kind: "height", value: 900000n },
                     },
-                ],
-                senderSats: 1000n,
-                funding: {
-                    inputs: [carrier],
-                    totalValue: 2000n,
-                    batchExpiry: { kind: "height", value: 900000n },
+                    params: {
+                        receiverKey,
+                        senderKey,
+                        operatorKey: cfg.operatorKey,
+                        dust: cfg.dust,
+                        contribution: 10n,
+                    },
+                    receiverAddress,
+                    fare,
+                    satsFarePayer: "sender",
                 },
-                params: {
-                    receiverKey,
-                    senderKey,
-                    operatorKey: cfg.operatorKey,
-                    dust: cfg.dust,
-                    contribution: 10n,
-                },
-                receiverAddress,
+                cfg,
+                serverUnroll,
+            );
+            const envelope = decodeLockupEnvelope(encoded);
+            const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
+            const locked = advance({
+                id: "sponsored-1",
+                kind: "sponsored",
+                operatorKey: cfg.operatorKey,
+                topup: 10n,
+                locktime: 0n,
+                batchExpiry: { kind: "height", value: 900000n },
+                operatorInputs: [{ txid: carrier.txid, vout: carrier.vout }],
+                unsignedLockupTx: encoded,
+                unsignedLockupId: envelope.unsignedTxId,
+                covenantAddress: receiverAddress,
                 fare,
-                satsFarePayer: "sender",
-            },
-            cfg,
-            serverUnroll,
-        );
-        const envelope = decodeLockupEnvelope(encoded);
-        const tx = Transaction.fromPSBT(base64.decode(envelope.arkTx));
-        const locked = advance({
-            id: "sponsored-1",
-            kind: "sponsored",
-            operatorKey: cfg.operatorKey,
-            topup: 10n,
-            locktime: 0n,
-            batchExpiry: { kind: "height", value: 900000n },
-            operatorInputs: [{ txid: carrier.txid, vout: carrier.vout }],
-            unsignedLockupTx: encoded,
-            unsignedLockupId: envelope.unsignedTxId,
-            covenantAddress: receiverAddress,
-            fare,
-            arkTxid: tx.id,
-            outpoint: { txid: tx.id, vout: envelope.covenantOutputIndex },
-        });
-        const advances = new AdvanceRepository(s.db);
-        s.deps.advances = advances;
-        advances.insert(locked);
-        const fareCoin = fundingCoin({
-            txid: tx.id,
-            vout: 1,
-            value: Number(tx.getOutput(1).amount),
-            isSwept: true,
-        });
-        let observed = fareCoin;
-        s.deps.runtime.providers.indexerProvider.getVtxos = async () => ({ vtxos: [observed] });
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([fareCoin]);
-        for (const [changed, code] of [
-            [{ ...locked, operatorKey: receiverKey }, "proceeds_payout_key_changed"],
-            [{ ...locked, arkTxid: "ee".repeat(32) }, "proceeds_lockup_mismatch"],
-            [
-                { ...locked, outpoint: { txid: "ee".repeat(32), vout: 0 } },
-                "proceeds_lockup_mismatch",
-            ],
-            [{ ...locked, outpoint: { txid: tx.id, vout: 1 } }, "proceeds_lockup_mismatch"],
-        ] as const) {
-            advances.update(changed);
-            await expect(
-                discoverProceeds(s.deps, [{ ...fareCoin, txid: changed.arkTxid! }]),
-            ).rejects.toThrow(code);
-        }
-        advances.update(locked);
-        observed = { ...fareCoin, vout: 2 };
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
-        observed = { ...fareCoin, isSpent: true };
-        expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
-        expect(s.settle).not.toHaveBeenCalled();
-    });
+                arkTxid: tx.id,
+                outpoint: { txid: tx.id, vout: envelope.covenantOutputIndex },
+            });
+            const advances = new AdvanceRepository(s.db);
+            s.deps.advances = advances;
+            advances.insert(locked);
+            expect(tx.getOutput(1).amount).toBe(receiptSats);
+            const fareCoin = fundingCoin({
+                txid: tx.id,
+                vout: 1,
+                value: Number(tx.getOutput(1).amount),
+                isSwept: true,
+            });
+            let observed = fareCoin;
+            s.deps.runtime.providers.indexerProvider.getVtxos = async () => ({ vtxos: [observed] });
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([fareCoin]);
+            for (const [changed, code] of [
+                [{ ...locked, operatorKey: receiverKey }, "proceeds_payout_key_changed"],
+                [{ ...locked, arkTxid: "ee".repeat(32) }, "proceeds_lockup_mismatch"],
+                [
+                    { ...locked, outpoint: { txid: "ee".repeat(32), vout: 0 } },
+                    "proceeds_lockup_mismatch",
+                ],
+                [{ ...locked, outpoint: { txid: tx.id, vout: 1 } }, "proceeds_lockup_mismatch"],
+            ] as const) {
+                advances.update(changed);
+                await expect(
+                    discoverProceeds(s.deps, [{ ...fareCoin, txid: changed.arkTxid! }]),
+                ).rejects.toThrow(code);
+            }
+            advances.update(locked);
+            observed = { ...fareCoin, vout: 2 };
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
+            observed = { ...fareCoin, isSpent: true };
+            expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
+            expect(s.settle).not.toHaveBeenCalled();
+        },
+    );
 });
 
 describe("plain inventory bootstrap", () => {
@@ -1635,7 +1686,7 @@ describe("inventory split database fencing", () => {
                 expiresAt: 160,
             }),
             expectedPolicyRevision: policy.getSnapshot().revision,
-            recoveryExecutionBudget: { kind: "height", value: 0n },
+            recoveryExecutionBudget: { kind: "time", value: 0n },
         });
     };
     it("prevents a quote from acquiring an input owned by a durable split job", () => {

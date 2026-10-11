@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
 import { assetIdToWire } from "@arkade-taxi/protocol";
-import { swapIdToTaxiAssetId, taxiAssetIdToSwapId } from "../../src/arkade/swapFillBuilder.js";
+import { taxiAssetId, sdkAssetId } from "@arkade-taxi/client";
 import { PATCHABLE_POLICY_KEYS, POLICY_VOCABULARY } from "../../src/admin/routes.js";
 import { SHOWN_CONFIG } from "../../src/config.js";
 import { openApiDocument } from "../../src/openapi.js";
@@ -83,15 +83,14 @@ const BLOCKER_SOURCES = [
     "app/src/arkade/submit.ts",
     "app/src/reconciler.ts",
     "app/src/watcher.ts",
-    "app/src/swapFillReconciler.ts",
+    "app/src/fillReconciler.ts",
     "app/src/proceeds.ts",
     "db/src/proceeds.ts",
     "db/src/reservations.ts",
 ];
 const NOT_BLOCKERS = new Set([
     ...["not_ready", "recovery_failed", "runtime_unsafe", "shutdown_failed", "shutdown_timeout"],
-    ...["swap_fill_offer_cancelled", "swap_fill_submit_never_invoked", "envelope_conflict"],
-    ...["swap_fill_input_conflict"],
+    ...["fill_submit_never_invoked", "fill_input_conflict", "envelope_conflict"],
     ...["exceeds_max_outstanding", "funding_reservation_invalid", "invalid_state", "not_found"],
     ...["max_concurrent_advances", "policy_changed", "quote_expired", "recovery_budget_invalid"],
     // Refusals of one quote, which the fence raises alongside those above; the
@@ -752,7 +751,7 @@ describe("the dashboard is dependency-free", () => {
             expect(dashboard.element("policy-loaded").textContent).toMatch(/^loaded/),
         );
         // Distinct txid bytes and a group above 255, so byte order shows on both halves.
-        const wallet = taxiAssetIdToSwapId({
+        const wallet = sdkAssetId({
             txid: Uint8Array.from({ length: 32 }, (_, i) => i + 1),
             groupIndex: 300,
         });
@@ -761,7 +760,7 @@ describe("the dashboard is dependency-free", () => {
         dashboard.element("rule-asset").value = wallet;
         dashboard.element("rule-add-asset").fire("click");
         expect(JSON.parse(dashboard.element("assetRules").value)[0].assetId).toEqual(
-            assetIdToWire(swapIdToTaxiAssetId(wallet)),
+            assetIdToWire(taxiAssetId(wallet)),
         );
         expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
 
@@ -769,7 +768,7 @@ describe("the dashboard is dependency-free", () => {
         await vi.waitFor(() =>
             expect(dashboard.element("policy-note").textContent).toBe("request accepted"),
         );
-        expect(admin.policy.get().assetRules[0]!.assetId).toEqual(swapIdToTaxiAssetId(wallet));
+        expect(admin.policy.get().assetRules[0]!.assetId).toEqual(taxiAssetId(wallet));
         expect(dashboard.element("rules-body").children[0]!.children[0]!.title).toBe(wallet);
     });
 
@@ -789,7 +788,7 @@ describe("the dashboard is dependency-free", () => {
                 },
                 coins: [
                     fundingCoin({
-                        assets: [{ assetId: taxiAssetIdToSwapId(token), amount: 1_234_567n }],
+                        assets: [{ assetId: sdkAssetId(token), amount: 1_234_567n }],
                     }),
                 ],
                 boarding,
@@ -817,7 +816,7 @@ describe("the dashboard is dependency-free", () => {
             dashboard
                 .element("funding-assets")
                 .children.map((row) => row.children.map((c) => c.title || c.textContent)),
-        ).toEqual([[taxiAssetIdToSwapId(token), "258", "1 234 567"]]);
+        ).toEqual([[sdkAssetId(token), "258", "1 234 567"]]);
 
         dashboard.element("funding-copy").fire("click");
         dashboard.element("funding-boarding-copy").fire("click");
@@ -1037,7 +1036,7 @@ describe("console coverage", () => {
             assetId: () => {
                 dashboard.element("rule-add-bitcoin").fire("click");
                 dashboard.element("rule-add-any").fire("click");
-                dashboard.element("rule-asset").value = taxiAssetIdToSwapId(TOKEN);
+                dashboard.element("rule-asset").value = sdkAssetId(TOKEN);
                 dashboard.element("rule-add-asset").fire("click");
                 expect(rules().map((rule: { assetId: unknown }) => rule.assetId)).toEqual([
                     null,
@@ -1114,7 +1113,7 @@ describe("console coverage", () => {
 
         set("currency", "token");
         expect(options("pricing")).toEqual(["flat"]);
-        set("token", taxiAssetIdToSwapId(TOKEN));
+        set("token", sdkAssetId(TOKEN));
         set("units", "2");
         dashboard.element("policy-form").fire("submit");
         await vi.waitFor(() =>
@@ -1127,7 +1126,7 @@ describe("console coverage", () => {
                 pricing: { kind: "flat", units: 2n },
             },
         ]);
-        expect(control("token").value).toBe(taxiAssetIdToSwapId(TOKEN));
+        expect(control("token").value).toBe(sdkAssetId(TOKEN));
     });
 
     it("explains every claim mode where it is chosen, and every kind of payment", () => {
@@ -1324,7 +1323,7 @@ describe("setup guidance", () => {
         click("wizard-open");
         expect(dashboard.element("wizard").open).toBe(true);
         dashboard.element("wiz-btc").checked = true;
-        dashboard.element("wiz-assets").value = taxiAssetIdToSwapId({
+        dashboard.element("wiz-assets").value = sdkAssetId({
             txid: new Uint8Array(32).fill(0xab),
             groupIndex: 0,
         });

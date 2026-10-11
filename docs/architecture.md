@@ -25,6 +25,18 @@ because a client cannot re-derive the covenant address without them.
 
 ## Why the service is small
 
+Receive quotes publish the operator's reserved funding and payout script. A
+caller builds and signs a complete graph, then `/v1/fills` validates the
+operator's reserved inputs, repayment covenant and fare. The operator signs
+last and submits without learning swap terms or decoding offers. The swap
+assembler belongs to `@arkade-os/swap`; caller and receiver verify their own
+economics. Transfer and sponsored-transfer builders remain operator-owned.
+
+Fill reconciliation observes the persisted graph after a restart or lost
+reply. Settlement requires the exact covenant and operator payouts. A graph
+with an ambiguous provider outcome keeps its reservations until settlement or
+proof of a conflicting spend; its unresolved liability gates readiness.
+
 Because the operator cannot censor a claim, the API surface is minimal: quote,
 lockup, status. Claim and refund have no endpoints at all — they are client-side
 by construction. The service watches for the spend and reconciles its ledger.

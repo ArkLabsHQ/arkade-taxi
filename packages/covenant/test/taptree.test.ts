@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-    CLTVMultisigTapscript,
-    CSVMultisigTapscript,
-    MultisigTapscript,
-    VtxoScript,
-    arkade,
-} from "@arkade-os/sdk";
+import { CSVMultisigTapscript, MultisigTapscript, VtxoScript, arkade } from "@arkade-os/sdk";
 import { p2tr, TAPROOT_UNSPENDABLE_KEY, taprootListToTree } from "@scure/btc-signer";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
 import { DustCovenantScript, Leaf } from "../src/vtxo.js";
+import { compileV2 } from "../src/v2-artifact.js";
 import type { DustCovenantParams } from "../src/params.js";
 
 // Real curve points. computeArkadeScriptPublicKey lifts the emulator key to do
@@ -24,17 +19,8 @@ const params = (): DustCovenantParams => ({
     exitDelay: { value: 86_016n, type: "seconds" },
     dust: 330n,
     topup: 330n,
-    locktime: 800_000n,
+    locktime: 1_800_000_000n,
 });
-
-// Captured at f3de5de from this fixture, before leaf 4 existed.
-const GOLDEN_SCRIPTS = [
-    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad20f09b70026fd7394d4743912128010bb87b1fbd3823a7d09bc93df2bb6d34ee9aac",
-    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad207049caabf9dcc7c2de3d96a5d66dfae4fb883334849918f694e8ed69989283deac",
-    "20462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad204d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766ad2090522dd225ac25761e75cc5cdd93e40c1738d47bb683aeeaf6bec4dea5e95296ac",
-    "0300350cb17520462779ad4aad39514614751a71085f2f10e1c7a593e4e030efb5b8721ce55b0bad2090522dd225ac25761e75cc5cdd93e40c1738d47bb683aeeaf6bec4dea5e95296ac",
-];
-const GOLDEN_PK_SCRIPT = "51203aace253edc3274123e0aff6eb4eb16d9bfcf5dc1d60a2cc38ff45f5bcd28e9e";
 
 const opts = (p: DustCovenantParams = params()) => ({
     serverKey: key(4),
@@ -44,9 +30,15 @@ const opts = (p: DustCovenantParams = params()) => ({
 });
 
 describe("DustCovenantScript", () => {
-    it("has five leaves in the order that fixes the merkle root", () => {
+    it("builds six leaves from params with no version field, renew at leaf 5", () => {
         const s = new DustCovenantScript(opts());
-        expect(s.scripts).toHaveLength(5);
+        expect(s.scripts).toHaveLength(6);
+        expect(s.scripts[Leaf.Renew]).toEqual(
+            compileV2(params(), key(4), key(5)).functionByName("renew")!.leafScript,
+        );
+    });
+
+    it("has its leaves in the order that fixes the merkle root", () => {
         expect(Leaf.Recycle).toBe(0);
         expect(Leaf.Recovery).toBe(3);
         expect(Leaf.Exit).toBe(4);
@@ -62,7 +54,7 @@ describe("DustCovenantScript", () => {
         const a = new DustCovenantScript(opts()).pkScript;
         const b = new DustCovenantScript({
             ...opts(),
-            params: { ...params(), topup: 300n },
+            params: { ...params(), dust: 300n, topup: 300n },
         }).pkScript;
         expect(a).not.toEqual(b);
     });
@@ -70,14 +62,6 @@ describe("DustCovenantScript", () => {
     it("derives a bech32m Arkade address", () => {
         const s = new DustCovenantScript(opts());
         expect(s.address("ark", key(4)).encode()).toMatch(/^ark1/);
-    });
-
-    it("exposes the three covenant scripts it committed to", () => {
-        expect(Object.keys(new DustCovenantScript(opts()).covenant).sort()).toEqual([
-            "purchase",
-            "recycle",
-            "refund",
-        ]);
     });
 });
 
@@ -92,14 +76,15 @@ describe("claim mode is committed to by the tree", () => {
         expect(legacy.scripts).toEqual(new DustCovenantScript(opts()).scripts);
     });
 
-    it("keeps all five leaf indexes in place for every mode", () => {
+    it("keeps all six leaf indexes in place for every mode", () => {
         for (const script of [legacy, recycleOnly, purchaseOnly]) {
-            expect(script.scripts).toHaveLength(5);
+            expect(script.scripts).toHaveLength(6);
             expect(Leaf.Recycle).toBe(0);
             expect(Leaf.Purchase).toBe(1);
             expect(Leaf.RefundSender).toBe(2);
             expect(Leaf.Recovery).toBe(3);
             expect(Leaf.Exit).toBe(4);
+            expect(Leaf.Renew).toBe(5);
         }
     });
 
@@ -113,6 +98,7 @@ describe("claim mode is committed to by the tree", () => {
         expect(recycleOnly.scripts[Leaf.Recycle]).toEqual(legacy.scripts[Leaf.Recycle]);
         expect(recycleOnly.scripts[Leaf.RefundSender]).toEqual(legacy.scripts[Leaf.RefundSender]);
         expect(recycleOnly.scripts[Leaf.Recovery]).toEqual(legacy.scripts[Leaf.Recovery]);
+        expect(recycleOnly.scripts[Leaf.Renew]).toEqual(legacy.scripts[Leaf.Renew]);
         expect(purchaseOnly.scripts[Leaf.Purchase]).toEqual(legacy.scripts[Leaf.Purchase]);
     });
 
@@ -149,54 +135,8 @@ describe("claim mode is committed to by the tree", () => {
     });
 });
 
-describe("covenant v2", () => {
-    const legacy = new DustCovenantScript(opts());
-    const v2 = new DustCovenantScript(
-        opts({ ...params(), locktime: 1_800_000_000n, covenantVersion: 2 }),
-    );
-    const pathLengths = (s: DustCovenantScript) =>
-        s.scripts.map((leaf) => s.findLeaf(hex.encode(leaf))[0].merklePath.length);
-    const tweak = (script: Uint8Array) => arkade.computeArkadeScriptPublicKey(key(5), script);
-
-    // A sixth leaf re-balances the individual paths, so height is what holds.
-    it("appends renew without deepening the tree, at a new address", () => {
-        expect(v2.scripts).toHaveLength(6);
-        expect(legacy.scripts).toHaveLength(5);
-        expect(Math.max(...pathLengths(v2))).toBe(Math.max(...pathLengths(legacy)));
-        expect(v2.pkScript).not.toEqual(legacy.pkScript);
-    });
-
-    // Every covenant leaf is compiled from dust_covenant.ark now, so all four
-    // move; only the hand-built exit is shared with v1.
-    it("changes every covenant leaf and keeps the exit", () => {
-        expect(
-            legacy.scripts.map((leaf, i) => hex.encode(leaf) !== hex.encode(v2.scripts[i])),
-        ).toEqual([true, true, true, true, false]);
-    });
-
-    it("commits leaf 2 to the v2 refund and leaf 3 to the reclaim", () => {
-        expect(MultisigTapscript.decode(v2.scripts[Leaf.RefundSender]).params.pubkeys).toEqual([
-            key(4),
-            key(2),
-            tweak(v2.covenant.refund),
-        ]);
-        expect(CLTVMultisigTapscript.decode(v2.scripts[Leaf.Recovery]).params.pubkeys).toEqual([
-            key(4),
-            tweak(v2.covenant.reclaim!),
-        ]);
-    });
-});
-
 describe("unilateral exit leaf", () => {
     const script = () => new DustCovenantScript(opts());
-
-    it("appends the exit at index 4 and leaves 0-3 byte-identical", () => {
-        const s = script();
-        expect(s.scripts).toHaveLength(5);
-        expect(Leaf.Exit).toBe(4);
-        expect(s.scripts.slice(0, 4).map((leaf) => hex.encode(leaf))).toEqual(GOLDEN_SCRIPTS);
-        expect(hex.encode(new VtxoScript(s.scripts.slice(0, 4)).pkScript)).toBe(GOLDEN_PK_SCRIPT);
-    });
 
     it("locks the exit to sender and operator signer at the configured delay", () => {
         const closure = CSVMultisigTapscript.decode(script().scripts[Leaf.Exit]);
@@ -222,8 +162,9 @@ describe("unilateral exit leaf", () => {
 });
 
 // VtxoScript uses btcd's AssembleTaprootScriptTree. @scure/btc-signer's default
-// taprootListToTree is a Huffman builder that only agrees with arkd for
-// power-of-2 leaf counts: it agrees at 4 leaves and not at the covenant's 5.
+// taprootListToTree is a Huffman builder, and the two agree only at some leaf
+// counts: at 4 and at the covenant's 6, but not at 5. Measured, not derived —
+// so a leaf added or removed has to be re-measured here, not reasoned about.
 describe("taptree assembly", () => {
     // Tapscript leaves, not scriptPubKeys: <32-byte key> OP_CHECKSIG.
     const leaves = (n: number) =>
@@ -237,11 +178,13 @@ describe("taptree assembly", () => {
             true,
         ).script;
 
-    it("agrees with the Huffman builder at four leaves", () => {
-        expect(new VtxoScript(leaves(4)).pkScript).toEqual(huffman(leaves(4)));
-    });
-
-    it("DIVERGES from the Huffman builder at five leaves", () => {
-        expect(new VtxoScript(leaves(5)).pkScript).not.toEqual(huffman(leaves(5)));
+    it.each([
+        [4, true],
+        [5, false],
+        [6, true],
+    ])("at %i leaves, agreement with the Huffman builder is %s", (n, agrees) => {
+        const same = new VtxoScript(leaves(n)).pkScript;
+        if (agrees) expect(same).toEqual(huffman(leaves(n)));
+        else expect(same).not.toEqual(huffman(leaves(n)));
     });
 });

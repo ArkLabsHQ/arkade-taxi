@@ -49,6 +49,8 @@ export function admit(
     // spendable coin; a bitcoin payment rides beside it in the covenant.
     const topup = dust;
     const paymentSats = isBitcoinTransfer ? (req.paymentSats ?? req.senderSats) : 0n;
+    // Tighter than the covenant on purpose: the reclaim leaf holds the payer's
+    // sats until the deadline, so admission bounds how much can sit there.
     if (
         (paymentSats !== 0n || req.paymentSats !== undefined) &&
         (paymentSats < vtxoMinAmount || paymentSats >= dust || paymentSats > req.senderSats)
@@ -89,6 +91,9 @@ export function admit(
     // Lend anyway and say so: refusing here would strand a payer over a
     // liability the operator chose to take on. One line flips it to a refusal.
     const warnings: AdmissionWarning[] = [];
+    const headroomSats = policy.maxOutstandingSats - (exposure.outstandingSats + topup);
+    if (headroomSats * 10n < policy.maxOutstandingSats)
+        warnings.push({ code: "exposure_nearing_cap", headroomSats });
     if (lending) {
         const coverageSats = lending.solvency.coverageSats - topup;
         if (coverageSats < 0n)

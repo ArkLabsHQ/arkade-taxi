@@ -8,6 +8,7 @@ import {
     VtxoScript,
     asset,
     canSpendOffchain,
+    collectIntents,
     type ExtendedVirtualCoin,
     type VirtualCoin,
     type IntentFeeConfig,
@@ -15,7 +16,7 @@ import {
     type TimeHeight,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
-import { recycleFare, refundTopup, type AssetIdRef } from "@arkade-taxi/covenant";
+import { loanSats, lockupSats, recycleFare, type AssetIdRef } from "@arkade-taxi/covenant";
 import { advanceKind, covenantParamsOf, type Advance, type Outpoint } from "@arkade-taxi/core";
 import type {
     AdvanceRepository,
@@ -23,7 +24,6 @@ import type {
     ProceedsPlan,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
 } from "@arkade-taxi/db";
 import type { RuntimeConfig } from "./config.js";
 import {
@@ -510,7 +510,6 @@ interface Deps {
     runtime: ReturnType<typeof createOperatorRuntime>;
     advances: Pick<AdvanceRepository, "byState">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints">;
-    swapFills?: Pick<SwapFillRepository, "listReservedOutpoints">;
     receiveQuotes?: Pick<ReceiveQuoteRepository, "listReservedOutpoints">;
     jobs: ProceedsRepository;
     now?: () => number;
@@ -582,14 +581,12 @@ export async function discoverProceeds(
             fail("proceeds_receipt_mismatch");
         found.set(key(point), candidate);
     };
-    const checkFare = (advance: Advance) =>
+    // Operator change rides on the fare output when a separate one would repeat
+    // its script, so the sats come from the validated graph, not the fare alone.
+    const checkFare = (advance: Advance, lockup: Transaction) =>
         check(
             { txid: advance.arkTxid!, vout: 1 },
-            advance.fare.currency === "sats"
-                ? advance.fare.units
-                : advance.covenantVersion === 2
-                  ? config.dust
-                  : config.vtxoMinAmount,
+            lockup.getOutput(1).amount!,
             advance.fare.currency === "asset"
                 ? [
                       {
@@ -602,9 +599,6 @@ export async function discoverProceeds(
     for (const advance of (["recycled", "purchased", "refunded", "recovered"] as const).flatMap(
         (s) => advances.byState(s),
     )) {
-        // A v2 advance repays `loanSats`, not `refundTopup`, and every one of its
-        // payouts is already a spendable coin, so this scan has nothing to rescue.
-        if (advance.covenantVersion === 2) continue;
         if (!advance.outpoint || !advance.arkTxid || !advance.spentTxid) continue;
         if (hex.encode(advance.operatorKey) !== hex.encode(config.operatorKey))
             fail("proceeds_payout_key_changed");
@@ -612,16 +606,14 @@ export async function discoverProceeds(
         const fare = { txid: advance.arkTxid, vout: 1 };
         const repayment = { txid: advance.spentTxid, vout: 0 };
         if (
-            (source.kind === "joint-fill" || !candidates.has(key(fare))) &&
+            (source.kind === "fill" || !candidates.has(key(fare))) &&
             !candidates.has(key(repayment))
         )
             continue;
         const envelope =
             source.kind === "legacy" ? validatePersistedLockupGraph(advance, config) : undefined;
         const tx = Transaction.fromPSBT(
-            base64.decode(
-                source.kind === "joint-fill" ? source.source.graph.arkTx : envelope!.arkTx,
-            ),
+            base64.decode(source.kind === "fill" ? source.source.graph.arkTx : envelope!.arkTx),
         );
         if (tx.id !== advance.arkTxid) fail("proceeds_lockup_mismatch");
         const covenant = await timed("proceeds.discovery.covenant", () =>
@@ -633,7 +625,7 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance);
+        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance, tx);
         if (advance.state === "recycled") {
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(
@@ -644,7 +636,12 @@ export async function discoverProceeds(
                     : [],
             );
         } else if (advance.state !== "purchased")
-            await check(repayment, refundTopup(advance, config.vtxoMinAmount), []);
+            // reclaimWhole pays the whole lockup; repayRefund pays only the loan.
+            await check(
+                repayment,
+                advance.state === "recovered" ? lockupSats(advance) : loanSats(advance),
+                [],
+            );
         if (found.size >= 32) break;
     }
     for (const advance of advances.byState("locked")) {
@@ -667,7 +664,7 @@ export async function discoverProceeds(
             advance.outpoint.vout !== envelope.covenantOutputIndex
         )
             fail("proceeds_lockup_mismatch");
-        await checkFare(advance);
+        await checkFare(advance, tx);
     }
     return [...found.values()].slice(0, 32).sort((a, b) => key(a).localeCompare(key(b)));
 }
@@ -675,8 +672,7 @@ export async function discoverProceeds(
 export function createProceedsCollector(deps: Deps) {
     const { config, runtime, jobs, reservations } = deps;
     const timed = phaseTimer(deps.phaseLogger);
-    const taxiLocksOf = () =>
-        unionReservedOutpoints(reservations, deps.swapFills, deps.receiveQuotes);
+    const taxiLocksOf = () => unionReservedOutpoints(reservations, deps.receiveQuotes);
     const now = deps.now ?? Date.now;
     const owner = randomUUID();
     const leaseMs = 60_000;
@@ -807,7 +803,7 @@ export function createProceedsCollector(deps: Deps) {
         const inputs = plan.inputs.map((p) => mapped.get(key(p))!);
         assertProceedsPlan(plan, inputs, config);
         if (!isDeepStrictEqual(inputs.map(facts), plan.coins)) fail("proceeds_input_facts_changed");
-        const intents = await runtime.storage.intentRepository.getIntents({
+        const intents = await collectIntents(runtime.storage.intentRepository, {
             containingInputs: plan.inputs,
         });
         const outcome = reconcileProceeds(inputs, intents, now(), jobs.submissionEvidence(job.id));
@@ -832,7 +828,6 @@ export function createProceedsCollector(deps: Deps) {
             const own = jobs.active();
             const locks = [
                 ...reservations.listReservedOutpoints(),
-                ...(deps.swapFills?.listReservedOutpoints() ?? []),
                 ...(deps.receiveQuotes?.listReservedOutpoints() ?? []),
             ];
             if (

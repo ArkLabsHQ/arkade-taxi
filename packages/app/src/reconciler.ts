@@ -76,7 +76,7 @@ const key = ({ txid, vout }: Outpoint): string => `${txid}:${vout}`;
 
 function expectedLockup(advance: Advance): { outpoint: Outpoint; script: string } {
     const tagged = readFundingSource(advance.unsignedLockupTx);
-    if (tagged.kind === "joint-fill") {
+    if (tagged.kind === "fill") {
         if (tagged.source.graph.graphId !== advance.unsignedLockupId)
             throw new Error(`advance ${advance.id}: persisted lockup commitment mismatch`);
         const tx = Transaction.fromPSBT(base64.decode(tagged.source.graph.arkTx));

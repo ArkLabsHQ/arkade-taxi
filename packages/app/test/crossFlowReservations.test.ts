@@ -7,7 +7,6 @@ import {
     ProceedsRepository,
     ReceiveQuoteRepository,
     ReservationRepository,
-    SwapFillRepository,
     totalExposure as fenceExposure,
     type Database,
 } from "@arkade-taxi/db";
@@ -41,6 +40,7 @@ import {
     serverKey,
     serverUnroll,
 } from "./fixtures.js";
+import { insertReceiveQuote } from "./jointFillFixtures.js";
 import { arkInfo } from "./arkade/fixtures.js";
 
 const V2_DEADLINE = 1_757_000_000n + 8_640_000n;
@@ -54,7 +54,7 @@ const CUSTODY_TX = "0d".repeat(32);
 
 let db: Database;
 let reservations: ReservationRepository;
-let swapFills: SwapFillRepository;
+let receiveQuotes: ReceiveQuoteRepository;
 let custody: CustodyRepository;
 
 /** Reclaims a v2 advance, leaving its lockup as inventory at `(CUSTODY_TX, 0)`. */
@@ -71,7 +71,6 @@ function custodyCoin(ledger: AdvanceRepository): { txid: string; vout: number } 
         dust: 330n,
         topup: 330n,
         paymentSats: 1_000n,
-        covenantVersion: 2,
         // A v2 advance keeps no batch expiry; its CLTV is wall-clock.
         locktime: V2_DEADLINE,
         recoveryLocktime: { kind: "time", value: V2_DEADLINE },
@@ -92,12 +91,53 @@ function custodyCoin(ledger: AdvanceRepository): { txid: string; vout: number } 
     return { txid: CUSTODY_TX, vout: 0 };
 }
 
-const GRAPH = {
-    arkTx: "aGVsbG8=",
-    checkpoints: ["d29ybGQ="],
-    graphId: new Uint8Array(32).fill(0xab),
-    inputOwners: [null, "solver", "sponsor"] as (string | null)[],
-};
+function reserveFill(taxiInputs: { txid: string; vout: number }[], tag = "1"): void {
+    const world = insertReceiveQuote({
+        db,
+        wantAmount: 5n,
+        operatorCoin: fundingCoin({ ...taxiInputs[0]!, value: 20_000 }),
+    });
+    const quote = world.quotes.get(world.quoteId)!;
+    const fill = {
+        id: `fill-${tag}`,
+        quoteId: quote.id,
+        operationId: `op-${tag}`,
+        state: "submitting" as const,
+        taxiInputs,
+        covenantOutputIndex: 0,
+        assetUnits: 5n,
+        contributionSats: 330n,
+        fare: quote.fare,
+        graph: { arkTx: "aGVsbG8=", checkpoints: ["d29ybGQ="] },
+        graphId: new Uint8Array(32).fill(0xab),
+        submitInvoked: true,
+        attempts: 1,
+        createdAt: NOW,
+        updatedAt: NOW,
+        expiresAt: NOW + 60,
+    };
+    world.quotes.bindFill({
+        quoteId: quote.id,
+        fill,
+        advance: {
+            id: quote.id,
+            state: "locking",
+            ...quote.params,
+            assetUnits: 5n,
+            operatorInputs: taxiInputs,
+            unsignedLockupTx: "unsigned",
+            unsignedLockupId: "ff".repeat(32),
+            covenantAddress: quote.covenantAddress,
+            fare: quote.fare,
+            recoveryLocktime: quote.recoveryLocktime,
+            createdAt: NOW,
+            updatedAt: NOW,
+            expiresAt: NOW + 60,
+        },
+        expectedPolicyRevision: quote.policyRevision,
+        now: NOW,
+    });
+}
 
 function setup(): void {
     db = openDatabase(":memory:");
@@ -114,7 +154,7 @@ function setup(): void {
         "test",
     );
     reservations = new ReservationRepository(db);
-    swapFills = new SwapFillRepository(db);
+    receiveQuotes = new ReceiveQuoteRepository(db);
     custody = new CustodyRepository(db);
     custodyCoin(new AdvanceRepository(db, { custodyWindowSeconds: 8_640_000 }));
     reservations.reserveQuote({
@@ -127,10 +167,9 @@ function setup(): void {
             operatorSignerKey: config().operatorSignerKey,
             exitDelay: config().exitDelay,
             dust: 330n,
-            topup: 300n,
-            locktime: 100n,
-            recoveryLocktime: { kind: "height", value: 100n },
-            batchExpiry: { kind: "height", value: 300n },
+            topup: 330n,
+            locktime: V2_DEADLINE,
+            recoveryLocktime: { kind: "time", value: V2_DEADLINE },
             operatorInputs: [COIN_A],
             unsignedLockupTx: "unsigned",
             unsignedLockupId: "ff".repeat(32),
@@ -141,45 +180,26 @@ function setup(): void {
             expiresAt: NOW + 60,
         },
         expectedPolicyRevision: new PolicyRepository(db).getSnapshot().revision,
-        recoveryExecutionBudget: { kind: "height", value: 1n },
+        recoveryExecutionBudget: { kind: "time", value: 1n },
     });
-    swapFills.insert({
-        id: "fill-1",
-        operationId: "op-1",
-        state: "quoted",
-        offerHex: "deadbeef",
-        solverInputs: [{ txid: "ee".repeat(32), vout: 1, value: 5000n }],
-        solverProceedsScript: new Uint8Array([0x51]),
-        solverKeys: ["ab".repeat(32)],
-        taxiInputs: [COIN_B],
-        contributionSats: 330n,
-        sponsorScript: new Uint8Array([0x51]),
-        fare: { currency: "sats", units: 10n },
-        maxFare: { currency: "sats", units: 50n },
-        graph: structuredClone(GRAPH),
-        graphId: new Uint8Array(32).fill(0xab),
-        submitInvoked: false,
-        attempts: 0,
-        createdAt: NOW,
-        updatedAt: NOW,
-        expiresAt: NOW + 60,
-    });
+    reserveFill([COIN_B]);
 }
 
 afterEach(() => db.close());
 
 describe("cross-flow reservations", () => {
-    it("each repository hides the other flow's coins from single-source consumers", () => {
+    it("keeps a bound fill's coins in the advance reservation ledger", () => {
         setup();
-        expect(reservations.listReservedOutpoints()).toEqual([COIN_A]);
-        expect(swapFills.listReservedOutpoints()).toEqual([COIN_B]);
+        expect(reservations.listReservedOutpoints()).toEqual([COIN_A, COIN_B]);
+        expect(receiveQuotes.listReservedOutpoints()).toEqual([]);
+        expect(receiveQuotes.get("receive-1")?.state).toBe("bound");
     });
 
-    it("unions advance and swap-fill reservations without duplicates", () => {
+    it("unions advance and fill reservations without duplicates", () => {
         setup();
-        expect(unionReservedOutpoints(reservations, swapFills)).toEqual([COIN_A, COIN_B]);
-        expect(unionReservedOutpoints(reservations, reservations)).toEqual([COIN_A]);
-        expect(unionReservedOutpoints(undefined, swapFills)).toEqual([COIN_B]);
+        expect(unionReservedOutpoints(reservations, receiveQuotes)).toEqual([COIN_A, COIN_B]);
+        expect(unionReservedOutpoints(reservations, reservations)).toEqual([COIN_A, COIN_B]);
+        expect(unionReservedOutpoints(undefined, reservations)).toEqual([COIN_A, COIN_B]);
     });
 
     // Model B: a reclaimed coin is ordinary inventory and stays lendable. What
@@ -195,7 +215,7 @@ describe("cross-flow reservations", () => {
         expect(custody.listHeldOutpoints()).toEqual([]);
         const selection = selectOperatorFunding({
             spendable,
-            reserved: unionReservedOutpoints(reservations, swapFills),
+            reserved: unionReservedOutpoints(reservations, receiveQuotes),
             requiredSats: 1000n,
             safety: runtimeSafety(),
             nowMs: NOW * 1000,
@@ -221,7 +241,7 @@ describe("cross-flow reservations", () => {
         const cfg = config();
         const selection = selectOperatorFunding({
             spendable,
-            reserved: unionReservedOutpoints(reservations, swapFills),
+            reserved: unionReservedOutpoints(reservations, receiveQuotes),
             requiredSats: 1000n,
             safety: runtimeSafety(),
             nowMs: NOW * 1000,
@@ -250,9 +270,8 @@ describe("cross-flow reservations", () => {
             exitDelay: config().exitDelay,
             dust: 330n,
             topup: 330n,
-            locktime: 100n,
-            recoveryLocktime: { kind: "height", value: 100n },
-            batchExpiry: { kind: "height", value: 300n },
+            locktime: V2_DEADLINE,
+            recoveryLocktime: { kind: "time", value: V2_DEADLINE },
             operatorInputs: [COIN_C],
             unsignedLockupTx: "unsigned",
             unsignedLockupId: "7e".repeat(32),
@@ -266,14 +285,14 @@ describe("cross-flow reservations", () => {
         const fence = fenceExposure(db);
 
         expect(fence.total).toBe(660n);
-        expect(totalExposure(ledger, swapFills, new ReceiveQuoteRepository(db))).toEqual({
+        expect(totalExposure(ledger, receiveQuotes)).toEqual({
             outstandingSats: fence.total,
             lockedCount: Number(fence.count),
             oldestUnsweptLocktime: null,
         });
     });
 
-    it("rejects proceeds collection over a swap-fill reservation", () => {
+    it("rejects proceeds collection over a fill reservation", () => {
         setup();
         const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
         const receipt = fundingCoin({ txid: COIN_B.txid, vout: COIN_B.vout });
@@ -282,7 +301,7 @@ describe("cross-flow reservations", () => {
             planProceeds(
                 [receipt],
                 [],
-                unionReservedOutpoints(reservations, swapFills),
+                unionReservedOutpoints(reservations, receiveQuotes),
                 cfg,
                 {},
                 address,
@@ -303,38 +322,12 @@ describe("cross-flow wiring through production quote paths", () => {
         const terms = new PolicyRepository(db);
         terms.update(basePolicy(), "test");
         reservations = new ReservationRepository(db);
-        swapFills = new SwapFillRepository(db);
+        receiveQuotes = new ReceiveQuoteRepository(db);
         return { terms, ledger: new AdvanceRepository(db) };
     }
 
     function insertFill(taxiInputs: { txid: string; vout: number }[]): void {
-        const tag = taxiInputs[0]!.txid.slice(0, 2);
-        swapFills.insert({
-            id: `fill-${tag}`,
-            operationId: `op-${tag}`,
-            state: "quoted",
-            offerHex: "deadbeef",
-            solverInputs: [{ txid: "ee".repeat(32), vout: 1, value: 5000n }],
-            solverProceedsScript: new Uint8Array([0x51]),
-            solverKeys: ["ab".repeat(32)],
-            taxiInputs,
-            contributionSats: 330n,
-            sponsorScript: new Uint8Array([0x51]),
-            fare: { currency: "sats", units: 10n },
-            maxFare: { currency: "sats", units: 50n },
-            graph: {
-                arkTx: "aGVsbG8=",
-                checkpoints: ["d29ybGQ="],
-                graphId: new Uint8Array(32).fill(0xab),
-                inputOwners: ["sponsor"] as (string | null)[],
-            },
-            graphId: new Uint8Array(32).fill(0xab),
-            submitInvoked: false,
-            attempts: 0,
-            createdAt: NOW,
-            updatedAt: NOW,
-            expiresAt: NOW + 60,
-        });
+        reserveFill(taxiInputs, taxiInputs[0]!.txid.slice(0, 2));
     }
 
     function operatorInventory(
@@ -355,7 +348,7 @@ describe("cross-flow wiring through production quote paths", () => {
         };
     }
 
-    it("advance quote selection skips a swap-fill coin through createQuote", async () => {
+    it("advance quote selection skips a fill coin through createQuote", async () => {
         const { terms, ledger } = setupWiring();
         const fill = { txid: FILL_TX, vout: 0 };
         const alt = { txid: ALT_TX, vout: 0 };
@@ -367,7 +360,7 @@ describe("cross-flow wiring through production quote paths", () => {
             advances: ledger,
             policy: terms,
             reservations,
-            swapFills,
+            receiveQuotes,
             config: config(),
             now: () => NOW,
             randomId: () => "adv-wiring-1",
@@ -396,7 +389,7 @@ describe("cross-flow wiring through production quote paths", () => {
             advances: ledger,
             policy: terms,
             reservations,
-            swapFills,
+            receiveQuotes,
             lending: () => ({
                 solvency: custodySolvencyView({
                     liabilities,
@@ -429,7 +422,7 @@ describe("cross-flow wiring through production quote paths", () => {
             advances: ledger,
             policy: terms,
             reservations,
-            swapFills,
+            receiveQuotes,
             lending: () => ({
                 solvency: custodySolvencyView({
                     liabilities: new CustodyRepository(db).liabilities(),
@@ -467,7 +460,7 @@ describe("cross-flow wiring through production quote paths", () => {
             advances: ledger,
             policy: terms,
             reservations,
-            swapFills,
+            receiveQuotes,
             config: config(),
             now: () => NOW,
             randomId: () => "adv-proceeds-1",
@@ -482,7 +475,7 @@ describe("cross-flow wiring through production quote paths", () => {
         ]);
     });
 
-    it("sponsored quote selection skips a swap-fill coin through createSponsoredQuote", async () => {
+    it("sponsored quote selection skips a fill coin through createSponsoredQuote", async () => {
         const { terms, ledger } = setupWiring();
         const fill = { txid: FILL_TX, vout: 0 };
         const alt = { txid: ALT_TX, vout: 0 };
@@ -494,7 +487,7 @@ describe("cross-flow wiring through production quote paths", () => {
             advances: ledger,
             policy: terms,
             reservations,
-            swapFills,
+            receiveQuotes,
             config: config(),
             now: () => NOW,
             randomId: () => "spn-wiring-1",
@@ -514,7 +507,7 @@ describe("cross-flow wiring through production quote paths", () => {
         ).toEqual([alt]);
     });
 
-    it("proceeds collector guard treats a swap-fill coin as locked reserve", async () => {
+    it("proceeds collector guard treats a fill coin as locked reserve", async () => {
         const carrier = fundingCoin({ value: 2000 });
         const spare = fundingCoin({ value: 1000, vout: 1 });
         const receipt = fundingCoin({ value: 1, isSwept: true, txid: "ab".repeat(32) });
@@ -530,7 +523,7 @@ describe("cross-flow wiring through production quote paths", () => {
         const jobs = new ProceedsRepository(db);
         jobs.create("job", plan, 100);
         reservations = new ReservationRepository(db);
-        swapFills = new SwapFillRepository(db);
+        receiveQuotes = new ReceiveQuoteRepository(db);
         insertFill([{ txid: carrier.txid, vout: carrier.vout }]);
         const coins = plan.inputs.map((p) =>
             [receipt, spare, carrier].find((c) => c.txid === p.txid && c.vout === p.vout)!,
@@ -566,7 +559,7 @@ describe("cross-flow wiring through production quote paths", () => {
                 },
                 storage: {
                     intentRepository: {
-                        getIntents: async () => [],
+                        getIntentsPage: async () => ({ items: [] }),
                         getLockedVtxoOutpoints: async () => [],
                     },
                 },
@@ -575,7 +568,7 @@ describe("cross-flow wiring through production quote paths", () => {
             },
             advances: { byState: () => [] },
             reservations,
-            swapFills,
+            receiveQuotes,
             jobs,
             now: () => 100,
         } as unknown as Parameters<typeof createProceedsCollector>[0];

@@ -14,7 +14,7 @@ export function computeExposure(advances: readonly Advance[]): Exposure {
         outstandingSats += a.topup;
         lockedCount++;
         if (!isLocked(a)) continue;
-        // A v2 advance has no batch expiry; its own deadline carries the domain.
+        // A covenant advance has no batch expiry; its deadline carries the domain.
         locktimeKinds.add(a.batchExpiry?.kind ?? a.recoveryLocktime?.kind ?? "time");
         if (locktimeKinds.size > 1) {
             oldestUnsweptLocktime = null;
@@ -36,9 +36,8 @@ export function sweepable(
     return advances
         .filter((a) => {
             const recovery = a.recoveryLocktime;
-            // A v2 deadline outlives the funding coins by design, so it is not
-            // held to their domain; without this a v2 advance never sweeps and
-            // the Taxi never reclaims its own dust.
+            // The deadline outlives the funding coins, so it is not held to
+            // their domain; without this nothing ever sweeps.
             if (
                 !isLocked(a) ||
                 !recovery ||

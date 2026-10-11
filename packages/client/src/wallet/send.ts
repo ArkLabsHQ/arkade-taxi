@@ -30,6 +30,7 @@ import type { Bip21Taxi } from "./requests.js";
 import {
     boundedFetch,
     callerMinimum,
+    callerRecoveryMinimum,
     ruleFor,
     taxiAssetId,
     taxiClient,
@@ -696,7 +697,8 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             vtxoMinAmount: ctx.vtxoMinAmount,
             hrp: ctx.hrp,
         };
-        const minLocktime = mode === "sponsored" ? 0n : await callerMinimum(ctx);
+        // `callerMinimum` bounds funding liveness, a different clock.
+        const minLocktime = mode === "sponsored" ? 0n : callerRecoveryMinimum();
         const quoted =
             mode === "sponsored"
                 ? {

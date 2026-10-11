@@ -220,17 +220,6 @@ export function validateSponsoredPayment(
             : context.fare.currency === "sats"
               ? context.fare.units
               : context.vtxoMinAmount;
-    if (fareHosting > 0n)
-        outputs.push({
-            amount: fareHosting,
-            script: ownerScript(
-                context.operatorKey,
-                fareHosting,
-                context.serverKey,
-                context.params.dust,
-                context.hrp,
-            ),
-        });
     if (
         envelope.satsFarePayer !== undefined &&
         (context.fare.currency !== "sats" || context.fare.units <= 0n)
@@ -245,6 +234,23 @@ export function validateSponsoredPayment(
     const operatorChange = operatorTotal - context.params.contribution - operatorFare;
     if (senderChange < 0n || operatorChange < 0n)
         reject(VerificationErrorCode.Malformed, "joint funding is insufficient");
+    const payoutScript = (key: Uint8Array, amount: bigint) =>
+        ownerScript(key, amount, context.serverKey, context.params.dust, context.hrp);
+    // One wallet pays out to its funding coin's own key, so a separate change
+    // output would repeat this script. Mirrors app/src/lockup.ts.
+    const mergeChange =
+        fareHosting > 0n &&
+        operatorChange > 0n &&
+        sameBytes(
+            payoutScript(context.operatorKey, fareHosting),
+            payoutScript(operatorTrees[0].tweakedPublicKey, operatorChange),
+        );
+    const farePayout = mergeChange ? fareHosting + operatorChange : fareHosting;
+    if (fareHosting > 0n)
+        outputs.push({
+            amount: farePayout,
+            script: payoutScript(context.operatorKey, farePayout),
+        });
 
     const destinations = new Map<string, Map<number, bigint>>();
     const paymentId = context.params.assetId ? assetId(context.params.assetId) : undefined;
@@ -300,16 +306,10 @@ export function validateSponsoredPayment(
             if (change) allocation.set(index, change);
         }
     }
-    if (operatorChange > 0n)
+    if (operatorChange > 0n && !mergeChange)
         outputs.push({
             amount: operatorChange,
-            script: ownerScript(
-                operatorTrees[0].tweakedPublicKey,
-                operatorChange,
-                context.serverKey,
-                context.params.dust,
-                context.hrp,
-            ),
+            script: payoutScript(operatorTrees[0].tweakedPublicKey, operatorChange),
         });
     if (outputs.some((output) => output.amount < context.vtxoMinAmount))
         reject(VerificationErrorCode.Malformed, "payment output is below the operator minimum");

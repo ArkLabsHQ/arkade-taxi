@@ -1,11 +1,4 @@
-import {
-    arkade,
-    CLTVMultisigTapscript,
-    CSVMultisigTapscript,
-    MultisigTapscript,
-    VtxoScript,
-} from "@arkade-os/sdk";
-import { buildScripts, type CovenantScripts } from "./scripts.js";
+import { arkade, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
 import { compileV2 } from "./v2-artifact.js";
 import { validateParams, type DustCovenantParams } from "./params.js";
 
@@ -16,9 +9,17 @@ export enum Leaf {
     RefundSender = 2,
     Recovery = 3,
     Exit = 4,
-    /** v2 only, appended so every earlier value and sibling proof keeps its meaning. */
     Renew = 5,
 }
+
+/** The arkade scripts the tree committed to, one per covenant leaf. */
+export type CovenantScripts = {
+    recycle: Uint8Array;
+    purchase: Uint8Array;
+    refund: Uint8Array;
+    reclaim: Uint8Array;
+    renew: Uint8Array;
+};
 
 export interface DustCovenantOptions {
     serverKey: Uint8Array;
@@ -42,43 +43,7 @@ export function claimLeafDisabled(params: DustCovenantParams, leaf: Leaf): boole
 
 type Tree = { scripts: Uint8Array[]; covenant: CovenantScripts };
 
-// Index 4 on the Go mirror is the unused optional LeafReclaim, so the two
-// numberings disagree there.
-const exitLeaf = (params: DustCovenantParams): Uint8Array =>
-    CSVMultisigTapscript.encode({
-        timelock: params.exitDelay,
-        pubkeys: [params.senderKey, params.operatorSignerKey],
-    }).script;
-
-function handBuilt({ serverKey, emulatorKey, params, vtxoMinAmount }: DustCovenantOptions): Tree {
-    const covenant = buildScripts(params, vtxoMinAmount);
-    const tweak = (script: Uint8Array) => arkade.computeArkadeScriptPublicKey(emulatorKey, script);
-    // The disabled slot keeps the tree's shape, so every sibling proof stays put.
-    const claimKey = (leaf: Leaf, script: Uint8Array) =>
-        tweak(claimLeafDisabled(params, leaf) ? DISABLED_CLAIM_SCRIPT : script);
-
-    return {
-        covenant,
-        scripts: [
-            MultisigTapscript.encode({
-                pubkeys: [serverKey, claimKey(Leaf.Recycle, covenant.recycle)],
-            }).script,
-            MultisigTapscript.encode({
-                pubkeys: [serverKey, claimKey(Leaf.Purchase, covenant.purchase)],
-            }).script,
-            MultisigTapscript.encode({
-                pubkeys: [serverKey, params.senderKey, tweak(covenant.refund)],
-            }).script,
-            CLTVMultisigTapscript.encode({
-                absoluteTimelock: params.locktime,
-                pubkeys: [serverKey, tweak(covenant.refund)],
-            }).script,
-            exitLeaf(params),
-        ],
-    };
-}
-
-/** Every v2 leaf comes out of the compiled artifact, tweak and all. */
+/** Every leaf comes out of the compiled artifact, tweak and all. */
 function fromArtifact({
     serverKey,
     emulatorKey,
@@ -137,8 +102,7 @@ export class DustCovenantScript extends VtxoScript {
     readonly covenant: CovenantScripts;
 
     constructor(readonly options: DustCovenantOptions) {
-        const tree =
-            options.params.covenantVersion === 2 ? fromArtifact(options) : handBuilt(options);
+        const tree = fromArtifact(options);
         super(tree.scripts);
         this.covenant = tree.covenant;
     }

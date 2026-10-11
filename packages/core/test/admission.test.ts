@@ -1,14 +1,27 @@
 import { describe, expect, it } from "vitest";
-import type { AssetIdRef } from "@arkade-taxi/covenant";
+import { schnorr } from "@noble/curves/secp256k1.js";
+import { validateParams, type AssetIdRef, type DustCovenantParams } from "@arkade-taxi/covenant";
 import type { Exposure, Policy, QuoteRequest } from "../src/types.js";
 import { admit } from "../src/admission.js";
 import type { CustodySolvency } from "../src/solvency.js";
 import type { AssetRule, FareOption } from "../src/fares.js";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
+const pubkey = (fill: number) => schnorr.getPublicKey(key(fill));
 
 const DUST = 330n;
 const MIN = 1n;
+
+const COVENANT_PARAMS: DustCovenantParams = {
+    receiverKey: pubkey(1),
+    senderKey: pubkey(2),
+    operatorKey: pubkey(3),
+    operatorSignerKey: pubkey(6),
+    exitDelay: { value: 86_016n, type: "seconds" },
+    dust: DUST,
+    topup: DUST,
+    locktime: 1_800_000_000n,
+};
 
 const asset = (fill: number, groupIndex = 0): AssetIdRef => ({ txid: key(fill), groupIndex });
 
@@ -238,6 +251,16 @@ describe("caps", () => {
         expect(reasonOf(d)).toBe("exceeds_max_outstanding");
     });
 
+    it("warns while exposure nears the cap and stays silent with headroom", () => {
+        const near = policy({ maxOutstandingSats: 1_000n });
+        expect(
+            okOf(admit(request(), near, exposure({ outstandingSats: 600n }), DUST, MIN)).warnings,
+        ).toEqual([{ code: "exposure_nearing_cap", headroomSats: 70n }]);
+        expect(
+            okOf(admit(request(), near, exposure({ outstandingSats: 500n }), DUST, MIN)).warnings,
+        ).toBeUndefined();
+    });
+
     it("refuses at the concurrency limit", () => {
         const d = admit(request(), policy({ maxConcurrentAdvances: 0 }), exposure(), DUST, MIN);
         expect(reasonOf(d)).toBe("max_concurrent_advances");
@@ -300,6 +323,16 @@ describe("paymentSats", () => {
 
     it("refuses a payment under a larger minimum", () => {
         expect(reasonOf(ask(9n, {}, policy(), 10n))).toBe("invalid_payment_sats");
+    });
+
+    it("stays tighter than the covenant's own positive-payment rule", () => {
+        for (const paymentSats of [1n, DUST, DUST * 2n]) {
+            expect(() =>
+                validateParams({ ...COVENANT_PARAMS, paymentSats }, paymentSats < 10n ? 1n : 10n),
+            ).not.toThrow();
+        }
+        expect(reasonOf(ask(1n, {}, policy(), 10n))).toBe("invalid_payment_sats");
+        expect(reasonOf(ask(DUST, { senderSats: DUST * 4n }))).toBe("invalid_payment_sats");
     });
 
     it("refuses a payment the sender's own coins cannot cover", () => {

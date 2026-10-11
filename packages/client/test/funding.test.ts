@@ -5,6 +5,7 @@ import * as client from "../src/index.js";
 import {
     args,
     assetArgs,
+    DEADLINE,
     info,
     jsonResponse,
     operatorKey,
@@ -20,7 +21,7 @@ import {
 const coin = (): ExtendedVirtualCoin => ({
     txid: "aa".repeat(32),
     vout: 2,
-    value: 10,
+    value: 660,
     status: { confirmed: true },
     createdAt: new Date(0),
     script: bytesToHex(senderTree.pkScript),
@@ -28,7 +29,6 @@ const coin = (): ExtendedVirtualCoin => ({
     isSpent: false,
     isSwept: false,
     isPreconfirmed: false,
-    virtualStatus: { state: "settled" },
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],
@@ -36,6 +36,12 @@ const coin = (): ExtendedVirtualCoin => ({
 });
 
 describe("fundingInputsFromVtxos", () => {
+    it("accepts canonical selected coins without legacy status metadata", () => {
+        const selected = coin();
+        expect(selected).not.toHaveProperty("virtualStatus");
+        expect(client.fundingInputsFromVtxos([selected])).toHaveLength(1);
+    });
+
     it("preserves selected outpoints, canonical leaves, assets and height expiry", () => {
         const selected = coin();
         const id = asset.AssetId.create("12".repeat(32), 7);
@@ -44,7 +50,7 @@ describe("fundingInputsFromVtxos", () => {
         expect(input).toMatchObject({
             txid: "aa".repeat(32),
             vout: 2,
-            value: 10n,
+            value: 660n,
             tapTree: senderTree.encode(),
             spendLeaf: senderTree.scripts[0],
             expiry: { kind: "height", value: 900_000n },
@@ -70,7 +76,7 @@ describe("fundingInputsFromVtxos", () => {
         { spentBy: "bb".repeat(32) },
         { isSwept: true },
         { isUnrolled: true },
-        { virtualStatus: { state: "spent" as const } },
+        { settledBy: "cc".repeat(32) },
         { value: Number.MAX_SAFE_INTEGER + 1 },
         { value: 1.5 },
         { value: -1 },
@@ -237,7 +243,7 @@ describe("requestVerifiedQuote", () => {
         ]);
         expect(JSON.parse(String(fetch.calls[1].init.body))).toMatchObject({
             receiverKey: bytesToHex(receiverKey),
-            senderSats: "10",
+            senderSats: "660",
         });
     });
 
@@ -261,8 +267,8 @@ describe("requestVerifiedQuote", () => {
         expect(verified.params).toMatchObject({ topup: 330n, paymentSats: 100n });
     });
 
-    it("rejects a quote from an operator that still lends a partial advance", async () => {
-        const { a, ask } = exactRequest({ topup: 10n });
+    it("rejects a quote whose payment differs from the one authorised", async () => {
+        const { a, ask } = exactRequest({ paymentSats: 101n });
         const { taxi } = transport(a);
         await expect(taxi.requestVerifiedQuote(ask)).rejects.toMatchObject({
             code: "PAYMENT_SATS_MISMATCH",
@@ -377,7 +383,7 @@ describe("requestVerifiedQuote", () => {
         if (kind === "topup") r.expect.maxTopupSats = 329n;
         if (kind === "fare") r.expect.maxFare.units = 9n;
         if (kind === "currency") r.expect.maxFare = { currency: "asset", units: 10n };
-        if (kind === "locktime") r.expect.minLocktime = 800_001n;
+        if (kind === "locktime") r.expect.minLocktime = DEADLINE + 1n;
         if (kind === "exitDelay") r.expect.minExitDelay = { value: 86_017n, type: "seconds" };
         if (kind === "amount") r.selectedVtxos[0].value = 9;
         if (kind === "expiry") r.now = 1_000_000_060;
@@ -387,7 +393,7 @@ describe("requestVerifiedQuote", () => {
     it("preserves exact asset amounts and rejects a changed requested amount", async () => {
         const a = assetArgs();
         const r = request(a);
-        r.selectedVtxos[0].value = 700;
+        r.selectedVtxos[0].value = 990;
         r.selectedVtxos[0].assets = [
             {
                 assetId: asset.AssetId.create("12".repeat(32), 7).toString(),
@@ -415,7 +421,7 @@ describe("requestVerifiedQuote", () => {
         const r = request(a);
         r.fareId = "usdt-purchase";
         r.expect.maxFare = fare;
-        r.selectedVtxos[0].value = 700;
+        r.selectedVtxos[0].value = 990;
         r.selectedVtxos[0].assets = [
             {
                 assetId: asset.AssetId.create("12".repeat(32), 7).toString(),
@@ -447,12 +453,12 @@ describe("requestVerifiedQuote", () => {
         });
         const taxi = new client.TaxiClient({ baseUrl: "https://taxi.example", fetch });
         const result = await taxi.requestVerifiedQuote(r);
-        expect(result.senderInputs[0].value).toBe(10n);
-        expect(JSON.parse(String(fetch.calls[1].init.body)).senderSats).toBe("10");
+        expect(result.senderInputs[0].value).toBe(660n);
+        expect(JSON.parse(String(fetch.calls[1].init.body)).senderSats).toBe("660");
     });
 
     it.each([
-        { values: [10, 20], total: 30n },
+        { values: [330, 330], total: 660n },
         { values: [Number.MAX_SAFE_INTEGER, 2], total: 9_007_199_254_740_993n },
     ])("derives and verifies the exact selected total $total", async ({ values, total }) => {
         expectTypeOf<client.RequestVerifiedQuoteArgs>().not.toHaveProperty("senderSats");

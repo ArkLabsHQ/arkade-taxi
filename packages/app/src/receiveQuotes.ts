@@ -17,11 +17,12 @@ import {
     type ReceiveQuote,
     type ReceiveQuoteRepository,
     type ReservationRepository,
-    type SwapFillRepository,
 } from "@arkade-taxi/db";
 import {
     assetIdFromWire,
+    bytesToHex,
     fareToWire,
+    fundingInputToWire,
     hexToBytes,
     quoteParamsToWire,
     satsFromWire,
@@ -30,7 +31,12 @@ import {
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
 import type { RuntimeConfig } from "./config.js";
-import { sameFundingSnapshot, withQuoteAdmission, type AdvanceStore } from "./quotes.js";
+import {
+    covenantDeadline,
+    sameFundingSnapshot,
+    withQuoteAdmission,
+    type AdvanceStore,
+} from "./quotes.js";
 import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js";
 import { operatorFundingInput } from "./arkade/lockupBuilder.js";
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
@@ -42,13 +48,9 @@ export interface ReceiveQuoteDeps {
     policy: { get(): Policy; getSnapshot(): PolicySnapshot };
     advances: Pick<AdvanceStore, "exposureTotals">;
     reservations: Pick<ReservationRepository, "listReservedOutpoints" | "expireQuotes">;
-    swapFills?: Pick<
-        SwapFillRepository,
-        "listReservedOutpoints" | "expireQuotes" | "exposureTotals"
-    >;
     receiveQuotes: Pick<
         ReceiveQuoteRepository,
-        "insert" | "get" | "bind" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
+        "insert" | "get" | "expireQuotes" | "listReservedOutpoints" | "exposureTotals"
     >;
     inventory: {
         getSpendableVtxos(): Promise<ExtendedVirtualCoin[]>;
@@ -63,7 +65,7 @@ export interface ReceiveQuoteDeps {
 type DecodedRequest = {
     receiverAddress: string;
     receiverKey: Uint8Array;
-    makerPublicKey: string;
+    senderKey: string;
     makerKey: Uint8Array;
     assetId: { txid: Uint8Array; groupIndex: number };
     fareId?: string;
@@ -86,15 +88,8 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     if (prototype !== Object.prototype && prototype !== null)
         throw badRequest("request body must be a plain JSON object");
     const raw = body as Record<string, unknown>;
-    exactKeys(raw, [
-        "receiverAddress",
-        "makerPublicKey",
-        "assetId",
-        "fareId",
-        "fundingExpiry",
-        "payer",
-    ]);
-    for (const required of ["receiverAddress", "makerPublicKey", "assetId"])
+    exactKeys(raw, ["receiverAddress", "senderKey", "assetId", "fareId", "fundingExpiry", "payer"]);
+    for (const required of ["receiverAddress", "senderKey", "assetId"])
         if (!Object.prototype.hasOwnProperty.call(raw, required))
             throw badRequest(`missing request field ${required}`);
 
@@ -113,9 +108,9 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     if (!equalBytes(receiver.serverPubKey, config.serverPubkey))
         throw badRequest("receiverAddress names the wrong Arkade server key");
 
-    if (typeof raw.makerPublicKey !== "string" || !HEX_32.test(raw.makerPublicKey))
-        throw badRequest("makerPublicKey must be a 32-byte lowercase hex key");
-    const makerKey = hexToBytes(raw.makerPublicKey, "makerPublicKey");
+    if (typeof raw.senderKey !== "string" || !HEX_32.test(raw.senderKey))
+        throw badRequest("senderKey must be a 32-byte lowercase hex key");
+    const makerKey = hexToBytes(raw.senderKey, "senderKey");
 
     if (!raw.assetId || typeof raw.assetId !== "object" || Array.isArray(raw.assetId))
         throw badRequest("assetId must be an object");
@@ -170,7 +165,7 @@ function decodeBody(body: unknown, config: RuntimeConfig): DecodedRequest {
     return {
         receiverAddress: raw.receiverAddress,
         receiverKey: receiver.vtxoTaprootKey,
-        makerPublicKey: raw.makerPublicKey,
+        senderKey: raw.senderKey,
         makerKey,
         assetId,
         payer,
@@ -186,8 +181,6 @@ const toCovenantFare = (fare: FareSpec): DustCovenantParams["receiverFare"] =>
 
 /** Rides beside the persisted `params`, never inside them: that JSON has a
  * strict decoder a rolled-back build would choke on. */
-const covenantVersionOf = (config: RuntimeConfig) =>
-    config.covenantVersion === 2 ? { covenantVersion: 2 as const } : {};
 
 function deriveCovenant(config: RuntimeConfig, params: DustCovenantParams): string {
     try {
@@ -214,23 +207,16 @@ type Terms =
       };
 
 function immutableTerms(req: DecodedRequest, policy: Policy, config: RuntimeConfig): Terms {
-    const receipt = config.vtxoMinAmount;
-    const senderLoan = config.dust - receipt;
-    // v2 lends the whole dust on both payer paths, so there is no split to form
-    // and no sub-dust receipt to leave behind.
-    const v2 = config.covenantVersion === 2;
-    if (
-        receipt <= 0n ||
-        config.dust <= 0n ||
-        (!v2 && (senderLoan < receipt || senderLoan + receipt !== config.dust))
-    )
-        throw badRequest("server limits cannot form a positive two-output split");
+    // The covenant lends the whole dust on both payer paths, so there is no
+    // split to form and no sub-dust receipt to leave behind.
+    if (config.vtxoMinAmount <= 0n || config.dust <= 0n)
+        throw badRequest("server limits cannot form a positive loan");
     const rule = ruleFor(policy.assetRules, req.assetId);
     if (!rule) throw admissionError("asset_not_served");
     if (!rule.enabled) throw admissionError("asset_disabled");
     if (resolveClaimMode(rule.claim, "recycle") !== "recycle")
         throw badRequest("asset policy does not allow recycle claims");
-    const loan = v2 || req.payer === "receiver" ? config.dust : senderLoan;
+    const loan = config.dust;
     const cap = rule.maxTopupSats ?? policy.maxPerPaymentTopupSats;
     if (loan > cap) throw admissionError("topup_exceeds_max_per_payment");
 
@@ -293,20 +279,18 @@ async function createAdmitted(
             dust: deps.config.dust,
             topup: terms.loan,
             assetId: req.assetId,
-            // Only proves the keys form a covenant; v2 refuses a height.
-            locktime: deps.config.covenantVersion === 2 ? 500_000_000n : 1n,
+            // Only proves the keys form a covenant; the domain is checked too.
+            locktime: 500_000_000n,
             claimMode: "recycle",
             recoveryRecipient: "receiver",
-            ...covenantVersionOf(deps.config),
             ...(terms.payer === "receiver"
                 ? { receiverFare: toCovenantFare(terms.receiverFare) }
                 : {}),
         });
     } catch (cause) {
-        throw badRequest("makerPublicKey or receiverAddress is not a valid covenant identity");
+        throw badRequest("senderKey or receiverAddress is not a valid covenant identity");
     }
     deps.reservations.expireQuotes(deps.now());
-    deps.swapFills?.expireQuotes(deps.now());
     deps.receiveQuotes.expireQuotes(deps.now());
     for (let attempt = 0; attempt < 3; attempt++) {
         try {
@@ -351,7 +335,7 @@ async function createReserved(
             },
         );
     }
-    const reserved = unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes);
+    const reserved = unionReservedOutpoints(deps.reservations, deps.receiveQuotes);
     const options = {
         spendable,
         reserved: [...reserved, ...locks],
@@ -368,8 +352,9 @@ async function createReserved(
     };
     const selection = structuredClone(selectOperatorFunding(options));
     const floor = inputFloor(selection.batchExpiry, req.fundingExpiry);
+    assertFloorHeadroom(floor, firstSafety, deps.config);
     const quotedAt = deps.now();
-    const recovery = recoveryDeadline(floor, initial.policy, firstSafety, deps.config, quotedAt);
+    const recovery = covenantDeadline(firstSafety, deps.config, quotedAt);
     const params: ReceiveQuote["params"] = {
         receiverKey: req.receiverKey,
         senderKey: req.makerKey,
@@ -386,7 +371,6 @@ async function createReserved(
     };
     const covenantAddress = deriveCovenant(deps.config, {
         ...params,
-        ...covenantVersionOf(deps.config),
     });
     let latestSpendable: ExtendedVirtualCoin[];
     let latestLocks: Outpoint[];
@@ -408,17 +392,16 @@ async function createReserved(
         ...options,
         spendable: latestSpendable,
         reserved: [
-            ...unionReservedOutpoints(deps.reservations, deps.swapFills, deps.receiveQuotes),
+            ...unionReservedOutpoints(deps.reservations, deps.receiveQuotes),
             ...latestLocks,
         ],
         safety: latestSafety,
         nowMs: deps.nowMs(),
     });
     const latestFloor = inputFloor(latest.batchExpiry, req.fundingExpiry);
-    const latestRecovery =
-        deps.config.covenantVersion === 2
-            ? recovery
-            : recoveryDeadline(latestFloor, initial.policy, latestSafety, deps.config, quotedAt);
+    // The deadline is measured from the quote, not from the funding, so a
+    // re-selection cannot move it.
+    const latestRecovery = recovery;
     if (
         !sameSelection(selection, latest) ||
         latestFloor.kind !== floor.kind ||
@@ -440,7 +423,7 @@ async function createReserved(
         id: deps.randomId(),
         state: "quoted",
         receiverAddress: req.receiverAddress,
-        makerPublicKey: req.makerPublicKey,
+        senderKey: req.senderKey,
         params,
         covenantAddress,
         fare: terms.fare,
@@ -452,7 +435,6 @@ async function createReserved(
         expiresAt: now + initial.policy.quoteTtlSeconds,
         policyRevision: initial.revision,
         operatorInputs: selection.inputs.map(operatorFundingInput),
-        ...covenantVersionOf(deps.config),
         ...(terms.payer === "receiver"
             ? { payer: "receiver" as const, receiverFare: terms.receiverFare }
             : {}),
@@ -460,18 +442,13 @@ async function createReserved(
     deps.receiveQuotes.insert({
         quote,
         expectedPolicyRevision: initial.revision,
-        // The budget shares the recovery locktime's domain, which for v2 is its
-        // own wall clock rather than the funding floor's.
         recoveryExecutionBudget: {
-            kind: recovery.kind,
-            value:
-                recovery.kind === "height"
-                    ? deps.config.recoveryBroadcastBlocks
-                    : deps.config.recoveryBroadcastSeconds,
+            kind: "time",
+            value: deps.config.recoveryBroadcastSeconds,
         },
         expectedReservedOutpoints: reserved,
     });
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }
 
 function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadline {
@@ -481,59 +458,26 @@ function inputFloor(batch: ExpiryDeadline, hint?: ExpiryDeadline): ExpiryDeadlin
     return { kind: batch.kind, value: hint.value < batch.value ? hint.value : batch.value };
 }
 
-/** v2's CLTV is wall-clock and outlives the funding coins on purpose: a renewer
- * must not push the Taxi's own claim out. v1 keeps its margin off expiry. */
-function recoveryDeadline(
+/** Funding liveness, independent of the deadline: the selection enforces this on
+ * the operator's own coins, so a requester-supplied ceiling owes it too. */
+function assertFloorHeadroom(
     floor: ExpiryDeadline,
-    policy: Policy,
     safety: RuntimeSafety,
     config: RuntimeConfig,
-    now: number,
-): ExpiryDeadline {
-    if (config.covenantVersion === 2) {
-        const value = BigInt(now) + config.covenantDeadlineSeconds;
-        if (value < 500_000_000n || value > 0xffff_ffffn || value <= safety.chainTime!)
-            throw new ServiceError(
-                ErrorCode.NoLocktimeHeadroom,
-                503,
-                `covenant deadline ${value} is not a future time-domain locktime`,
-            );
-        return { kind: "time", value };
-    }
+): void {
     const clock = floor.kind === "height" ? safety.chainHeight! : safety.chainTime!;
     const headroom =
         floor.kind === "height" ? config.minExpiryHeadroomBlocks : config.minExpiryHeadroomSeconds;
-    const margin = BigInt(
-        floor.kind === "height" ? policy.locktimeMarginBlocks : policy.locktimeMarginSeconds,
-    );
-    const execution =
-        floor.kind === "height" ? config.recoveryBroadcastBlocks : config.recoveryBroadcastSeconds;
     if (floor.value - clock < headroom)
         throw new ServiceError(ErrorCode.NoLocktimeHeadroom, 503, "funding expiry lacks headroom");
-    const value = floor.value - margin;
-    if (
-        margin <= execution ||
-        value <= clock ||
-        value + execution >= floor.value ||
-        (floor.kind === "time") !== value >= 500_000_000n
-    )
-        throw new ServiceError(ErrorCode.NoLocktimeHeadroom, 503, "recovery margin is unsafe");
-    return { kind: floor.kind, value };
 }
 
 function enforceExposure(deps: ReceiveQuoteDeps, policy: Policy, loan: bigint): void {
     const advance = deps.advances.exposureTotals();
-    const swaps = deps.swapFills?.exposureTotals() ?? { outstandingSats: 0n, activeCount: 0 };
     const receive = deps.receiveQuotes.exposureTotals();
-    if (
-        advance.outstandingSats + swaps.outstandingSats + receive.outstandingSats + loan >
-        policy.maxOutstandingSats
-    )
+    if (advance.outstandingSats + receive.outstandingSats + loan > policy.maxOutstandingSats)
         throw admissionError("exceeds_max_outstanding");
-    if (
-        advance.lockedCount + swaps.activeCount + receive.activeCount >=
-        policy.maxConcurrentAdvances
-    )
+    if (advance.lockedCount + receive.activeCount >= policy.maxConcurrentAdvances)
         throw admissionError("max_concurrent_advances");
 }
 
@@ -560,12 +504,12 @@ const sameOutpoints = (a: readonly Outpoint[], b: readonly Outpoint[]): boolean 
     return first.size === b.length && b.every(({ txid, vout }) => first.has(`${txid}:${vout}`));
 };
 
-function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
+function toResponse(quote: ReceiveQuote, config: RuntimeConfig): ReceiveQuoteResponse {
     return {
         quoteId: quote.id,
         state: quote.state,
         receiverAddress: quote.receiverAddress,
-        makerPublicKey: quote.makerPublicKey,
+        senderKey: quote.senderKey,
         params: quoteParamsToWire(quote.params),
         covenantAddress: quote.covenantAddress,
         fare: fareToWire(quote.fare),
@@ -580,6 +524,10 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
         },
         createdAt: quote.createdAt,
         expiresAt: quote.expiresAt,
+        operatorInputs: quote.operatorInputs.map(fundingInputToWire),
+        operatorScript: bytesToHex(
+            new ArkAddress(config.serverPubkey, config.operatorKey, config.addressHrp).pkScript,
+        ),
         ...(quote.boundFillId === undefined ? {} : { boundFillId: quote.boundFillId }),
         ...(quote.payer === "receiver"
             ? {
@@ -592,11 +540,11 @@ function toResponse(quote: ReceiveQuote): ReceiveQuoteResponse {
 }
 
 export function getReceiveQuote(
-    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now">,
+    deps: Pick<ReceiveQuoteDeps, "receiveQuotes" | "now" | "config">,
     id: string,
 ): ReceiveQuoteResponse {
     deps.receiveQuotes.expireQuotes(deps.now());
     const quote = deps.receiveQuotes.get(id);
     if (!quote) throw new ServiceError(ErrorCode.NotFound, 404, `receive quote ${id} not found`);
-    return toResponse(quote);
+    return toResponse(quote, deps.config);
 }
