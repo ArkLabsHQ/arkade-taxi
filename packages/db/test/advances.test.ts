@@ -103,6 +103,19 @@ describe("round-trip fidelity", () => {
         expect(repo.get("unit")?.paymentSats).toBeUndefined();
     });
 
+    it("round-trips the sender's extra packet and leaves it absent without one", () => {
+        const extraPacket = { type: 5, payload: Uint8Array.from([0xab, 0xcd, 0xef]) };
+        repo.insert(advance({ id: "packet", extraPacket }));
+        repo.insert(advance({ id: "plain" }));
+        expect(repo.get("packet")?.extraPacket).toEqual(extraPacket);
+        expect(repo.get("plain")?.extraPacket).toBeUndefined();
+        expect(() =>
+            repo.insert(
+                advance({ id: "empty", extraPacket: { type: 5, payload: new Uint8Array() } }),
+            ),
+        ).toThrow(/CHECK constraint/);
+    });
+
     it("round-trips the exit params", () => {
         const a = advance({
             operatorSignerKey: new Uint8Array(32).fill(7),

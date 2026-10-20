@@ -18,6 +18,7 @@ const COLUMNS = [
     "dust",
     "topup",
     "payment_sats",
+    "extra_packet",
     "asset_txid",
     "asset_group_index",
     "asset_units",
@@ -102,6 +103,7 @@ interface AdvanceRow {
     dust: bigint;
     topup: bigint;
     payment_sats: bigint | null;
+    extra_packet: Buffer | null;
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
     asset_units: bigint | null;
@@ -224,6 +226,9 @@ function toParams(a: Advance): AdvanceParams {
         dust: a.dust,
         topup: a.topup,
         payment_sats: a.paymentSats ?? null,
+        extra_packet: a.extraPacket
+            ? Buffer.from([a.extraPacket.type, ...a.extraPacket.payload])
+            : null,
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
         asset_units: a.assetUnits ?? null,
@@ -355,6 +360,14 @@ function fromRow(r: AdvanceRow): Advance {
         dust: r.dust,
         topup: r.topup,
         ...(r.payment_sats !== null ? { paymentSats: r.payment_sats } : {}),
+        ...(r.extra_packet !== null
+            ? {
+                  extraPacket: {
+                      type: r.extra_packet[0]!,
+                      payload: bytes(r.extra_packet.subarray(1)),
+                  },
+              }
+            : {}),
         locktime: r.locktime,
         covenantAddress: r.covenant_address,
         fare:

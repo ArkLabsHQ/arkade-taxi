@@ -724,6 +724,13 @@ export const MIGRATIONS: readonly Migration[] = [
         DROP TABLE swap_fill_reservations;
         DROP TABLE swap_fills;`,
     },
+    {
+        id: 19,
+        compat: "additive",
+        // The type byte then the payload. NULL is a graph without one, which keeps rebuilding unchanged.
+        up: `ALTER TABLE advances ADD COLUMN extra_packet BLOB
+                CHECK (extra_packet IS NULL OR length(extra_packet) >= 2)`,
+    },
 ];
 
 /** Every table and column this build reads, keyed by the migration that added it. */

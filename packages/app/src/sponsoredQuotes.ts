@@ -362,6 +362,7 @@ async function createReservedSponsoredQuote(
         dust: params.dust,
         topup: params.contribution,
         ...(params.paymentSats !== undefined ? { paymentSats: params.paymentSats } : {}),
+        ...(params.extraPacket ? { extraPacket: params.extraPacket } : {}),
         locktime,
         ...funding,
         batchExpiry: expiry,

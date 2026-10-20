@@ -330,6 +330,7 @@ function sponsoredRequest(advance: Advance, request: LockupBuildRequest): Sponso
             contribution: advance.topup,
             ...(advance.paymentSats !== undefined ? { paymentSats: advance.paymentSats } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
+            ...(advance.extraPacket ? { extraPacket: advance.extraPacket } : {}),
         },
         receiverAddress: advance.covenantAddress,
         fare: advance.fare,
