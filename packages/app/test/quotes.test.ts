@@ -167,10 +167,16 @@ describe("createQuote", () => {
         expect(() => validatePersistedLockupGraph(swapped, config())).toThrow(/persisted/);
     });
 
-    it.each([0, 1])("refuses an extra packet of the reserved type %s", async (type) => {
-        await expect(
-            createQuote(deps(), quoteBody({ extraPacket: { type, payload: "abcd" } })),
-        ).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/reserved/) });
+    it.each([
+        ["the reserved type 0", { type: 0, payload: "abcd" }, /reserved/],
+        ["the reserved type 1", { type: 1, payload: "abcd" }, /reserved/],
+        ["uppercase hex", { type: 5, payload: "ABCD" }, /lowercase hex/],
+        ["a payload over the cap", { type: 5, payload: "ab".repeat(1025) }, /exceeds 1024 bytes/],
+    ])("refuses an extra packet with %s", async (_name, extraPacket, message) => {
+        await expect(createQuote(deps(), quoteBody({ extraPacket }))).rejects.toMatchObject({
+            status: 400,
+            message: expect.stringMatching(message),
+        });
     });
 
     it("keeps bitcoin claims free of an asset quantity", async () => {

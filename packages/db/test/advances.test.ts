@@ -116,6 +116,15 @@ describe("round-trip fidelity", () => {
         ).toThrow(/CHECK constraint/);
     });
 
+    it("fails loudly on an extra packet that bypassed its CHECK", () => {
+        repo.insert(
+            advance({ id: "bypassed", extraPacket: { type: 5, payload: Uint8Array.of(1) } }),
+        );
+        db.pragma("ignore_check_constraints = ON");
+        db.prepare("UPDATE advances SET extra_packet = X'05' WHERE id = 'bypassed'").run();
+        expect(() => repo.get("bypassed")).toThrow(/extra_packet holds no payload/);
+    });
+
     it("round-trips the exit params", () => {
         const a = advance({
             operatorSignerKey: new Uint8Array(32).fill(7),

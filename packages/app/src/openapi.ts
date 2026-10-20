@@ -472,7 +472,10 @@ const schemas: Record<string, Schema> = {
     ExtraPacket: {
         description:
             "Extension packet the transaction must carry after the asset groups, e.g. an offer's packet when funding it. Types 0 and 1 are reserved for the asset and emulator packets. A sponsored quote echoes it in `params`; a lockup carries it in the graph the sender rebuilds.",
-        ...object({ type: { type: "integer", minimum: 2, maximum: 255 }, payload: hex }),
+        ...object({
+            type: { type: "integer", minimum: 2, maximum: 255 },
+            payload: { ...hex, maxLength: 2048 },
+        }),
     },
     SponsoredQuoteRequest: object(
         {
