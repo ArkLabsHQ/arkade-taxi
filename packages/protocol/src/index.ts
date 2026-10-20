@@ -119,6 +119,11 @@ export interface QuoteRequestBody {
     assetUnits?: string;
     /** Which offered fare the client accepts. Omitted takes the operator's first. */
     fareId?: string;
+    /**
+     * An extra extension packet the lockup must carry, declared by the sender, after
+     * the asset groups. Not a covenant parameter, so it leaves the address unchanged.
+     */
+    extraPacket?: { type: number; payload: string };
 }
 
 /** Everything needed to re-derive the covenant address independently. The

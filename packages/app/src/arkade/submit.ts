@@ -303,6 +303,7 @@ function assertPersistedGraph(
         covenantAddress: advance.covenantAddress,
         fare: advance.fare,
         ...(envelope.satsFarePayer === undefined ? {} : { satsFarePayer: envelope.satsFarePayer }),
+        ...(advance.extraPacket ? { extraPacket: advance.extraPacket } : {}),
     };
     const unroll = CSVMultisigTapscript.decode(hex.decode(envelope.serverUnrollScript));
     const rebuilt =
@@ -330,6 +331,7 @@ function sponsoredRequest(advance: Advance, request: LockupBuildRequest): Sponso
             contribution: advance.topup,
             ...(advance.paymentSats !== undefined ? { paymentSats: advance.paymentSats } : {}),
             ...(advance.assetId ? { assetId: advance.assetId } : {}),
+            ...(advance.extraPacket ? { extraPacket: advance.extraPacket } : {}),
         },
         receiverAddress: advance.covenantAddress,
         fare: advance.fare,
