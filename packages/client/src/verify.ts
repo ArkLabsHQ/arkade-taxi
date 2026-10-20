@@ -67,6 +67,8 @@ export interface QuoteExpectation {
      * self-consistently. Omitted accepts the operator's resolution. */
     claimMode?: "recycle" | "purchase";
     recoveryRecipient?: "sender" | "receiver";
+    /** The packet the caller asked the lockup to carry; the rebuild compared byte for byte holds it. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface VerifyQuoteArgs {
@@ -269,6 +271,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
         trustedServerUnrollScript: args.trustedServerUnrollScript,
         vtxoMinAmount,
         hrp,
+        ...(expect.extraPacket ? { extraPacket: expect.extraPacket } : {}),
     };
     const validated = validateLockup({ quote: args.quote, ...lockupContext });
     const result = Object.freeze({

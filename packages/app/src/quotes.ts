@@ -53,6 +53,7 @@ import {
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { totalExposure } from "./exposure.js";
 import { admissionError, ErrorCode, sanitizeOperationalError, ServiceError } from "./errors.js";
+import { decodeExtraPacket, type ExtraPacket } from "./extraPacket.js";
 import { validateLockupSubmission, type LockupSubmitter } from "./arkade/submit.js";
 
 export interface LockupBuildRequest {
@@ -69,6 +70,7 @@ export interface LockupBuildRequest {
      * instead of operator change. Absent reconstructs a funded legacy graph. */
     satsFarePayer?: "sender";
     senderSats: bigint;
+    extraPacket?: ExtraPacket;
 }
 
 export interface LockupBuilder {
@@ -355,6 +357,7 @@ function decodeBody(body: unknown): {
     fareId?: string;
     claimMode?: "recycle" | "purchase";
     assetId?: { txid: Uint8Array; groupIndex: number };
+    extraPacket?: ExtraPacket;
 } {
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
         throw badRequest("request body must be a JSON object");
@@ -407,9 +410,11 @@ function decodeBody(body: unknown): {
         if (k.length !== 32) throw badRequest(`${name} must be 32 bytes, got ${k.length}`);
     }
 
-    if (b.assetId === undefined) return decoded;
+    const extraPacket = decodeExtraPacket(b.extraPacket);
+    const withPacket = extraPacket ? { ...decoded, extraPacket } : decoded;
+    if (b.assetId === undefined) return withPacket;
     try {
-        return { ...decoded, assetId: assetIdFromWire(b.assetId) };
+        return { ...withPacket, assetId: assetIdFromWire(b.assetId) };
     } catch (e) {
         throw ServiceError.from(e);
     }
@@ -678,6 +683,7 @@ async function createReservedQuote(
         senderSats: req.senderSats,
         senderInputs: req.senderInputs,
         ...(req.assetUnits !== undefined ? { assetUnits: req.assetUnits } : {}),
+        ...(req.extraPacket ? { extraPacket: req.extraPacket } : {}),
     };
     trace?.observe("quote.builder", "start");
     const funding = await deps.lockupBuilder.buildUnsigned(
@@ -736,6 +742,7 @@ async function createReservedQuote(
         dust: params.dust,
         topup: params.topup,
         ...(params.paymentSats !== undefined ? { paymentSats: params.paymentSats } : {}),
+        ...(req.extraPacket ? { extraPacket: req.extraPacket } : {}),
         locktime: params.locktime,
         claimMode: decision.claim,
         recoveryLocktime: { kind: "time", value: params.locktime },

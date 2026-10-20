@@ -8,7 +8,6 @@ import {
 import {
     assetIdFromWire,
     fareToWire,
-    hexToBytes,
     satsFromWire,
     sponsoredParamsToWire,
     type FundingInputValue,
@@ -29,6 +28,7 @@ import { assertFreshSafety, selectOperatorFunding } from "./arkade/inventory.js"
 import { unionReservedOutpoints } from "./arkade/reservedOutpoints.js";
 import { totalExposure } from "./exposure.js";
 import { admissionError, ErrorCode, ServiceError } from "./errors.js";
+import { decodeExtraPacket } from "./extraPacket.js";
 import {
     createAdmittedQuote,
     decodeSenderFunding,
@@ -159,17 +159,7 @@ function decodeBody(
     )
         throw badRequest("receiverAddress names the wrong Arkade server key");
 
-    let extraPacket: { type: number; payload: Uint8Array } | undefined;
-    if (b.extraPacket !== undefined) {
-        const e = b.extraPacket;
-        if (e === null || typeof e !== "object" || Array.isArray(e))
-            throw badRequest("extraPacket must be an object");
-        if (!Number.isInteger(e.type) || e.type < 0 || e.type > 255)
-            throw badRequest("extraPacket.type must be a one-byte tag");
-        if (typeof e.payload !== "string" || !/^([0-9a-fA-F]{2})+$/.test(e.payload))
-            throw badRequest("extraPacket.payload must be non-empty hex");
-        extraPacket = { type: e.type, payload: hexToBytes(e.payload, "extraPacket.payload") };
-    }
+    const extraPacket = decodeExtraPacket(b.extraPacket);
     const tail = {
         ...decoded,
         receiverAddress: b.receiverAddress,
