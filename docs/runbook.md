@@ -362,9 +362,11 @@ that guard destroys the operational guarantee.
 
 ## Upgrade and rollback
 
-Discover the current stable SDK with
-`pnpm view @arkade-os/sdk version dist-tags --json`. This repository pins
-SDK `0.5.6` and swap `0.1.6` in its manifests and lockfile. Run all
+This repository pins unpublished SDK `0.5.7-taxi.0` and swap `0.1.7-taxi.0`
+archives in its manifests and lockfile. Their source commits and authenticated
+bytes are recorded in [vendor/sdk](../vendor/sdk/manifest.json) and
+[vendor/swap](../vendor/swap/manifest.json). The SDK's durable reservation APIs and
+the swap package's compiler-defined offers are required by this stack. Run all
 repository, image, package and fresh-master E2E gates after dependency changes.
 Record the actual master SHA from the current run's `stack.json`, not a previous
 log or a pinned checkout.

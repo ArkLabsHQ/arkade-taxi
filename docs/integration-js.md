@@ -46,7 +46,11 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Install `@arkade-taxi/client` and `@arkade-os/sdk@0.5.6`. Call this function with Alice's
+Use `@arkade-taxi/client@0.1.0` and the SDK candidate pinned in this repository's
+[dependency manifest](../vendor/sdk/manifest.json). Wallet applications should use
+[`createTaxiSender`](../packages/client/WALLET.md), whose durable reservation and
+recovery adapters coordinate Taxi with ordinary sends. The lower-level example
+below requires the application to provide that coordination. Call it with Alice's
 initialized wallet, Bob's full address, the selected offer's `fareId`, and policy/trust facts
 from the wallet's own configuration. `assetUnits` is Bob's payment quantity; the fare is additional.
 Offers come from `/v1/info` `assetRules`: USDT's own rule, or the `"*"` rule when it has none.
@@ -263,8 +267,9 @@ keys into the trusted fields. Bob also pins Taxi's operator repayment key.
 The address HRP and embedded server key must agree with these trusted facts.
 
 Validate the trusted Arkade Service's `checkpointTapscript` with SDK
-`assertValidServerUnrollScript` and `defaultCheckpointExitDelayPolicy`
-for your locally configured network. Pass the validated `.script` to
+`assertValidServerUnrollScript(checkpointTapscript, network, forfeitPubkey)`
+using your locally configured SDK network and the service's independently trusted
+x-only forfeit key. Pass the validated `.script` to
 Alice's `trustedServerUnrollScript`; Bob's `config.serverUnrollScript`
 is the same validated script encoded as lowercase hex. His config also names
 the trusted `arkdUrl`, `emulatorUrl`, `network` and current `chainHeight`
