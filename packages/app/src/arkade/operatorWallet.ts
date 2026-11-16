@@ -331,6 +331,14 @@ export function createOperatorRuntime(
                             identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
                             arkProvider: Object.assign(Object.create(providers.arkProvider), {
                                 getInfo: async () => verified.info!,
+                                deleteIntent: (
+                                    intent: Parameters<
+                                        typeof providers.arkProvider.deleteIntent
+                                    >[0],
+                                ) =>
+                                    timed("runtime.intent.deleteIntent", () =>
+                                        providers.arkProvider.deleteIntent(intent),
+                                    ),
                                 registerIntent: async (
                                     intent: Parameters<
                                         typeof providers.arkProvider.registerIntent
@@ -345,14 +353,28 @@ export function createOperatorRuntime(
                                                 "background_settlement_spends_held_coin",
                                             );
                                         await assertPersistedRegistration(intent);
-                                        return providers.arkProvider.registerIntent(intent);
+                                        if (!backgroundSettling || stopped || live !== token)
+                                            throw new Error("background_settlement_not_authorized");
+                                        return timed("runtime.background.registerIntent", () =>
+                                            providers.arkProvider.registerIntent(intent),
+                                        );
                                     }
                                     if (!settlementGuard || live !== token)
                                         throw new Error("proceeds_submission_not_authorized");
                                     await assertPersistedRegistration(intent);
-                                    const enter = await settlementGuard(intent);
+                                    const guard = settlementGuard;
+                                    if (!guard || live !== token)
+                                        throw new Error("proceeds_submission_not_authorized");
+                                    const enter = await timed(
+                                        "runtime.proceeds.registrationGuard",
+                                        () => guard(intent),
+                                    );
+                                    if (live !== token || settlementGuard !== guard)
+                                        throw new Error("proceeds_submission_not_authorized");
                                     enter();
-                                    return providers.arkProvider.registerIntent(intent);
+                                    return timed("runtime.proceeds.registerIntent", () =>
+                                        providers.arkProvider.registerIntent(intent),
+                                    );
                                 },
                             }),
                             indexerProvider: providers.indexerProvider,
