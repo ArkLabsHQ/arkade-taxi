@@ -147,25 +147,11 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.5.0-rc.18` and
-`@arkade-os/swap@0.1.0-rc.21` are both published, but npm answers those coordinates
-with a **different build**: what this repository runs against is the pair built
-from `arkade-os/ts-sdk` at `99313fa7`, and no registry carries those bytes.
-`vendor/carrier/` holds them as tracked archives named for that source commit,
-`vendor/carrier/manifest.json` records the provenance of each, and the root
-`pnpm-workspace.yaml` overrides point every resolution — direct and transitive — at those
-bytes.
-
-Because the version numbers themselves resolve, **dropping or narrowing an
-override does not fail loudly** — it installs the registry build under the same
-number. So the overrides are load-bearing for correctness, not merely for
-version pinning, and `pnpm verify:artifacts` is what stands behind them: it runs
-on built-in Node with nothing installed, fails on a source, identity or hash
-mismatch, and once `node_modules` exists it loads every declared resolution and
-requires the pinned SDK deadline and swap fill-builder exports. Every path that installs
-dependencies runs it before the install and again after it. Re-freezing the
-bundle is `node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout>`,
-then `pnpm install`, then `pnpm verify:artifacts`.
+Dependencies use the published `@arkade-os/sdk@0.5.6` and `@arkade-os/swap@0.1.6`
+packages. The committed lockfile pins their registry integrity hashes; install
+with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
+client, covenant and protocol packages, then installs those exact tarballs in a
+fresh consumer and verifies their identity and resolution before testing.
 
 Recompile the covenant from its Arkade source and prove no byte moved:
 
@@ -218,8 +204,7 @@ selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.
 and publishes its results alongside it. Verify those results with
 `node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
 
-The lockfile uses the frozen SDK and swap builds recorded in
-`vendor/carrier/manifest.json`. Repeat the entire gate against current regtest
+Repeat the entire gate against current regtest
 master after updating providers or artifacts. A successful run proves that
 recorded provider combination. See [E2E instructions](e2e/README.md).
 

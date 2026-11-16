@@ -101,6 +101,7 @@ export const fundingCoin = (over: Partial<ExtendedVirtualCoin> = {}): ExtendedVi
     isPreconfirmed: true,
     tapTree: operatorTree.encode(),
     forfeitTapLeafScript: operatorTree.leaves[0],
+    proofTapLeafScript: operatorTree.leaves[0],
     intentTapLeafScript: operatorTree.leaves[0],
     ...over,
 });

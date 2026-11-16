@@ -32,6 +32,7 @@ const coin = (): ExtendedVirtualCoin => ({
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],
+    proofTapLeafScript: senderTree.leaves[0],
     intentTapLeafScript: senderTree.leaves[0],
 });
 

@@ -3,6 +3,10 @@ import { createServer } from "node:net";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 
+export const TAXI_VERSION = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+).version;
+
 const ACTORS = ["operator", "sender", "receiverWithAsset", "receiverSats", "emptyReceiver"];
 const SECRET_KEY =
     /(?:secret|private.?key|privkey|mnemonic|seed|password|token|credential|authorization|cookie|wif)/i;
@@ -318,8 +322,8 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
         },
         pnpm: {
             overrides: {
-                "@arkade-taxi/covenant@0.0.0": "$@arkade-taxi/covenant",
-                "@arkade-taxi/protocol@0.0.0": "$@arkade-taxi/protocol",
+                [`@arkade-taxi/covenant@${TAXI_VERSION}`]: "$@arkade-taxi/covenant",
+                [`@arkade-taxi/protocol@${TAXI_VERSION}`]: "$@arkade-taxi/protocol",
             },
         },
     };
@@ -365,7 +369,7 @@ export function assertPackResult(output, expected, exists = existsSync) {
     const filename = typeof result?.filename === "string" ? paths.resolve(result.filename) : "";
     if (
         result?.name !== expected.name ||
-        result?.version !== "0.0.0" ||
+        result?.version !== TAXI_VERSION ||
         paths.dirname(filename) !== paths.resolve(expected.packDir) ||
         !exists(filename)
     )
@@ -387,7 +391,7 @@ export function assertLocalConsumerResolution(manifest, lock, listed) {
             !spec.startsWith("file:") ||
             !lock.includes(spec) ||
             dependency?.resolved !== spec ||
-            dependency?.version !== "0.0.0"
+            dependency?.version !== TAXI_VERSION
         )
             throw new Error(`${name} did not resolve from its local tarball`);
     }

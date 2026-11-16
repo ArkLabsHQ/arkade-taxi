@@ -519,19 +519,19 @@ describe("package manager process boundary", () => {
 
     it("builds a consumer manifest from exactly three local Taxi tarballs", () => {
         const tarballs = [
-            "/tmp/run/packs/arkade-taxi-covenant-0.0.0.tgz",
-            "/tmp/run/packs/arkade-taxi-protocol-0.0.0.tgz",
-            "/tmp/run/packs/arkade-taxi-client-0.0.0.tgz",
+            "/tmp/run/packs/arkade-taxi-covenant-0.1.0.tgz",
+            "/tmp/run/packs/arkade-taxi-protocol-0.1.0.tgz",
+            "/tmp/run/packs/arkade-taxi-client-0.1.0.tgz",
         ];
         const manifest = buildConsumerManifest(tarballs, "/tmp/run/consumer", "linux");
         expect(manifest.dependencies).toEqual({
-            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-0.0.0.tgz",
-            "@arkade-taxi/covenant": "file:../packs/arkade-taxi-covenant-0.0.0.tgz",
-            "@arkade-taxi/protocol": "file:../packs/arkade-taxi-protocol-0.0.0.tgz",
+            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-0.1.0.tgz",
+            "@arkade-taxi/covenant": "file:../packs/arkade-taxi-covenant-0.1.0.tgz",
+            "@arkade-taxi/protocol": "file:../packs/arkade-taxi-protocol-0.1.0.tgz",
         });
         expect(manifest.pnpm.overrides).toEqual({
-            "@arkade-taxi/covenant@0.0.0": "$@arkade-taxi/covenant",
-            "@arkade-taxi/protocol@0.0.0": "$@arkade-taxi/protocol",
+            "@arkade-taxi/covenant@0.1.0": "$@arkade-taxi/covenant",
+            "@arkade-taxi/protocol@0.1.0": "$@arkade-taxi/protocol",
         });
         expect(JSON.stringify(manifest)).not.toContain('"0.0.0"');
         const lock = Object.values(manifest.dependencies).join("\n");
@@ -539,7 +539,7 @@ describe("package manager process boundary", () => {
             dependencies: Object.fromEntries(
                 Object.entries(manifest.dependencies).map(([name, resolved]) => [
                     name,
-                    { resolved, version: "0.0.0" },
+                    { resolved, version: "0.1.0" },
                 ]),
             ),
         };
@@ -551,7 +551,7 @@ describe("package manager process boundary", () => {
                     ...listed.dependencies,
                     "@arkade-taxi/protocol": {
                         resolved: "https://registry.npmjs.org/@arkade-taxi/protocol",
-                        version: "0.0.0",
+                        version: "0.1.0",
                     },
                 },
             }),
@@ -594,12 +594,12 @@ describe("package manager process boundary", () => {
 
     it("validates pack identity and detects tarball mutation", () => {
         const packDir = join("tmp", "packs");
-        const filename = resolve(packDir, "arkade-taxi-client-0.0.0.tgz");
+        const filename = resolve(packDir, "arkade-taxi-client-0.1.0.tgz");
         expect(
             assertPackResult(
                 JSON.stringify({
                     name: "@arkade-taxi/client",
-                    version: "0.0.0",
+                    version: "0.1.0",
                     filename,
                 }),
                 { name: "@arkade-taxi/client", packDir },

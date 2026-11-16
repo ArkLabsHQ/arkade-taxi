@@ -363,8 +363,8 @@ that guard destroys the operational guarantee.
 ## Upgrade and rollback
 
 Discover the current stable SDK with
-`pnpm view @arkade-os/sdk version dist-tags --json`; the 2026-09-12 registry
-checkpoint is stable `0.4.72` (the `rc` tag is a separate prerelease). Run all
+`pnpm view @arkade-os/sdk version dist-tags --json`. This repository pins
+SDK `0.5.6` and swap `0.1.6` in its manifests and lockfile. Run all
 repository, image, package and fresh-master E2E gates after dependency changes.
 Record the actual master SHA from the current run's `stack.json`, not a previous
 log or a pinned checkout.

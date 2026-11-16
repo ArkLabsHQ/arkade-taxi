@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     ArkAddress,
-    collectIntents,
+    collectBatchRegistrations,
     Estimator,
     Extension,
     Wallet,
@@ -140,7 +140,7 @@ function setup(
         },
         storage: {
             intentRepository: {
-                getIntentsPage: async () => ({ items: intents }),
+                getBatchRegistrationsPage: async () => ({ items: intents }),
                 getLockedVtxoOutpoints: async () => sdkLocks,
             },
         },
@@ -181,7 +181,7 @@ function setup(
             const register = vi.fn(async () => {
                 throw new Error("registration response lost");
             });
-            const remove = vi.fn(async () => {
+            const remove = vi.fn(async (): Promise<void> => {
                 throw new Error("delete unavailable");
             });
             const sign = vi.fn(async (coins: Outpoint[], ..._args: unknown[]) => ({
@@ -205,9 +205,10 @@ function setup(
                 getContractManager: async () => ({ assertAnnotatable: async () => {} }),
                 _addPendingSpends: () => {},
                 _removePendingSpends: () => {},
+                _settlingOutpoints: new Set(),
                 intentRepository: {
-                    getIntentsPage: async () => ({ items: intents }),
-                    saveIntent: save,
+                    getBatchRegistrationsPage: async () => ({ items: intents }),
+                    saveBatchRegistration: save,
                 },
                 arkProvider: {
                     getEventStream: async function* () {},
@@ -779,7 +780,7 @@ describe("durable proceeds collector", () => {
         const collector = createProceedsCollector(s.deps);
         await collector.tick();
         expect(sdk.register).not.toHaveBeenCalled();
-        const records = await collectIntents(s.deps.runtime.storage.intentRepository);
+        const records = await collectBatchRegistrations(s.deps.runtime.storage.intentRepository);
         s.setIntents([{ ...records[0], registerProof: "unknown-proof" }]);
         s.setOutputs([receipt, spare, carrier]);
         await collector.tick();
@@ -799,6 +800,7 @@ describe("durable proceeds collector", () => {
                     else s.info.vtxoMaxAmount = 1000n;
                 },
             });
+            sdk.remove.mockResolvedValue();
             let collector = createProceedsCollector(s.deps);
             await collector.tick();
             expect(collector.status().blocker).toBe(
@@ -808,7 +810,9 @@ describe("durable proceeds collector", () => {
             );
             expect(sdk.register).not.toHaveBeenCalled();
             expect(sdk.save).toHaveBeenCalledTimes(2);
-            const records = await collectIntents(s.deps.runtime.storage.intentRepository);
+            const records = await collectBatchRegistrations(
+                s.deps.runtime.storage.intentRepository,
+            );
             expect(records).toHaveLength(1);
             expect(records[0]).toMatchObject({ state: "cancelled" });
             expect(records[0]!.validUntil).toBeUndefined();
@@ -836,9 +840,11 @@ describe("durable proceeds collector", () => {
         await collector.tick();
         expect(sdk.register).toHaveBeenCalledTimes(1);
         expect(sdk.remove).toHaveBeenCalledTimes(1);
-        expect(sdk.save).toHaveBeenCalledTimes(2);
-        expect(errors).toHaveBeenCalledTimes(2);
-        expect(await collectIntents(s.deps.runtime.storage.intentRepository)).toEqual([]);
+        expect(sdk.save).toHaveBeenCalledTimes(1);
+        expect(errors).toHaveBeenCalledTimes(1);
+        expect(await collectBatchRegistrations(s.deps.runtime.storage.intentRepository)).toEqual(
+            [],
+        );
         collector.stop();
         s.restartDatabase();
         s.setNow(365 * 86400000);
@@ -855,6 +861,7 @@ describe("durable proceeds collector", () => {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         const s = setup();
         const sdk = s.useActualSdk();
+        sdk.remove.mockResolvedValue();
         s.db.exec(
             "CREATE TRIGGER deny_proceeds_entry BEFORE UPDATE OF submission_state ON proceeds_jobs BEGIN SELECT RAISE(ABORT, 'SQLITE_FULL'); END",
         );
@@ -885,7 +892,7 @@ describe("durable proceeds collector", () => {
             expect(collector.status().blocker).toBe("proceeds_output_limit_exceeded");
             expect(s.settle).not.toHaveBeenCalled();
             expect(
-                await collectIntents(s.deps.runtime.storage.intentRepository, {
+                await collectBatchRegistrations(s.deps.runtime.storage.intentRepository, {
                     containingInputs: plan.inputs,
                 }),
             ).toEqual([]);
@@ -997,7 +1004,7 @@ describe("durable proceeds collector", () => {
         const s = setup();
         const repository = s.deps.runtime.storage.intentRepository;
         const record = {
-            intentTxId: "00".repeat(32),
+            proofTxId: "00".repeat(32),
             state: "waiting_for_batch" as const,
             createdAt: 0,
             updatedAt: 0,
@@ -1006,26 +1013,26 @@ describe("durable proceeds collector", () => {
             deleteProof: "delete",
             deleteProofMessage: "{}",
             partialForfeits: [],
-            intentVtxos: s.jobs.active()!.plan.inputs,
+            proofInputs: s.jobs.active()!.plan.inputs,
         };
         const pages = vi
-            .spyOn(repository, "getIntentsPage")
+            .spyOn(repository, "getBatchRegistrationsPage")
             .mockImplementation(async (filter, page) => {
-                expect(filter).toEqual({ containingInputs: record.intentVtxos });
+                expect(filter).toEqual({ containingInputs: record.proofInputs });
                 return page.after === undefined
-                    ? { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId }
-                    : { items: [{ ...record, intentTxId: "01".repeat(32) }] };
+                    ? { items: [{ ...record, validUntil: 99 }], nextCursor: record.proofTxId }
+                    : { items: [{ ...record, proofTxId: "01".repeat(32) }] };
             });
         const collector = createProceedsCollector(s.deps);
         await collector.tick();
         expect(pages).toHaveBeenCalledTimes(2);
-        expect(pages.mock.calls[1]![1].after).toBe(record.intentTxId);
+        expect(pages.mock.calls[1]![1].after).toBe(record.proofTxId);
         expect(collector.status().blocker).toBe("proceeds_ambiguous_intent");
         expect(s.settle).not.toHaveBeenCalled();
         expect(s.deps.reservations.listReservedOutpoints()).toHaveLength(2);
         pages.mockImplementation(async (_filter, page) => {
             if (page.after !== undefined) throw new Error("database is locked");
-            return { items: [{ ...record, validUntil: 99 }], nextCursor: record.intentTxId };
+            return { items: [{ ...record, validUntil: 99 }], nextCursor: record.proofTxId };
         });
         await collector.tick();
         expect(collector.status().blocker).toBe("proceeds_collection_failed");

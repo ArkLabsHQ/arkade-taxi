@@ -2,16 +2,22 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AdvanceRepository, openDatabase, PolicyRepository, type Database } from "@arkade-taxi/db";
 import {
     Wallet,
-    collectIntents,
+    collectBatchRegistrations,
     ArkAddress,
     VtxoScript,
     CSVMultisigTapscript,
     networks,
+    Transaction,
+    Proof,
+    ArkError,
     type WalletConfig,
     type ExtendedVirtualCoin,
     type ContractManager,
-    type ArkIntent,
+    type BatchRegistration,
+    type OnchainProvider,
+    type ArkProvider,
 } from "@arkade-os/sdk";
+import { base64 } from "@scure/base";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
     config,
@@ -31,7 +37,16 @@ import { resolveRuntimeConfig } from "../../src/config.js";
 import { createSpendWatcher } from "../../src/watcher.js";
 
 const proofOf = (inputs: { txid: string; vout: number }[]) =>
-    ({ proof: intentProof(inputs) }) as never;
+    ({
+        proof: intentProof(inputs),
+        message: {
+            type: "register",
+            valid_at: 0,
+            expire_at: 0,
+            onchain_output_indexes: [],
+            cosigners_public_keys: [],
+        },
+    }) satisfies Parameters<ArkProvider["registerIntent"]>[0];
 
 /** A batch output (or, preconfirmed, an offchain receipt) whose expiry is `seconds` after birth. */
 const livingFor = (seconds: number, isPreconfirmed = false): Partial<ExtendedVirtualCoin> => {
@@ -94,7 +109,7 @@ function setup({
     let creationEntered: (() => void) | undefined;
     const onchainProvider = {
         getChainTip: async () => ({ height, hash: "aa".repeat(32), time }),
-    } as WalletConfig["onchainProvider"];
+    } as OnchainProvider;
     type FakeWallet = ReturnType<typeof makeWallet>;
     // What the first wallet's poll does: board a deposit plus whatever renewal selects.
     let backgroundWork = async (self: FakeWallet): Promise<string> =>
@@ -110,8 +125,26 @@ function setup({
                 outputs: unknown[];
             }) => {
                 events.push(`settle:${params.inputs.map(({ txid }) => txid.slice(0, 2)).join()}`);
-                const id = await cfg.arkProvider!.registerIntent(proofOf(params.inputs));
+                const request = proofOf(params.inputs);
+                const record: BatchRegistration = {
+                    proofTxId: Transaction.fromPSBT(base64.decode(request.proof)).id,
+                    state: "waiting_to_submit",
+                    createdAt: now,
+                    updatedAt: now,
+                    registerProof: request.proof,
+                    registerProofMessage: Proof.encodeMessage(request.message),
+                    deleteProof: request.proof,
+                    deleteProofMessage: JSON.stringify({ type: "delete", expire_at: 0 }),
+                    partialForfeits: [],
+                    proofInputs: params.inputs,
+                };
+                await cfg.storage!.intentRepository!.saveBatchRegistration(record).catch(() => {});
+                const id = await cfg.arkProvider!.registerIntent(request);
                 await settleGate;
+                await cfg.storage!.intentRepository!.saveBatchRegistration({
+                    ...record,
+                    state: "batch_succeeded",
+                });
                 events.push("settle:end");
                 return id;
             },
@@ -278,7 +311,7 @@ describe("persistent operator runtime safety", () => {
     it("keeps canonical tip observation independent of a retired wallet while preserving a real tip failure pause", async () => {
         const s = setup();
         await s.runtime.refresh();
-        const onchainProvider = s.walletConfig.onchainProvider!;
+        const onchainProvider = s.walletConfig.onchainProvider as OnchainProvider;
         const getChainTip = vi.spyOn(onchainProvider, "getChainTip");
         const terms = new PolicyRepository(s.db);
         terms.update(policy(), "test");
@@ -453,7 +486,7 @@ describe("persistent operator runtime safety", () => {
             return "intent";
         });
         const work = s.runtime.withSettlement(
-            async () => s.walletConfig.arkProvider!.registerIntent({} as never),
+            async () => s.runtime.wallet!.settle({ inputs: [], outputs: [] }),
             async () => {
                 checking = true;
                 await gate;
@@ -476,12 +509,29 @@ describe("persistent operator runtime safety", () => {
             .mockResolvedValue("intent");
         await expect(
             s.runtime.withSettlement(
-                async () => s.walletConfig.arkProvider!.registerIntent({} as never),
+                async () => s.runtime.wallet!.settle({ inputs: [], outputs: [] }),
                 async () => () => {
                     throw new Error("SQLITE_FULL");
                 },
             ),
         ).rejects.toThrow("SQLITE_FULL");
+        expect(register).not.toHaveBeenCalled();
+    });
+    it("refuses provider submission when the SDK's initial registration journal write failed", async () => {
+        const s = setup();
+        await s.runtime.refresh();
+        vi.spyOn(s.runtime.storage.intentRepository, "saveBatchRegistration").mockRejectedValue(
+            new Error("SQLITE_FULL"),
+        );
+        const register = vi
+            .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+            .mockResolvedValue("intent");
+        await expect(
+            s.runtime.withSettlement(
+                async () => s.runtime.wallet!.settle({ inputs: [], outputs: [] }),
+                async () => () => {},
+            ),
+        ).rejects.toThrow("operator_registration_not_persisted");
         expect(register).not.toHaveBeenCalled();
     });
     it("pins an active settlement wallet across provider refresh and drains before disposal", async () => {
@@ -599,6 +649,7 @@ describe("persistent operator runtime safety", () => {
                 isPreconfirmed: true,
                 tapTree: script.encode(),
                 forfeitTapLeafScript: script.forfeit(),
+                proofTapLeafScript: script.forfeit(),
                 intentTapLeafScript: script.forfeit(),
             };
             vi.spyOn(wallet, "getContractManager").mockResolvedValue({
@@ -624,7 +675,7 @@ describe("persistent operator runtime safety", () => {
             heldOutpoints: () => [],
             onchainProvider: {
                 getChainTip: async () => ({ height: 100, time: 1789132000, hash: "aa".repeat(32) }),
-            } as WalletConfig["onchainProvider"],
+            } as OnchainProvider,
         });
         try {
             const snapshot = await runtime.refresh();
@@ -1170,8 +1221,8 @@ describe("the SDK's background settlement", () => {
 
 describe("SDK intents left waiting", () => {
     const coin = (id: string) => ({ txid: id.repeat(32), vout: 0 });
-    const intent = (id: string, over: Partial<ArkIntent> = {}): ArkIntent => ({
-        intentTxId: id.repeat(32),
+    const intent = (id: string, over: Partial<BatchRegistration> = {}): BatchRegistration => ({
+        proofTxId: id.repeat(32),
         state: "waiting_for_batch",
         createdAt: 500,
         updatedAt: 500,
@@ -1180,14 +1231,14 @@ describe("SDK intents left waiting", () => {
         deleteProof: `delete-${id}`,
         deleteProofMessage: JSON.stringify({ type: "delete", expire_at: 0 }),
         partialForfeits: [],
-        intentVtxos: [coin(id)],
+        proofInputs: [coin(id)],
         ...over,
     });
 
     const states = async (s: ReturnType<typeof setup>) =>
         Object.fromEntries(
-            (await collectIntents(s.runtime.storage.intentRepository)).map((i) => [
-                i.intentTxId.slice(0, 2),
+            (await collectBatchRegistrations(s.runtime.storage.intentRepository)).map((i) => [
+                i.proofTxId.slice(0, 2),
                 i.state,
             ]),
         );
@@ -1201,7 +1252,7 @@ describe("SDK intents left waiting", () => {
                     .map((o) => ({ ...o, isSpent: spent.includes(o.txid.slice(0, 2)) }) as never),
             }));
 
-    it("cancels an earlier process's intents, waiting or in a batch, unless held or settled", async () => {
+    it("keeps earlier registrations locked when deletion fails and retries until acknowledged", async () => {
         const s = setup();
         for (const record of [
             intent("a1"),
@@ -1211,7 +1262,7 @@ describe("SDK intents left waiting", () => {
             intent("a5", { createdAt: 1000 }),
             intent("a6"),
         ])
-            await s.runtime.storage.intentRepository.saveIntent(record);
+            await s.runtime.storage.intentRepository.saveBatchRegistration(record);
         s.setHeld([coin("a2")]);
         const remove = vi
             .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
@@ -1226,11 +1277,21 @@ describe("SDK intents left waiting", () => {
             message: { type: "delete", expire_at: 0 },
         });
         expect(await states(s)).toEqual({
-            a1: "cancelled",
+            a1: "waiting_for_batch",
             a2: "waiting_for_batch",
-            a3: "cancelled",
-            a4: "waiting_for_batch",
+            a3: "batch_in_progress",
+            a4: "batch_succeeded",
             a5: "waiting_for_batch",
+            a6: "waiting_for_batch",
+        });
+        expect(await s.runtime.storage.intentRepository.getLockedVtxoOutpoints()).toContainEqual(
+            coin("a1"),
+        );
+        remove.mockResolvedValue();
+        await s.runtime.refresh();
+        expect(await states(s)).toMatchObject({
+            a1: "cancelled",
+            a3: "cancelled",
             a6: "cancelled",
         });
     });
@@ -1240,20 +1301,20 @@ describe("SDK intents left waiting", () => {
         const repository = s.runtime.storage.intentRepository;
         const now = Date.now();
         for (let n = 0; n < 500; n++)
-            await repository.saveIntent(
+            await repository.saveBatchRegistration(
                 intent("00", {
-                    intentTxId: n.toString(16).padStart(64, "0"),
+                    proofTxId: n.toString(16).padStart(64, "0"),
                     createdAt: now + 4_000_000,
                 }),
             );
         for (const record of [intent("a1"), intent("a2"), intent("a3"), intent("a4")])
-            await repository.saveIntent(record);
+            await repository.saveBatchRegistration(record);
         s.setHeld([coin("a2")]);
         indexer(s, ["a3"], ["a4"]);
         const remove = vi
             .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
             .mockResolvedValue();
-        const pages = vi.spyOn(repository, "getIntentsPage");
+        const pages = vi.spyOn(repository, "getBatchRegistrationsPage");
         s.setNow(now + 3_600_501);
         const safety = await s.runtime.refresh();
         expect(remove.mock.calls.map(([request]) => request.proof)).toEqual([
@@ -1263,21 +1324,67 @@ describe("SDK intents left waiting", () => {
         expect(safety.blockers).toContain("operator_intent_stale");
         expect(pages.mock.calls.filter(([, page]) => page.after !== undefined)).toHaveLength(2);
         expect(
-            await collectIntents(repository, {
-                intentTxIds: ["a1", "a2", "a3", "a4"].map((id) => id.repeat(32)),
+            await collectBatchRegistrations(repository, {
+                proofTxIds: ["a1", "a2", "a3", "a4"].map((id) => id.repeat(32)),
             }),
         ).toMatchObject([
             { state: "cancelled" },
             { state: "waiting_for_batch" },
-            { state: "waiting_for_batch" },
+            { state: "batch_succeeded" },
             { state: "cancelled" },
         ]);
         await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
     });
 
+    it.each([
+        [
+            new ArkError(23, "no matching intents found for intent proof", "INVALID_INTENT_PROOF"),
+            "cancelled",
+        ],
+        [new ArkError(23, "proof signature invalid", "INVALID_INTENT_PROOF"), "waiting_for_batch"],
+        [new Error("no matching intents found"), "waiting_for_batch"],
+    ])(
+        "requires explicit operator absence evidence before releasing a retried deletion (%s)",
+        async (error, state) => {
+            const s = setup();
+            await s.runtime.storage.intentRepository.saveBatchRegistration(intent("d2"));
+            vi.spyOn(s.runtime.providers.arkProvider, "deleteIntent").mockRejectedValue(error);
+            indexer(s, []);
+            s.setNow(Date.now() + 600_000);
+            await s.runtime.refresh();
+            expect(await states(s)).toEqual({ d2: state });
+        },
+    );
+
+    it.each(["lookup", "deletion"])(
+        "retains a registration whose input gains a live owner during %s",
+        async (phase) => {
+            const s = setup();
+            await s.runtime.storage.intentRepository.saveBatchRegistration(intent("d3"));
+            vi.spyOn(s.runtime.providers.indexerProvider, "getVtxos").mockImplementation(
+                async () => {
+                    if (phase === "lookup") s.setHeld([coin("d3")]);
+                    return { vtxos: [] };
+                },
+            );
+            const remove = vi
+                .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
+                .mockImplementation(async () => {
+                    if (phase === "deletion") s.setHeld([coin("d3")]);
+                });
+            s.setNow(Date.now() + 600_000);
+            await s.runtime.refresh();
+            expect(remove).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
+            expect(await states(s)).toEqual({ d3: "waiting_for_batch" });
+            expect(
+                await s.runtime.storage.intentRepository.getLockedVtxoOutpoints(),
+            ).toContainEqual(coin("d3"));
+        },
+    );
+
     it("leaves an earlier process's intent alone until it has been quiet for a few sessions", async () => {
         const s = setup();
-        await s.runtime.storage.intentRepository.saveIntent(intent("d1"));
+        await s.runtime.storage.intentRepository.saveBatchRegistration(intent("d1"));
         const remove = vi
             .spyOn(s.runtime.providers.arkProvider, "deleteIntent")
             .mockResolvedValue();
@@ -1293,7 +1400,7 @@ describe("SDK intents left waiting", () => {
 
     it("stops reporting an earlier process's intents once startup has dealt with them", async () => {
         const s = setup();
-        await s.runtime.storage.intentRepository.saveIntent(
+        await s.runtime.storage.intentRepository.saveBatchRegistration(
             intent("e1", { state: "batch_in_progress" }),
         );
         vi.spyOn(s.runtime.providers.arkProvider, "deleteIntent").mockResolvedValue();
@@ -1301,13 +1408,13 @@ describe("SDK intents left waiting", () => {
         s.setNow(Date.now() + 2 * 3_600_000);
 
         const { blockers } = await s.runtime.refresh();
-        expect(await states(s)).toEqual({ e1: "batch_in_progress" });
+        expect(await states(s)).toEqual({ e1: "batch_succeeded" });
         expect(blockers).not.toContain("operator_intent_stale");
     });
 
     it("keeps recovery open when the intent records cannot be read", async () => {
         const s = setup();
-        vi.spyOn(s.runtime.storage.intentRepository, "getIntentsPage").mockRejectedValue(
+        vi.spyOn(s.runtime.storage.intentRepository, "getBatchRegistrationsPage").mockRejectedValue(
             new Error("database is locked"),
         );
         await expect(s.runtime.assertRecovery()).resolves.toBeDefined();
@@ -1315,7 +1422,9 @@ describe("SDK intents left waiting", () => {
 
     it("reports an intent still waiting after an hour, without stopping recovery", async () => {
         const s = setup();
-        await s.runtime.storage.intentRepository.saveIntent(intent("b1", { createdAt: 1000 }));
+        await s.runtime.storage.intentRepository.saveBatchRegistration(
+            intent("b1", { createdAt: 1000 }),
+        );
         const stale = async () =>
             (await s.runtime.refresh()).blockers.includes("operator_intent_stale");
 

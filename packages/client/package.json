@@ -1,6 +1,6 @@
 {
     "name": "@arkade-taxi/client",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -24,7 +24,7 @@
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*",
         "@arkade-taxi/protocol": "workspace:*",
-        "@arkade-os/sdk": "0.5.0-rc.18",
+        "@arkade-os/sdk": "0.5.6",
         "@noble/hashes": "^2.0.1",
         "@scure/base": "^2.0.0",
         "@scure/btc-signer": "2.4.1"

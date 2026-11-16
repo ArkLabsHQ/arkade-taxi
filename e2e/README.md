@@ -8,23 +8,13 @@ stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
-## Candidate packages this suite runs against
+## Packages this suite runs against
 
-`pnpm-lock.yaml` resolves `@arkade-os/sdk` and `@arkade-os/swap` from
-`vendor/carrier/*.tgz`, which are **tracked** and hash-pinned against
-`vendor/carrier/manifest.json`, so `pnpm install`, `docker build` and the
-harness's client pack all work from a clean checkout. The temporary consumer
-takes its overrides from that same manifest, so the packed client is exercised
-against the frozen candidates rather than silently falling back to the registry
-build of the same version numbers.
-
-The verifier checks each archive's digest and the lockfile's integrity against
-the manifest. The harness checks that the packed Taxi packages resolve from
-their local tarballs and that those archives stay unchanged during installation.
-After installation, it resolves the SDK and swap package from the consumer and
-the SDK from the installed client, checking the frozen versions and required
-capabilities. These capability checks do not compare every installed file with
-its archive.
+The lockfile pins published SDK `0.5.6` and swap `0.1.6` packages with their
+registry integrity hashes. The harness packs this checkout's client, covenant
+and protocol packages and installs those three tarballs in a fresh consumer.
+It checks their identities, verifies the consumer resolves each local tarball,
+and rejects stale build output before running the suite.
 
 ## Running it
 
