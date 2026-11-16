@@ -1,15 +1,15 @@
 {
     "package": "@arkade-os/swap",
-    "version": "0.1.7-taxi.1",
-    "file": "arkade-os-swap-0.1.7-taxi.1-309701dc.tgz",
-    "sha256": "f943d702c51544b9fe8d2d8af3092e1ebeb8282e8872719123b8b40a805869ac",
-    "integrity": "sha512-wTAuy1fSx4QjyVgSYJxv5uLpzi1ir1wYZxXAyXNk0SRVGReMSk8yb6YLG9l9qThWm2jIFmS9Ct+AK8zSoBG5AQ==",
-    "bytes": 674566,
+    "version": "0.2.0-taxi.0",
+    "file": "arkade-os-swap-0.2.0-taxi.0-37aa317a.tgz",
+    "sha256": "faa05b0abb38570bebf603e2c79f94c2fb3c2d8087e43d59d11b4790d9e0f7da",
+    "integrity": "sha512-cUTofSeNbcJRRN6vNE0R1CEa2p0Dqijrj0M2Lk3y0e7pK82d6j0ztKHvN4cwcroSVv/buUmlZl/YiYnbwhUy1A==",
+    "bytes": 676360,
     "sourceRepository": "https://github.com/arkade-os/ts-sdk",
-    "sourceCommit": "309701dc0dc10a20bdb8e81c8c9ca5aa499498ef",
-    "sourceTree": "aa2036b2a9ce183ee3e467bac68fa5602d6a74c3",
+    "sourceCommit": "37aa317a08750dd39b5a9f639f4d0452d46655fa",
+    "sourceTree": "e501340fb5478c818695705857ddf7a97f50c01e",
     "sourceDirectory": "packages/swap",
-    "sourceDirectoryTree": "9c92319e903d8824b2565f78bcdd81bf34723768",
+    "sourceDirectoryTree": "86f474277188acda7ec3969acb4d5f2d31f11404",
     "baseCommit": "ec5155987fc97f249a13ba4208d78e5b007b9a98",
     "node": "v24.22.1",
     "pnpm": "10.25.0",
@@ -31,9 +31,16 @@
             }
         ]
     },
-    "packCommand": "pnpm -C packages/swap pack",
+    "packCommand": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261116/arkade-os-swap-0.2.0-taxi.0-37aa317a.tgz",
     "registryPublished": false,
     "license": "MIT",
     "sdkDependency": "0.5.6",
-    "swapUnitTestsPassed": 2120
+    "swapUnitTestsPassed": 2142,
+    "workerSdkRequirement": "0.5.7-taxi.2",
+    "testedWorkerSdk": null,
+    "localTestSdk": {
+        "version": "0.5.6",
+        "sourceDirectory": "packages/sdk",
+        "sourceDirectoryTree": "2ff58662d8cabd9bd88abf66a0cdfc3b6d9726d9"
+    }
 }

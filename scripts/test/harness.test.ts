@@ -524,11 +524,11 @@ describe("package manager process boundary", () => {
         const tarballs = [
             "/tmp/run/packs/arkade-taxi-covenant-0.1.0.tgz",
             "/tmp/run/packs/arkade-taxi-protocol-0.1.0.tgz",
-            "/tmp/run/packs/arkade-taxi-client-0.1.0.tgz",
+            "/tmp/run/packs/arkade-taxi-client-0.2.0-taxi.0.tgz",
         ];
         const manifest = buildConsumerManifest(tarballs, "/tmp/run/consumer", "linux");
         expect(manifest.dependencies).toMatchObject({
-            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-0.1.0.tgz",
+            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-0.2.0-taxi.0.tgz",
             "@arkade-taxi/covenant": "file:../packs/arkade-taxi-covenant-0.1.0.tgz",
             "@arkade-taxi/protocol": "file:../packs/arkade-taxi-protocol-0.1.0.tgz",
         });
@@ -542,7 +542,10 @@ describe("package manager process boundary", () => {
             dependencies: Object.fromEntries(
                 Object.entries(manifest.dependencies).map(([name, resolved]) => [
                     name,
-                    { resolved, version: "0.1.0" },
+                    {
+                        resolved,
+                        version: name === "@arkade-taxi/client" ? "0.2.0-taxi.0" : "0.1.0",
+                    },
                 ]),
             ),
         };
@@ -617,12 +620,12 @@ describe("package manager process boundary", () => {
 
     it("validates pack identity and detects tarball mutation", () => {
         const packDir = join("tmp", "packs");
-        const filename = resolve(packDir, "arkade-taxi-client-0.1.0.tgz");
+        const filename = resolve(packDir, "arkade-taxi-client-0.2.0-taxi.0.tgz");
         expect(
             assertPackResult(
                 JSON.stringify({
                     name: "@arkade-taxi/client",
-                    version: "0.1.0",
+                    version: "0.2.0-taxi.0",
                     filename,
                 }),
                 { name: "@arkade-taxi/client", packDir },

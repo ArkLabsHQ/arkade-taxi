@@ -7,7 +7,14 @@ const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 const projectManifest = JSON.parse(
     readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
 );
-export const TAXI_VERSION = projectManifest.version;
+export const TAXI_VERSIONS = Object.fromEntries(
+    ["client", "covenant", "protocol"].map((name) => {
+        const manifest = JSON.parse(
+            readFileSync(new URL(`../../packages/${name}/package.json`, import.meta.url), "utf8"),
+        );
+        return [manifest.name, manifest.version];
+    }),
+);
 
 const ACTORS = ["operator", "sender", "receiverWithAsset", "receiverSats", "emptyReceiver"];
 const SECRET_KEY =
@@ -308,8 +315,10 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
                 ...Object.fromEntries(
                     Object.entries(dependencies).filter(([, spec]) => spec.startsWith("file:")),
                 ),
-                [`@arkade-taxi/covenant@${TAXI_VERSION}`]: "$@arkade-taxi/covenant",
-                [`@arkade-taxi/protocol@${TAXI_VERSION}`]: "$@arkade-taxi/protocol",
+                [`@arkade-taxi/covenant@${TAXI_VERSIONS["@arkade-taxi/covenant"]}`]:
+                    "$@arkade-taxi/covenant",
+                [`@arkade-taxi/protocol@${TAXI_VERSIONS["@arkade-taxi/protocol"]}`]:
+                    "$@arkade-taxi/protocol",
             },
         },
     };
@@ -355,7 +364,8 @@ export function assertPackResult(output, expected, exists = existsSync) {
     const filename = typeof result?.filename === "string" ? paths.resolve(result.filename) : "";
     if (
         result?.name !== expected.name ||
-        result?.version !== TAXI_VERSION ||
+        !TAXI_VERSIONS[expected.name] ||
+        result?.version !== TAXI_VERSIONS[expected.name] ||
         paths.dirname(filename) !== paths.resolve(expected.packDir) ||
         !exists(filename)
     )
@@ -369,7 +379,7 @@ export function assertTarballIntegrity(before, after) {
 }
 
 export function assertLocalConsumerResolution(manifest, lock, listed) {
-    for (const name of ["@arkade-taxi/client", "@arkade-taxi/covenant", "@arkade-taxi/protocol"]) {
+    for (const [name, version] of Object.entries(TAXI_VERSIONS)) {
         const spec = manifest?.dependencies?.[name];
         const dependency = listed?.dependencies?.[name];
         if (
@@ -377,7 +387,7 @@ export function assertLocalConsumerResolution(manifest, lock, listed) {
             !spec.startsWith("file:") ||
             !lock.includes(spec) ||
             dependency?.resolved !== spec ||
-            dependency?.version !== TAXI_VERSION
+            dependency?.version !== version
         )
             throw new Error(`${name} did not resolve from its local tarball`);
     }

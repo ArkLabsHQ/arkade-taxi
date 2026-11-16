@@ -136,7 +136,6 @@ comes from pinned wallet config, never from the URI.
 ## Development
 
 ```bash
-pnpm verify:artifacts
 pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
@@ -147,14 +146,18 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-The service uses the unpublished `@arkade-os/sdk@0.5.7-taxi.0` candidate in
+The service uses the unpublished `@arkade-os/sdk@0.5.7-taxi.2` candidate in
 `vendor/sdk`, whose source and archive hash are recorded in its manifest. The
 workspace override applies those same bytes to every SDK consumer. The test suite
-uses the compiler-defined `@arkade-os/swap@0.1.7-taxi.1` candidate recorded in
+uses the compiler-defined `@arkade-os/swap@0.2.0-taxi.0` candidate recorded in
 `vendor/swap`. The committed lockfile pins dependency integrity;
 install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
 client, covenant and protocol packages, then installs those exact tarballs in a
 fresh consumer and verifies their identity and resolution before testing.
+
+The client candidate is `0.2.0-taxi.0`; covenant and protocol remain `0.1.0`.
+Worker wallets require the same SDK candidate in the page and worker. Reload
+existing tabs after updating the worker so both sides use the scoped requests.
 
 Recompile the covenant from its Arkade source and prove no byte moved:
 

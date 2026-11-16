@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-    TAXI_VERSION,
+    TAXI_VERSIONS,
     assertArtifactSafe,
     assertCleanupCandidates,
     assertLocalConsumerResolution,
@@ -660,7 +660,10 @@ export const packClient = async (root, env) => {
             "utf8",
         ),
     );
-    if (installed.name !== "@arkade-taxi/client" || installed.version !== TAXI_VERSION)
+    if (
+        installed.name !== "@arkade-taxi/client" ||
+        installed.version !== TAXI_VERSIONS["@arkade-taxi/client"]
+    )
         throw new Error("installed packed client identity changed");
     const listed = JSON.parse(
         (
