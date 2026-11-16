@@ -46,14 +46,11 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Use `@arkade-taxi/client@0.1.0` and the SDK candidate pinned in this repository's
-[dependency manifest](../vendor/sdk/manifest.json). Wallet applications should use
-[`createTaxiSender`](../packages/client/WALLET.md), whose durable reservation and
-recovery adapters coordinate Taxi with ordinary sends. The lower-level example
-below requires the application to provide that coordination. Call it with Alice's
-initialized wallet, Bob's full address, the selected offer's `fareId`, and policy/trust facts
-from the wallet's own configuration. `assetUnits` is Bob's payment quantity; the fare is additional.
-Offers come from `/v1/info` `assetRules`: USDT's own rule, or the `"*"` rule when it has none.
+Use `@arkade-taxi/client@0.1.0` with the [pinned SDK](../vendor/sdk/manifest.json).
+Wallet apps should use [`createTaxiSender`](../packages/client/WALLET.md) for durable reservations and recovery.
+This lower-level example requires equivalent coordination. Pass Alice's initialized wallet, Bob's full address,
+the selected `fareId` and wallet-configured trust facts. `assetUnits` is Bob's quantity; the fare is additional.
+Offers come from `/v1/info` `assetRules`: the asset's rule, or `"*"` when absent.
 
 ```ts
 import { TaxiClient, type RequestVerifiedQuoteArgs } from "@arkade-taxi/client";
@@ -266,14 +263,12 @@ already trusts, or a pinned deployment configuration. Decode their compressed
 keys into the trusted fields. Bob also pins Taxi's operator repayment key.
 The address HRP and embedded server key must agree with these trusted facts.
 
-Validate the trusted Arkade Service's `checkpointTapscript` with SDK
-`assertValidServerUnrollScript(checkpointTapscript, network, forfeitPubkey)`
-using your locally configured SDK network and the service's independently trusted
-x-only forfeit key. Pass the validated `.script` to
-Alice's `trustedServerUnrollScript`; Bob's `config.serverUnrollScript`
-is the same validated script encoded as lowercase hex. His config also names
-the trusted `arkdUrl`, `emulatorUrl`, `network` and current `chainHeight`
-for height-based expiry checks.
+Validate the trusted service's `checkpointTapscript` using
+`assertValidServerUnrollScript(checkpointTapscript, network, forfeitPubkey)` with the locally configured SDK
+network and independently trusted x-only forfeit key. Pass its `.script` as Alice's
+`trustedServerUnrollScript` and its lowercase hex as Bob's `config.serverUnrollScript`.
+Bob's config also names the trusted `arkdUrl`, `emulatorUrl`, `network` and current
+`chainHeight` for height-based expiry checks.
 
 The SDK REST providers use the realm's `globalThis.fetch`.
 `TaxiClient({ fetch })` does not configure covenant provider calls.
