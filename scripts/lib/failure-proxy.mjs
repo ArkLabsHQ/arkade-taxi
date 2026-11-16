@@ -2,9 +2,10 @@ import { createServer, request as httpRequest } from "node:http";
 
 export async function createFailureProxy(targets) {
     let rules = [];
+    let nextRuleId = 0;
     const events = [];
     const submissionCounts = { arkd: 0, emulator: 0 };
-    const paused = new Set();
+    const paused = new Map();
     const sockets = new Set();
     const record = (event) => {
         const recorded = { at: Date.now(), ...event };
@@ -17,10 +18,15 @@ export async function createFailureProxy(targets) {
         if (events.length > 30000) events.shift();
         return recorded;
     };
-    const reset = () => {
-        rules = [];
-        for (const resume of paused) resume();
-        paused.clear();
+    const reset = (ruleId) => {
+        if (ruleId !== undefined && (!Number.isInteger(ruleId) || ruleId < 1))
+            throw new Error("invalid failure proxy rule ID");
+        rules = rules.filter((rule) => ruleId !== undefined && rule.id !== ruleId);
+        for (const [resume, id] of paused) {
+            if (ruleId !== undefined && id !== ruleId) continue;
+            paused.delete(resume);
+            resume();
+        }
     };
     const server = createServer((request, response) => {
         const [target, ...parts] = request.url.slice(1).split("/");
@@ -90,9 +96,14 @@ export async function createFailureProxy(targets) {
                         });
                     } else if (rule?.mode === "pause" && rule.phase !== "request") {
                         result.pause();
-                        paused.add(forward);
+                        paused.set(forward, rule.id);
                         result.on("close", () => paused.delete(forward));
-                        record({ target, path: path.split("?")[0], action: "paused" });
+                        record({
+                            target,
+                            path: path.split("?")[0],
+                            action: "paused",
+                            ruleId: rule.id,
+                        });
                     } else forward();
                     response.on("close", () => result.destroy());
                 },
@@ -103,9 +114,9 @@ export async function createFailureProxy(targets) {
         };
         if (rule?.mode === "pause" && rule.phase === "request") {
             request.pause();
-            paused.add(send);
+            paused.set(send, rule.id);
             response.on("close", () => paused.delete(send));
-            record({ target, path: path.split("?")[0], action: "request-paused" });
+            record({ target, path: path.split("?")[0], action: "request-paused", ruleId: rule.id });
         } else send();
     });
     server.on("connection", (socket) => {
@@ -125,7 +136,9 @@ export async function createFailureProxy(targets) {
                 !rule.path.startsWith("/")
             )
                 throw new Error("invalid failure proxy rule");
-            rules.push({ ...rule });
+            const id = ++nextRuleId;
+            rules.push({ ...rule, id });
+            return id;
         },
         reset,
         events,

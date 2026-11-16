@@ -101,7 +101,7 @@ export const SCENARIOS = [
     },
     {
         id: "fill-pending-accepted-quarantine",
-        title: "a lost accepted arkd reply quarantines its funding until the original transaction is finalized",
+        title: "a lost accepted arkd reply quarantines its funding until original finalization is proven",
     },
     {
         id: "fill-undersigned-foreign-input",

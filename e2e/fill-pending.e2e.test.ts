@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { ArkAddress, RestArkProvider } from "@arkade-os/sdk";
+import { ArkAddress } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import { TaxiClient, verifyQuote } from "@arkade-taxi/client";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
@@ -10,7 +10,6 @@ import {
     directCounters,
     directEvidence,
     directReady,
-    finalizeAcceptedDirectFill,
     postDirectFill,
     prepareDirectFill,
     recycleDirectFill,
@@ -36,6 +35,13 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
     try {
         const { live, graph, quote } = prepared;
         const before = await directCounters();
+        const outputProof = await control("configure", {
+            target: "arkd",
+            path: "/v1/indexer/vtxos",
+            mode: "pause",
+            phase: "request",
+            query: { outpoints: `${graph.arkTx.id}:0` },
+        });
         await control("configure", {
             target: "arkd",
             path: "/v1/tx/submit",
@@ -69,7 +75,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
         expect(await live.client.status(quote.quoteId)).toMatchObject({ state: "locking" });
         const inputs = [...prepared.callerCoins, ...quote.operatorInputs];
         const acceptedInputs = await poll(
-            "accepted inputs carry their original pending spend",
+            "accepted inputs carry their original spend",
             async () =>
                 (
                     await live.indexer.getVtxos({
@@ -88,13 +94,16 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
                 }),
             120_000,
         );
-        expect(
-            (
-                await live.indexer.getVtxos({
-                    outpoints: [0, 2].map((vout) => ({ txid: graph.arkTx.id, vout })),
-                })
-            ).vtxos,
-        ).toEqual([]);
+        await poll(
+            "original transaction output proof is unavailable",
+            () => control("events"),
+            (snapshot) =>
+                snapshot.events.some(
+                    (event: any) =>
+                        event.action === "request-paused" && event.ruleId === outputProof.ruleId,
+                ),
+            120_000,
+        );
         const quarantined = await poll(
             "fresh pending quarantine past quote and submit lease",
             health,
@@ -159,7 +168,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
         const admitted = await unrelatedQuote();
         expect((await directReady()).status).toBe(503);
         const outageAt = Math.floor(Date.now() / 1000);
-        await control("configure", {
+        const sourceProof = await control("configure", {
             target: "arkd",
             path: "/v1/indexer/vtxos",
             mode: "pause",
@@ -172,7 +181,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
                 (await control("events")).events.some(
                     (event: any) =>
                         event.target === "arkd" &&
-                        event.path === "/v1/indexer/vtxos" &&
+                        event.ruleId === sourceProof.ruleId &&
                         event.action === "request-paused" &&
                         event.at >= outageAt * 1000,
                 ),
@@ -191,7 +200,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
             code: "not_ready",
         });
         expect(responseStatuses).toEqual([503, 503]);
-        await control("reset");
+        await control("reset", { ruleId: sourceProof.ruleId });
         const resetAt = Math.floor(Date.now() / 1000);
         await poll(
             "pending input observation refreshes after outage",
@@ -205,28 +214,15 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
         const beforeCleanup = await directCounters();
         expect(beforeCleanup.submit).toBe(afterDrop.submit);
         expect(beforeCleanup.finalize).toBe(afterDrop.finalize);
-        const provider = new RestArkProvider(required("TAXI_E2E_ARKD_URL"));
-        const cleanupCalls = { pending: 0, finalize: 0 };
-        await finalizeAcceptedDirectFill({
-            graph,
-            callerCoins: prepared.callerCoins,
-            pendingWallet: prepared.caller.wallet,
-            provider: {
-                getPendingTxs: (proof) => {
-                    cleanupCalls.pending++;
-                    return provider.getPendingTxs(proof);
-                },
-                finalizeTx: (txid, checkpoints) => {
-                    expect(txid).toBe(graph.arkTx.id);
-                    cleanupCalls.finalize++;
-                    return provider.finalizeTx(txid, checkpoints);
-                },
-            },
-            operatorIdentity: live.actors.operator.identity,
+        expect(await live.client.fillStatus(bound.boundFillId!)).toMatchObject({
+            state: "submitting",
         });
+        await control("reset", { ruleId: outputProof.ruleId });
         const settled = await settledDirectFill(prepared);
-        expect(cleanupCalls).toEqual({ pending: 1, finalize: 1 });
-        expect((await directCounters()).submit).toBe(afterDrop.submit);
+        const afterSettlement = await directCounters();
+        expect(afterSettlement.submit).toBe(afterDrop.submit);
+        expect(afterSettlement.finalize).toBe(afterDrop.finalize);
+        expect(afterSettlement.emulator).toBe(afterDrop.emulator);
         const money = await recycleDirectFill(prepared);
         Object.assign(observed, {
             quoteId: quote.quoteId,
@@ -244,8 +240,9 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
             admitted,
             readmitted,
             signatures: settled.signatures,
-            counters: { before, afterDrop, beforeCleanup },
-            cleanupCalls,
+            counters: { before, afterDrop, beforeCleanup, afterSettlement },
+            finalization: "arkd-one-shot",
+            proofFaults: { output: outputProof.ruleId, source: sourceProof.ruleId },
             ...money,
         });
     } finally {

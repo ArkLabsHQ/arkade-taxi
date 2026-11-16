@@ -163,6 +163,53 @@ it("holds real upstream reads until reset releases the waiting response", async 
     expect(await pending).toMatchObject({ effects: 0 });
 });
 
+it("restores source reads while output proof remains unavailable", async () => {
+    const { proxy } = await setup();
+    const outputRule = proxy.configure({
+        target: "arkd",
+        path: "/vtxos",
+        query: { outpoints: "output:0" },
+        mode: "pause",
+        phase: "request",
+    });
+    const sourceRule = proxy.configure({
+        target: "arkd",
+        path: "/vtxos",
+        query: { outpoints: "source:0" },
+        mode: "pause",
+        phase: "request",
+    });
+    let outputReceived = false;
+    const output = fetch(`${proxy.url}/arkd/vtxos?outpoints=output:0`).then(async (response) => {
+        outputReceived = true;
+        return response.json();
+    });
+    const source = fetch(`${proxy.url}/arkd/vtxos?outpoints=source:0`).then((response) =>
+        response.json(),
+    );
+    try {
+        await vi.waitFor(() => {
+            expect(
+                proxy.events.filter((event: any) => event.action === "request-paused"),
+            ).toHaveLength(2);
+        });
+        expect(
+            await fetch(`${proxy.url}/arkd/vtxos?outpoints=unrelated:0`).then((r) => r.json()),
+        ).toMatchObject({ effects: 0 });
+        proxy.reset(sourceRule);
+        expect(await source).toMatchObject({ effects: 0 });
+        expect(outputReceived).toBe(false);
+        expect(
+            await fetch(`${proxy.url}/arkd/vtxos?outpoints=source:0`).then((r) => r.json()),
+        ).toMatchObject({ effects: 0 });
+        proxy.reset(outputRule);
+        expect(await output).toMatchObject({ effects: 0 });
+    } finally {
+        proxy.reset();
+        await Promise.all([source, output]);
+    }
+});
+
 it("pauses request reads without performing a mutation until released", async () => {
     const { proxy, effects } = await setup();
     proxy.configure({

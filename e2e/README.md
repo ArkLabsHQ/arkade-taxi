@@ -70,10 +70,11 @@ depends on.
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
 chain time a day ahead. `fill-undersigned-foreign-input` tests pre-submit refusal
 without spending any Taxi input. `fill-pending-accepted-quarantine` drops an
-accepted arkd submit reply before finalization, retains the bound liability past
-TTL, and checks fresh observation, admission on other coins and outage refusal.
-It retrieves the original pending transaction and finalizes that same graph,
-then claims and recycles it. Both modes run each isolated scenario before the
+accepted arkd submit reply while output proof is unavailable, retains the bound
+liability past TTL, and checks fresh source observation, admission on other coins
+and outage refusal. Restoring proof settles the original one-shot transaction
+without another submission or finalization call, then claims and recycles it.
+Both modes run each isolated scenario before the
 shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
 checks one such run, whose artifacts land in `e2e-artifacts/isolated/<test>/` (or

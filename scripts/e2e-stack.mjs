@@ -1073,8 +1073,9 @@ await import("/app/dist/cli.js");
                 for await (const chunk of request) chunks.push(chunk);
                 const command = JSON.parse(Buffer.concat(chunks).toString());
                 let result = { ok: true };
-                if (command.action === "configure") failureProxy.configure(command.rule);
-                else if (command.action === "reset") failureProxy.reset();
+                if (command.action === "configure")
+                    result = { ok: true, ruleId: failureProxy.configure(command.rule) };
+                else if (command.action === "reset") failureProxy.reset(command.rule?.ruleId);
                 else if (command.action === "events")
                     result = {
                         events: failureProxy.events,
