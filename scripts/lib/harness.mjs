@@ -485,6 +485,24 @@ const composeServiceNames = (source) => {
     return [...section.matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)].map((match) => match[1]);
 };
 
+export function withoutMempoolMiningAnalytics(compose) {
+    const begin = "\n  mempool_api:";
+    const end = "\n  mempool_web:";
+    if (compose.split(begin).length !== 2 || compose.split(end).length !== 2)
+        throw new Error("arkade-regtest mempool service boundaries changed");
+    const start = compose.indexOf(begin);
+    const stop = compose.indexOf(end);
+    if (stop < start) throw new Error("arkade-regtest mempool service order changed");
+    const service = compose.slice(start, stop);
+    if ([...service.matchAll(/DATABASE_ENABLED: "(true|false)"/g)].length !== 1)
+        throw new Error("arkade-regtest mempool API database setting changed");
+    return (
+        compose.slice(0, start) +
+        service.replace('DATABASE_ENABLED: "true"', 'DATABASE_ENABLED: "false"') +
+        compose.slice(stop)
+    );
+}
+
 export function namespaceRegtestSources(sources, project, expectedPortBindings) {
     isolatedProject(project);
     if (!Array.isArray(expectedPortBindings) || !expectedPortBindings.length)

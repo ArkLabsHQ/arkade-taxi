@@ -54,6 +54,7 @@ import {
     removeStaleFailureDiagnostics,
     sanitizeError,
     taxiLogArgs,
+    withoutMempoolMiningAnalytics,
 } from "../lib/harness.mjs";
 import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
@@ -63,6 +64,44 @@ import {
     expiryOf,
     stubDelegateProvider,
 } from "../e2e-wallets.mjs";
+
+describe("ephemeral regtest Esplora", () => {
+    const source = `services:
+  another:
+    environment:
+      DATABASE_ENABLED: "true"
+  mempool_api:
+    environment:
+      DATABASE_ENABLED: "true"
+      MEMPOOL_BACKEND: electrum
+      ELECTRUM_HOST: fulcrum
+      CORE_RPC_HOST: bitcoin
+  mempool_web:
+    environment:
+      DATABASE_ENABLED: "true"
+`;
+
+    it("preserves real RPC and Electrum while disabling only mining analytics", () => {
+        const expected = source.replace(
+            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "true"',
+            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "false"',
+        );
+        expect(withoutMempoolMiningAnalytics(source)).toBe(expected);
+        expect(withoutMempoolMiningAnalytics(expected)).toBe(expected);
+    });
+
+    it.each([
+        source.replace("  mempool_api:", "  renamed_api:"),
+        source.replace("  mempool_web:", "  renamed_web:"),
+        source.replace("  mempool_api:", "  mempool_api:\n  mempool_api:"),
+        source.replace(
+            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "true"',
+            "  mempool_api:\n    environment:\n      DATABASE_ENABLED: true",
+        ),
+    ])("refuses a changed compose contract", (changed) => {
+        expect(() => withoutMempoolMiningAnalytics(changed)).toThrow(/changed/);
+    });
+});
 
 it("pins and verifies the zero-fee settlement fixture without raising Taxi fee authority", () => {
     expect(Object.values(ARKD_FEES)).toEqual(["0.0", "0.0", "0.0", "0.0"]);

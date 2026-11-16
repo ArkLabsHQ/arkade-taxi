@@ -52,6 +52,7 @@ import {
     resolveE2eOptions,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
+    withoutMempoolMiningAnalytics,
 } from "./lib/harness.mjs";
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
@@ -822,7 +823,7 @@ async function main(isolatedFile = undefined) {
         });
         const base = join(runner, "docker", "compose.base.yml");
         const ark = join(runner, "docker", "compose.ark.yml");
-        const baseSource = readFileSync(base, "utf8");
+        const baseSource = withoutMempoolMiningAnalytics(readFileSync(base, "utf8"));
         const arkSource = readFileSync(ark, "utf8");
         const portBindings = discoverPortBindings(
             `${baseSource}\n${arkSource}`,
