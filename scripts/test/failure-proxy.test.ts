@@ -210,6 +210,67 @@ it("restores source reads while output proof remains unavailable", async () => {
     }
 });
 
+it("delays only the selected output projection while preserving real upstream reads", async () => {
+    let reads = 0;
+    const expected = {
+        vtxos: [{ txid: "ab".repeat(32), vout: 0 }],
+        pagination: { next: "cursor" },
+    };
+    const { proxy } = await setup((request, response) => {
+        reads++;
+        response.writeHead(request.url?.includes("failure=1") ? 503 : 200, {
+            "content-type": "application/json",
+        });
+        response.end(JSON.stringify(expected));
+    });
+    const outpoint = `${"ab".repeat(32)}:0`;
+    const rule = proxy.configure({
+        target: "arkd",
+        path: "/v1/indexer/vtxos",
+        method: "GET",
+        query: { outpoints: outpoint },
+        mode: "projection-lag",
+    });
+    const url = `${proxy.url}/arkd/v1/indexer/vtxos?outpoints=${outpoint}`;
+    expect(await fetch(url).then((response) => response.json())).toEqual({
+        ...expected,
+        vtxos: [],
+    });
+    expect(reads).toBe(1);
+    expect(proxy.events.at(-1)).toMatchObject({ action: "projection-delayed", ruleId: rule });
+    expect(
+        await fetch(url.replace(outpoint, `${"cd".repeat(32)}:1`)).then((r) => r.json()),
+    ).toEqual(expected);
+    const unavailable = await fetch(`${url}&failure=1`);
+    expect(unavailable.status).toBe(503);
+    expect(await unavailable.json()).toEqual(expected);
+    proxy.reset(rule);
+    expect(await fetch(url).then((response) => response.json())).toEqual(expected);
+    expect(reads).toBe(4);
+});
+
+it.each([
+    { method: "POST" },
+    { method: undefined },
+    { target: "emulator" },
+    { path: "/v1/tx/submit" },
+    { query: {} },
+    { query: { outpoints: "invalid" } },
+    { query: { outpoints: `${"ab".repeat(32)}:0`, scripts: "other" } },
+])("refuses projection lag outside an exact indexer outpoint read: %j", async (changed) => {
+    const { proxy } = await setup();
+    expect(() =>
+        proxy.configure({
+            target: "arkd",
+            path: "/v1/indexer/vtxos",
+            method: "GET",
+            query: { outpoints: `${"ab".repeat(32)}:0` },
+            mode: "projection-lag",
+            ...changed,
+        }),
+    ).toThrow(/invalid/);
+});
+
 it("pauses request reads without performing a mutation until released", async () => {
     const { proxy, effects } = await setup();
     proxy.configure({

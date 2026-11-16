@@ -38,8 +38,8 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
         const outputProof = await control("configure", {
             target: "arkd",
             path: "/v1/indexer/vtxos",
-            mode: "pause",
-            phase: "request",
+            mode: "projection-lag",
+            method: "GET",
             query: { outpoints: `${graph.arkTx.id}:0` },
         });
         await control("configure", {
@@ -100,7 +100,8 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
             (snapshot) =>
                 snapshot.events.some(
                     (event: any) =>
-                        event.action === "request-paused" && event.ruleId === outputProof.ruleId,
+                        event.action === "projection-delayed" &&
+                        event.ruleId === outputProof.ruleId,
                 ),
             120_000,
         );
@@ -171,8 +172,9 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
         const sourceProof = await control("configure", {
             target: "arkd",
             path: "/v1/indexer/vtxos",
-            mode: "pause",
-            phase: "request",
+            mode: "drop",
+            method: "GET",
+            once: false,
             query: { outpoints: point(prepared.callerCoins[0]!) },
         });
         await poll(
@@ -182,7 +184,7 @@ liveScenario("fill-pending-accepted-quarantine", async () => {
                     (event: any) =>
                         event.target === "arkd" &&
                         event.ruleId === sourceProof.ruleId &&
-                        event.action === "request-paused" &&
+                        event.action === "dropped" &&
                         event.at >= outageAt * 1000,
                 ),
             (seen) => seen,

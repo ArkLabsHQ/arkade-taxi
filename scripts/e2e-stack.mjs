@@ -1547,3 +1547,5 @@ if (mainPath && fileURLToPath(import.meta.url) === mainPath)
             process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
             process.exitCode = 1;
         });
+
+export { main as runStack };
