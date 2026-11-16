@@ -150,7 +150,7 @@ both happen.
 The service uses the unpublished `@arkade-os/sdk@0.5.7-taxi.0` candidate in
 `vendor/sdk`, whose source and archive hash are recorded in its manifest. The
 workspace override applies those same bytes to every SDK consumer. The test suite
-uses the compiler-defined `@arkade-os/swap@0.1.7-taxi.0` candidate recorded in
+uses the compiler-defined `@arkade-os/swap@0.1.7-taxi.1` candidate recorded in
 `vendor/swap`. The committed lockfile pins dependency integrity;
 install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
 client, covenant and protocol packages, then installs those exact tarballs in a
