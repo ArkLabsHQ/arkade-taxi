@@ -134,11 +134,14 @@ try {
                 private: true,
                 type: "module",
                 dependencies: Object.fromEntries(packed.map((e) => [e.name, spec(e.path)])),
-                pnpm: { overrides: Object.fromEntries(packed.map((e) => [e.name, spec(e.path)])) },
             },
             null,
             2,
         )}\n`,
+    );
+    writeFileSync(
+        join(consumer, "pnpm-workspace.yaml"),
+        `${JSON.stringify({ overrides: Object.fromEntries(packed.map((e) => [e.name, spec(e.path)])) }, null, 2)}\n`,
     );
     runPnpm(
         consumer,

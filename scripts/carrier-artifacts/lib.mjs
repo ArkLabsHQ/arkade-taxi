@@ -495,10 +495,13 @@ export function readFlatMapping(yaml, key) {
     if (body === undefined) return undefined;
     const mapping = {};
     for (const line of body) {
-        const pair = /^ +(?:'([^']+)'|([^\s:'][^:]*)):\s+(?:'([^']*)'|(\S.*?))\s*$/.exec(line);
+        const pair =
+            /^ +(?:"([^"]+)"|'([^']+)'|([^\s:'"][^:]*)):\s+(?:"([^"]*)"|'([^']*)'|(\S.*?))\s*$/.exec(
+                line,
+            );
         if (!pair)
             throw new Error(`${key} contains a line this reader will not interpret: ${line}`);
-        mapping[pair[1] ?? pair[2]] = pair[3] ?? pair[4];
+        mapping[pair[1] ?? pair[2] ?? pair[3]] = pair[4] ?? pair[5] ?? pair[6];
     }
     return mapping;
 }

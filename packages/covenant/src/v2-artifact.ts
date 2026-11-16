@@ -4,7 +4,6 @@ import { loanSats, recycleFare, type DustCovenantParams } from "./params.js";
 
 export { V2_ARTIFACT };
 
-/** Same namespace value-space quirk artifact.ts documents: these do not resolve as types. */
 type Compiled = InstanceType<typeof arkade.ArkadeProgramScript>;
 type Args = ConstructorParameters<typeof arkade.ArkadeProgramScript>[1];
 
@@ -25,7 +24,6 @@ export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
         operatorSats,
         loan: loanSats(p),
         locktime: p.locktime,
-        // Encoded here: artifact.ts's typed v1 mirror passes the bare value instead.
         exitDelay: BigInt(timelockToSequence(p.exitDelay)),
         hasAsset: p.assetId ? 1n : 0n,
         assetTxid: p.assetId?.txid ?? NO_ASSET,

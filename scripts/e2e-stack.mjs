@@ -107,6 +107,8 @@ const SERVICES = [
     "mempool_web",
     "lnd",
     "arkd-wallet",
+    "arkd-signer",
+    "redis",
     "arkd",
     "arkade-wallet",
     "arkade-explorer",
@@ -121,6 +123,8 @@ const DIAGNOSTIC_SERVICES = [
     "mempool_api",
     "mempool_web",
     "arkd-wallet",
+    "arkd-signer",
+    "redis",
     "arkd",
     "emulator",
 ];
@@ -659,7 +663,9 @@ export const packClient = async (root, env) => {
         manifest.dependencies[name] = spec;
         manifest.pnpm.overrides[name] = spec;
     }
-    writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    const { pnpm: workspace, ...consumerPackage } = manifest;
+    writeFileSync(join(consumer, "pnpm-workspace.yaml"), `${JSON.stringify(workspace, null, 2)}\n`);
+    writeFileSync(join(consumer, "package.json"), `${JSON.stringify(consumerPackage, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
         {

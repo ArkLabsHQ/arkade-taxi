@@ -57,14 +57,9 @@ const faults = [
     ],
     [
         "B",
-        "root override of swap back to a registry coordinate",
-        [ROOT],
-        () =>
-            sub(
-                ROOT,
-                `"overrides": {\n            "@arkade-os/sdk": "${SDK_SPEC}",\n            "@arkade-os/swap": "${SWAP_SPEC}"`,
-                `"overrides": {\n            "@arkade-os/sdk": "${SDK_SPEC}",\n            "@arkade-os/swap": "${swap.version}"`,
-            ),
+        "workspace override of swap back to a registry coordinate",
+        [WS],
+        () => sub(WS, SWAP_SPEC, swap.version),
     ],
     [
         "C",
@@ -176,23 +171,19 @@ const faults = [
     ],
     [
         "Q",
-        "pnpm-workspace.yaml grows an overrides block",
-        [WS],
-        () =>
-            writeFileSync(
-                at(WS),
-                `${text(WS)}\noverrides:\n    '@arkade-os/swap': ${swap.version}\n`,
-            ),
+        "settings moved back to ignored package.json field",
+        [ROOT],
+        () => {
+            const manifest = readJson(at(ROOT));
+            manifest.pnpm = { overrides: { "@arkade-os/swap": SWAP_SPEC } };
+            writeFileSync(at(ROOT), `${JSON.stringify(manifest, null, 4)}\n`);
+        },
     ],
     [
         "Q2",
-        "the same, behind a trailing comment",
+        "workspace override missing behind a trailing comment",
         [WS],
-        () =>
-            writeFileSync(
-                at(WS),
-                `${text(WS)}\noverrides: # pinned upstream\n    '@arkade-os/swap': ${swap.version}\n`,
-            ),
+        () => sub(WS, "overrides:", "# overrides:"),
     ],
     [
         "R",
@@ -889,8 +880,8 @@ const EXPECTED = {
     N: "attributes to no job",
     O: "attributes to no stage",
     P: "2 install exemptions",
-    Q: "declares overrides",
-    Q2: "declares overrides",
+    Q: "declares ignored pnpm settings",
+    Q2: "which is not a frozen archive",
     R: "which this scan does not read",
     R2: "which this scan does not read",
     S: "is missing; the frozen archives",

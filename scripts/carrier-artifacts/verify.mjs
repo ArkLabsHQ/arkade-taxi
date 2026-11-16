@@ -116,21 +116,18 @@ for (const artifact of manifest.artifacts ?? []) {
     );
 }
 
-// pnpm 10 takes settings from pnpm-workspace.yaml, so an `overrides` block
-// appearing there would silently overrule the root package.json this repo uses.
 const workspaceYaml = readFileSync(at(WORKSPACE_FILE), "utf8");
-check(
-    readFlatMapping(workspaceYaml, "overrides") === undefined,
-    `${WORKSPACE_FILE} declares overrides, which overrule the package.json ones this repository writes`,
-);
-
 const root = readJson(at("package.json"));
-const overrides = root.pnpm?.overrides ?? {};
+check(
+    root.pnpm === undefined,
+    "package.json declares ignored pnpm settings; use pnpm-workspace.yaml",
+);
+const overrides = readFlatMapping(workspaceYaml, "overrides") ?? {};
 for (const name of PINNED_PACKAGES) {
     const artifact = byPackage.get(name);
     check(
         artifact !== undefined && overrides[name] === fileSpec(`./${VENDOR_DIR}`, artifact.file),
-        `package.json override of ${name} is ${overrides[name]}, which is not a frozen archive`,
+        `${WORKSPACE_FILE} override of ${name} is ${overrides[name]}, which is not a frozen archive`,
     );
 }
 

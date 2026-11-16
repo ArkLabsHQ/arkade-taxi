@@ -22,6 +22,7 @@ import {
     unprovenWorkflowPreamble,
     packageRootFrom,
     pinnedSourceMismatch,
+    readFlatMapping,
     readJson,
     unverifiedInstall,
     workflowJobs,
@@ -46,6 +47,17 @@ const declarersOf = (name: string): string[] =>
     );
 
 describe("frozen carrier artifacts", () => {
+    it("reads pnpm workspace overrides with formatter-normalized quoting", () => {
+        const root = readJson(at("package.json"));
+        expect(root.pnpm).toBeUndefined();
+        const overrides = readFlatMapping(
+            readFileSync(at("pnpm-workspace.yaml"), "utf8"),
+            "overrides",
+        );
+        for (const artifact of readJson(at(MANIFEST_PATH)).artifacts)
+            expect(overrides[artifact.package]).toBe(`file:./${VENDOR_DIR}/${artifact.file}`);
+    });
+
     it("passes the built-in-Node verification with every scan group run", () => {
         const output = execFileSync(
             process.execPath,

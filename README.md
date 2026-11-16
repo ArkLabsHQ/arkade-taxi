@@ -153,7 +153,7 @@ with a **different build**: what this repository runs against is the pair built
 from `arkade-os/ts-sdk` at `99313fa7`, and no registry carries those bytes.
 `vendor/carrier/` holds them as tracked archives named for that source commit,
 `vendor/carrier/manifest.json` records the provenance of each, and the root
-`pnpm.overrides` point every resolution — direct and transitive — at those
+`pnpm-workspace.yaml` overrides point every resolution — direct and transitive — at those
 bytes.
 
 Because the version numbers themselves resolve, **dropping or narrowing an
@@ -197,7 +197,7 @@ pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
 ```
 
-All 21 functional/resilience scenarios and both integrity assertions must pass,
+All 26 shared scenarios, three isolated scenarios and both integrity assertions must pass,
 with zero skips, using the built production image and packed client. The
 harness records the exact master SHA, source identity, image identities and
 SDK version in `e2e-artifacts/stack.json`; retain it with the results and logs.
@@ -210,7 +210,7 @@ docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg
 pnpm e2e:stack --direct --emulator-image arkade-emulator:v0.0.8-local.0f647925 --wallet ../wallet-wt-unified-carrier
 ```
 
-`--direct` requires all 17 direct Taxi scenarios and both integrity assertions.
+`--direct` requires all 21 direct Taxi scenarios and both integrity assertions.
 `--wallet` runs that checkout's `playwright.taxi.config.ts` against the same live
 stack before the recovery scenarios advance chain time. Both options are local
 only; CI continues to require the complete suite. The harness records the
@@ -218,7 +218,7 @@ selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.
 and publishes its results alongside it. Verify those results with
 `node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
 
-The lockfile uses the frozen SDK **0.4.77** from `23c6d353`, recorded in
+The lockfile uses the frozen SDK and swap builds recorded in
 `vendor/carrier/manifest.json`. Repeat the entire gate against current regtest
 master after updating providers or artifacts. A successful run proves that
 recorded provider combination. See [E2E instructions](e2e/README.md).

@@ -269,22 +269,26 @@ export function satsToWire(v: bigint): string {
 }
 
 const groupIndexFromWire = (n: number, label: string): number => {
-    if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0) {
-        fail(label, `expected a non-negative integer, got ${String(n)}`);
+    if (typeof n !== "number" || !Number.isSafeInteger(n) || n < 0 || n > 0xffff) {
+        fail(label, `expected a uint16, got ${String(n)}`);
     }
     return n;
 };
 
 export function assetIdFromWire(a: AssetIdWire, label = "assetId"): AssetIdValue {
     if (a === null || typeof a !== "object") fail(label, `expected an object, got ${typeof a}`);
+    const txid = hexToBytes(a.txid, `${label}.txid`);
+    if (txid.length !== 32) fail(`${label}.txid`, "expected 32 bytes");
     return {
-        txid: hexToBytes(a.txid, `${label}.txid`),
+        txid,
         groupIndex: groupIndexFromWire(a.groupIndex, `${label}.groupIndex`),
     };
 }
 
 export function assetIdToWire(a: AssetIdValue): AssetIdWire {
-    return { txid: bytesToHex(a.txid), groupIndex: groupIndexFromWire(a.groupIndex, "groupIndex") };
+    const wire = { txid: bytesToHex(a.txid), groupIndex: a.groupIndex };
+    assetIdFromWire(wire);
+    return wire;
 }
 
 const exitDelayFromWire = (
