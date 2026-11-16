@@ -87,7 +87,9 @@ describe("Taxi claim input reservations", () => {
     it("retains the reservation when submission is ambiguous", async () => {
         const { queue, release } = setup();
         vi.mocked(claimVerified).mockRejectedValue(
-            new ClaimSpent(new CovenantSpendAmbiguousError("33".repeat(32), new Error("connection lost"))),
+            new ClaimSpent(
+                new CovenantSpendAmbiguousError("33".repeat(32), new Error("connection lost")),
+            ),
         );
         await queue.claim(offerKey(offer));
         expect(release).not.toHaveBeenCalled();
@@ -102,6 +104,15 @@ describe("Taxi claim input reservations", () => {
         await queue.claim(offerKey(offer));
         expect(release).toHaveBeenCalledOnce();
         expect(queue.snapshot().spent.has(offerKey(offer))).toBe(false);
+        queue.dispose();
+    });
+
+    it("releases a consumed claim capability when validation failed before submission", async () => {
+        const { queue, release } = setup();
+        vi.mocked(claimVerified).mockRejectedValue(new ClaimSpent(new Error("invalid funding coin")));
+        await queue.claim(offerKey(offer));
+        expect(release).toHaveBeenCalledOnce();
+        expect(queue.snapshot().spent.has(offerKey(offer))).toBe(true);
         queue.dispose();
     });
 

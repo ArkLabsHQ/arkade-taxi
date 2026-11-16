@@ -46,6 +46,8 @@ describe("E2E artifact lifecycle", () => {
             ["mempool_api", ["logs", "--no-color", "--tail", "300", "mempool_api"]],
             ["mempool_web", ["logs", "--no-color", "--tail", "300", "mempool_web"]],
             ["arkd-wallet", ["logs", "--no-color", "--tail", "300", "arkd-wallet"]],
+            ["arkd-signer", ["logs", "--no-color", "--tail", "300", "arkd-signer"]],
+            ["redis", ["logs", "--no-color", "--tail", "300", "redis"]],
             ["arkd", ["logs", "--no-color", "--tail", "300", "arkd"]],
             ["emulator", ["logs", "--no-color", "--tail", "300", "emulator"]],
         ]);
