@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
-import { Transaction } from "@arkade-os/sdk";
+import { Extension, Transaction } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { assetIdToWire, bytesToHex } from "@arkade-taxi/protocol";
 import type { ServiceError } from "../src/errors.js";
@@ -37,6 +37,7 @@ import {
 import type { Policy } from "@arkade-taxi/core";
 import { ProductionLockupBuilder } from "../src/arkade/lockupBuilder.js";
 import { decodeLockupEnvelope, encodeLockupEnvelope } from "../src/arkade/psbt.js";
+import { validatePersistedLockupGraph } from "../src/arkade/submit.js";
 import {
     openDatabase,
     AdvanceRepository,
@@ -149,6 +150,35 @@ describe("createQuote", () => {
             expect(d.reservations.listReservedOutpoints()).toEqual([]);
         },
     );
+    it("stamps the sender's extra packet into the lockup and rebuilds it from the advance", async () => {
+        const response = await createQuote(
+            deps(),
+            quoteBody({ extraPacket: { type: 5, payload: "abcd" } }),
+        );
+        const stored = advances.get(response.transferId)!;
+        const tx = Transaction.fromPSBT(
+            base64.decode(decodeLockupEnvelope(response.unsignedLockupTx).arkTx),
+        );
+        const packet = Extension.fromTx(tx).getPacketByType(5);
+        expect(bytesToHex(packet!.serialize())).toBe("abcd");
+        expect(stored.extraPacket).toEqual({ type: 5, payload: Uint8Array.from([0xab, 0xcd]) });
+        expect(() => validatePersistedLockupGraph(stored, config())).not.toThrow();
+        const swapped = { ...stored, extraPacket: { type: 5, payload: Uint8Array.from([0xab]) } };
+        expect(() => validatePersistedLockupGraph(swapped, config())).toThrow(/persisted/);
+    });
+
+    it.each([
+        ["the reserved type 0", { type: 0, payload: "abcd" }, /reserved/],
+        ["the reserved type 1", { type: 1, payload: "abcd" }, /reserved/],
+        ["uppercase hex", { type: 5, payload: "ABCD" }, /lowercase hex/],
+        ["a payload over the cap", { type: 5, payload: "ab".repeat(1025) }, /exceeds 1024 bytes/],
+    ])("refuses an extra packet with %s", async (_name, extraPacket, message) => {
+        await expect(createQuote(deps(), quoteBody({ extraPacket }))).rejects.toMatchObject({
+            status: 400,
+            message: expect.stringMatching(message),
+        });
+    });
+
     it("keeps bitcoin claims free of an asset quantity", async () => {
         const response = await createQuote(deps(), quoteBody());
         expect(advances.get(response.transferId)?.assetUnits).toBeUndefined();

@@ -95,6 +95,40 @@ describe("verifyQuote — claim mode", () => {
         expect(verifyQuote(asksFor(claimMode)).params.claimMode).toBe(claimMode);
     });
 
+    describe("an extra packet the sender declared", () => {
+        const declared = { type: 5, payload: Uint8Array.from([0xab, 0xcd]) };
+        const carrying = (packet = declared) => quote(params(), { extraPacket: packet });
+
+        it("accepts a lockup carrying exactly that packet", () => {
+            const a = args();
+            const verified = verifyQuote({
+                ...a,
+                quote: carrying(),
+                expect: { ...a.expect, extraPacket: declared },
+            });
+            expect(verified.quote.transferId).toBe("tr_01");
+        });
+
+        it.each([
+            ["a packet the sender never declared", carrying(), undefined],
+            ["no packet where one was declared", quote(), declared],
+            [
+                "a substituted payload",
+                carrying({ type: 5, payload: Uint8Array.from([0xab]) }),
+                declared,
+            ],
+        ])("rejects %s", (_name, quoted, packet) => {
+            const a = args();
+            rejects(
+                {
+                    quote: quoted,
+                    expect: { ...a.expect, ...(packet ? { extraPacket: packet } : {}) },
+                },
+                "MALFORMED_QUOTE",
+            );
+        });
+    });
+
     it("rejects a quote whose tree commits to the other leaf", () => {
         const a = asksFor("purchase");
         rejects(

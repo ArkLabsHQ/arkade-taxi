@@ -113,6 +113,7 @@ interface QuoteFixtureOptions {
     serverUnrollScript?: CSVMultisigTapscript.Type;
     /** Sats the operator funds over what it owes, so the graph carries change. */
     operatorChange?: bigint;
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 const fareSats = (fare: FareSpec): bigint => (fare.currency === "sats" ? fare.units : 330n);
@@ -140,6 +141,7 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
             ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
+            ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         opts.serverUnrollScript ?? unroll,

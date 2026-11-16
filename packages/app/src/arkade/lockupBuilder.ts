@@ -171,6 +171,7 @@ export function lockupPlan(req: LockupBuildRequest, config: RuntimeConfig) {
             contribution: req.params.topup,
             carrier: "dust carrier",
             kind: "lockup",
+            ...(req.extraPacket ? { extraPacket: req.extraPacket } : {}),
         }),
         covenant,
     };

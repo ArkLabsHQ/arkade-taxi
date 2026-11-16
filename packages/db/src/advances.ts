@@ -18,6 +18,7 @@ const COLUMNS = [
     "dust",
     "topup",
     "payment_sats",
+    "extra_packet",
     "asset_txid",
     "asset_group_index",
     "asset_units",
@@ -102,6 +103,7 @@ interface AdvanceRow {
     dust: bigint;
     topup: bigint;
     payment_sats: bigint | null;
+    extra_packet: Buffer | null;
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
     asset_units: bigint | null;
@@ -191,6 +193,11 @@ const UPDATE_SQL = `UPDATE advances SET ${COLUMNS.filter((c) => c !== "id")
 /** Copies out of the pooled Buffer: `.buffer` on it is 8KB of unrelated rows. */
 const bytes = (b: Buffer): Uint8Array => Uint8Array.from(b);
 
+const extraPacketOf = (blob: Buffer, id: string) => {
+    if (blob.length < 2) throw new Error(`advance ${id}: extra_packet holds no payload`);
+    return { type: blob[0]!, payload: bytes(blob.subarray(1)) };
+};
+
 const stringArray = (json: string, id: string): string[] => {
     try {
         const value: unknown = JSON.parse(json);
@@ -224,6 +231,9 @@ function toParams(a: Advance): AdvanceParams {
         dust: a.dust,
         topup: a.topup,
         payment_sats: a.paymentSats ?? null,
+        extra_packet: a.extraPacket
+            ? Buffer.concat([Buffer.from([a.extraPacket.type]), Buffer.from(a.extraPacket.payload)])
+            : null,
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
         asset_units: a.assetUnits ?? null,
@@ -355,6 +365,7 @@ function fromRow(r: AdvanceRow): Advance {
         dust: r.dust,
         topup: r.topup,
         ...(r.payment_sats !== null ? { paymentSats: r.payment_sats } : {}),
+        ...(r.extra_packet !== null ? { extraPacket: extraPacketOf(r.extra_packet, r.id) } : {}),
         locktime: r.locktime,
         covenantAddress: r.covenant_address,
         fare:

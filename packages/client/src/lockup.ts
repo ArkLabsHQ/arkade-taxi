@@ -13,6 +13,7 @@ import {
     MultisigTapscript,
     P2A,
     Transaction,
+    UnknownPacket,
     VtxoScript,
     VtxoTaprootTree,
     asset,
@@ -68,6 +69,7 @@ interface LockupValidationContext {
     trustedServerUnrollScript: Uint8Array;
     vtxoMinAmount: bigint;
     hrp: string;
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 interface ValidatedLockup {
@@ -850,7 +852,12 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
                 [],
             );
         });
-    if (groups.length) outputs.push(Extension.create([Packet.create(groups)]).txOut());
+    const extra = context.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extra !== undefined ? [new UnknownPacket(extra.type, extra.payload)] : []),
+    ];
+    if (packets.length) outputs.push(Extension.create(packets).txOut());
 
     const { checkpoints, expectedArk } = rebuildJointTx(
         envelope.checkpoints,

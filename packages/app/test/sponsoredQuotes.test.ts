@@ -364,6 +364,18 @@ describe("createSponsoredQuote", () => {
         },
     );
 
+    it("rebuilds a sponsored graph carrying the sender's extra packet, and only that packet", async () => {
+        const quote = await createSponsoredQuote(
+            deps(),
+            sponsoredBody({ extraPacket: { type: 5, payload: "abcd" } }),
+        );
+        const stored = advances.get(quote.transferId)!;
+        expect(stored.extraPacket).toEqual({ type: 5, payload: Uint8Array.from([0xab, 0xcd]) });
+        expect(() => validatePersistedLockupGraph(stored, config())).not.toThrow();
+        const swapped = { ...stored, extraPacket: { type: 5, payload: Uint8Array.from([0xab]) } };
+        expect(() => validatePersistedLockupGraph(swapped, config())).toThrow(/persisted/);
+    });
+
     it("still reconstructs a sats-fare graph funded before the fare was charged", async () => {
         const d = deps({ policy: satsFarePolicy(10n) });
         const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));

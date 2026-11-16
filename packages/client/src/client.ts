@@ -116,6 +116,8 @@ export interface QuoteRequest {
     /** Exact sats the receiver must end up with, bitcoin only. Omitted leaves
      * the operator deriving the advance from `senderSats`. */
     paymentSats?: bigint;
+    /** An extension packet the lockup must carry after the asset groups. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface RequestVerifiedQuoteArgs extends Omit<
@@ -133,7 +135,12 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     /** The exact amount to send. Sent as the request and bound as the
      * expectation from this one field, for the same reason. */
     paymentSats?: bigint;
-    expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId" | "paymentSats">;
+    /** Declared once, like `paymentSats`: the rebuild checked against the quote carries it. */
+    extraPacket?: { type: number; payload: Uint8Array };
+    expect: Omit<
+        QuoteExpectation,
+        "receiverKey" | "senderKey" | "assetId" | "paymentSats" | "extraPacket"
+    >;
 }
 
 export interface SponsoredQuoteRequest {
@@ -306,6 +313,11 @@ export class TaxiClient {
         if (req.paymentSats !== undefined) wire.paymentSats = satsToWire(req.paymentSats);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.extraPacket !== undefined)
+            wire.extraPacket = {
+                type: req.extraPacket.type,
+                payload: bytesToHex(req.extraPacket.payload),
+            };
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
         decodeQuote(body);
         return body;
@@ -421,6 +433,7 @@ export class TaxiClient {
                         assetId: request.assetId,
                         claimMode: requestedClaimMode,
                         paymentSats: request.paymentSats,
+                        ...(request.extraPacket ? { extraPacket: request.extraPacket } : {}),
                     },
                 }),
         );
