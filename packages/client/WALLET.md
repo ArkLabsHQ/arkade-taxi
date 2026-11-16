@@ -2,7 +2,8 @@
 
 Import wallet orchestration from `@arkade-taxi/client/wallet`. The root client entry retains its low-level protocol and verification API. The wallet entry provides verified sends, sequential receiver claims, Bitcoin-to-asset RFQ routing and persisted activity.
 
-- `createTaxiSender` takes trusted Arkade context, the server checkpoint script, storage, fresh unreserved coins and transaction coordination. Its journal precedes submission and retains uncertain payments for reconciliation.
+- `createTaxiSender` takes trusted Arkade context, the server checkpoint script, storage, fresh unreserved coins and transaction coordination. `reserveInputs` must durably exclude selected inputs from every wallet spend before signing; a restored attempt reuses its transfer's hold. Its journal precedes submission and retains uncertain payments for reconciliation.
+- Sender and claim reservation adapters release without a txid only for a proven unsent attempt. A release carrying the successful txid must retain the hold until every selected input is observed spent. Never release an ambiguous submission on a timeout or tab closure.
 - `createClaimWatch` verifies configured server, emulator and operator keys before exposing offers.
 - `TaxiClaimQueue` coordinates claims against fresh unreserved coins. Free verified claims are automatic with coordination enabled; paid claims require `claim(key)`. `setActive(false)` revokes in-flight authorization, and `dispose()` revokes the departed wallet context.
 - `TaxiActivityStore` persists and reconciles activity without turning a history failure into a payment failure.

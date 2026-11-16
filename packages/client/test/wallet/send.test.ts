@@ -20,6 +20,7 @@ import {
     createTaxiSender,
     probeBitcoinTaxi,
     type ArkadeContext,
+    type TaxiSenderDependencies,
 } from "../../src/wallet/index.js";
 import {
     HRP,
@@ -183,7 +184,9 @@ const fakeTaxi = ({ readyAt = 0, lockAfter = 0 } = {}) => {
     return { fetch, count, times, lockedAt: () => lockedAt };
 };
 
-const sender = () => {
+const release = vi.fn();
+const reserveInputs = vi.fn(async () => ({ release }));
+const sender = (changes: Partial<TaxiSenderDependencies> = {}) => {
     const storage = new Map<string, string>();
     return createTaxiSender({
         storage: {
@@ -195,12 +198,14 @@ const sender = () => {
         getContext: async () => ctx,
         serverUnrollScript: unroll.script,
         unreservedCoins: async () => [current],
+        reserveInputs,
+        ...changes,
     });
 };
 let current: ExtendedVirtualCoin;
 const wallet = { identity: senderIdentity } as unknown as IWallet;
-const send = (mode: "recycle" | "sponsored") =>
-    sender().sendDirectTaxi({
+const send = (mode: "recycle" | "sponsored", service = sender()) =>
+    service.sendDirectTaxi({
         wallet,
         network: "regtest",
         taxi: { url: taxiUrl },
@@ -213,6 +218,8 @@ const send = (mode: "recycle" | "sponsored") =>
 beforeEach(() => {
     taxiUrl = `https://taxi-${++taxis}.example`;
     paused = false;
+    release.mockReset();
+    reserveInputs.mockReset().mockResolvedValue({ release });
     vi.useFakeTimers({
         now: NOW * 1000,
         toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
@@ -225,6 +232,57 @@ afterEach(() => {
 
 // Quotes are refused until 2.5 s in; the lockup locks 1.5 s after it lands.
 describe("sender round trips", () => {
+    it("requires a wallet reservation adapter before authorizing a transfer", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", taxi.fetch);
+        current = coin(1_000);
+        await expect(drive(send("recycle", sender({ reserveInputs: undefined })))).rejects.toThrow(
+            "Wallet input reservation is required",
+        );
+        expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBeUndefined();
+    });
+
+    it("releases an unsent input if the signed payment cannot be journaled", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", taxi.fetch);
+        current = coin(1_000);
+        const service = sender({
+            storage: {
+                getItem: () => null,
+                setItem: () => {
+                    throw new Error("journal unavailable");
+                },
+                removeItem: () => {},
+            },
+        });
+        await expect(drive(send("recycle", service))).rejects.toThrow("journal unavailable");
+        expect(release).toHaveBeenCalledWith();
+        expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBeUndefined();
+    });
+
+    it("refuses signing when shared wallet inputs cannot be reserved", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", taxi.fetch);
+        current = coin(1_000);
+        reserveInputs.mockRejectedValueOnce(new Error("coin is already being spent"));
+        await expect(drive(send("recycle"))).rejects.toThrow("coin is already being spent");
+        expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBeUndefined();
+        expect(release).not.toHaveBeenCalled();
+    });
+
+    it("retains sender inputs when the submission response is lost", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", async (input: unknown, init: RequestInit = {}) => {
+            const response = await taxi.fetch(input, init);
+            if (String(input).endsWith("/lockup")) throw new Error("reply lost");
+            return response;
+        });
+        current = coin(1_000);
+        await expect(drive(send("recycle"))).rejects.toMatchObject({ name: "PendingDirectTaxi" });
+        expect(reserveInputs).toHaveBeenCalledOnce();
+        expect(release).not.toHaveBeenCalled();
+    });
+
     it("probes twice, then quotes, locks up and waits for a sub-dust recycle", async () => {
         const taxi = fakeTaxi({ readyAt: 2_500, lockAfter: 1_500 });
         vi.stubGlobal("fetch", taxi.fetch);
@@ -244,6 +302,12 @@ describe("sender round trips", () => {
         expect(taxi.times("POST /v1/transfers")).toEqual([0, 500, 1_000, 1_500, 2_000, 3_000]);
         expect(taxi.times("GET /v1/transfers/tr_01")).toEqual([3_000, 3_500, 4_000, 4_500]);
         expect(taxi.lockedAt()).toBe(4_500);
+        expect(reserveInputs).toHaveBeenCalledWith(
+            wallet,
+            expect.objectContaining({ transferId: "tr_01" }),
+            [expect.objectContaining({ txid: current.txid, vout: current.vout })],
+        );
+        expect(release).toHaveBeenCalledWith(expect.stringMatching(/^[0-9a-f]{64}$/));
     });
 
     it("quotes, locks up and waits for a sponsored asset send", async () => {

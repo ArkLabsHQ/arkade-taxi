@@ -1561,11 +1561,15 @@ await import("/app/dist/cli.js");
                 hasOwnedResources = true;
             }
             if (hasOwnedResources)
-                await run("docker", composeArgs(state, ["down", "--remove-orphans"]), {
-                    env: state.childEnv,
-                    print: false,
-                    check: false,
-                });
+                await run(
+                    "docker",
+                    composeArgs(state, ["down", "--timeout", "10", "--remove-orphans"]),
+                    {
+                        env: state.childEnv,
+                        print: false,
+                        check: false,
+                    },
+                );
             for (const { volume } of volumeCandidates)
                 await run("docker", ["volume", "rm", volume.Name], {
                     print: false,

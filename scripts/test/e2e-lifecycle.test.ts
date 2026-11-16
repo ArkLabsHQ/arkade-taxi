@@ -80,6 +80,9 @@ describe("E2E artifact lifecycle", () => {
         expect(source.indexOf("await interruption.waitForOperations()", cleanup)).toBeLessThan(
             source.indexOf("interruption.beginCleanup()", cleanup),
         );
+        expect(source).toContain(
+            'composeArgs(state, ["down", "--timeout", "10", "--remove-orphans"])',
+        );
     });
 
     it("does not release interruption cleanup until the owned child process tree drains", async () => {

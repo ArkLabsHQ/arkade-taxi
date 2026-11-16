@@ -109,7 +109,9 @@ describe("Taxi claim input reservations", () => {
 
     it("releases a consumed claim capability when validation failed before submission", async () => {
         const { queue, release } = setup();
-        vi.mocked(claimVerified).mockRejectedValue(new ClaimSpent(new Error("invalid funding coin")));
+        vi.mocked(claimVerified).mockRejectedValue(
+            new ClaimSpent(new Error("invalid funding coin")),
+        );
         await queue.claim(offerKey(offer));
         expect(release).toHaveBeenCalledOnce();
         expect(queue.snapshot().spent.has(offerKey(offer))).toBe(true);
