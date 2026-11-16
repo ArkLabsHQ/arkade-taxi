@@ -27,13 +27,20 @@ node e2e/assert-ran.mjs e2e-results.json
 
 For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
-build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
-same stack before the SDK actor scenarios. This explicit local mode requires
+build. This explicit local mode requires
 21 named scenarios and both integrity assertions plus the isolated runs below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
-The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
-(whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
-the run before any stack starts.
+Wallet browser tests use the wallet repository's native harness, which owns its
+pinned solver, Taxi, regtest stack and Electrum endpoint. Run both browser lanes
+from that prepared checkout:
+
+```bash
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Mobile Chrome"
+```
+
+Append `--manual` for a local interactive session. The retired Taxi `--wallet`
+option reports this command before starting any services.
 
 ### The renewal scenario
 

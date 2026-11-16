@@ -559,7 +559,7 @@ describe("cross-flow wiring through production quote paths", () => {
                 },
                 storage: {
                     intentRepository: {
-                        getIntentsPage: async () => ({ items: [] }),
+                        getBatchRegistrationsPage: async () => ({ items: [] }),
                         getLockedVtxoOutpoints: async () => [],
                     },
                 },

@@ -607,7 +607,7 @@ describe("persistent operator runtime safety", () => {
         expect(s.ioCounts()).toEqual(before);
     });
 
-    it("does not trust the real Wallet's fulfilled fallback when its intent read fails", async () => {
+    it("keeps admission blocked when the real Wallet rejects an intent read failure", async () => {
         const db = openDatabase(":memory:");
         databases.push(db);
         const info = arkInfo({
@@ -675,7 +675,9 @@ describe("persistent operator runtime safety", () => {
             heldOutpoints: () => [],
             onchainProvider: {
                 getChainTip: async () => ({ height: 100, time: 1789132000, hash: "aa".repeat(32) }),
-            } as OnchainProvider,
+                getCoins: async () => [],
+                watchAddresses: async () => () => {},
+            } as unknown as OnchainProvider,
         });
         try {
             const snapshot = await runtime.refresh();
@@ -684,14 +686,14 @@ describe("persistent operator runtime safety", () => {
             vi.spyOn(runtime.storage.intentRepository, "getLockedVtxoOutpoints").mockRejectedValue(
                 new Error("injected intent read failure"),
             );
-            const warning = vi.spyOn(console, "error").mockImplementation(() => {});
-            expect(await runtime.wallet!.getSpendableVtxos()).toHaveLength(1);
-            expect(warning).toHaveBeenCalled();
+            await expect(runtime.wallet!.getSpendableVtxos()).rejects.toThrow(
+                "injected intent read failure",
+            );
             await expect(runtime.assertAdmission()).rejects.toMatchObject({
                 code: "runtime_unsafe",
                 status: 503,
             });
-            expect(runtime.safety().blockers).toContain("intent_locks_unavailable");
+            expect(runtime.safety().blockers).toContain("wallet_unsynced");
         } finally {
             await runtime.dispose();
         }

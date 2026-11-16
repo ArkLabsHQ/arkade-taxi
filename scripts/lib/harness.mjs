@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:net";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
 
-export const TAXI_VERSION = JSON.parse(
+const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
+const projectManifest = JSON.parse(
     readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
-).version;
+);
+export const TAXI_VERSION = projectManifest.version;
 
 const ACTORS = ["operator", "sender", "receiverWithAsset", "receiverSats", "emptyReceiver"];
 const SECRET_KEY =
@@ -13,29 +15,6 @@ const SECRET_KEY =
 
 const stableJson = (value) =>
     JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item));
-
-export async function reserveWalletPorts() {
-    const servers = [createServer(), createServer()];
-    const release = () =>
-        Promise.all(
-            servers.map((server) => new Promise((resolve) => server.close(() => resolve()))),
-        );
-    try {
-        for (const server of servers)
-            await new Promise((resolve, reject) => {
-                server.once("error", reject);
-                server.listen(0, "127.0.0.1", resolve);
-            });
-        return {
-            walletPort: servers[0].address().port,
-            delegatorPort: servers[1].address().port,
-            release,
-        };
-    } catch (error) {
-        await release();
-        throw error;
-    }
-}
 
 export function routeProviderFetch(fetcher, routes) {
     const mappings = routes
@@ -213,7 +192,7 @@ export function resolveTask12Tests(args) {
 }
 
 export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
-    const options = { mode: "full", emulatorImage: undefined, wallet: undefined };
+    const options = { mode: "full", emulatorImage: undefined };
     const paths = [];
     const seen = new Set();
     for (let index = 0; index < args.length; index++) {
@@ -222,20 +201,22 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
             paths.push(arg);
             continue;
         }
-        if (!["--direct", "--emulator-image", "--wallet"].includes(arg) || seen.has(arg))
+        if (arg === "--wallet")
+            throw new Error(
+                'Wallet browser tests moved to the wallet repository: node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"',
+            );
+        if (!["--direct", "--emulator-image"].includes(arg) || seen.has(arg))
             throw new Error(`unsupported or repeated E2E option: ${arg}`);
         seen.add(arg);
         if (arg === "--direct") options.mode = "direct";
         else {
             const value = args[++index];
             if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
-            options[arg === "--wallet" ? "wallet" : "emulatorImage"] = value;
+            options.emulatorImage = value;
         }
     }
     if (seen.size && ci && ci !== "false")
         throw new Error("local E2E options are forbidden in CI; run the complete default suite");
-    if (options.wallet && options.mode !== "direct")
-        throw new Error("--wallet requires the local --direct mode");
     if (options.mode === "direct" && paths.length)
         throw new Error("--direct accepts no test selection");
     const tests = resolveTask12Tests(paths);
@@ -252,16 +233,6 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
                 : tests,
         isolatedTests: [...ISOLATED_TESTS],
     };
-}
-
-// setTimeout runs any delay above 2^31 - 1 ms after 1 ms, killing the wallet run at once.
-export function resolveWalletTimeoutMs(value) {
-    const timeoutMs = Number(value ?? 900_000);
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2 ** 31 - 1)
-        throw new Error(
-            `TAXI_E2E_WALLET_TIMEOUT_MS must be whole milliseconds from 1 to ${2 ** 31 - 1}, got ${JSON.stringify(value)}`,
-        );
-    return timeoutMs;
 }
 
 export function packageManagerInvocation(
@@ -302,6 +273,17 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
     if (!Array.isArray(tarballs) || tarballs.length !== 3)
         throw new Error("consumer requires exactly three Taxi tarballs");
     const paths = platform === "win32" ? win32 : posix;
+    const dependencies = Object.fromEntries(
+        ["@arkade-os/sdk", "@arkade-os/swap"].map((name) => {
+            const spec = projectManifest.devDependencies[name];
+            return [
+                name,
+                spec.startsWith("file:")
+                    ? localTarballSpec(paths.resolve(projectRoot, spec.slice(5)), consumer, paths)
+                    : spec,
+            ];
+        }),
+    );
     const packages = {};
     for (const tarball of tarballs) {
         const name = /arkade-taxi-(client|covenant|protocol)-[^/\\]+\.tgz$/.exec(tarball)?.[1];
@@ -316,12 +298,16 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
         private: true,
         type: "module",
         dependencies: {
+            ...dependencies,
             "@arkade-taxi/client": packages.client,
             "@arkade-taxi/covenant": packages.covenant,
             "@arkade-taxi/protocol": packages.protocol,
         },
         pnpm: {
             overrides: {
+                ...Object.fromEntries(
+                    Object.entries(dependencies).filter(([, spec]) => spec.startsWith("file:")),
+                ),
                 [`@arkade-taxi/covenant@${TAXI_VERSION}`]: "$@arkade-taxi/covenant",
                 [`@arkade-taxi/protocol@${TAXI_VERSION}`]: "$@arkade-taxi/protocol",
             },

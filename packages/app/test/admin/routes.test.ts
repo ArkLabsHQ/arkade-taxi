@@ -207,7 +207,12 @@ describe("GET /admin/api/funding", () => {
             amount,
         });
         const boarding = boardingView({
-            deposits: { confirmedSats: 100_000n, unconfirmedSats: 5_000n, expiredSats: 40_000n },
+            deposits: {
+                confirmedSats: 100_000n,
+                unconfirmedSats: 5_000n,
+                expiredSats: 40_000n,
+                unknownSats: 3_000n,
+            },
         });
         const funding = async () => ({
             config: config({ addressHrp: "tark" }),
@@ -243,6 +248,7 @@ describe("GET /admin/api/funding", () => {
                     confirmedSats: "100000",
                     unconfirmedSats: "5000",
                     expiredSats: "40000",
+                    unknownSats: "3000",
                 },
             });
         }
@@ -257,6 +263,7 @@ describe("GET /admin/api/funding", () => {
             confirmedSats: null,
             unconfirmedSats: null,
             expiredSats: null,
+            unknownSats: null,
         });
         expect((await unread.send("/admin/api/funding/board", "POST", {})).status).toBe(404);
     });

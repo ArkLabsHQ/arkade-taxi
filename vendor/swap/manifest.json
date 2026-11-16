@@ -1,0 +1,38 @@
+{
+    "package": "@arkade-os/swap",
+    "version": "0.1.7-taxi.0",
+    "file": "arkade-os-swap-0.1.7-taxi.0-a518278d.tgz",
+    "sha256": "dc48e9f7469f9f5d74b238c543c6683797dd1ad60dae90848628fcb1316d9f5e",
+    "integrity": "sha512-Zxlhqi9CXK/B/F+F0QAWejAivuaZbhp4QbtyATkFWKnG55QVsWpmCp6zM5ZPNalx5bOo8qSqipZW21HfAQHuPA==",
+    "bytes": 673083,
+    "sourceRepository": "https://github.com/arkade-os/ts-sdk",
+    "sourceCommit": "a518278d7815f7ca1f14e12b063d806c495e6636",
+    "sourceTree": "05290d7edc308dff5e0e6f853ee276b81b011aff",
+    "sourceDirectory": "packages/swap",
+    "sourceDirectoryTree": "0b21975b721826b44c59b5388166e9186dedec67",
+    "baseCommit": "ec5155987fc97f249a13ba4208d78e5b007b9a98",
+    "node": "v24.22.1",
+    "pnpm": "10.25.0",
+    "typescript": "Version 5.9.2",
+    "compiler": {
+        "compilerRevision": "e264d5e6ecd044de7130d5c8a0e1f49d43958c11",
+        "binarySha256": "eb41bbd3574d5716627c6a93c985d422f325b670b18855c7cdd4011822c7944e",
+        "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+        "artifacts": [
+            {
+                "source": "swap-want-btc.ark",
+                "artifact": "swap-want-btc.artifact.json",
+                "fingerprint": "sha256:1e24bf908b23615806b6070c47f9089070674fad6a8bc799a8fc56f4a26e54f1"
+            },
+            {
+                "source": "swap-want-asset.ark",
+                "artifact": "swap-want-asset.artifact.json",
+                "fingerprint": "sha256:7ff7fc6fbdf3312d6f20503159d487c495f87a37fd49c7c92b7fe0606092d9e7"
+            }
+        ]
+    },
+    "packCommand": "pnpm -C packages/swap pack",
+    "registryPublished": false,
+    "license": "MIT",
+    "sdkDependency": "0.5.6"
+}

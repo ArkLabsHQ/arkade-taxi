@@ -174,11 +174,13 @@ function setup(
             return db;
         },
         useActualSdk(options: { failWrites?: boolean; reject?: () => void } = {}) {
+            let entered = false;
             const save = vi.fn(async (intent: any) => {
-                if (options.failWrites) throw new Error("SQLITE_FULL");
+                if (options.failWrites && entered) throw new Error("SQLITE_FULL");
                 intents = [intent];
             });
             const register = vi.fn(async () => {
+                if (options.failWrites) return "intent-id";
                 throw new Error("registration response lost");
             });
             const remove = vi.fn(async (): Promise<void> => {
@@ -206,8 +208,10 @@ function setup(
                 _addPendingSpends: () => {},
                 _removePendingSpends: () => {},
                 _settlingOutpoints: new Set(),
+                persistentReservedOutpoints: new Set(),
                 intentRepository: {
                     getBatchRegistrationsPage: async () => ({ items: intents }),
+                    getLockedVtxoOutpoints: async () => sdkLocks,
                     saveBatchRegistration: save,
                 },
                 arkProvider: {
@@ -216,6 +220,8 @@ function setup(
                         options.reject?.();
                         const enter = await submitGuard!(intent);
                         enter?.();
+                        entered = true;
+                        if (options.failWrites) intents = [];
                         return register();
                     },
                     deleteIntent: remove,
@@ -840,7 +846,7 @@ describe("durable proceeds collector", () => {
         await collector.tick();
         expect(sdk.register).toHaveBeenCalledTimes(1);
         expect(sdk.remove).toHaveBeenCalledTimes(1);
-        expect(sdk.save).toHaveBeenCalledTimes(1);
+        expect(sdk.save).toHaveBeenCalledTimes(2);
         expect(errors).toHaveBeenCalledTimes(1);
         expect(await collectBatchRegistrations(s.deps.runtime.storage.intentRepository)).toEqual(
             [],

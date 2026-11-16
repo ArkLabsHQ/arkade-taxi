@@ -50,8 +50,6 @@ import {
     resolveInstalledClientEntry,
     isolatedLabel,
     resolveE2eOptions,
-    resolveWalletTimeoutMs,
-    reserveWalletPorts,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
 } from "./lib/harness.mjs";
@@ -716,14 +714,10 @@ const patchPolicy = async (adminUrl) => {
 async function main(isolatedFile = undefined) {
     const isolated = isolatedFile !== undefined;
     const options = resolveE2eOptions(process.argv.slice(2));
-    const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);
     const tests = isolated ? [isolatedFile] : options.tests;
     const scenarioIds = isolated
         ? isolatedScenarioIds(isolatedFile)
         : readScenarioIds(options.mode);
-    const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
-    if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
-        throw new Error("--wallet checkout requires playwright.taxi.config.ts");
     const interruption = createInterruptionState();
     activeInterruption = interruption;
     const signalHandlers = {
@@ -765,7 +759,6 @@ async function main(isolatedFile = undefined) {
         knownSecrets,
     });
     const taxi = captureTaxiIdentity(REPO);
-    const walletIdentity = wallet ? captureTaxiIdentity(wallet) : undefined;
     let actorSecrets = {};
     let state;
     let taxiContainer;
@@ -1072,8 +1065,6 @@ await import("/app/dist/cli.js");
         assertResolvedPorts(ports, portBindings.length + 2);
         const taxiUrl = `http://127.0.0.1:${ports.TAXI_E2E_HTTP_PORT}`;
         const adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
-        proxyTargets.taxi = taxiUrl;
-        const walletTaxiUrl = `${failureProxy.url}/taxi`;
         controlServer = createServer(async (request, response) => {
             try {
                 if (request.method !== "POST") throw new Error("POST required");
@@ -1198,9 +1189,6 @@ await import("/app/dist/cli.js");
                 project,
                 profiles,
                 selection: { mode: options.mode, scenarioIds, tests },
-                ...(walletIdentity
-                    ? { wallet: { ...walletIdentity, taxiUrl: walletTaxiUrl } }
-                    : {}),
                 ports: redactSecrets(ports),
                 arkdDelays: configuredArkDelays,
                 intentFees,
@@ -1240,40 +1228,6 @@ await import("/app/dist/cli.js");
             TAXI_RECONCILE_INTERVAL_MS: "5000",
         });
         const vitestEntry = join(REPO, "node_modules", "vitest", "vitest.mjs");
-        if (wallet) {
-            const walletArtifacts = join(artifacts, "wallet");
-            mkdirSync(walletArtifacts, { recursive: true });
-            const reservation = await reserveWalletPorts();
-            const { walletPort, delegatorPort } = reservation;
-            await reservation.release();
-            const walletEnv = { ...testEnv };
-            delete walletEnv.TAXI_OPERATOR_PRIVKEY;
-            const invocation = packageManagerInvocation([
-                "exec",
-                "playwright",
-                "test",
-                "--config",
-                "playwright.taxi.config.ts",
-            ]);
-            await run(invocation.command, invocation.args, {
-                cwd: wallet,
-                env: {
-                    ...walletEnv,
-                    NPM_CONFIG_USERCONFIG: packs.npmUserConfig,
-                    NPM_CONFIG_GLOBALCONFIG: packs.npmUserConfig,
-                    TAXI_E2E_BASE_URL: walletTaxiUrl,
-                    VITE_ARK_SERVER: arkdUrl,
-                    VITE_ESPLORA_URL: esploraUrl,
-                    VITE_TAXI_URL: walletTaxiUrl,
-                    VITE_EMULATOR_PUBKEY: emulatorInfo.signerPubkey,
-                    TAXI_E2E_WALLET_PORT: String(walletPort),
-                    TAXI_E2E_DELEGATOR_PORT: String(delegatorPort),
-                    TAXI_E2E_WALLET_ARTIFACTS: walletArtifacts,
-                },
-                secrets: knownSecrets,
-                timeoutMs: walletTimeoutMs,
-            });
-        }
         await runAndPublishResults(() =>
             run(
                 process.execPath,
@@ -1539,6 +1493,7 @@ await import("/app/dist/cli.js");
                         env: state.childEnv,
                         print: false,
                         check: false,
+                        timeoutMs: 120_000,
                     },
                 );
             for (const { volume } of volumeCandidates)
@@ -1580,8 +1535,11 @@ await import("/app/dist/cli.js");
 const mainPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (mainPath && fileURLToPath(import.meta.url) === mainPath)
     // One stack per isolated test, then the shared suite.
-    resolveE2eOptions(process.argv.slice(2))
-        .isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve())
+    Promise.resolve()
+        .then(() => resolveE2eOptions(process.argv.slice(2)))
+        .then(({ isolatedTests }) =>
+            isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve()),
+        )
         .then(() => main())
         .catch((error) => {
             process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

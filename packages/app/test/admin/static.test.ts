@@ -99,7 +99,7 @@ const NOT_BLOCKERS = new Set([
     // Refusals inside the SDK's own background settlement, which only the SDK sees and logs,
     // and the SDK's intent states.
     ...["background_settlement_not_authorized", "background_settlement_spends_held_coin"],
-    ...["waiting_to_submit", "waiting_for_batch", "batch_in_progress"],
+    ...["waiting_to_submit", "waiting_for_batch", "batch_in_progress", "batch_succeeded"],
     // An SDK contract-event type the watcher reads, not a readiness code.
     ...["connection_reset"],
 ]);
@@ -775,7 +775,12 @@ describe("the dashboard is dependency-free", () => {
     it("loads the funding card from the real router on load and REFRESH, not on the poll", async () => {
         const token = { txid: Uint8Array.from({ length: 32 }, (_, i) => 32 - i), groupIndex: 258 };
         let boarding = boardingView({
-            deposits: { confirmedSats: 60_000n, unconfirmedSats: 5_000n, expiredSats: 7_000n },
+            deposits: {
+                confirmedSats: 60_000n,
+                unconfirmedSats: 5_000n,
+                expiredSats: 7_000n,
+                unknownSats: 2_000n,
+            },
         });
         const admin = harness({
             funding: async () => ({

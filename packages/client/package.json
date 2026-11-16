@@ -28,5 +28,11 @@
         "@noble/hashes": "^2.0.1",
         "@scure/base": "^2.0.0",
         "@scure/btc-signer": "2.4.1"
+    },
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ArkLabsHQ/arkade-taxi.git",
+        "directory": "packages/client"
     }
 }

@@ -147,9 +147,12 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-Dependencies use the published `@arkade-os/sdk@0.5.6` and `@arkade-os/swap@0.1.6`
-packages. The committed lockfile pins their registry integrity hashes; install
-with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
+The service uses the unpublished `@arkade-os/sdk@0.5.7-taxi.0` candidate in
+`vendor/sdk`, whose source and archive hash are recorded in its manifest. The
+workspace override applies those same bytes to every SDK consumer. The test suite
+uses the compiler-defined `@arkade-os/swap@0.1.7-taxi.0` candidate recorded in
+`vendor/swap`. The committed lockfile pins dependency integrity;
+install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
 client, covenant and protocol packages, then installs those exact tarballs in a
 fresh consumer and verifies their identity and resolution before testing.
 
@@ -192,17 +195,26 @@ It owns a unique project and leaves existing regtest resources untouched.
 For a local Alice/Bob pass without Solver or swap offers:
 
 ```bash
-docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg VERSION=v0.0.8-local.0f647925 -t arkade-emulator:v0.0.8-local.0f647925 ../emulator-wt-taxi-intents
-pnpm e2e:stack --direct --emulator-image arkade-emulator:v0.0.8-local.0f647925 --wallet ../wallet-wt-unified-carrier
+pnpm e2e:stack --direct
 ```
 
 `--direct` requires all 21 direct Taxi scenarios and both integrity assertions.
-`--wallet` runs that checkout's `playwright.taxi.config.ts` against the same live
-stack before the recovery scenarios advance chain time. Both options are local
-only; CI continues to require the complete suite. The harness records the
+Add `--emulator-image <local-image>` to test a local emulator build. These options
+are local only; CI continues to require the complete suite. The harness records the
 selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.json`
 and publishes its results alongside it. Verify those results with
 `node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
+
+Wallet browser tests run from the wallet checkout with its pinned solver, Taxi,
+regtest and provider images, as described in that repository's README:
+
+```bash
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Mobile Chrome"
+```
+
+That harness uses its own isolated stack and Electrum endpoint. Append `--manual`
+for an interactive local session; its printed stop endpoint triggers owned cleanup.
 
 Repeat the entire gate against current regtest
 master after updating providers or artifacts. A successful run proves that

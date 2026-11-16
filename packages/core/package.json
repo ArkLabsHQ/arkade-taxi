@@ -15,5 +15,15 @@
     },
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*"
-    }
+    },
+    "files": [
+        "dist"
+    ],
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ArkLabsHQ/arkade-taxi.git",
+        "directory": "packages/core"
+    },
+    "private": true
 }

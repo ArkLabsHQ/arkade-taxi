@@ -2669,6 +2669,7 @@ describe("canonical covenant observation", () => {
                 expect(subscribe).toHaveBeenCalledWith(
                     expect.arrayContaining([covenantScript]),
                     "taxi-test-subscription",
+                    expect.any(AbortSignal),
                 ),
             );
             stopping = watcher.stop().then(() => {
@@ -2870,7 +2871,7 @@ describe("proceeds of a receiver-paid recycle", () => {
                 },
                 storage: {
                     intentRepository: {
-                        getIntentsPage: async () => ({ items: [] }),
+                        getBatchRegistrationsPage: async () => ({ items: [] }),
                         getLockedVtxoOutpoints: async () => [],
                     },
                 },

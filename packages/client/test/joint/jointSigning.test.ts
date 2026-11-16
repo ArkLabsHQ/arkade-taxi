@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { base64, hex } from "@scure/base";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToNumberBE, numberToBytesBE } from "@noble/curves/utils.js";
@@ -53,9 +54,13 @@ const state = vi.hoisted(() => ({
     prevTxs: new Map<string, string>(),
 }));
 
+afterEach(async () => {
+    await yieldToEventLoop();
+});
+
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const mod = await importOriginal<typeof import("@arkade-os/sdk")>();
-    return {
+    const mocked = {
         ...mod,
         RestArkProvider: class {
             async getInfo() {
@@ -84,6 +89,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
             }
         },
     };
+    return { ...mocked, RestOperatorProvider: mocked.RestArkProvider };
 });
 
 const SERVER_SEED = new Uint8Array(32).fill(0x59);
