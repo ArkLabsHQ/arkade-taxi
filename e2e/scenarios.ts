@@ -1,5 +1,6 @@
 import { it } from "vitest";
 import { runWithCleanup } from "../scripts/lib/scenario-cleanup.mjs";
+import { captureScenarioProceeds } from "../scripts/lib/proceeds-diagnostics.mjs";
 
 export const SCENARIOS = [
     {
@@ -131,7 +132,14 @@ export function liveScenario(id: string, fn: () => void | Promise<void>): void {
                 throw new Error(
                     "e2e: run pnpm e2e:stack to provide the isolated production image and packed client",
                 );
-            await runWithCleanup(fn);
+            await runWithCleanup(async () => {
+                try {
+                    await fn();
+                } catch (error) {
+                    await captureScenarioProceeds(`scenario-failed:${id}`);
+                    throw error;
+                }
+            });
         },
         "timeout" in scenario ? scenario.timeout : undefined,
     );

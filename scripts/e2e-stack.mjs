@@ -56,6 +56,7 @@ import {
 } from "./lib/harness.mjs";
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
+import { captureProceedsDiagnostics } from "./lib/proceeds-diagnostics.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
 import { isolatedScenarioIds, readScenarioIds } from "../e2e/assert-ran.mjs";
 import { distMismatch } from "./lib/package-checks.mjs";
@@ -767,6 +768,7 @@ async function main(isolatedFile = undefined) {
     let controlServer;
     let taxiVolume;
     let taxiImage;
+    let adminUrl;
     let failure;
     let cleanupFailure;
     mkdirSync(artifacts, { recursive: true });
@@ -778,6 +780,7 @@ async function main(isolatedFile = undefined) {
         "failure.log",
         "stack.log",
         "taxi.log",
+        "proceeds-diagnostics.jsonl",
     ])
         rmSync(join(artifacts, name), { force: true });
     mkdirSync(secretDir, { recursive: true });
@@ -850,6 +853,7 @@ async function main(isolatedFile = undefined) {
         writeFileSync(join(runner, "regtest.mjs"), transformed.regtest);
         writeFileSync(join(runner, "lib", "setup", "arkd.mjs"), transformed.arkdSetup);
         const ports = Object.fromEntries(PORT_NAMES.map((name) => [name, 0]));
+        const emulatorEnvironment = { EMULATOR_LOG_LEVEL: "5" };
         const values = {
             REGTEST_PROFILES: "emulator",
             // Current regtest sets its own compose project from this; keep it
@@ -858,6 +862,7 @@ async function main(isolatedFile = undefined) {
             AUTOMINE_INTERVAL: "0",
             ...ARKD_DELAYS,
             ...ARKD_FEES,
+            ...emulatorEnvironment,
             ...(options.emulatorImage ? { EMULATOR_IMAGE: options.emulatorImage } : {}),
             ARKD_PASSWORD: secrets[0],
             ARKD_WALLET_SIGNER_KEY: secrets[1],
@@ -944,6 +949,11 @@ async function main(isolatedFile = undefined) {
         }
         assertResolvedPorts(ports, portBindings.length);
         const labels = await assertProjectLabels(project, SERVICES);
+        assertOwnedServiceEnvironment(labels, {
+            project,
+            service: "emulator",
+            environment: emulatorEnvironment,
+        });
         const configuredArkDelays = assertConfiguredArkDelays(
             assertOwnedServiceEnvironment(labels, {
                 project,
@@ -1065,7 +1075,7 @@ await import("/app/dist/cli.js");
         );
         assertResolvedPorts(ports, portBindings.length + 2);
         const taxiUrl = `http://127.0.0.1:${ports.TAXI_E2E_HTTP_PORT}`;
-        const adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
+        adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
         controlServer = createServer(async (request, response) => {
             try {
                 if (request.method !== "POST") throw new Error("POST required");
@@ -1334,6 +1344,14 @@ await import("/app/dist/cli.js");
         writeFileSync(join(artifacts, "failure.log"), `${safeFailure}\n`);
         throw sanitizedError;
     } finally {
+        if (adminUrl)
+            await captureProceedsDiagnostics({
+                adminUrl,
+                project,
+                phase: "before-stack-teardown",
+                file: join(artifacts, "proceeds-diagnostics.jsonl"),
+                knownSecrets,
+            });
         if (!cleanupFailure) {
             try {
                 await interruption.waitForOperations();
