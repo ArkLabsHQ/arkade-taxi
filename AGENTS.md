@@ -30,9 +30,10 @@ contract change, with the reason in the commit message.
 ## Never assemble the taproot tree by hand
 
 `VtxoScript` uses btcd's `AssembleTaprootScriptTree`. `@scure/btc-signer`'s
-default `taprootListToTree` is a Huffman builder that only agrees with arkd for
-power-of-2 leaf counts. The covenant has six leaves, so the Huffman builder would
-silently derive a different address. `test/taptree.test.ts` guards this.
+default `taprootListToTree` is a Huffman builder. Tests measure agreement at four
+and six leaves, but a different address at five. Use `VtxoScript` and recheck
+assembly parity whenever the leaf count changes.
+`packages/covenant/test/taptree.test.ts` guards this.
 `Leaf` in `packages/covenant/src/vtxo.ts` fixes their order: recycle, purchase,
 refund, reclaim, exit, renew. Preserve that order when loading compiler groups.
 
