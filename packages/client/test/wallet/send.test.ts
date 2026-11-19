@@ -18,6 +18,7 @@ import { taxiAssetId } from "../../src/index.js";
 import {
     boundedFetch,
     createTaxiSender,
+    PendingDirectTaxi,
     probeBitcoinTaxi,
     type ArkadeContext,
     type TaxiSenderDependencies,
@@ -282,6 +283,129 @@ describe("sender round trips", () => {
         expect(reserveInputs).toHaveBeenCalledOnce();
         expect(release).not.toHaveBeenCalled();
     });
+
+    it.each(["recycle", "sponsored"] as const)(
+        "resumes a lost %s reply with the same authorization and idempotent input hold",
+        async (mode) => {
+            const taxi = fakeTaxi();
+            vi.stubGlobal("fetch", async (input: unknown, init: RequestInit = {}) => {
+                const response = await taxi.fetch(input, init);
+                if (String(input).endsWith("/lockup")) throw new Error("reply lost");
+                return response;
+            });
+            current =
+                mode === "sponsored"
+                    ? coin(700, [{ assetId: ASSET, amount: 200_000_000n + FARE_UNITS }])
+                    : coin(1_000);
+            const records = new Map<string, string>();
+            const storage = {
+                getItem: (key: string) => records.get(key) ?? null,
+                setItem: (key: string, value: string) => void records.set(key, value),
+                removeItem: (key: string) => void records.delete(key),
+            };
+            const holds = new Map<string, string[]>();
+            const release = vi.fn(async () => void holds.delete("tr_01"));
+            let acquisitions = 0;
+            const reserve = vi.fn(
+                async (
+                    _wallet: IWallet,
+                    record: { transferId: string },
+                    inputs: readonly { txid: string; vout: number }[],
+                ) => {
+                    const outpoints = inputs.map(({ txid, vout }) => `${txid}:${vout}`);
+                    if (holds.has(record.transferId))
+                        expect(outpoints).toEqual(holds.get(record.transferId));
+                    else {
+                        holds.set(record.transferId, outpoints);
+                        acquisitions++;
+                    }
+                    return { release };
+                },
+            );
+            const first = sender({ storage, reserveInputs: reserve });
+            const pending = await drive(send(mode, first)).catch((error: unknown) => error);
+            expect(pending).toBeInstanceOf(PendingDirectTaxi);
+            if (!(pending instanceof PendingDirectTaxi)) throw pending;
+            expect(holds.size).toBe(1);
+            expect(release).not.toHaveBeenCalled();
+            const restored = await sender({ storage, reserveInputs: reserve }).getPendingDirectTaxi(
+                wallet,
+                "regtest",
+            );
+            expect(restored?.record).toEqual(pending.record);
+            await expect(drive(restored!.resume())).resolves.toBe(pending.record.expectedTxid);
+            expect(reserve).toHaveBeenCalledTimes(2);
+            expect(acquisitions).toBe(1);
+            expect(holds.size).toBe(0);
+            expect(release).toHaveBeenCalledExactlyOnceWith(pending.record.expectedTxid);
+            expect(records.size).toBe(0);
+            const prefix = mode === "sponsored" ? "/v1/sponsored-transfers" : "/v1/transfers";
+            expect(taxi.count()[`POST ${prefix}`]).toBe(1);
+            expect(taxi.count()[`POST ${prefix}/tr_01/lockup`]).toBe(1);
+        },
+    );
+
+    it("preserves a pending transfer when recovery has no reservation adapter", async () => {
+        const taxi = fakeTaxi();
+        vi.stubGlobal("fetch", async (input: unknown, init: RequestInit = {}) => {
+            const response = await taxi.fetch(input, init);
+            if (String(input).endsWith("/lockup")) throw new Error("reply lost");
+            return response;
+        });
+        current = coin(1_000);
+        const records = new Map<string, string>();
+        const storage = {
+            getItem: (key: string) => records.get(key) ?? null,
+            setItem: (key: string, value: string) => void records.set(key, value),
+            removeItem: (key: string) => void records.delete(key),
+        };
+        await expect(drive(send("recycle", sender({ storage })))).rejects.toBeInstanceOf(
+            PendingDirectTaxi,
+        );
+        const stored = [...records];
+        const restored = await sender({ storage, reserveInputs: undefined }).getPendingDirectTaxi(
+            wallet,
+            "regtest",
+        );
+        expect(restored).toBeInstanceOf(PendingDirectTaxi);
+        await expect(drive(restored!.resume())).rejects.toMatchObject({
+            name: "PendingDirectTaxi",
+            cause: expect.objectContaining({
+                message: "Wallet input reservation is required to resume Taxi sends",
+            }),
+        });
+        expect([...records]).toEqual(stored);
+        expect(taxi.count()["POST /v1/transfers"]).toBe(1);
+        expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBe(1);
+        expect(taxi.count()["GET /v1/transfers/tr_01"]).toBeUndefined();
+        expect(release).not.toHaveBeenCalled();
+        const recovered = await sender({ storage }).getPendingDirectTaxi(wallet, "regtest");
+        await expect(drive(recovered!.resume())).resolves.toBe(restored!.record.expectedTxid);
+        expect(taxi.count()["POST /v1/transfers"]).toBe(1);
+        expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBe(1);
+        expect(records.size).toBe(0);
+        expect(release).toHaveBeenCalledExactlyOnceWith(restored!.record.expectedTxid);
+    });
+
+    it.each([false, true])(
+        "returns a confirmed payment when release fails (diagnostic throws: %s)",
+        async (diagnosticThrows) => {
+            const taxi = fakeTaxi();
+            vi.stubGlobal("fetch", taxi.fetch);
+            current = coin(1_000);
+            const failure = new Error("reservation cleanup unavailable");
+            release.mockRejectedValue(failure);
+            const onHistoryError = vi.fn(() => {
+                if (diagnosticThrows) throw new Error("diagnostic unavailable");
+            });
+            await expect(drive(send("recycle", sender({ onHistoryError })))).resolves.toMatch(
+                /^[0-9a-f]{64}$/,
+            );
+            expect(onHistoryError).toHaveBeenCalledExactlyOnceWith(failure);
+            expect(release).toHaveBeenCalledOnce();
+            expect(taxi.count()["POST /v1/transfers/tr_01/lockup"]).toBe(1);
+        },
+    );
 
     it("probes twice, then quotes, locks up and waits for a sub-dust recycle", async () => {
         const taxi = fakeTaxi({ readyAt: 2_500, lockAfter: 1_500 });

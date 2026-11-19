@@ -359,7 +359,8 @@ describe("createSponsoredQuote", () => {
                 stored.unsignedLockupTx = encodeLockupEnvelope(wire);
             }
             const rebuild = () => validatePersistedLockupGraph(stored, config());
-            if (discriminator === "stripped") expect(rebuild).toThrow(/persisted/);
+            if (discriminator === "stripped")
+                expect(rebuild).toThrow("a positive sats fare requires a sender sats fare payer");
             else expect(rebuild).not.toThrow();
         },
     );
@@ -376,20 +377,21 @@ describe("createSponsoredQuote", () => {
         expect(() => validatePersistedLockupGraph(swapped, config())).toThrow(/persisted/);
     });
 
-    it("still reconstructs a sats-fare graph funded before the fare was charged", async () => {
+    it("rejects a positive sats fare graph whose sender payer is missing", async () => {
         const d = deps({ policy: satsFarePolicy(10n) });
         const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
         const built = sponsoredBuilder.built.find((r) => r.advanceId === quote.transferId)!;
         delete built.satsFarePayer;
-        const legacyTx = buildSponsoredEnvelope(built, config(), serverUnroll);
-        expect(decodeLockupEnvelope(legacyTx).satsFarePayer).toBeUndefined();
-        const funded = {
-            ...advances.get(quote.transferId)!,
-            unsignedLockupTx: legacyTx,
-            unsignedLockupId: decodeLockupEnvelope(legacyTx).unsignedTxId,
-        };
-        expect(validatePersistedLockupGraph(funded, config())).toEqual(
-            decodeLockupEnvelope(legacyTx),
+        expect(() => buildSponsoredEnvelope(built, config(), serverUnroll)).toThrow(
+            "a positive sats fare requires a sender sats fare payer",
+        );
+        const stored = advances.get(quote.transferId)!;
+        expect(() => validatePersistedLockupGraph(stored, config())).not.toThrow();
+        const wire = decodeLockupEnvelope(stored.unsignedLockupTx);
+        delete wire.satsFarePayer;
+        const invalid = { ...stored, unsignedLockupTx: encodeLockupEnvelope(wire) };
+        expect(() => validatePersistedLockupGraph(invalid, config())).toThrow(
+            "a positive sats fare requires a sender sats fare payer",
         );
     });
 

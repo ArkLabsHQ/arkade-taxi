@@ -1,6 +1,10 @@
 import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { V2_ARTIFACT, v2Args, type DustCovenantParams } from "@arkade-taxi/covenant";
+import {
+    DUST_COVENANT_ARTIFACT,
+    dustCovenantArgs,
+    type DustCovenantParams,
+} from "@arkade-taxi/covenant";
 
 export interface DelegateeRegistration {
     artifactId: string;
@@ -33,7 +37,7 @@ const snake = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c.toLo
 export function renewalTemplate(artifactId: string): string {
     const variables: Record<string, string> = { renewal_window: "int" };
     const args: Record<string, string> = {};
-    for (const { name, type } of V2_ARTIFACT.constructorInputs) {
+    for (const { name, type } of DUST_COVENANT_ARTIFACT.constructorInputs) {
         variables[snake(name)] = type;
         args[name] = `<${snake(name)}>`;
     }
@@ -71,11 +75,11 @@ export function delegationVariables(
     serverKey: Uint8Array,
     renewalBeforeExpirySeconds: bigint,
 ): Record<string, string> {
-    const args = v2Args(params, serverKey);
+    const args = dustCovenantArgs(params, serverKey);
     const out: Record<string, string> = {
         renewal_window: bytesToHex(arkade.BigNum.encode(renewalBeforeExpirySeconds)),
     };
-    for (const { name, type } of V2_ARTIFACT.constructorInputs) {
+    for (const { name, type } of DUST_COVENANT_ARTIFACT.constructorInputs) {
         const value = (args as Record<string, unknown>)[name];
         if (type === "int") {
             if (typeof value !== "bigint") throw new DelegateeError(`${name} is not an integer`);
@@ -101,7 +105,7 @@ export class DelegateeClient {
     /** Idempotent on their derived id, so startup may repeat them. */
     async register(): Promise<DelegateeRegistration> {
         const artifact = await this.post<{ artifact?: { id?: string } }>("/v1/artifact", {
-            document: JSON.stringify(V2_ARTIFACT),
+            document: JSON.stringify(DUST_COVENANT_ARTIFACT),
         });
         const artifactId = artifact.artifact?.id;
         if (!artifactId) throw new DelegateeError("delegatee returned no artifact id");

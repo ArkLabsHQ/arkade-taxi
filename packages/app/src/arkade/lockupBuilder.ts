@@ -116,15 +116,14 @@ export function toArkInput(
     };
 }
 
-/**
- * Absent is the legacy layout, where the fare left operator change and came
- * straight back to the operator — a net fare of zero. Only a positive sats fare
- * can name a payer; asset fares are hosted, not paid, out of operator sats.
- */
 export function senderPaysSatsFare(
     req: Pick<LockupBuildRequest, "satsFarePayer" | "fare">,
 ): boolean {
-    if (req.satsFarePayer === undefined) return false;
+    if (req.satsFarePayer === undefined) {
+        if (req.fare.currency === "sats" && req.fare.units > 0n)
+            throw new LockupShapeError("a positive sats fare requires a sender sats fare payer");
+        return false;
+    }
     if (req.satsFarePayer !== "sender") throw new LockupShapeError("unknown sats fare payer");
     if (req.fare.currency !== "sats" || req.fare.units <= 0n)
         throw new LockupShapeError("a sats fare payer needs a positive sats fare");

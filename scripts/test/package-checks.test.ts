@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +6,14 @@ import { distMismatch } from "../lib/package-checks.mjs";
 const at = (...parts: string[]) => resolve(import.meta.dirname, "../..", ...parts);
 
 describe("what a package packs", () => {
+    it("keeps every Taxi package on one release version", () => {
+        const read = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+        const release = read(at("package.json")).version;
+        for (const entry of readdirSync(at("packages"), { withFileTypes: true }))
+            if (entry.isDirectory())
+                expect(read(at("packages", entry.name, "package.json")).version).toBe(release);
+    });
+
     const fixture = (sources: string[], emitted: string[]) => {
         const root = mkdtempSync(join(tmpdir(), "dist-trace-"));
         for (const [dir, names, ext] of [

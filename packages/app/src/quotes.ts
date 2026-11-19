@@ -66,8 +66,7 @@ export interface LockupBuildRequest {
     /** A separate output at lockup: the covenant pins the operator's repayment
      * to exactly `topup`, so no fee is expressible inside it. */
     fare: FareSpec;
-    /** Set on every new positive-sats-fare lockup: the fare leaves sender change
-     * instead of operator change. Absent reconstructs a funded legacy graph. */
+    /** Required for positive sats fares; absent for zero fares and asset hosting. */
     satsFarePayer?: "sender";
     senderSats: bigint;
     extraPacket?: ExtraPacket;

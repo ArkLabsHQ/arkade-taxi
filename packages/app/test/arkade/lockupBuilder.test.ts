@@ -25,6 +25,7 @@ describe("joint funded graph", () => {
             const cfg = config({ operatorKey: operatorTree.tweakedPublicKey });
             req.params.operatorKey = cfg.operatorKey;
             req.fare.units = fare;
+            req.senderSats = req.senderInputs[0].value = 660n + fare;
             req.funding.totalValue = req.params.topup + fare + fare;
             req.funding.inputs[0].value = Number(req.funding.totalValue);
             req.covenantAddress = new DustCovenantScript({
@@ -38,7 +39,7 @@ describe("joint funded graph", () => {
             const { valueOutputs } = lockupPlan(req, cfg);
             expect(valueOutputs).toMatchObject([
                 { role: "covenant", amount: 330n },
-                { role: "operator-fare", amount: fare + fare },
+                { role: "operator-fare", amount: fare + fare + fare },
                 { role: "sender-change", amount: 660n },
             ]);
             expect(new Set(valueOutputs.map((o) => hex.encode(o.script))).size).toBe(3);
@@ -91,6 +92,7 @@ describe("joint funded graph", () => {
         req.params.assetId = { txid: id.txid, groupIndex: 0 };
         req.assetUnits = 99n;
         req.fare.units = 0n;
+        delete req.satsFarePayer;
         req.funding.totalValue = req.params.topup;
         req.funding.inputs[0].value = Number(req.funding.totalValue);
         req.covenantAddress = new DustCovenantScript({
@@ -128,7 +130,7 @@ describe("joint funded graph", () => {
         "checks operator residual boundary %s without reallocating it",
         (amount) => {
             const req = buildRequest();
-            req.funding.totalValue = req.params.topup + req.fare.units + amount;
+            req.funding.totalValue = req.params.topup + amount;
             req.funding.inputs[0].value = Number(req.funding.totalValue);
             if (amount > 0n && amount < config().dust)
                 expect(() => buildLockupEnvelope(req, config(), unroll)).toThrow(/dust floor/);
@@ -147,6 +149,7 @@ describe("joint funded graph", () => {
     it.each([0n, 330n, 660n])("keeps canonical declared fare payout at %s sats", (amount) => {
         const req = buildRequest();
         req.fare.units = amount;
+        if (amount === 0n) delete req.satsFarePayer;
         req.funding.totalValue = req.params.topup + amount;
         req.funding.inputs[0].value = Number(req.funding.totalValue);
         const parsed = parseLockupEnvelope(
@@ -168,7 +171,7 @@ describe("joint funded graph", () => {
     // on this rail: a sub-dust payout is refused before it can become a third.
     it("refuses a sub-dust payout rather than reaching the OP_RETURN ceiling", () => {
         const req = buildRequest();
-        req.senderSats = req.senderInputs[0].value = 30n;
+        req.senderSats = req.senderInputs[0].value = req.fare.units + 30n;
         req.funding.totalValue = req.params.topup + req.fare.units;
         req.funding.inputs[0].value = Number(req.funding.totalValue);
         expect(() => buildLockupEnvelope(req, config(), unroll)).toThrow(/dust floor/);
@@ -176,8 +179,8 @@ describe("joint funded graph", () => {
     it.each([330n, 331n, 660n])("selects SDK scripts for owner change at %s sats", (amount) => {
         const req = buildRequest();
         req.fare.units = 330n;
-        req.senderSats = req.senderInputs[0].value = amount;
-        req.funding.totalValue = req.params.topup + req.fare.units + amount;
+        req.senderSats = req.senderInputs[0].value = amount + req.fare.units;
+        req.funding.totalValue = req.params.topup + amount;
         req.funding.inputs[0].value = Number(req.funding.totalValue);
         const wire = JSON.parse(
             Buffer.from(base64.decode(buildLockupEnvelope(req, config(), unroll))).toString(),
@@ -201,10 +204,11 @@ describe("joint funded graph", () => {
         (role) => {
             const req = buildRequest();
             req.fare.units = role === "fare" ? 329n : 330n;
-            req.funding.totalValue = req.params.topup + req.fare.units;
+            req.funding.totalValue = req.params.topup;
             if (role === "operator change") req.funding.totalValue += 329n;
             req.funding.inputs[0].value = Number(req.funding.totalValue);
-            if (role === "sender change") req.senderSats = req.senderInputs[0].value = 329n;
+            if (role === "sender change")
+                req.senderSats = req.senderInputs[0].value = req.fare.units + 329n;
             expect(() => buildLockupEnvelope(req, config(), unroll)).toThrow(/dust floor/);
         },
     );
@@ -258,6 +262,7 @@ describe("joint funded graph", () => {
         };
         req.assetUnits = 70n;
         req.fare = { currency: "asset", assetId: req.params.assetId, units: 8n };
+        delete req.satsFarePayer;
         req.senderInputs[0].assetPacket = asset.Packet.create([
             asset.AssetGroup.create(payment, null, [], [asset.AssetOutput.create(2, 100n)], []),
             asset.AssetGroup.create(
@@ -334,8 +339,8 @@ describe("joint funded graph", () => {
         ]);
         expect(tx.getOutput(0).amount).toBe(330n);
         expect(tx.getOutput(1).amount).toBe(330n);
-        expect(tx.getOutput(2).amount).toBe(660n);
-        expect(tx.getOutput(3).amount).toBe(340n);
+        expect(tx.getOutput(2).amount).toBe(330n);
+        expect(tx.getOutput(3).amount).toBe(670n);
         expect(tx.outputsLength).toBe(5);
         expect(envelope.senderInputIndexes).toEqual([0]);
         expect(envelope.operatorInputIndexes).toEqual([1]);
@@ -351,6 +356,7 @@ describe("covenant outputs", () => {
         const req = buildRequest();
         req.senderSats = req.senderInputs[0].value = over.senderSats ?? 330n;
         req.fare.units = over.fare ?? 0n;
+        if (req.fare.units === 0n) delete req.satsFarePayer;
         req.covenantAddress = new DustCovenantScript({
             params: req.params,
             serverKey: cfg.serverPubkey,
@@ -369,6 +375,7 @@ describe("covenant outputs", () => {
         ]).serialize();
         req.assetUnits = 95n;
         req.fare = { currency: "asset", units: 5n, assetId: req.params.assetId };
+        delete req.satsFarePayer;
         req.covenantAddress = new DustCovenantScript({
             params: req.params,
             serverKey: cfg.serverPubkey,
@@ -467,7 +474,7 @@ describe("sender-paid sats fare", () => {
     interface Over {
         senderSats?: bigint;
         fare?: bigint;
-        legacy?: true;
+        missingFarePayer?: true;
         asset?: boolean;
     }
 
@@ -478,7 +485,7 @@ describe("sender-paid sats fare", () => {
         req.fare.units = over.fare ?? 330n;
         req.funding.totalValue = 1000n;
         req.funding.inputs[0].value = 1000;
-        if (!over.legacy) req.satsFarePayer = "sender";
+        if (over.missingFarePayer) delete req.satsFarePayer;
         if (over.asset) {
             req.senderInputs[0].assetPacket = asset.Packet.create([
                 asset.AssetGroup.create(
@@ -529,15 +536,9 @@ describe("sender-paid sats fare", () => {
         ]);
     });
 
-    it("collects nothing without the discriminator, as every funded graph did", () => {
-        const req = request({ legacy: true });
-        expect(layout(req)).toEqual([
-            ["covenant", 330n],
-            ["operator-fare", 330n],
-            ["sender-change", 661n],
-            ["operator-change", 340n],
-        ]);
-        expect(netOperatorSats(req)).toBe(0n);
+    it("refuses a positive sats fare without its sender payer", () => {
+        const req = request({ missingFarePayer: true });
+        expect(() => layout(req)).toThrow(/sats fare payer/);
     });
 
     it("charges the same way when the carrier moves an asset", () => {
@@ -549,12 +550,6 @@ describe("sender-paid sats fare", () => {
             ["operator-change", 670n],
         ]);
         expect(netOperatorSats(req)).toBe(330n);
-        expect(layout(request({ senderSats: 1_000n, asset: true, legacy: true }))).toEqual([
-            ["covenant", 330n],
-            ["operator-fare", 330n],
-            ["sender-change", 1000n],
-            ["operator-change", 340n],
-        ]);
     });
 
     it.each([330n, 400n, 660n])("never nets a %s sat fare out of the loan principal", (fare) => {
@@ -577,7 +572,7 @@ describe("sender-paid sats fare", () => {
         expect(() => lockupPlan(req, cfg)).toThrow(/positive sats fare/);
     });
 
-    it("refuses an unrecognised payer rather than falling back to the legacy layout", () => {
+    it("refuses an unrecognised payer", () => {
         const req = request();
         (req as { satsFarePayer?: string }).satsFarePayer = "operator";
         expect(() => lockupPlan(req, cfg)).toThrow(/sats fare payer/);
@@ -590,13 +585,5 @@ describe("sender-paid sats fare", () => {
         expect(wire.satsFarePayer).toBe("sender");
         expect(parseLockupEnvelope(encoded, req, cfg, unroll).unsignedTxId).toBe(wire.unsignedTxId);
         expect(Transaction.fromPSBT(base64.decode(wire.arkTx)).getOutput(2).amount).toBe(670n);
-        const legacy = buildLockupEnvelope(
-            request({ senderSats: 1_000n, asset: true, legacy: true }),
-            cfg,
-            unroll,
-        );
-        expect(
-            JSON.parse(Buffer.from(base64.decode(legacy)).toString()).satsFarePayer,
-        ).toBeUndefined();
     });
 });

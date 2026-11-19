@@ -221,12 +221,13 @@ export function validateSponsoredPayment(
               ? context.fare.units
               : context.vtxoMinAmount;
     if (
-        envelope.satsFarePayer !== undefined &&
-        (context.fare.currency !== "sats" || context.fare.units <= 0n)
+        envelope.satsFarePayer !==
+        (context.fare.currency === "sats" && context.fare.units > 0n ? "sender" : undefined)
     )
-        reject(VerificationErrorCode.Malformed, "satsFarePayer needs a positive sats fare");
-    // Absent, the fare leaves operator change and returns to the operator. The
-    // caller authorised this fare either way, so both layouts are within it.
+        reject(
+            VerificationErrorCode.Malformed,
+            "satsFarePayer must name the sender exactly for a positive sats fare",
+        );
     const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
     const operatorFare = fareHosting - senderFare;
     const senderChange = context.senderSats + context.params.contribution - payment - senderFare;

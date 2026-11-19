@@ -45,6 +45,7 @@ export function buildRequest(): LockupBuildRequest {
         params,
         covenantAddress: covenant.address("ark", serverKey).encode(),
         fare: { currency: "sats", units: 330n },
+        satsFarePayer: "sender",
         senderSats: 660n,
         senderInputs: [
             {
@@ -78,5 +79,6 @@ export function buildRequest(): LockupBuildRequest {
  * would be the lockup's third OP_RETURN. */
 export function receiverPays(request: LockupBuildRequest, receiverFare: ReceiverFare): void {
     request.params.receiverFare = receiverFare;
-    request.senderInputs[0]!.value = request.senderSats = request.params.dust;
+    request.senderInputs[0]!.value = request.senderSats =
+        request.params.dust + (request.fare.currency === "sats" ? request.fare.units : 0n);
 }

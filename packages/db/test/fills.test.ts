@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { AdvanceRepository, applyMigrations, FillRepository, type Fill } from "../src/index.js";
+import { AdvanceRepository, initializeSchema, FillRepository, type Fill } from "../src/index.js";
 
 const NOW = 100;
 const INPUT = { txid: "aa".repeat(32), vout: 1 };
@@ -32,7 +32,7 @@ afterEach(() => databases.splice(0).forEach((db) => db.close()));
 const setup = (over: Partial<Fill> = {}) => {
     const db = new DatabaseCtor(":memory:");
     databases.push(db);
-    applyMigrations(db);
+    initializeSchema(db);
     const fills = new FillRepository(db);
     fills.insert(row(over));
     const advances = new AdvanceRepository(db);

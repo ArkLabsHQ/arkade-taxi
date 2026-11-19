@@ -46,5 +46,5 @@ jobs:
             - run: git diff --exit-code packages/covenant/contracts packages/covenant/src/dust-covenant-artifact.ts
             # Executes the covenant's leaves in the emulator engine instead of comparing
             # bytes, so it fails when a leaf's semantics change while its bytes
-            # still match a stale fixture. Clones the ref named in v2-vectors.json.
+            # still match a stale fixture. Clones the ref named in vectors.json.
             - run: node packages/covenant/test/engine/run.mjs

@@ -16,7 +16,11 @@ export interface ClaimQueueOptions {
     /** Fresh spendable coins with wallet reservations and pending send inputs excluded. */
     getCoins: () => Promise<ExtendedVirtualCoin[]>;
     coordinate?: (run: () => Promise<void>) => Promise<void>;
-    /** Hold the selected input durably; release must await confirmation that it cannot be reused. */
+    /**
+     * Persist the selected input hold before returning. The adapter owns ambiguous holds
+     * and restart reconciliation independently of this queue; retain its release handle
+     * until independent proof permits safe cleanup, including after queue disposal.
+     */
     reserve?: (
         offer: VerifiedClaim,
         plan: RecyclePlan,
@@ -199,6 +203,7 @@ export class TaxiClaimQueue {
                 }
                 throw error;
             }
+            // A submitted claim stays consumed even if its history write fails.
             this.claimed.add(key);
             try {
                 await this.options.recordClaim(offer, plan, txid);

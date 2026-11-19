@@ -259,6 +259,12 @@ export interface TaxiSenderDependencies {
     getContext: () => Promise<ArkadeContext>;
     serverUnrollScript: Uint8Array;
     unreservedCoins: (wallet: IWallet) => Promise<ExtendedVirtualCoin[]>;
+    /**
+     * Persist the exact input hold before signing. Scope transferId to this wallet/Taxi;
+     * reacquire the same hold idempotently across retries and restarts, rejecting changed inputs.
+     * Release only on proven non-submission or verified spent inputs. After confirmation,
+     * release failures go to onHistoryError without replacing the successful payment result.
+     */
     reserveInputs?: (
         wallet: IWallet,
         record: PendingTaxiRecord,
@@ -271,6 +277,7 @@ export interface TaxiSenderDependencies {
         activity: TaxiActivity,
         status: Awaited<ReturnType<TaxiClient["status"]>>,
     ) => void;
+    /** Reports history and reservation-release failures without changing a confirmed payment. */
     onHistoryError?: (error: unknown) => void;
 }
 

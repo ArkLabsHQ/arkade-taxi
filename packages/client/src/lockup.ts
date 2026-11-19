@@ -735,12 +735,10 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
               ? context.fare.units
               : context.params.dust;
     if (
-        envelope.satsFarePayer !== undefined &&
-        (context.fare.currency !== "sats" || context.fare.units <= 0n)
+        envelope.satsFarePayer !==
+        (context.fare.currency === "sats" && context.fare.units > 0n ? "sender" : undefined)
     )
-        reject("satsFarePayer needs a positive sats fare");
-    // Absent, the fare leaves operator change and returns to the operator. The
-    // caller authorised this fare either way, so both layouts are within it.
+        reject("satsFarePayer must name the sender exactly for a positive sats fare");
     const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
     const operatorFare = fareHosting - senderFare;
     const senderChange = context.senderSats + context.params.topup - lockup - senderFare;

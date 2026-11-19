@@ -151,4 +151,27 @@ describe("Taxi claim input reservations", () => {
         expect(queue.snapshot().offers).toHaveLength(0);
         queue.dispose();
     });
+
+    it("never repeats a submitted claim when its history record fails", async () => {
+        const failure = new Error("history storage unavailable");
+        const onError = vi.fn();
+        const recordClaim = vi.fn().mockRejectedValue(failure);
+        const { queue, release, options } = setup({ recordClaim, onError });
+        const txid = "33".repeat(32);
+        vi.mocked(claimVerified).mockResolvedValue(txid);
+        await queue.claim(offerKey(offer));
+        queue.offer(offer);
+        await queue.claim(offerKey(offer));
+        expect(claimVerified).toHaveBeenCalledOnce();
+        expect(recordClaim).toHaveBeenCalledExactlyOnceWith(
+            offer,
+            expect.objectContaining({ kind: "recycle", coin }),
+            txid,
+        );
+        expect(onError).toHaveBeenCalledExactlyOnceWith(failure, offerKey(offer));
+        expect(release).toHaveBeenCalledExactlyOnceWith(txid);
+        expect(options.reload).toHaveBeenCalledOnce();
+        expect(queue.snapshot().offers).toHaveLength(0);
+        queue.dispose();
+    });
 });

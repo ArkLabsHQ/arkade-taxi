@@ -1,59 +1,32 @@
 {
     "package": "@arkade-os/swap",
-    "version": "0.2.0-taxi.2",
-    "file": "arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz",
-    "sha256": "5860499a2f4962ce2749bd81a789e3ffb1e729a436db1d7c4191b6679778071e",
-    "integrity": "sha512-W4el3BcY/SWOJkgTQ6TPvbRIc9xWNlCaazgL6AvSVXvEPwQXcGdk8WjWpLT538yhuMGq9m/oCRO0zLp3k/j47w==",
-    "bytes": 687606,
-    "sourceRepository": "https://github.com/arkade-os/ts-sdk",
-    "sourceCommit": "fdf784fbb8d1e8a4ddf50ac7d5e239bcbe2e681f",
-    "sourceTree": "9de2c493e39f51ba0953aed3072583f60bbd8f23",
-    "sourceDirectory": "packages/swap",
-    "sourceDirectoryTree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
+    "version": "0.2.0-taxi-v1",
+    "file": "arkade-os-swap-0.2.0-taxi-v1-b1e4ad8d.tgz",
+    "sha256": "074e0949ef22d7708e92ca3a00fb09fd2a918d9c1d2429c5545d29184c16c011",
+    "integrity": "sha512-FXP+FCTPdfaRdeRMnloYqqw9TkfCOpvQyQj9RbSKna6tlnU6Ny/Urj00xovFjVuWQEASRMrp94HsYJdtB4ZYKw==",
+    "bytes": 682955,
+    "license": "MIT",
     "source": {
         "repository": "https://github.com/arkade-os/ts-sdk.git",
-        "commit": "fdf784fbb8d1e8a4ddf50ac7d5e239bcbe2e681f",
+        "commit": "b1e4ad8d01fb358c40dedc38cd8db6841b72a4cc",
         "directory": "packages/swap",
-        "tree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
-        "directoryTree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
-        "repositoryTree": "9de2c493e39f51ba0953aed3072583f60bbd8f23"
-    },
-    "baseCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
-    "node": "v24.22.1",
-    "pnpm": "10.25.0",
-    "typescript": "Version 5.9.2",
-    "platform": "win32-x64",
-    "packCommand": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz",
-    "registryPublished": false,
-    "license": "MIT",
-    "licenseFrom": "archive package manifest",
-    "sdkDependency": "0.5.8",
-    "swapUnitTestsPassed": 2173,
-    "swapUnitTestFilesPassed": 87,
-    "workerSdkRequirement": "0.5.9-taxi.0",
-    "testedWorkerSdk": null,
-    "validation": {
-        "unitLog": "C:/Git/outputs/arkade-taxi/release-compat-20261119T090044Z/swap-upstream-unit.log",
-        "publishedSdkFloor": "0.5.8 source typecheck and built dist smoke passed; worker qualification excluded",
-        "independentSourceReview": "SDK agent, narrow delta reviewed without blocker",
-        "canonicalCompilerArtifacts": "byte-identical to d9 and b053; not regenerated in this refresh",
-        "frozenRecoveryArtifacts": "byte-identical to37aa; exact-script reader only",
-        "fundedConsumerQualification": "pending"
+        "tree": "ad25dc021a9bcad573977f9b0db7a8ad00e9446e",
+        "directoryTree": "ad25dc021a9bcad573977f9b0db7a8ad00e9446e",
+        "repositoryTree": "96eadff6edf8c3a43ba0c6b9240992977905af60"
     },
     "toolchain": {
         "node": "v24.22.1",
         "pnpm": "10.25.0",
         "typescript": "Version 5.9.2",
         "platform": "win32-x64",
-        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz"
+        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-v1-20261119/arkade-os-swap-0.2.0-taxi-v1-b1e4ad8d.tgz"
     },
     "compiler": {
-        "sourceRepository": "https://github.com/arkade-os/ts-sdk",
-        "sourceCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
+        "upstreamSourceCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
         "executedDuringRefresh": false,
         "compilerRevision": null,
         "binarySha256": null,
-        "provenance": "Canonical files are byte-identical to upstream committed artifacts; no compiler binary identity is encoded. This refresh did not regenerate them or execute the historical recovery compiler.",
+        "provenance": "Committed canonical artifacts are unchanged from upstream and fdf; compiler binary identity is not encoded. No regeneration during this cleanup.",
         "artifacts": [
             {
                 "source": "src/contracts/asset-swap.ark",
@@ -61,7 +34,6 @@
                 "artifact": "src/contracts/asset-swap.json",
                 "artifactSha256": "82719d002c65277fdf4e5c8b06e48c7c37e5463c02b1bcf4613d13532ca5ea76",
                 "fingerprint": "sha256:e2b80add6237f6c7e2c69a96ae46d55abe6de5f71c3718106f4d5b22ac9e6d0a",
-                "codeHash": null,
                 "compiler": {
                     "name": "arkadec",
                     "version": "0.1.0-rc.1",
@@ -69,7 +41,7 @@
                         "optimize": true
                     }
                 },
-                "embeddedSourceEntry": "asset-swap.ark"
+                "embeddedSourceMatches": true
             },
             {
                 "source": "src/contracts/sats-swap.ark",
@@ -77,7 +49,6 @@
                 "artifact": "src/contracts/sats-swap.json",
                 "artifactSha256": "1542c885ab5af379e459670687ccddeb3af33367641a33d8955b6f68f883ece9",
                 "fingerprint": "sha256:d7a60ab2178ede40a2e4867816689ea022641531cc662b562bebd7caa1ef96c4",
-                "codeHash": null,
                 "compiler": {
                     "name": "arkadec",
                     "version": "0.1.0-rc.1",
@@ -85,10 +56,10 @@
                         "optimize": true
                     }
                 },
-                "embeddedSourceEntry": "sats-swap.ark"
+                "embeddedSourceMatches": true
             }
-        ],
-        "recoverySourceCommit": "37aa317a08750dd39b5a9f639f4d0452d46655fa",
-        "recoveryIdentityLedger": "swap-source-program-identity.json"
-    }
+        ]
+    },
+    "sdkDependency": "0.5.8",
+    "workerSdkRequirement": "0.5.9-taxi-v1"
 }

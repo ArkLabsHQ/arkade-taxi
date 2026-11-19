@@ -126,7 +126,7 @@ const sourceAdvance = (
     const senderInput = operatorFundingInput(
         fundingCoin({
             txid: "11".repeat(32),
-            value: 330 + Number(terms.paymentSats ?? 0n),
+            value: 330 + Number(terms.paymentSats ?? 0n) + Number(fareSats),
             script: hex.encode(senderTree.pkScript),
             tapTree: senderTree.encode(),
             forfeitTapLeafScript: senderTree.leaves[0],
@@ -172,6 +172,7 @@ const sourceAdvance = (
                 },
                 covenantAddress: script.address(cfg.addressHrp, cfg.serverPubkey).encode(),
                 fare: base.fare,
+                ...(fareSats > 0n ? { satsFarePayer: "sender" as const } : {}),
             },
             cfg,
             serverUnroll,
@@ -211,6 +212,7 @@ const sourceAdvance = (
                     senderInputIndexes: [0],
                     operatorInputIndexes: [1],
                     assetUnits: "9007199254740993",
+                    ...(fareSats > 0n ? { satsFarePayer: "sender" } : {}),
                 }),
             ),
         );
@@ -571,6 +573,17 @@ describe("recovery graph", () => {
         ).toThrow(/fare/);
     });
 
+    it("rejects a direct positive sats fare with a missing payer at startup and recovery", () => {
+        const row = sourceAdvance();
+        const envelope = decodeLockupEnvelope(row.unsignedLockupTx);
+        delete envelope.satsFarePayer;
+        const invalid = { ...row, unsignedLockupTx: encodeLockupEnvelope(envelope) };
+        expect(() => buildRecoveryIntent(invalid, config())).toThrow(/recovery graph is malformed/);
+        expect(() => assertRecoveryStartupInvariants([invalid], config())).toThrow(
+            /sats fare payer/,
+        );
+    });
+
     it("audits a lockup whose operator change rides on the fare output", () => {
         const operatorKey = operatorTree.tweakedPublicKey;
         const row = sourceAdvance("height", false, { operatorKey });
@@ -581,7 +594,7 @@ describe("recovery graph", () => {
         // Covenant, the merged operator payout, sender change, anchor — a separate
         // change output would make five and repeat output 1's script.
         expect(source.outputsLength).toBe(4);
-        expect(source.getOutput(1).amount).toBe(20_000n - row.topup);
+        expect(source.getOutput(1).amount).toBe(20_000n - row.topup + row.fare.units);
         expect(() => buildRecoveryIntent(row, cfg)).not.toThrow();
         expect(() =>
             buildRecoveryIntent({ ...row, fare: { currency: "sats", units: 11n } }, cfg),
@@ -1134,14 +1147,14 @@ describe("startup recovery invariant", () => {
         },
     );
 
-    it("rejects an active legacy or incomplete recovery phase", () => {
-        const legacy = {
+    it("rejects an unknown recovery phase", () => {
+        const invalid = {
             ...sourceAdvance(),
             state: "recovering" as const,
-            recoveryPhase: "legacy" as const,
-        };
-        expect(() => assertRecoveryStartupInvariants([legacy], config())).toThrow(
-            /recovery-height.*legacy recovery phase/,
+            recoveryPhase: "unknown",
+        } as unknown as Advance;
+        expect(() => assertRecoveryStartupInvariants([invalid], config())).toThrow(
+            /recovery-height.*unknown recovery phase/,
         );
     });
 });

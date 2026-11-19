@@ -51,7 +51,7 @@ type SignatureCheck = (tx: Transaction, index: number, signers: string[]) => voi
 const verifySignatures: SignatureCheck = (tx, index, signers) =>
     verifyTapscriptSignatures(tx, index, signers, [], [DEFAULT_SIGHASH]);
 
-/** What this scan's own coin read knows that the row cannot: a v2 advance stores
+/** What this scan's own coin read knows that the row cannot: an advance stores
  * no batch expiry, and a renewal re-dates the one it races. */
 export interface ObservedCovenant {
     expiry?: ExpiryDeadline;
@@ -347,7 +347,7 @@ const exactTransactionHeader = (
     tx: Transaction,
     lockTime: number,
     label: string,
-    /** A v2 reclaim's CLTV is a ceiling, not an equality: refusing an earlier
+    /** A reclaim's CLTV is a ceiling, not an equality: refusing an earlier
      * one would open no custody row. */
     atMost = false,
 ): void => {
@@ -415,7 +415,7 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     });
     const tagged = readFundingSource(advance.unsignedLockupTx);
     const envelope =
-        tagged.kind === "legacy" ? decodeLockupEnvelope(advance.unsignedLockupTx) : undefined;
+        tagged.kind === "direct" ? decodeLockupEnvelope(advance.unsignedLockupTx) : undefined;
     const graphId = tagged.kind === "fill" ? tagged.source.graph.graphId : envelope!.unsignedTxId;
     const covenantOutputIndex =
         tagged.kind === "fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
@@ -518,7 +518,7 @@ const exactSuccessor = async (
             coin.isUnrolled === false &&
             sameCovenant(coin, facts),
     );
-    // Two v2 covenants differing only in paymentSats share one address, so an
+    // Two covenants differing only in paymentSats share one address, so an
     // ambiguous pair is refused rather than guessed at. None is not a renewal.
     if (live.length > 1) fail("renewal successor is ambiguous");
     return live[0];
@@ -598,7 +598,7 @@ const arkInput = (
 
 /**
  * The claimant's own coin at input 1 of a two-input covenant spend. `expected`
- * pins its script to a persisted key; v2's refund leaf binds it to out[1]
+ * pins its script to a persisted key; the refund leaf binds it to out[1]
  * instead, so that caller passes none.
  */
 const secondInput = async (
@@ -1346,7 +1346,7 @@ export function createSpendWatcher(deps: SpendWatcherDeps): SpendWatcher {
                         continue;
                     }
                     // Ahead of the evidence gate below, which a swept coin fails:
-                    // that observation is the one the v2 alarm exists for.
+                    // that observation is the one the alarm exists for.
                     observing.set(advance.id, observedCoin(coin));
                     try {
                         const facts = covenantFacts(observedAdvance, deps.config);

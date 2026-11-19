@@ -11,6 +11,14 @@ import { schnorr } from "@noble/curves/secp256k1.js";
 import { createHash } from "node:crypto";
 import { base64, hex } from "@scure/base";
 import { checkpointSpending, sealGraph } from "../graphFixtures.js";
+import { config } from "../fixtures.js";
+import { buildRequest, unroll } from "./lockupFixtures.js";
+import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder.js";
+import {
+    decodeLockupEnvelope,
+    encodeLockupEnvelope,
+    parseLockupEnvelope,
+} from "../../src/arkade/psbt.js";
 import {
     encodeFillSource,
     readFundingSource,
@@ -158,7 +166,19 @@ describe("fill funding source", () => {
         expect(() => readFundingSource(encodeFillSource(recovery))).toThrow(/preflight/);
     });
 
-    it("classifies untouched legacy envelopes without trying a joint fallback", () => {
-        expect(readFundingSource("bGVnYWN5")).toEqual({ kind: "legacy" });
+    it("classifies untagged direct inputs without trying a fill fallback", () => {
+        expect(readFundingSource("bGVnYWN5")).toEqual({ kind: "direct" });
+    });
+
+    it("preserves the current direct graph and encoded commitments", () => {
+        const request = buildRequest();
+        request.satsFarePayer = "sender";
+        const encoded = buildLockupEnvelope(request, config(), unroll);
+        const envelope = decodeLockupEnvelope(encoded);
+        expect(readFundingSource(encoded)).toEqual({ kind: "direct" });
+        expect(encodeLockupEnvelope(envelope)).toBe(encoded);
+        expect(parseLockupEnvelope(encoded, request, config(), unroll).unsignedTxId).toBe(
+            envelope.unsignedTxId,
+        );
     });
 });

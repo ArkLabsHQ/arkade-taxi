@@ -92,10 +92,9 @@ Readback is restricted to proved operator input ownership and passes the same
 strict graph validation. Exact retries and finalization remain a live
 deployment E2E requirement.
 
-Databases upgraded from the pre-phase schema mark existing `locking` rows as
-`legacy`. Those rows are never reconstructed or submitted automatically; they
-retain reservations, block readiness, and remain eligible only for promotion
-after exact covenant-outpoint observation.
+Submission and recovery phases describe durable facts in the v1 schema.
+Missing or malformed signed facts retain reservations and block automatic
+submission until their actual network outcome is established.
 
 The reconciler promotes `locking` to `locked` only after observing the exact
 spendable covenant outpoint and retains the operator-input reservations while

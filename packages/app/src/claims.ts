@@ -92,7 +92,7 @@ export function listReceiverClaims(
                                   .covenantOutputIndex;
                     const { outpoint, recoveryLocktime } = advance;
                     const jointScriptMatches =
-                        source.kind === "legacy" ||
+                        source.kind === "direct" ||
                         (() => {
                             const expected = ArkAddress.decode(advance.covenantAddress).pkScript;
                             return (

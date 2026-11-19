@@ -740,6 +740,54 @@ describe("persistent operator runtime safety", () => {
         ).rejects.toThrow("operator_registration_not_persisted");
         expect(register).not.toHaveBeenCalled();
     });
+    it.each(["reordered", "changed txid", "changed vout"] as const)(
+        "checks persisted proof outpoints before registration (%s)",
+        async (variant) => {
+            const s = setup();
+            await s.runtime.refresh();
+            const inputs = [
+                fundingCoin({
+                    txid: bytesToHex(Uint8Array.from({ length: 32 }, (_, i) => i)),
+                    vout: 0,
+                }),
+                fundingCoin({
+                    txid: bytesToHex(Uint8Array.from({ length: 32 }, (_, i) => i + 32)),
+                    vout: 513,
+                }),
+            ];
+            const repository = s.runtime.storage.intentRepository;
+            const save = repository.saveBatchRegistration.bind(repository);
+            vi.spyOn(repository, "saveBatchRegistration").mockImplementation((record) => {
+                const proofInputs = record.proofInputs
+                    .map(({ txid, vout }) => ({ txid, vout }))
+                    .reverse();
+                if (variant === "changed txid") proofInputs[0].txid = "ff".repeat(32);
+                if (variant === "changed vout") proofInputs[0].vout++;
+                return save({ ...record, proofInputs });
+            });
+            const register = vi
+                .spyOn(s.runtime.providers.arkProvider, "registerIntent")
+                .mockResolvedValue("intent");
+            const guard = vi.fn(async () => () => {});
+            try {
+                const work = s.runtime.withSettlement(
+                    (wallet) => wallet.settle({ inputs, outputs: [] }),
+                    guard,
+                );
+                if (variant === "reordered") {
+                    await expect(work).resolves.toBe("intent");
+                    expect(register).toHaveBeenCalledExactlyOnceWith(proofOf(inputs));
+                    expect(guard).toHaveBeenCalledTimes(1);
+                } else {
+                    await expect(work).rejects.toThrow("operator_registration_not_persisted");
+                    expect(register).not.toHaveBeenCalled();
+                    expect(guard).not.toHaveBeenCalled();
+                }
+            } finally {
+                await s.runtime.dispose();
+            }
+        },
+    );
     it("pins an active settlement wallet across provider refresh and drains before disposal", async () => {
         const s = setup();
         await s.runtime.refresh();

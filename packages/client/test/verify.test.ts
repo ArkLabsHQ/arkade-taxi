@@ -137,7 +137,7 @@ describe("verifyQuote — claim mode", () => {
         );
     });
 
-    it("rejects a legacy tree when the caller named a mode", () => {
+    it("rejects a missing claim mode when the caller named one", () => {
         rejects({ ...asksFor("recycle"), quote: quote({ ...params() }) }, "CLAIM_MODE_MISMATCH");
     });
 
