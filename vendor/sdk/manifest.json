@@ -1,7 +1,7 @@
 {
     "package": "@arkade-os/sdk",
     "version": "0.5.9-taxi.0",
-    "file": "C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-sdk-0.5.9-taxi.0-9b3a8fcf.tgz",
+    "file": "arkade-os-sdk-0.5.9-taxi.0-9b3a8fcf.tgz",
     "sha256": "6cb4605bd57806edfcf447859ffd6573c302ee601aeb313af48835ef318aa94e",
     "integrity": "sha512-nez6PTdANtd4K1EMEXelEDCD3IpJlOd969aOiHfzFCoCnObp9X61XnvgDeR3mnXoaXIu/SGFX6xgTDQrOaczbw==",
     "bytes": 2984735,
@@ -81,5 +81,7 @@
         "passed": 2141
     },
     "qualification": "Local source gates passed. New-cohort consumer runtime qualification and new PR CI pending.",
-    "createdAt": "2026-11-19T09:55:27.274Z"
+    "createdAt": "2026-11-19T09:55:27.274Z",
+    "sourceDirectory": "packages/sdk",
+    "sourceDirectoryTree": "2d97c05c4179d60b386e761687dd68bf163b77b1"
 }
