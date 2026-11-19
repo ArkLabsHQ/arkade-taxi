@@ -1,32 +1,32 @@
 {
     "package": "@arkade-os/swap",
     "version": "0.2.0-taxi-v1",
-    "file": "arkade-os-swap-0.2.0-taxi-v1-b1e4ad8d.tgz",
-    "sha256": "074e0949ef22d7708e92ca3a00fb09fd2a918d9c1d2429c5545d29184c16c011",
-    "integrity": "sha512-FXP+FCTPdfaRdeRMnloYqqw9TkfCOpvQyQj9RbSKna6tlnU6Ny/Urj00xovFjVuWQEASRMrp94HsYJdtB4ZYKw==",
-    "bytes": 682955,
+    "file": "arkade-os-swap-0.2.0-taxi-v1-ba2996cd.tgz",
+    "sha256": "7dadccc3d89b117e17fd0a42cbcef6d57afa329cc41c0748143e94880996ecf7",
+    "integrity": "sha512-zqMO0Yj5KMUs5lDvmpe+QYTVqSwHjaNVfBSbR4c+JbbN7/G2/Ti2lFhKEdqmnM2EmlzQibMLmD+zSP5MrcQ4ew==",
+    "bytes": 682763,
     "license": "MIT",
     "source": {
         "repository": "https://github.com/arkade-os/ts-sdk.git",
-        "commit": "b1e4ad8d01fb358c40dedc38cd8db6841b72a4cc",
+        "commit": "ba2996cdf2cb93c6906c2eeef952df00a6209cc7",
         "directory": "packages/swap",
-        "tree": "ad25dc021a9bcad573977f9b0db7a8ad00e9446e",
-        "directoryTree": "ad25dc021a9bcad573977f9b0db7a8ad00e9446e",
-        "repositoryTree": "96eadff6edf8c3a43ba0c6b9240992977905af60"
+        "tree": "08c68ffeacbbdc1a4bca2b5c1feb9f14d7202f34",
+        "directoryTree": "08c68ffeacbbdc1a4bca2b5c1feb9f14d7202f34",
+        "repositoryTree": "3336ea2dea3cbb0f8e0142945c3fa1bedb714d6d"
     },
     "toolchain": {
         "node": "v24.22.1",
         "pnpm": "10.25.0",
         "typescript": "Version 5.9.2",
         "platform": "win32-x64",
-        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-v1-20261119/arkade-os-swap-0.2.0-taxi-v1-b1e4ad8d.tgz"
+        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-v1-20261119/arkade-os-swap-0.2.0-taxi-v1-ba2996cd.tgz"
     },
     "compiler": {
         "upstreamSourceCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
         "executedDuringRefresh": false,
         "compilerRevision": null,
         "binarySha256": null,
-        "provenance": "Committed canonical artifacts are unchanged from upstream and fdf; compiler binary identity is not encoded. No regeneration during this cleanup.",
+        "provenance": "Committed canonical artifacts remain unchanged from upstream d9, fdf and b1; compiler binary identity is not encoded. No regeneration during packaging closure.",
         "artifacts": [
             {
                 "source": "src/contracts/asset-swap.ark",
@@ -60,6 +60,6 @@
             }
         ]
     },
-    "sdkDependency": "0.5.8",
+    "sdkDependency": "0.5.9-taxi-v1",
     "workerSdkRequirement": "0.5.9-taxi-v1"
 }

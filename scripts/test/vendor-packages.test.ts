@@ -24,6 +24,7 @@ it.each(["sdk", "swap"])(
     "authenticates the installed %s vendor and its resolved entry",
     (directory) => {
         const declared = manifest(join(root, "vendor", directory, "manifest.json"));
+        expect(declared.file).toMatch(new RegExp(`-${declared.source.commit.slice(0, 8)}\\.tgz$`));
         const archive = join(root, "vendor", directory, declared.file);
         const bytes = readFileSync(archive);
         expect(bytes.length).toBe(declared.bytes);

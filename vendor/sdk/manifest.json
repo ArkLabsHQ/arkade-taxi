@@ -1,18 +1,18 @@
 {
     "package": "@arkade-os/sdk",
     "version": "0.5.9-taxi-v1",
-    "file": "arkade-os-sdk-0.5.9-taxi-v1-ca687170.tgz",
-    "sha256": "fb3a4a2a86576a86e6673ba3e95f2679e891a08ade67a0777315d44606703001",
-    "integrity": "sha512-niR+BlZb2Cx1fIOPW43n8I2qBboQ1IiWu1hNEkTN+u3G7rxwcwfhg26X6VP/dAfidJUnCqtMEexzhbpAQRcg8A==",
-    "bytes": 2987640,
+    "file": "arkade-os-sdk-0.5.9-taxi-v1-9674c5a1.tgz",
+    "sha256": "7170c65d3237b06fbe59bd31e00a3e778c591a31d68ac67d3a67270bd180276b",
+    "integrity": "sha512-20v86brGaUhgtTSNs4fcT+EnBZPsqRgSbpUoRmfYmJdgoHVXU+goo4wOfXPigA6gBOaTqJwu1VFera/ZqgCzMQ==",
+    "bytes": 2985886,
     "license": "MIT",
     "source": {
         "repository": "https://github.com/arkade-os/ts-sdk.git",
-        "commit": "ca6871706e04b213e770149feda1ac9cdf2a9bb7",
+        "commit": "9674c5a1c0e9db2347127915eda09ba888c470a2",
         "directory": "packages/sdk",
-        "tree": "ca26a33bad437af8d9751469f9d932bb6e6aa17d",
-        "directoryTree": "ca26a33bad437af8d9751469f9d932bb6e6aa17d",
-        "repositoryTree": "06f1931c6f6ec9563b062d55847ea4592418c2dc"
+        "tree": "11d896c405152d7e94ee670a8f5dcee6f676329f",
+        "directoryTree": "11d896c405152d7e94ee670a8f5dcee6f676329f",
+        "repositoryTree": "afd91ec4e56f84304920c00f580451abc3ef404f"
     },
     "toolchain": {
         "node": "v24.22.1",
