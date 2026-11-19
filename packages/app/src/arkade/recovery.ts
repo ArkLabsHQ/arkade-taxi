@@ -34,6 +34,7 @@ import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt.js";
 import { operatorPayoutSats } from "../lockup.js";
 import { validatePersistedLockupGraph } from "./submit.js";
 import { readFundingSource } from "./fundingSource.js";
+import { senderPaysSatsFare } from "./lockupBuilder.js";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -195,7 +196,7 @@ function assertRecoveryPhaseMatrix(advance: Advance): void {
         !advance.recoveryPhase ||
         !["prepared", "submitted", "failed"].includes(advance.recoveryPhase)
     )
-        fail(`advance ${advance.id}: legacy recovery phase or unknown phase cannot be resumed`);
+        fail(`advance ${advance.id}: unknown recovery phase cannot be resumed`);
     if (lease.some(present) !== lease.every(present))
         fail(`advance ${advance.id}: recovery lease facts are incomplete`);
     assertTimestamp(advance, advance.recoveryLeaseUntil, "recovery lease time");
@@ -251,7 +252,7 @@ export function assertRecoveryStartupInvariants(
             fail(`advance ${advance.id}: the deadline must fall after the lockup`);
         try {
             const source = readFundingSource(advance.unsignedLockupTx);
-            if (source.kind === "legacy") validatePersistedLockupGraph(advance, config);
+            if (source.kind === "direct") validatePersistedLockupGraph(advance, config);
         } catch (cause) {
             fail(
                 `advance ${advance.id}: persisted lockup graph is invalid: ${cause instanceof Error ? cause.message : "validation failed"}`,
@@ -365,7 +366,9 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         const operatorChange =
             operatorFunding.reduce((sum, input) => sum + input.value, 0n) -
             advance.topup -
-            (envelope.satsFarePayer === undefined ? fareHosting : 0n);
+            (senderPaysSatsFare({ fare: advance.fare, satsFarePayer: envelope.satsFarePayer })
+                ? 0n
+                : fareHosting);
         farePayout = operatorPayoutSats(
             fareHosting,
             operatorChange,
@@ -390,7 +393,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     )
         fail(`advance ${advance.id}: persisted covenant script or value mismatch`);
 
-    if (tagged.kind === "legacy" && fareHosting > 0n) {
+    if (tagged.kind === "direct" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;
         if (
             !fareOutput ||
@@ -424,7 +427,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
               ) ?? [])
             : [];
         if (
-            tagged.kind === "legacy" &&
+            tagged.kind === "direct" &&
             advance.fare.currency === "asset" &&
             advance.fare.units > 0n
         ) {

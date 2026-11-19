@@ -7,6 +7,7 @@ import {
     offerKey,
     planReceiverClaim,
     type ClaimPlan,
+    type RecyclePlan,
     type VerifiedClaim,
 } from "./claims.js";
 
@@ -15,6 +16,15 @@ export interface ClaimQueueOptions {
     /** Fresh spendable coins with wallet reservations and pending send inputs excluded. */
     getCoins: () => Promise<ExtendedVirtualCoin[]>;
     coordinate?: (run: () => Promise<void>) => Promise<void>;
+    /**
+     * Persist the selected input hold before returning. The adapter owns ambiguous holds
+     * and restart reconciliation independently of this queue; retain its release handle
+     * until independent proof permits safe cleanup, including after queue disposal.
+     */
+    reserve?: (
+        offer: VerifiedClaim,
+        plan: RecyclePlan,
+    ) => Promise<{ release: (claimTxid?: string) => void | Promise<void> }>;
     reload: () => Promise<void>;
     allowed: () => boolean;
     automatic?: boolean;
@@ -168,24 +178,45 @@ export class TaxiClaimQueue {
                 (automatic && (!this.automatic || !isFreeReceiverClaim(offer.claim, plan)))
             )
                 return;
-            if (plan.kind === "recycle") this.consumed.add(`${plan.coin.txid}:${plan.coin.vout}`);
+            const coinKey =
+                plan.kind === "recycle" ? `${plan.coin.txid}:${plan.coin.vout}` : undefined;
+            if (plan.kind === "recycle" && !this.options.reserve)
+                throw new Error("Wallet input reservation is required for Taxi recycle claims");
+            const reservation =
+                plan.kind === "recycle" ? await this.options.reserve!(offer, plan) : undefined;
+            if (!valid() || (automatic && !this.automatic)) {
+                await reservation?.release();
+                return;
+            }
+            if (coinKey) this.consumed.add(coinKey);
             const identity = guardedClaimIdentity(
                 this.options.identity,
                 () => valid() && (!automatic || this.automatic),
             );
-            const txid = await claimVerified(offer, plan, identity);
+            let txid: string;
+            try {
+                txid = await claimVerified(offer, plan, identity);
+            } catch (error) {
+                if (!(error instanceof ClaimSpent) || !error.mayHaveSubmitted) {
+                    await reservation?.release();
+                    if (coinKey) this.consumed.delete(coinKey);
+                }
+                throw error;
+            }
+            // A submitted claim stays consumed even if its history write fails.
+            this.claimed.add(key);
             try {
                 await this.options.recordClaim(offer, plan, txid);
             } catch (error) {
                 this.report(error, key);
             }
-            this.claimed.add(key);
             if (this.offers.get(key) === offer) {
                 this.offers.delete(key);
                 this.plans.delete(key);
                 this.errors.delete(key);
             }
             this.publish();
+            await reservation?.release(txid);
             if (!this.authorized(epoch)) return;
             await this.options.reload();
         };

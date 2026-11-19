@@ -1,0 +1,24 @@
+{
+    "package": "@arkade-os/sdk",
+    "version": "0.5.9-taxi-v1",
+    "file": "arkade-os-sdk-0.5.9-taxi-v1-9674c5a1.tgz",
+    "sha256": "7170c65d3237b06fbe59bd31e00a3e778c591a31d68ac67d3a67270bd180276b",
+    "integrity": "sha512-20v86brGaUhgtTSNs4fcT+EnBZPsqRgSbpUoRmfYmJdgoHVXU+goo4wOfXPigA6gBOaTqJwu1VFera/ZqgCzMQ==",
+    "bytes": 2985886,
+    "license": "MIT",
+    "source": {
+        "repository": "https://github.com/arkade-os/ts-sdk.git",
+        "commit": "9674c5a1c0e9db2347127915eda09ba888c470a2",
+        "directory": "packages/sdk",
+        "tree": "11d896c405152d7e94ee670a8f5dcee6f676329f",
+        "directoryTree": "11d896c405152d7e94ee670a8f5dcee6f676329f",
+        "repositoryTree": "afd91ec4e56f84304920c00f580451abc3ef404f"
+    },
+    "toolchain": {
+        "node": "v24.22.1",
+        "pnpm": "10.25.0",
+        "typescript": "5.9.2",
+        "platform": "win32-x64",
+        "command": "pnpm -C packages/sdk pack --pack-destination C:/Git/outputs/arkade-taxi/bundles-v1-20261119"
+    }
+}

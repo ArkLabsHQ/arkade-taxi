@@ -35,7 +35,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const mod = await importOriginal<typeof import("@arkade-os/sdk")>();
-    return {
+    const mocked = {
         ...mod,
         RestArkProvider: class {
             async getInfo() {
@@ -58,6 +58,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
             }
         },
     };
+    return { ...mocked, RestOperatorProvider: mocked.RestArkProvider };
 });
 
 const txOf = (psbt: string): Transaction => Transaction.fromPSBT(base64.decode(psbt));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
-import { compileV2 } from "../src/v2-artifact.js";
+import { compileDustCovenant } from "../src/artifact.js";
 import type { AssetIdRef, DustCovenantParams } from "../src/params.js";
 
 const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
@@ -21,7 +21,7 @@ const params: DustCovenantParams = {
 
 const ops = (name: string) =>
     arkade.ArkadeScript.decode(
-        compileV2(params, key(4), key(5)).functionByName(name)!.arkadeScript!,
+        compileDustCovenant(params, key(4), key(5)).functionByName(name)!.arkadeScript!,
     );
 
 /**

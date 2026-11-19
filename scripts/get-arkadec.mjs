@@ -1,7 +1,16 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import {
+    copyFileSync,
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    readFileSync,
+    rmSync,
+    writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const TAG = "v0.1.0-test";
@@ -46,21 +55,27 @@ export function verifyAsset(asset, bytes) {
 }
 
 export async function fetchArkadec() {
-    if (existsSync(BIN)) return BIN;
     const asset = assetFor();
-    const url = `https://github.com/arkade-os/compiler/releases/download/${TAG}/${asset}`;
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`arkadec: ${url} returned ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    verifyAsset(asset, bytes);
-
-    rmSync(DIR, { recursive: true, force: true });
-    mkdirSync(DIR, { recursive: true });
     const archive = resolve(DIR, asset);
+    let bytes;
+    if (existsSync(archive)) {
+        bytes = readFileSync(archive);
+    } else {
+        const url = `https://github.com/arkade-os/compiler/releases/download/${TAG}/${asset}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`arkadec: ${url} returned ${response.status}`);
+        bytes = new Uint8Array(await response.arrayBuffer());
+    }
+    verifyAsset(asset, bytes);
+    mkdirSync(DIR, { recursive: true });
     writeFileSync(archive, bytes);
-    // bsdtar on Windows reads the zip, GNU tar auto-detects the gzip.
-    execFileSync("tar", ["-xf", archive, "-C", DIR], { stdio: "inherit" });
-    renameSync(resolve(DIR, asset.replace(/\.(zip|tar\.gz)$/, ""), EXE), BIN);
+    const scratch = mkdtempSync(join(tmpdir(), "taxi-arkadec-"));
+    try {
+        execFileSync("tar", ["-xf", archive, "-C", scratch], { stdio: "inherit" });
+        copyFileSync(resolve(scratch, asset.replace(/\.(zip|tar\.gz)$/, ""), EXE), BIN);
+    } finally {
+        rmSync(scratch, { recursive: true, force: true });
+    }
     return BIN;
 }
 

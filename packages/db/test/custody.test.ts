@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { applyMigrations } from "../src/schema.js";
+import { initializeSchema } from "../src/schema.js";
 import { AdvanceRepository } from "../src/advances.js";
 import { PolicyRepository } from "../src/policy.js";
 import {
@@ -88,7 +88,7 @@ const bind = (token = "tok-1", inputs = [COIN_A], graph = GRAPH) =>
 beforeEach(() => {
     db = new DatabaseCtor(":memory:");
     db.defaultSafeIntegers(true);
-    applyMigrations(db);
+    initializeSchema(db);
     advances = new AdvanceRepository(db, { custodyWindowSeconds: WINDOW });
     custody = new CustodyRepository(db);
 });

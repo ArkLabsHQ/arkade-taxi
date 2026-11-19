@@ -576,6 +576,7 @@ export function registerApiRoutes(app: Hono, prefix: string, deps: AdminDeps): v
                     confirmedSats: deposits && satsToWire(deposits.confirmedSats),
                     unconfirmedSats: deposits && satsToWire(deposits.unconfirmedSats),
                     expiredSats: deposits && satsToWire(deposits.expiredSats),
+                    unknownSats: deposits && satsToWire(deposits.unknownSats),
                 },
             });
         } catch (e) {

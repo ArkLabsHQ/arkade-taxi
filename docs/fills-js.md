@@ -17,8 +17,6 @@ ambiguous response requires reconciliation; do not build a replacement spend
 from the same inputs. The Taxi returns status rather than signed PSBTs. The
 receiver verifies the incoming covenant before claiming.
 
-`requestVerifiedSwapFillQuote` and `submitSwapFill` are removed. The claim and
-send helpers, transfer builder and sponsored-transfer builder remain available.
-Migration 18 and the strict receive-quote decoder require re-vendoring clients
-together with the server cutover. See [the wire protocol](protocol.md#post-v1fills)
-for the request and validation rules.
+Use the Taxi `1.0.0` client with the v1 service. The claim and send helpers,
+transfer builder and sponsored-transfer builder share this protocol.
+See [the wire protocol](protocol.md#post-v1fills) for the request and validation rules.

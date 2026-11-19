@@ -1,21 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (unreleased)
 
-### Added
-
-- `POST /v1/fills` for caller-built graphs and `GET /v1/fills/{id}` for status.
-- Fill reconciliation and health visibility for unresolved submissions.
-
-### Changed
-
-- Receive quotes publish reserved `operatorInputs` and `operatorScript`.
-- Receive-quote `makerPublicKey` is renamed to `senderKey`.
-- Migration 18 requires coordinated server and client updates. Back up the
-  database and policy before deployment; rollback restores that backup with
-  the previous image.
-
-### Removed
-
-- The swap-fill quote/submit rail and Taxi-owned swap assembler.
-- Swap and RFQ wallet helpers from the Taxi client.
+- One Taxi release, wire protocol and compiler-defined covenant.
+- Direct Bitcoin and asset transfers, sponsored transfers and caller-built fills.
+- Verified receive quotes with reserved operator funding, fees and deadlines.
+- Durable input ownership before signing; ambiguous submissions retain their original journals and holds.
+- Persisted registration, claims, refunds, renewal and recovery with restart reconciliation.
+- A single initial database schema with current financial constraints.
+- Shared wallet orchestration and minimal ordinary send flows.
+- Authenticated SDK and Swap snapshots with public package and regtest validation.

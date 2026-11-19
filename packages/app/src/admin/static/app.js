@@ -221,6 +221,10 @@ const BLOCKER_GROUPS = [
     ],
     ["A payment's lent sats can now be recovered.", "recovery_eligible"],
     [
+        "The wallet could not save recovery data, so no settlement was submitted. Check the Taxi's database and logs.",
+        "operator_registration_not_persisted",
+    ],
+    [
         "A payment's recovery time is invalid, so the Taxi cannot recover its sats on its own.",
         "recovery_locktime_invalid",
     ],
@@ -1069,6 +1073,7 @@ function renderFunding(funding) {
     $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
     $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
     $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-boarding-unknown").textContent = sats(boarding.unknownSats);
     $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 

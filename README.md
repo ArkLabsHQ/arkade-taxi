@@ -136,7 +136,6 @@ comes from pinned wallet config, never from the URI.
 ## Development
 
 ```bash
-pnpm verify:artifacts
 pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
@@ -147,25 +146,19 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-A clean checkout needs nothing placed by hand. `@arkade-os/sdk@0.5.0-rc.18` and
-`@arkade-os/swap@0.1.0-rc.21` are both published, but npm answers those coordinates
-with a **different build**: what this repository runs against is the pair built
-from `arkade-os/ts-sdk` at `99313fa7`, and no registry carries those bytes.
-`vendor/carrier/` holds them as tracked archives named for that source commit,
-`vendor/carrier/manifest.json` records the provenance of each, and the root
-`pnpm.overrides` point every resolution — direct and transitive — at those
-bytes.
+The service uses the unpublished `@arkade-os/sdk@0.5.9-taxi-v1` candidate in
+`vendor/sdk`, whose source and archive hash are recorded in its manifest. The
+workspace override applies those same bytes to every SDK consumer. The test suite
+uses the compiler-defined `@arkade-os/swap@0.2.0-taxi-v1` candidate recorded in
+`vendor/swap`. The committed lockfile pins dependency integrity;
+install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
+client, covenant and protocol packages, then installs those exact tarballs in a
+fresh consumer and verifies their identity and resolution before testing.
 
-Because the version numbers themselves resolve, **dropping or narrowing an
-override does not fail loudly** — it installs the registry build under the same
-number. So the overrides are load-bearing for correctness, not merely for
-version pinning, and `pnpm verify:artifacts` is what stands behind them: it runs
-on built-in Node with nothing installed, fails on a source, identity or hash
-mismatch, and once `node_modules` exists it loads every declared resolution and
-requires the pinned SDK deadline and swap fill-builder exports. Every path that installs
-dependencies runs it before the install and again after it. Re-freezing the
-bundle is `node scripts/carrier-artifacts/pack.mjs --sdk <ts-sdk checkout>`,
-then `pnpm install`, then `pnpm verify:artifacts`.
+Taxi's client, covenant, protocol and service packages share version `1.0.0`.
+This is the first release baseline, with one wire protocol and one covenant.
+Worker wallets require the same SDK candidate in the page and worker. Reload
+existing tabs after updating the worker so both sides use the scoped requests.
 
 Recompile the covenant from its Arkade source and prove no byte moved:
 
@@ -183,7 +176,7 @@ fixture.
 ## Release verification
 
 The covenant is compiled from `contracts/dust_covenant.ark` and its committed
-artifact is diffed on every CI run; `test/v2-vectors.json` pins the leaf bytes
+artifact is diffed on every CI run; `test/vectors.json` pins the leaf bytes
 and addresses for every shape the covenant takes. The mutation guards were each
 observed to fail before being reverted.
 
@@ -197,7 +190,7 @@ pnpm e2e:stack
 node e2e/assert-ran.mjs e2e-results.json
 ```
 
-All 21 functional/resilience scenarios and both integrity assertions must pass,
+All 26 shared scenarios, three isolated scenarios and both integrity assertions must pass,
 with zero skips, using the built production image and packed client. The
 harness records the exact master SHA, source identity, image identities and
 SDK version in `e2e-artifacts/stack.json`; retain it with the results and logs.
@@ -206,20 +199,28 @@ It owns a unique project and leaves existing regtest resources untouched.
 For a local Alice/Bob pass without Solver or swap offers:
 
 ```bash
-docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 --build-arg VERSION=v0.0.8-local.0f647925 -t arkade-emulator:v0.0.8-local.0f647925 ../emulator-wt-taxi-intents
-pnpm e2e:stack --direct --emulator-image arkade-emulator:v0.0.8-local.0f647925 --wallet ../wallet-wt-unified-carrier
+pnpm e2e:stack --direct
 ```
 
-`--direct` requires all 17 direct Taxi scenarios and both integrity assertions.
-`--wallet` runs that checkout's `playwright.taxi.config.ts` against the same live
-stack before the recovery scenarios advance chain time. Both options are local
-only; CI continues to require the complete suite. The harness records the
+`--direct` requires all 21 direct Taxi scenarios and both integrity assertions.
+Add `--emulator-image <local-image>` to test a local emulator build. These options
+are local only; CI continues to require the complete suite. The harness records the
 selected IDs and image identities in a unique `e2e-artifacts/direct-<run>/stack.json`
 and publishes its results alongside it. Verify those results with
 `node e2e/assert-ran.mjs --direct e2e-artifacts/direct-<run>/results.json`.
 
-The lockfile uses the frozen SDK **0.4.77** from `23c6d353`, recorded in
-`vendor/carrier/manifest.json`. Repeat the entire gate against current regtest
+Wallet browser tests run from the wallet checkout with its pinned solver, Taxi,
+regtest and provider images, as described in that repository's README:
+
+```bash
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Mobile Chrome"
+```
+
+That harness uses its own isolated stack and Electrum endpoint. Append `--manual`
+for an interactive local session; its printed stop endpoint triggers owned cleanup.
+
+Repeat the entire gate against current regtest
 master after updating providers or artifacts. A successful run proves that
 recorded provider combination. See [E2E instructions](e2e/README.md).
 

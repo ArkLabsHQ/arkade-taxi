@@ -36,8 +36,7 @@ export interface SponsoredBuildRequest {
     /** A separate output at submission, as with the covenant flow: an asset fare
      * is sender-funded and the operator supplies its hosting sats. */
     fare: FareSpec;
-    /** Set on every new positive-sats-fare payment: the fare leaves sender change
-     * instead of operator change. Absent reconstructs a funded legacy graph. */
+    /** Required for positive sats fares; absent for zero fares and asset hosting. */
     satsFarePayer?: "sender";
     senderSats: bigint;
 }

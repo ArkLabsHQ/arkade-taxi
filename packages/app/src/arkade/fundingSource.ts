@@ -83,8 +83,8 @@ const outpoint = (value: { txid?: unknown; vout?: unknown }, label: string) => {
 const sameBytes = (a: Uint8Array, b: Uint8Array): boolean =>
     a.length === b.length && a.every((value, index) => value === b[index]);
 
-export function readFundingSource(encoded: string): { kind: "legacy" } | ValidatedFillSource {
-    if (!encoded.startsWith(SOURCE_PREFIX)) return { kind: "legacy" };
+export function readFundingSource(encoded: string): { kind: "direct" } | ValidatedFillSource {
+    if (!encoded.startsWith(SOURCE_PREFIX)) return { kind: "direct" };
     let source: FillFundingSource;
     try {
         source = JSON.parse(encoded.slice(SOURCE_PREFIX.length)) as FillFundingSource;

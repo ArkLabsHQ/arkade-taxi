@@ -93,7 +93,7 @@ type AdvanceParams = Record<(typeof COLUMNS)[number], string | number | bigint |
 interface AdvanceRow {
     id: string;
     state: AdvanceState;
-    kind: "covenant" | "sponsored" | null;
+    kind: "covenant" | "sponsored";
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
@@ -133,8 +133,7 @@ interface AdvanceRow {
     unsigned_lockup_id: string | null;
     submission_key: string | null;
     signed_envelope_digest: string | null;
-    submission_phase:
-        "claimed" | "prepared" | "responded" | "finalized" | "failed" | "legacy" | null;
+    submission_phase: "claimed" | "prepared" | "responded" | "finalized" | "failed" | null;
     signed_lockup_envelope: string | null;
     prepared_ark_tx: string | null;
     prepared_checkpoints_json: string | null;
@@ -151,7 +150,7 @@ interface AdvanceRow {
     submitted_at: bigint | null;
     recovery_txid: string | null;
     recovery_submitted_at: bigint | null;
-    recovery_phase: "prepared" | "submitted" | "failed" | "legacy" | null;
+    recovery_phase: "prepared" | "submitted" | "failed" | null;
     recovery_graph_digest: string | null;
     recovery_expected_txid: string | null;
     recovery_prepared_ark_tx: string | null;
@@ -317,6 +316,18 @@ function toParams(a: Advance): AdvanceParams {
 // says `undefined`. Timestamps and indices are narrowed back to `number`, which
 // safeIntegers would otherwise hand back as BigInt.
 function fromRow(r: AdvanceRow): Advance {
+    if (r.kind !== "covenant" && r.kind !== "sponsored")
+        throw new Error(`advance ${r.id}: unknown kind`);
+    if (
+        r.submission_phase !== null &&
+        !["claimed", "prepared", "responded", "finalized", "failed"].includes(r.submission_phase)
+    )
+        throw new Error(`advance ${r.id}: unknown submission phase`);
+    if (
+        r.recovery_phase !== null &&
+        !["prepared", "submitted", "failed"].includes(r.recovery_phase)
+    )
+        throw new Error(`advance ${r.id}: unknown recovery phase`);
     const sponsored = r.kind === "sponsored";
     if (
         (sponsored && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||

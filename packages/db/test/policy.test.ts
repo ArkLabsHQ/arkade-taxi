@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import type { Policy } from "@arkade-taxi/core";
-import { applyMigrations } from "../src/schema.js";
+import { initializeSchema } from "../src/schema.js";
 import { DEFAULT_POLICY, PolicyRepository } from "../src/policy.js";
 
 const RULE = {
@@ -41,7 +41,7 @@ let repo: PolicyRepository;
 
 beforeEach(() => {
     db = new DatabaseCtor(":memory:");
-    applyMigrations(db);
+    initializeSchema(db);
     repo = new PolicyRepository(db);
 });
 

@@ -41,7 +41,7 @@ export interface FundingSnapshot {
 export interface SubmissionState {
     submissionKey?: string;
     signedEnvelopeDigest?: string;
-    submissionPhase?: "claimed" | "prepared" | "responded" | "finalized" | "failed" | "legacy";
+    submissionPhase?: "claimed" | "prepared" | "responded" | "finalized" | "failed";
     signedLockupEnvelope?: string;
     preparedArkTx?: string;
     preparedCheckpoints?: string[];
@@ -58,7 +58,7 @@ export interface SubmissionState {
     submittedAt?: number;
     recoveryTxid?: string;
     recoverySubmittedAt?: number;
-    recoveryPhase?: "prepared" | "submitted" | "failed" | "legacy";
+    recoveryPhase?: "prepared" | "submitted" | "failed";
     recoveryGraphDigest?: string;
     recoveryExpectedTxid?: string;
     recoveryPreparedArkTx?: string;

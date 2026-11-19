@@ -170,8 +170,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
                 .filter(
                     (advance) =>
                         advance.failureCode === "reserved_input_conflict" ||
-                        advance.submissionPhase === "failed" ||
-                        advance.submissionPhase === "legacy",
+                        advance.submissionPhase === "failed",
                 )
                 .map((advance) => advance.failureCode)
                 .filter((code): code is string => !!code),
@@ -197,7 +196,7 @@ export function createLockupReconciler(deps: LockupReconcilerDeps): LockupReconc
             deps.reservations.releaseForAdvance(advance.id);
         };
         try {
-            if (readFundingSource(advance.unsignedLockupTx).kind === "legacy")
+            if (readFundingSource(advance.unsignedLockupTx).kind === "direct")
                 await deps.submission.resume(advance.id);
             expected = expectedLockup(advance);
             const response = await deps.indexer.getVtxos({ outpoints: [expected.outpoint] });

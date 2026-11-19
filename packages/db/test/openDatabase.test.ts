@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
-import { applyMigrations, MIGRATIONS, openDatabase, PolicyRepository } from "../src/index.js";
+import { initializeSchema, SCHEMA_VERSION, openDatabase, PolicyRepository } from "../src/index.js";
 
 const dir = mkdtempSync(join(tmpdir(), "taxi-database-durability-"));
 afterAll(() => {
@@ -25,14 +25,39 @@ function expectFull(db: Database) {
 }
 
 describe("openDatabase durability", () => {
-    it("opens a new disk database in WAL with full durability and migrations", () => {
+    it.each(["unsupported", "noncanonical"])(
+        "refuses a %s disk schema without changing rows or journal mode",
+        (kind) => {
+            const path = join(dir, `${kind}.sqlite`);
+            const previous = new DatabaseCtor(path);
+            previous.defaultSafeIntegers(true);
+            previous.pragma("journal_mode = DELETE");
+            initializeSchema(previous);
+            new PolicyRepository(previous).update({ maxOutstandingSats: amount }, "test");
+            if (kind === "unsupported") previous.pragma("user_version = 19");
+            else previous.exec("DROP INDEX advances_outpoint");
+            const before = previous.serialize();
+            previous.close();
+
+            expect(() => openDatabase(path)).toThrow(/(unsupported|incompatible).*schema/i);
+            expect(existsSync(`${path}-wal`)).toBe(false);
+            const unchanged = new DatabaseCtor(path);
+            try {
+                expect(unchanged.pragma("journal_mode", { simple: true })).toBe("delete");
+                expect(unchanged.serialize()).toEqual(before);
+                expect(new PolicyRepository(unchanged).get().maxOutstandingSats).toBe(amount);
+            } finally {
+                unchanged.close();
+            }
+        },
+    );
+
+    it("opens a new disk database in WAL with full durability and v1 schema", () => {
         const db = openDatabase(join(dir, "new.sqlite"));
         try {
             expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
             expectFull(db);
-            expect(Number(db.pragma("user_version", { simple: true }))).toBe(
-                Math.max(...MIGRATIONS.map((migration) => migration.id)),
-            );
+            expect(Number(db.pragma("user_version", { simple: true }))).toBe(SCHEMA_VERSION);
             expect(new PolicyRepository(db).get().paused).toBe(true);
         } finally {
             db.close();
@@ -45,7 +70,7 @@ describe("openDatabase durability", () => {
         previous.defaultSafeIntegers(true);
         previous.pragma("journal_mode = DELETE");
         previous.pragma("synchronous = FULL");
-        applyMigrations(previous);
+        initializeSchema(previous);
         new PolicyRepository(previous).update({ maxOutstandingSats: amount }, "test");
         const expectedSchema = schema(previous);
         const expectedPolicy = new PolicyRepository(previous).getSnapshot();

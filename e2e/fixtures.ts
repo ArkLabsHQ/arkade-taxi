@@ -14,7 +14,6 @@ import {
     VtxoScript,
     asset,
     assertValidServerUnrollScript,
-    defaultCheckpointExitDelayPolicy,
     networks,
     scriptFromTapLeafScript,
     type ExtendedVirtualCoin,
@@ -236,10 +235,11 @@ export async function openLive() {
     expect(xOnly(arkInfo.signerPubkey)).toBe(info.serverKey);
     expect(xOnly(emulatorInfo.signerPubkey)).toBe(info.emulatorKey);
     const network = networks[arkInfo.network as keyof typeof networks];
-    const unroll = assertValidServerUnrollScript(arkInfo.checkpointTapscript, {
-        ...defaultCheckpointExitDelayPolicy(network),
-        advertisedForfeitPubkey: hex.decode(xOnly(arkInfo.forfeitPubkey)),
-    });
+    const unroll = assertValidServerUnrollScript(
+        arkInfo.checkpointTapscript,
+        network,
+        hex.decode(xOnly(arkInfo.forfeitPubkey)),
+    );
     const sdkAssetId = asset.AssetId.fromString(fixture.asset.assetId);
     const assetId = {
         txid: Uint8Array.from(sdkAssetId.txid).reverse(),

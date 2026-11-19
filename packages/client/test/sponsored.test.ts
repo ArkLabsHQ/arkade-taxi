@@ -45,6 +45,7 @@ const coin = (): ExtendedVirtualCoin => ({
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],
+    proofTapLeafScript: senderTree.leaves[0],
     intentTapLeafScript: senderTree.leaves[0],
 });
 
@@ -354,17 +355,11 @@ describe("sponsored sender-paid sats fare", () => {
         const verified = verifySponsoredQuote(a);
         expect(verified.envelope.satsFarePayer).toBe("sender");
         expect(amounts(a.quote.unsignedSponsoredTx)).toEqual([330n, 10n, 690n, 19_670n]);
-        expect(amounts(satsFareSponsoredArgs({ legacy: true }).quote.unsignedSponsoredTx)).toEqual([
-            330n,
-            10n,
-            700n,
-            19_660n,
-        ]);
     });
 
-    it("accepts a funded legacy sponsored graph unchanged", () => {
-        const a = satsFareSponsoredArgs({ legacy: true });
-        expect(verifySponsoredQuote(a).envelope.satsFarePayer).toBeUndefined();
+    it("rejects a positive sats fare without its sender payer", () => {
+        const a = satsFareSponsoredArgs({ missingFarePayer: true });
+        expect(() => verifySponsoredQuote(a)).toThrow(/satsFarePayer/);
     });
 
     it("keeps the discriminator across signing", async () => {
@@ -373,12 +368,14 @@ describe("sponsored sender-paid sats fare", () => {
         expect(decodeLockupEnvelope(encoded).satsFarePayer).toBe("sender");
     });
 
-    it("refuses a sender-paid claim stapled onto a legacy layout", () => {
-        const a = satsFareSponsoredArgs({ legacy: true });
+    it("refuses output amounts that contradict the sender-paid fare", () => {
+        const a = satsFareSponsoredArgs();
         a.quote.unsignedSponsoredTx = rewrite(
             a.quote.unsignedSponsoredTx,
             (wire) => {
-                wire.satsFarePayer = "sender";
+                const tx = Transaction.fromPSBT(base64.decode(wire.arkTx));
+                tx.updateOutput(2, { amount: tx.getOutput(2).amount! + 1n });
+                wire.arkTx = base64.encode(tx.toPSBT());
             },
             true,
         );
@@ -411,7 +408,7 @@ describe("sponsored sender-paid sats fare", () => {
         const fare = { currency: "sats" as const, units: 330n };
         a.quote = sponsoredQuote(sponsoredParams(), { fare });
         a.expect.maxFare = fare;
-        expect(amounts(a.quote.unsignedSponsoredTx)).toEqual([330n, 19_670n, 660n, 0n]);
+        expect(amounts(a.quote.unsignedSponsoredTx)).toEqual([330n, 20_000n, 330n, 0n]);
         expect(() => verifySponsoredQuote(a)).not.toThrow();
     });
 });

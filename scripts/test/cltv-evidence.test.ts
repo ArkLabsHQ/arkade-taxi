@@ -16,20 +16,44 @@ const at = Date.parse("2026-09-12T06:28:29Z");
 const internal = new Error(
     'Failed to submit tx to emulator: {"code":13,"message":"internal error","details":[]}',
 );
-const cltv = "FORFEIT_CLOSURE_LOCKED (11): 1789280546 > 1789194383 (blocktime)";
-const emulator = `2026-09-12T06:28:29.100000000Z time="2026-09-12T06:28:29Z" level=error msg="failed to process transaction" error="failed to submit tx on arkd: rpc error: code = FailedPrecondition desc = ${cltv}"`;
-const arkd = `2026-09-12T06:28:29.090000000Z time="2026-09-12T06:28:29Z" level=warning msg="method=/ark.v1.ArkService/SubmitTx duration=5ms metadata={\\"x-build-version\\":\\"0.9.9\\",\\"x-sdk-version\\":\\"emulator/v0.0.7\\"}" error="${cltv}"`;
-const audit = `2026-09-12T06:28:29.120000000Z time="2026-09-12T06:28:29Z" level=debug msg="added or updated offchain tx ${txid}"`;
+const cltv =
+    "FORFEIT_CLOSURE_LOCKED (11): closure is CLTV locked, 1789280546 > 1789194383 (block time)";
+const refusal = {
+    code: 9,
+    message: cltv,
+    details: [
+        {
+            "@type": "type.googleapis.com/ark.v1.ErrorDetails",
+            code: 11,
+            name: "FORFEIT_CLOSURE_LOCKED",
+            message: cltv,
+            metadata: {
+                current_locktime: "1.789194383e+09",
+                locktime: "1.789280546e+09",
+                type: "time",
+            },
+        },
+    ],
+};
+const publicError = (response = refusal) =>
+    new Error(`Failed to submit tx to emulator: ${JSON.stringify(response)}`);
+const emulator = `2026-09-12T06:28:29.100000000Z time="2026-09-12T06:28:29Z" level=debug msg="failed to process transaction" error="failed to submit tx on arkd: rpc error: code = FailedPrecondition desc = ${cltv}"`;
+const arkd = `2026-09-12T06:28:29.090000000Z time="2026-09-12T06:28:29Z" level=warning msg="method=/ark.v1.ArkService/SubmitTx duration=5ms metadata={\\"x-build-version\\":\\"0.9.9\\",\\"x-sdk-version\\":\\"emulator/v0.0.10-rc.0\\"}" error="${cltv}"`;
+const executing = `2026-09-12T06:28:29.010000000Z time="2026-09-12T06:28:29Z" level=debug msg="executing arkade script: 00e0" ark_txid=${txid} input_index=0`;
+const executed = `2026-09-12T06:28:29.020000000Z time="2026-09-12T06:28:29Z" level=debug msg="execution of 00e0 succeeded" ark_txid=${txid} input_index=0`;
+const finalizer = `2026-09-12T06:28:29.030000000Z time="2026-09-12T06:28:29Z" level=debug msg="finalizer role analysis completed" is_finalizer=true`;
+const rpc = `2026-09-12T06:28:29.001000000Z time="2026-09-12T06:28:29Z" level=debug msg="gRPC method: /emulator.v1.EmulatorService/SubmitTx"`;
+const emulatorLogs = `${rpc}\n${executing}\n${executed}\n${finalizer}\n${emulator}`;
 const fixture = () => ({
     project,
     txid,
-    emulatorSdkVersion: "v0.0.7",
+    emulatorSdkVersion: "v0.0.10-rc.0",
     locktime: "1789280546",
     currentBlocktime: "1789194383",
     startedAt: at,
     endedAt: at + 2000,
-    error: internal,
-    logs: { project, emulator, arkd: `${arkd}\n${audit}` },
+    error: publicError(),
+    logs: { project, emulator: emulatorLogs, arkd },
 });
 
 describe("owned recovery rejection evidence", () => {
@@ -71,6 +95,9 @@ describe("owned recovery rejection evidence", () => {
             v.error = new Error("internal error");
         },
         (v: any) => {
+            v.error = internal;
+        },
+        (v: any) => {
             v.error = new Error(
                 'Failed to submit tx to emulator: {"code":3,"message":"internal error"}',
             );
@@ -86,13 +113,13 @@ describe("owned recovery rejection evidence", () => {
             );
         },
         (v: any) => {
-            v.logs.emulator = emulator.replace("(11)", "(110)");
+            v.logs.emulator = emulatorLogs.replace("(11)", "(110)");
         },
         (v: any) => {
-            v.logs.arkd = v.logs.arkd.replace("(blocktime)", "(blockheight)");
+            v.logs.arkd = v.logs.arkd.replace("(block time)", "(block height)");
         },
         (v: any) => {
-            v.logs.arkd = v.logs.arkd.replace("emulator/v0.0.7", "other-client");
+            v.logs.arkd = v.logs.arkd.replace("emulator/v0.0.10-rc.0", "other-client");
         },
         (v: any) => {
             v.logs.arkd += `\n${arkd}`;
@@ -101,13 +128,13 @@ describe("owned recovery rejection evidence", () => {
             v.logs.emulator += `\n${emulator}`;
         },
         (v: any) => {
-            v.logs.arkd += `\n${audit.replace(txid, "22".repeat(32))}`;
+            v.logs.emulator += `\n${executed.replace(txid, "22".repeat(32))}`;
         },
         (v: any) => {
-            v.logs.arkd = `${arkd}\n${audit.replace(txid, "22".repeat(32))}`;
+            v.logs.emulator = emulatorLogs.replaceAll(txid, "22".repeat(32));
         },
         (v: any) => {
-            v.logs.emulator = "unstructured " + emulator;
+            v.logs.emulator = "unstructured " + emulatorLogs;
         },
     ])("rejects foreign, ambiguous or incorrect evidence %#", (mutate) => {
         const value = fixture();
@@ -117,8 +144,117 @@ describe("owned recovery rejection evidence", () => {
 
     it("waits only for absent log records, never accepts incomplete evidence", () => {
         const value = fixture();
-        value.logs.arkd = arkd;
+        value.logs.emulator = "";
         expect(matchRecoveryEvidence(value)).toBeUndefined();
+    });
+
+    it("accepts exact integral decimal metadata alongside Go scientific notation", () => {
+        const value = fixture();
+        const response = structuredClone(refusal);
+        response.details[0].metadata.locktime = "1789280546.000";
+        response.details[0].metadata.current_locktime = "1789194383";
+        value.error = publicError(response);
+        expect(matchRecoveryEvidence(value)).toMatchObject({ txid });
+    });
+
+    it.each([
+        (r: any) => {
+            r.code = 13;
+        },
+        (r: any) => {
+            r.details = [];
+        },
+        (r: any) => {
+            r.details.push(r.details[0]);
+        },
+        (r: any) => {
+            r.details[0]["@type"] = "type.googleapis.com/other.ErrorDetails";
+        },
+        (r: any) => {
+            r.details[0].code = 12;
+        },
+        (r: any) => {
+            r.details[0].name = "OTHER_ERROR";
+        },
+        (r: any) => {
+            r.details[0].message = "CLTV locked";
+        },
+        (r: any) => {
+            r.details[0].extra = true;
+        },
+        (r: any) => {
+            r.details[0].metadata.extra = true;
+        },
+        (r: any) => {
+            r.details[0].metadata.type = "height";
+        },
+        (r: any) => {
+            r.details[0].metadata.locktime = "1789280547";
+        },
+        (r: any) => {
+            r.details[0].metadata.current_locktime = "1789194384";
+        },
+        (r: any) => {
+            r.details[0].metadata.locktime = "1789280546.000000001";
+        },
+        (r: any) => {
+            r.details[0].metadata.locktime = "1.789280546e+99";
+        },
+        (r: any) => {
+            r.details[0].metadata.locktime = "NaN";
+        },
+    ])("rejects incorrect typed error details %#", (mutate) => {
+        const value = fixture();
+        const response = structuredClone(refusal);
+        mutate(response);
+        value.error = publicError(response);
+        expect(() => matchRecoveryEvidence(value)).toThrow();
+    });
+
+    it.each([
+        (v: any) => {
+            v.logs.emulator = emulatorLogs.replace("input_index=0", "input_index=1");
+        },
+        (v: any) => {
+            v.logs.emulator = emulatorLogs.replace("execution of 00e0", "execution of 00e1");
+        },
+        (v: any) => {
+            v.logs.emulator = emulatorLogs.replace("is_finalizer=true", "is_finalizer=false");
+        },
+        (v: any) => {
+            v.logs.emulator += `\n${finalizer}`;
+        },
+        (v: any) => {
+            v.logs.emulator += `\n${rpc}`;
+        },
+        (v: any) => {
+            v.logs.emulator = emulatorLogs.replace("29.020000000Z", "29.009999999Z");
+        },
+        (v: any) => {
+            v.logs.emulator = emulatorLogs.replace("29.010000000Z", "29.020000001Z");
+        },
+        (v: any) => {
+            v.endedAt = at + 100;
+            v.logs.emulator = emulatorLogs.replace("29.100000000Z", "29.100000001Z");
+        },
+        (v: any) => {
+            v.logs.arkd += `\n2026-09-12T06:28:29.120000000Z level=debug msg="added or updated offchain tx ${txid}"`;
+        },
+    ])("rejects mismatched execution and precise log ordering %#", (mutate) => {
+        const value = fixture();
+        mutate(value);
+        expect(() => matchRecoveryEvidence(value)).toThrow();
+    });
+
+    it("rejects an unrelated debug failure or additional financial RPC in the window", () => {
+        for (const extra of [
+            'level=debug msg="failed to process intent" error="another typed failure"',
+            'level=debug msg="gRPC method: /emulator.v1.EmulatorService/SubmitIntent"',
+        ]) {
+            const value = fixture();
+            value.logs.emulator += `\n2026-09-12T06:28:29.120000000Z ${extra}`;
+            expect(() => matchRecoveryEvidence(value)).toThrow();
+        }
     });
 });
 
@@ -145,8 +281,7 @@ describe("owned bounded Docker log reads", () => {
                 mutate?.(value);
                 return JSON.stringify([value]);
             }
-            if (args[0] === "logs")
-                return args.at(-1) === "a".repeat(64) ? `${arkd}\n${audit}` : emulator;
+            if (args[0] === "logs") return args.at(-1) === "a".repeat(64) ? arkd : emulatorLogs;
             throw new Error("unexpected Docker command");
         };
         return { run, calls };

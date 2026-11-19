@@ -12,7 +12,7 @@ export {
     type RelativeTimelock,
 } from "./params.js";
 export { payoutPkScript } from "./pin.js";
-export { compileV2, v2Args, V2_ARTIFACT } from "./v2-artifact.js";
+export { compileDustCovenant, dustCovenantArgs, DUST_COVENANT_ARTIFACT } from "./artifact.js";
 export {
     claimLeafDisabled,
     DISABLED_CLAIM_SCRIPT,

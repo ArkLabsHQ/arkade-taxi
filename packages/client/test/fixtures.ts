@@ -9,7 +9,7 @@ import {
 } from "@arkade-os/sdk";
 import { buildLockupEnvelope } from "../../app/src/arkade/lockupBuilder.js";
 import { buildSponsoredEnvelope } from "../../app/src/arkade/sponsoredBuilder.js";
-import { decodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
+import { decodeLockupEnvelope, encodeLockupEnvelope } from "../../app/src/arkade/psbt.js";
 import { config, fundingCoin, operatorTree } from "../../app/test/fixtures.js";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import {
@@ -126,13 +126,16 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
     const senderSats =
         opts.senderSats ?? senderInputs.reduce((sum, input) => sum + input.value, 0n);
     const fare = opts.fare ?? { currency: "sats", units: 330n };
+    const satsFarePayer =
+        opts.satsFarePayer ?? (fare.currency === "sats" && fare.units > 0n ? "sender" : undefined);
+    const fundingOptions = { ...opts, satsFarePayer };
     const unsignedLockupTx = buildLockupEnvelope(
         {
             senderInputs,
             senderSats,
             funding: {
-                inputs: [fundingCoin({ value: Number(operatorOwes(p, fare, opts)) })],
-                totalValue: operatorOwes(p, fare, opts),
+                inputs: [fundingCoin({ value: Number(operatorOwes(p, fare, fundingOptions)) })],
+                totalValue: operatorOwes(p, fare, fundingOptions),
                 batchExpiry: { kind: "height", value: 900_000n },
             },
             params: p,
@@ -140,7 +143,7 @@ export const quote = (p = params(), opts: QuoteFixtureOptions = {}): QuoteRespon
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
-            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
+            ...(satsFarePayer ? { satsFarePayer } : {}),
             ...(opts.extraPacket ? { extraPacket: opts.extraPacket } : {}),
         },
         config({ operatorKey: p.operatorKey }),
@@ -268,6 +271,8 @@ export const sponsoredQuote = (
     const senderSats =
         opts.senderSats ?? senderInputs.reduce((sum, input) => sum + input.value, 0n);
     const fare = opts.fare ?? { currency: "sats", units: 10n };
+    const satsFarePayer =
+        opts.satsFarePayer ?? (fare.currency === "sats" && fare.units > 0n ? "sender" : undefined);
     const unsignedSponsoredTx = buildSponsoredEnvelope(
         {
             senderInputs,
@@ -286,7 +291,7 @@ export const sponsoredQuote = (
             advanceId: "tr_01",
             fare,
             ...(opts.assetUnits !== undefined ? { assetUnits: opts.assetUnits } : {}),
-            ...(opts.satsFarePayer ? { satsFarePayer: opts.satsFarePayer } : {}),
+            ...(satsFarePayer ? { satsFarePayer } : {}),
         },
         config({ operatorKey: p.operatorKey }),
         unroll,
@@ -381,12 +386,12 @@ export const sponsoredAssetArgs = (): VerifySponsoredQuoteArgs => {
     };
 };
 
-/** The asset-sender fixture paying a sats fare, which a sponsored quote bills to
- * the sender unless it is reconstructing a funded legacy graph. */
-export const satsFareSponsoredArgs = (opts: { legacy?: true } = {}): VerifySponsoredQuoteArgs => {
+export const satsFareSponsoredArgs = (
+    opts: { missingFarePayer?: true } = {},
+): VerifySponsoredQuoteArgs => {
     const a = sponsoredAssetArgs();
     const fare = { currency: "sats" as const, units: 10n };
-    return {
+    const result = {
         ...a,
         quote: sponsoredQuote(sponsoredParams(), {
             senderInputs: a.senderInputs,
@@ -394,10 +399,16 @@ export const satsFareSponsoredArgs = (opts: { legacy?: true } = {}): VerifySpons
             assetUnits: a.assetUnits!,
             assetId: a.expect.assetId!,
             fare,
-            ...(opts.legacy ? {} : { satsFarePayer: "sender" as const }),
+            satsFarePayer: "sender" as const,
         }),
         expect: { ...a.expect, maxFare: fare },
     };
+    if (opts.missingFarePayer) {
+        const wire = decodeLockupEnvelope(result.quote.unsignedSponsoredTx);
+        delete wire.satsFarePayer;
+        result.quote.unsignedSponsoredTx = encodeLockupEnvelope(wire);
+    }
+    return result;
 };
 
 /** The asset-sender fixture with an extra packet declared — the only shape that

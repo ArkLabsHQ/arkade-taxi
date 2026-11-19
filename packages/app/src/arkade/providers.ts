@@ -3,7 +3,6 @@ import {
     RestIndexerProvider,
     RestEmulatorProvider,
     assertValidServerUnrollScript,
-    defaultCheckpointExitDelayPolicy,
     defaultEmulatorPubkey,
     isVtxoExpiringSoon,
     networks,
@@ -150,13 +149,11 @@ export async function verifyProviders(
         result.blockers.push("provider_exit_delay_invalid");
     try {
         if (!network) throw new Error();
-        result.serverUnrollScript = assertValidServerUnrollScript(ark.value.checkpointTapscript, {
-            ...defaultCheckpointExitDelayPolicy(network),
-            advertisedForfeitPubkey: hexToBytes(
-                normalizeSigner(ark.value.forfeitPubkey),
-                "forfeit key",
-            ),
-        });
+        result.serverUnrollScript = assertValidServerUnrollScript(
+            ark.value.checkpointTapscript,
+            network,
+            hexToBytes(normalizeSigner(ark.value.forfeitPubkey), "forfeit key"),
+        );
     } catch {
         result.blockers.push("server_unroll_invalid");
     }

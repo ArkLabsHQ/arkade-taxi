@@ -32,6 +32,7 @@ const coin = (): ExtendedVirtualCoin => ({
     expiresAtHeight: 900_000,
     tapTree: senderTree.encode(),
     forfeitTapLeafScript: senderTree.leaves[0],
+    proofTapLeafScript: senderTree.leaves[0],
     intentTapLeafScript: senderTree.leaves[0],
 });
 
@@ -196,7 +197,7 @@ describe("requestVerifiedQuote — claim mode", () => {
         expect(paths(fetch)).toEqual([]);
     });
 
-    it("sends the expectation-only mode even when the operator echoes a legacy tree", async () => {
+    it("sends the expectation-only mode even when the operator omits it", async () => {
         const a = { ...args(), quote: quote({ ...params() }) };
         const withExpect = { ...a, expect: { ...a.expect, claimMode: "purchase" as const } };
         const { taxi } = transport(a);

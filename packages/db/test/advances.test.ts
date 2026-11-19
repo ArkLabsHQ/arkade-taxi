@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "better-sqlite3";
 import type { Advance } from "@arkade-taxi/core";
-import { applyMigrations } from "../src/schema.js";
+import { initializeSchema } from "../src/schema.js";
 import { AdvanceRepository } from "../src/advances.js";
 import { PolicyRepository } from "../src/policy.js";
 
@@ -48,11 +48,26 @@ let repo: AdvanceRepository;
 
 beforeEach(() => {
     db = new DatabaseCtor(":memory:");
-    applyMigrations(db);
+    initializeSchema(db);
     repo = new AdvanceRepository(db);
 });
 
 describe("round-trip fidelity", () => {
+    it.each(["submission_phase", "recovery_phase", "kind"])(
+        "rejects corrupted %s without altering its ownership",
+        (column) => {
+            repo.insert(
+                advance({ state: column === "submission_phase" ? "locking" : "recovering" }),
+            );
+            db.pragma("ignore_check_constraints = ON");
+            db.prepare(`UPDATE advances SET ${column} = ?`).run("unknown");
+            db.pragma("ignore_check_constraints = OFF");
+            const before = db.serialize();
+            expect(() => repo.get("adv-1")).toThrow(/unknown.*(phase|kind)/i);
+            expect(db.serialize()).toEqual(before);
+        },
+    );
+
     it("preserves receiver recovery ownership while legacy rows remain absent", () => {
         repo.insert(advance({ id: "legacy" }));
         repo.insert(
@@ -320,11 +335,11 @@ describe("round-trip fidelity", () => {
             }),
         );
         repo.insert(advance({ id: "submitted", state: "recovering", recoveryPhase: "submitted" }));
-        repo.insert(advance({ id: "legacy", state: "recovering", recoveryPhase: "legacy" }));
+        repo.insert(advance({ id: "failed", state: "recovering", recoveryPhase: "failed" }));
 
         expect(repo.expediteRecovery("leased", 100)).toBe("live_lease");
         expect(repo.expediteRecovery("submitted", 100)).toBe("incompatible");
-        expect(repo.expediteRecovery("legacy", 100)).toBe("incompatible");
+        expect(repo.expediteRecovery("failed", 100)).toBe("incompatible");
         expect(repo.expediteRecovery("missing", 100)).toBe("not_found");
     });
 
@@ -521,7 +536,7 @@ describe("round-trip fidelity", () => {
 
     it("stays exact on a Database that never enabled safeIntegers", () => {
         const plain = new DatabaseCtor(":memory:");
-        applyMigrations(plain);
+        initializeSchema(plain);
         const a = advance({ dust: ABOVE_MAX_SAFE });
 
         new AdvanceRepository(plain).insert(a);
@@ -820,7 +835,7 @@ describe("update", () => {
         const first = new DatabaseCtor(path);
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             const firstRepo = new AdvanceRepository(first);
             firstRepo.insert(
                 advance({
@@ -961,7 +976,7 @@ describe("update", () => {
         const first = new DatabaseCtor(join(dir, "taxi.sqlite"));
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             second = new DatabaseCtor(join(dir, "taxi.sqlite"));
             const firstRepo = new AdvanceRepository(first);
             const secondRepo = new AdvanceRepository(second);

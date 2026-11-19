@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+    TAXI_VERSIONS,
     assertArtifactSafe,
     assertCleanupCandidates,
     assertLocalConsumerResolution,
@@ -49,21 +50,16 @@ import {
     resolveInstalledClientEntry,
     isolatedLabel,
     resolveE2eOptions,
-    resolveWalletTimeoutMs,
-    reserveWalletPorts,
     removeStaleFailureDiagnostics,
     taxiLogArgs,
+    withoutMempoolMiningAnalytics,
 } from "./lib/harness.mjs";
 import { captureTaxiIdentity, writeStackManifest } from "./e2e-artifacts.mjs";
 import { createFailureProxy } from "./lib/failure-proxy.mjs";
+import { captureProceedsDiagnostics } from "./lib/proceeds-diagnostics.mjs";
 import { assertTaxiRestartOwnership } from "./lib/taxi-restart.mjs";
 import { isolatedScenarioIds, readScenarioIds } from "../e2e/assert-ran.mjs";
-import {
-    VENDOR_DIR,
-    assertFrozenResolutions,
-    distMismatch,
-    workspaceManifests,
-} from "./carrier-artifacts/lib.mjs";
+import { distMismatch } from "./lib/package-checks.mjs";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REGTEST_REPOSITORY = "https://github.com/ArkLabsHQ/arkade-regtest.git";
@@ -107,6 +103,8 @@ const SERVICES = [
     "mempool_web",
     "lnd",
     "arkd-wallet",
+    "arkd-signer",
+    "redis",
     "arkd",
     "arkade-wallet",
     "arkade-explorer",
@@ -121,6 +119,8 @@ const DIAGNOSTIC_SERVICES = [
     "mempool_api",
     "mempool_web",
     "arkd-wallet",
+    "arkd-signer",
+    "redis",
     "arkd",
     "emulator",
 ];
@@ -598,22 +598,6 @@ const assertProjectLabels = async (project, expectedServices) => {
     return assertCleanupCandidates(details, { project, services: expectedServices });
 };
 
-const frozenArtifacts = () => {
-    const { artifacts } = JSON.parse(readFileSync(join(REPO, VENDOR_DIR, "manifest.json"), "utf8"));
-    if (!artifacts?.length) throw new Error(`${VENDOR_DIR}/manifest.json freezes no archives`);
-    return artifacts;
-};
-
-/** The packed client names the candidates by version, so a fresh consumer would
- * take the registry build; point it at the same frozen archives the repo installs. */
-const vendoredClientDependencies = () =>
-    frozenArtifacts().map(({ package: name, file }) => {
-        const vendored = join(REPO, VENDOR_DIR, file);
-        if (!existsSync(vendored))
-            throw new Error(`frozen carrier archive ${file} is missing from ${VENDOR_DIR}`);
-        return [name, `file:${vendored.replaceAll("\\", "/")}`];
-    });
-
 export const packClient = async (root, env) => {
     const packDir = join(root, "packs");
     const consumer = join(root, "consumer");
@@ -626,8 +610,9 @@ export const packClient = async (root, env) => {
         "registry=https://registry.npmjs.org/\n@arkade-taxi:registry=http://127.0.0.1:9/\nalways-auth=false\n",
     );
     // A build only adds, so an unmerged branch's output survives and ships.
-    for (const relative of workspaceManifests(REPO).filter((p) => p.startsWith("packages/")))
-        rmSync(join(REPO, dirname(relative), "dist"), { recursive: true, force: true });
+    for (const entry of readdirSync(join(REPO, "packages"), { withFileTypes: true }))
+        if (entry.isDirectory())
+            rmSync(join(REPO, "packages", entry.name, "dist"), { recursive: true, force: true });
     await runPnpm(["-r", "build"], { cwd: REPO, env, npmUserConfig });
     const tarballs = [];
     for (const name of ["@arkade-taxi/covenant", "@arkade-taxi/protocol", "@arkade-taxi/client"]) {
@@ -655,11 +640,10 @@ export const packClient = async (root, env) => {
         throw new Error("pack directory does not contain exactly three tarballs");
     const beforeInstall = tarballHashes(tarballs);
     const manifest = buildConsumerManifest(tarballs, consumer);
-    for (const [name, spec] of vendoredClientDependencies()) {
-        manifest.dependencies[name] = spec;
-        manifest.pnpm.overrides[name] = spec;
-    }
-    writeFileSync(join(consumer, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const { pnpm: workspace, ...consumerPackage } = manifest;
+    writeFileSync(join(consumer, "pnpm-workspace.yaml"), `${JSON.stringify(workspace, null, 2)}\n`);
+    writeFileSync(join(consumer, "package.json"), `${JSON.stringify(consumerPackage, null, 2)}\n`);
     await runPnpm(
         ["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"],
         {
@@ -676,7 +660,10 @@ export const packClient = async (root, env) => {
             "utf8",
         ),
     );
-    if (installed.name !== "@arkade-taxi/client" || installed.version !== "0.0.0")
+    if (
+        installed.name !== "@arkade-taxi/client" ||
+        installed.version !== TAXI_VERSIONS["@arkade-taxi/client"]
+    )
         throw new Error("installed packed client identity changed");
     const listed = JSON.parse(
         (
@@ -690,13 +677,6 @@ export const packClient = async (root, env) => {
     )[0];
     const lock = readFileSync(join(consumer, "pnpm-lock.yaml"), "utf8");
     assertLocalConsumerResolution(manifest, lock, listed);
-    // This consumer reaches the real registry, and a bare import cannot tell it apart.
-    const artifacts = frozenArtifacts();
-    await assertFrozenResolutions(join(consumer, "package.json"), artifacts);
-    await assertFrozenResolutions(
-        join(consumer, "node_modules", "@arkade-taxi", "client", "package.json"),
-        artifacts.filter((artifact) => artifact.package === "@arkade-os/sdk"),
-    );
     await import(pathToFileURL(entry).href);
     return { consumer, entry, tarballs, npmUserConfig, manifest, lock, listed, installed };
 };
@@ -739,14 +719,10 @@ const patchPolicy = async (adminUrl) => {
 async function main(isolatedFile = undefined) {
     const isolated = isolatedFile !== undefined;
     const options = resolveE2eOptions(process.argv.slice(2));
-    const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);
     const tests = isolated ? [isolatedFile] : options.tests;
     const scenarioIds = isolated
         ? isolatedScenarioIds(isolatedFile)
         : readScenarioIds(options.mode);
-    const wallet = options.wallet && !isolated ? resolve(options.wallet) : undefined;
-    if (wallet && !existsSync(join(wallet, "playwright.taxi.config.ts")))
-        throw new Error("--wallet checkout requires playwright.taxi.config.ts");
     const interruption = createInterruptionState();
     activeInterruption = interruption;
     const signalHandlers = {
@@ -788,7 +764,6 @@ async function main(isolatedFile = undefined) {
         knownSecrets,
     });
     const taxi = captureTaxiIdentity(REPO);
-    const walletIdentity = wallet ? captureTaxiIdentity(wallet) : undefined;
     let actorSecrets = {};
     let state;
     let taxiContainer;
@@ -796,6 +771,7 @@ async function main(isolatedFile = undefined) {
     let controlServer;
     let taxiVolume;
     let taxiImage;
+    let adminUrl;
     let failure;
     let cleanupFailure;
     mkdirSync(artifacts, { recursive: true });
@@ -807,6 +783,7 @@ async function main(isolatedFile = undefined) {
         "failure.log",
         "stack.log",
         "taxi.log",
+        "proceeds-diagnostics.jsonl",
     ])
         rmSync(join(artifacts, name), { force: true });
     mkdirSync(secretDir, { recursive: true });
@@ -852,7 +829,7 @@ async function main(isolatedFile = undefined) {
         });
         const base = join(runner, "docker", "compose.base.yml");
         const ark = join(runner, "docker", "compose.ark.yml");
-        const baseSource = readFileSync(base, "utf8");
+        const baseSource = withoutMempoolMiningAnalytics(readFileSync(base, "utf8"));
         const arkSource = readFileSync(ark, "utf8");
         const portBindings = discoverPortBindings(
             `${baseSource}\n${arkSource}`,
@@ -879,6 +856,7 @@ async function main(isolatedFile = undefined) {
         writeFileSync(join(runner, "regtest.mjs"), transformed.regtest);
         writeFileSync(join(runner, "lib", "setup", "arkd.mjs"), transformed.arkdSetup);
         const ports = Object.fromEntries(PORT_NAMES.map((name) => [name, 0]));
+        const emulatorEnvironment = { EMULATOR_LOG_LEVEL: "5" };
         const values = {
             REGTEST_PROFILES: "emulator",
             // Current regtest sets its own compose project from this; keep it
@@ -887,6 +865,7 @@ async function main(isolatedFile = undefined) {
             AUTOMINE_INTERVAL: "0",
             ...ARKD_DELAYS,
             ...ARKD_FEES,
+            ...emulatorEnvironment,
             ...(options.emulatorImage ? { EMULATOR_IMAGE: options.emulatorImage } : {}),
             ARKD_PASSWORD: secrets[0],
             ARKD_WALLET_SIGNER_KEY: secrets[1],
@@ -973,6 +952,11 @@ async function main(isolatedFile = undefined) {
         }
         assertResolvedPorts(ports, portBindings.length);
         const labels = await assertProjectLabels(project, SERVICES);
+        assertOwnedServiceEnvironment(labels, {
+            project,
+            service: "emulator",
+            environment: emulatorEnvironment,
+        });
         const configuredArkDelays = assertConfiguredArkDelays(
             assertOwnedServiceEnvironment(labels, {
                 project,
@@ -1094,9 +1078,7 @@ await import("/app/dist/cli.js");
         );
         assertResolvedPorts(ports, portBindings.length + 2);
         const taxiUrl = `http://127.0.0.1:${ports.TAXI_E2E_HTTP_PORT}`;
-        const adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
-        proxyTargets.taxi = taxiUrl;
-        const walletTaxiUrl = `${failureProxy.url}/taxi`;
+        adminUrl = `http://127.0.0.1:${ports.TAXI_E2E_ADMIN_PORT}`;
         controlServer = createServer(async (request, response) => {
             try {
                 if (request.method !== "POST") throw new Error("POST required");
@@ -1104,8 +1086,9 @@ await import("/app/dist/cli.js");
                 for await (const chunk of request) chunks.push(chunk);
                 const command = JSON.parse(Buffer.concat(chunks).toString());
                 let result = { ok: true };
-                if (command.action === "configure") failureProxy.configure(command.rule);
-                else if (command.action === "reset") failureProxy.reset();
+                if (command.action === "configure")
+                    result = { ok: true, ruleId: failureProxy.configure(command.rule) };
+                else if (command.action === "reset") failureProxy.reset(command.rule?.ruleId);
                 else if (command.action === "events")
                     result = {
                         events: failureProxy.events,
@@ -1221,9 +1204,6 @@ await import("/app/dist/cli.js");
                 project,
                 profiles,
                 selection: { mode: options.mode, scenarioIds, tests },
-                ...(walletIdentity
-                    ? { wallet: { ...walletIdentity, taxiUrl: walletTaxiUrl } }
-                    : {}),
                 ports: redactSecrets(ports),
                 arkdDelays: configuredArkDelays,
                 intentFees,
@@ -1263,40 +1243,6 @@ await import("/app/dist/cli.js");
             TAXI_RECONCILE_INTERVAL_MS: "5000",
         });
         const vitestEntry = join(REPO, "node_modules", "vitest", "vitest.mjs");
-        if (wallet) {
-            const walletArtifacts = join(artifacts, "wallet");
-            mkdirSync(walletArtifacts, { recursive: true });
-            const reservation = await reserveWalletPorts();
-            const { walletPort, delegatorPort } = reservation;
-            await reservation.release();
-            const walletEnv = { ...testEnv };
-            delete walletEnv.TAXI_OPERATOR_PRIVKEY;
-            const invocation = packageManagerInvocation([
-                "exec",
-                "playwright",
-                "test",
-                "--config",
-                "playwright.taxi.config.ts",
-            ]);
-            await run(invocation.command, invocation.args, {
-                cwd: wallet,
-                env: {
-                    ...walletEnv,
-                    NPM_CONFIG_USERCONFIG: packs.npmUserConfig,
-                    NPM_CONFIG_GLOBALCONFIG: packs.npmUserConfig,
-                    TAXI_E2E_BASE_URL: walletTaxiUrl,
-                    VITE_ARK_SERVER: arkdUrl,
-                    VITE_ESPLORA_URL: esploraUrl,
-                    VITE_TAXI_URL: walletTaxiUrl,
-                    VITE_EMULATOR_PUBKEY: emulatorInfo.signerPubkey,
-                    TAXI_E2E_WALLET_PORT: String(walletPort),
-                    TAXI_E2E_DELEGATOR_PORT: String(delegatorPort),
-                    TAXI_E2E_WALLET_ARTIFACTS: walletArtifacts,
-                },
-                secrets: knownSecrets,
-                timeoutMs: walletTimeoutMs,
-            });
-        }
         await runAndPublishResults(() =>
             run(
                 process.execPath,
@@ -1401,6 +1347,14 @@ await import("/app/dist/cli.js");
         writeFileSync(join(artifacts, "failure.log"), `${safeFailure}\n`);
         throw sanitizedError;
     } finally {
+        if (adminUrl)
+            await captureProceedsDiagnostics({
+                adminUrl,
+                project,
+                phase: "before-stack-teardown",
+                file: join(artifacts, "proceeds-diagnostics.jsonl"),
+                knownSecrets,
+            });
         if (!cleanupFailure) {
             try {
                 await interruption.waitForOperations();
@@ -1555,11 +1509,16 @@ await import("/app/dist/cli.js");
                 hasOwnedResources = true;
             }
             if (hasOwnedResources)
-                await run("docker", composeArgs(state, ["down", "--remove-orphans"]), {
-                    env: state.childEnv,
-                    print: false,
-                    check: false,
-                });
+                await run(
+                    "docker",
+                    composeArgs(state, ["down", "--timeout", "10", "--remove-orphans"]),
+                    {
+                        env: state.childEnv,
+                        print: false,
+                        check: false,
+                        timeoutMs: 120_000,
+                    },
+                );
             for (const { volume } of volumeCandidates)
                 await run("docker", ["volume", "rm", volume.Name], {
                     print: false,
@@ -1599,10 +1558,15 @@ await import("/app/dist/cli.js");
 const mainPath = process.argv[1] ? resolve(process.argv[1]) : "";
 if (mainPath && fileURLToPath(import.meta.url) === mainPath)
     // One stack per isolated test, then the shared suite.
-    resolveE2eOptions(process.argv.slice(2))
-        .isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve())
+    Promise.resolve()
+        .then(() => resolveE2eOptions(process.argv.slice(2)))
+        .then(({ isolatedTests }) =>
+            isolatedTests.reduce((chain, file) => chain.then(() => main(file)), Promise.resolve()),
+        )
         .then(() => main())
         .catch((error) => {
             process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
             process.exitCode = 1;
         });
+
+export { main as runStack };

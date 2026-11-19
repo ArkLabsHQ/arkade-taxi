@@ -220,7 +220,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode) {
         reject(
             VerificationErrorCode.ClaimMode,
-            `quote commits to ${params.claimMode ?? "the legacy tree"}, you asked for ${expect.claimMode}`,
+            `quote commits to ${params.claimMode ?? "no claim mode"}, you asked for ${expect.claimMode}`,
         );
     }
     if (
@@ -229,7 +229,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     ) {
         reject(
             VerificationErrorCode.RecoveryRecipient,
-            `quote recovers to ${params.recoveryRecipient ?? "the legacy sender"}, you asked for ${expect.recoveryRecipient}`,
+            `quote recovers to ${params.recoveryRecipient ?? "sender"}, you asked for ${expect.recoveryRecipient}`,
         );
     }
 

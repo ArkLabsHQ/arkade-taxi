@@ -14,23 +14,28 @@ pnpm format:check
 Run all four. `build` passing while `typecheck` fails, and the reverse, both
 happen.
 
-## The covenant is ported, not authored
+## The covenant comes from the compiler
 
-`packages/covenant` is a TypeScript port of `test/covenant/covenant.go` in
-arkade-os/emulator#150, which was executed against a live emulator and arkd. The
-Go implementation is the reference. `test/vectors.json` is generated from it and
-asserted byte-for-byte.
+`packages/covenant/contracts/dust_covenant.ark` is the source. `pnpm artifact`
+uses the digest-pinned compiler in `scripts/get-arkadec.mjs` to regenerate the
+committed JSON and browser module. Runtime code loads that artifact through
+`programFromArtifact` and `ArkadeProgramScript`; do not hand-build its scripts
+or edit generated artifacts.
 
-If you change a script builder and the vector test fails, the port is wrong —
-not the vectors. Regenerate vectors only when the Go reference itself changed,
-and say so in the commit message.
+After a contract change, regenerate the artifacts and verify the diff. Run
+`node packages/covenant/test/engine/run.mjs` to execute the committed vectors
+against their pinned emulator engine. Update vectors only for an intentional
+contract change, with the reason in the commit message.
 
 ## Never assemble the taproot tree by hand
 
 `VtxoScript` uses btcd's `AssembleTaprootScriptTree`. `@scure/btc-signer`'s
-default `taprootListToTree` is a Huffman builder that only agrees with arkd for
-power-of-2 leaf counts. The covenant has 5 leaves, so the Huffman builder would
-silently derive a different address. `test/taptree.test.ts` guards this.
+default `taprootListToTree` is a Huffman builder. Tests measure agreement at four
+and six leaves, but a different address at five. Use `VtxoScript` and recheck
+assembly parity whenever the leaf count changes.
+`packages/covenant/test/taptree.test.ts` guards this.
+`Leaf` in `packages/covenant/src/vtxo.ts` fixes their order: recycle, purchase,
+refund, reclaim, exit, renew. Preserve that order when loading compiler groups.
 
 ## Comments
 

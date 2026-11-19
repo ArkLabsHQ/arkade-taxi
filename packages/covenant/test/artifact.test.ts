@@ -5,7 +5,7 @@ import { CSVMultisigTapscript, MultisigTapscript, arkade } from "@arkade-os/sdk"
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
 import { DustCovenantScript, Leaf } from "../src/vtxo.js";
-import { V2_ARTIFACT, v2Args } from "../src/v2-artifact.js";
+import { DUST_COVENANT_ARTIFACT, dustCovenantArgs } from "../src/artifact.js";
 import type { DustCovenantParams } from "../src/params.js";
 
 const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
@@ -33,7 +33,6 @@ const opts = (p: DustCovenantParams = params()) => ({
 
 const asset = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };
 
-/** Every v2 shape the committed vectors carry. */
 const SHAPES: Record<string, DustCovenantParams> = {
     btc: params(),
     "btc-payment": params({ paymentSats: 100n }),
@@ -53,21 +52,25 @@ const SHAPES: Record<string, DustCovenantParams> = {
 };
 
 const compile = (p: DustCovenantParams) =>
-    new arkade.ArkadeProgramScript(arkade.programFromArtifact(V2_ARTIFACT), v2Args(p, SERVER), {
-        serverKey: SERVER,
-        emulatorKey: EMULATOR,
-    });
+    new arkade.ArkadeProgramScript(
+        arkade.programFromArtifact(DUST_COVENANT_ARTIFACT),
+        dustCovenantArgs(p, SERVER),
+        {
+            serverKey: SERVER,
+            emulatorKey: EMULATOR,
+        },
+    );
 
-describe("v2 is compiled from Arkade source", () => {
+describe("the covenant is compiled from Arkade source", () => {
     const onDisk = JSON.parse(
         readFileSync(resolve(import.meta.dirname, "../contracts/dust_covenant.json"), "utf8"),
     );
 
     it("builds the module the covenant uses from the committed artifact", () => {
-        expect(V2_ARTIFACT.contractName).toBe("DustCovenant");
-        expect(V2_ARTIFACT.contractName).toBe(onDisk.contractName);
-        expect(V2_ARTIFACT.constructorInputs).toEqual(onDisk.constructorInputs);
-        expect(V2_ARTIFACT.functions).toEqual(onDisk.functions);
+        expect(DUST_COVENANT_ARTIFACT.contractName).toBe("DustCovenant");
+        expect(DUST_COVENANT_ARTIFACT.contractName).toBe(onDisk.contractName);
+        expect(DUST_COVENANT_ARTIFACT.constructorInputs).toEqual(onDisk.constructorInputs);
+        expect(DUST_COVENANT_ARTIFACT.functions).toEqual(onDisk.functions);
     });
 
     it("carries the compiler and source that produced it", () => {
@@ -79,7 +82,7 @@ describe("v2 is compiled from Arkade source", () => {
 
     // arkadec lists covenant groups before plain tapscript; vtxo.ts sets leaf order.
     it("declares the covenant groups in leaf order, then the exit as plain tapscript", () => {
-        expect(V2_ARTIFACT.functions.map((f) => f.name)).toEqual([
+        expect(DUST_COVENANT_ARTIFACT.functions.map((f) => f.name)).toEqual([
             "recycle",
             "purchase",
             "repayRefund",
@@ -87,11 +90,11 @@ describe("v2 is compiled from Arkade source", () => {
             "renew",
             "exit",
         ]);
-        for (const group of V2_ARTIFACT.functions)
+        for (const group of DUST_COVENANT_ARTIFACT.functions)
             expect(group.arkade !== undefined, group.name).toBe(group.name !== "exit");
     });
 
-    it("keeps six leaves with Renew after Exit, for every v2 shape", () => {
+    it("keeps six leaves with Renew after Exit, for every covenant shape", () => {
         for (const [name, p] of Object.entries(SHAPES)) {
             const s = new DustCovenantScript(opts(p));
             expect(s.scripts, name).toHaveLength(6);
@@ -189,10 +192,7 @@ describe("v2 is compiled from Arkade source", () => {
         }
     });
 
-    // No v2 leaf reads lockupSats: every value pin is relative to in[0].value or
-    // to the loan. The committed v2-btc and v2-btc-payment vectors share a
-    // pkScript for the same reason.
-    it("does not bind paymentSats, which no v2 leaf reads", () => {
+    it("does not bind paymentSats, which no covenant leaf reads", () => {
         expect(new DustCovenantScript(opts(params({ paymentSats: 100n }))).pkScript).toEqual(
             new DustCovenantScript(opts()).pkScript,
         );

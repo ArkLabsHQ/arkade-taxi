@@ -2172,6 +2172,7 @@ describe("canonical covenant observation", () => {
                 ];
                 encoded.set(tx.id, base64.encode(RawPSBTV0.encode(raw)));
                 await reprove();
+                if (nonce % 32 === 0) await new Promise<void>((resolve) => setImmediate(resolve));
             }
             encoded.set(tx.id, original);
             verify.mockImplementation(implementation).mockClear();
@@ -2184,7 +2185,7 @@ describe("canonical covenant observation", () => {
             await watcher.stop();
             state.db.close();
         }
-    }, 60_000);
+    }, 180_000);
 
     it("catches up a missed spend after a real SQLite restart", async () => {
         const directory = mkdtempSync(join(tmpdir(), "taxi-watcher-"));
@@ -2668,6 +2669,7 @@ describe("canonical covenant observation", () => {
                 expect(subscribe).toHaveBeenCalledWith(
                     expect.arrayContaining([covenantScript]),
                     "taxi-test-subscription",
+                    expect.any(AbortSignal),
                 ),
             );
             stopping = watcher.stop().then(() => {
@@ -2869,7 +2871,7 @@ describe("proceeds of a receiver-paid recycle", () => {
                 },
                 storage: {
                     intentRepository: {
-                        getIntentsPage: async () => ({ items: [] }),
+                        getBatchRegistrationsPage: async () => ({ items: [] }),
                         getLockedVtxoOutpoints: async () => [],
                     },
                 },

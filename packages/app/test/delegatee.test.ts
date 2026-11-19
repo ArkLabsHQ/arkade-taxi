@@ -11,7 +11,7 @@ import { config, emulatorKey, operatorKey, receiverKey, senderKey, serverKey } f
 
 const DEADLINE = 1_800_000_000n;
 
-const v2Params = (): DustCovenantParams => ({
+const covenantParams = (): DustCovenantParams => ({
     receiverKey,
     senderKey,
     operatorKey,
@@ -38,7 +38,7 @@ const json = (body: unknown) =>
 
 describe("delegatee registration", () => {
     it("fails the lockup when the returned address differs from the Taxi's derivation", async () => {
-        const params = v2Params();
+        const params = covenantParams();
         const delegate = vi.fn(async () => "ark1qstranger");
         await expect(
             registerRenewal(
@@ -57,7 +57,7 @@ describe("delegatee registration", () => {
     });
 
     it("accepts the registration when the two derivations agree", async () => {
-        const params = v2Params();
+        const params = covenantParams();
         const address = covenantAddress(params);
         await expect(
             registerRenewal(
@@ -78,7 +78,7 @@ describe("delegatee registration", () => {
         const template = JSON.parse(renewalTemplate("c".repeat(64)));
         const args = template.inputs[0].contract.arguments as Record<string, string>;
         const variables = template.variables as Record<string, string>;
-        const sent = delegationVariables(v2Params(), serverKey, 259_200n);
+        const sent = delegationVariables(covenantParams(), serverKey, 259_200n);
         expect(Object.keys(variables).sort()).toEqual(Object.keys(sent).sort());
         for (const [field, placeholder] of Object.entries(args))
             expect(variables[placeholder.slice(1, -1)]).toBeDefined();
@@ -90,7 +90,7 @@ describe("delegatee registration", () => {
     });
 
     it("sends a pubkey as 33 compressed bytes and an int as a minimal number", () => {
-        const sent = delegationVariables(v2Params(), serverKey, 259_200n);
+        const sent = delegationVariables(covenantParams(), serverKey, 259_200n);
         expect(sent.receiver_key).toBe(`02${bytesToHex(receiverKey)}`);
         // 1800000000 = 0x6b49d200 little-endian; 0x6b's high bit is clear, so
         // the sign-magnitude form needs no trailing pad byte.

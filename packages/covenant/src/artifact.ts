@@ -1,10 +1,9 @@
 import { arkade, timelockToSequence } from "@arkade-os/sdk";
-import { V2_ARTIFACT } from "./dust-covenant-artifact.js";
+import { DUST_COVENANT_ARTIFACT } from "./dust-covenant-artifact.js";
 import { loanSats, recycleFare, type DustCovenantParams } from "./params.js";
 
-export { V2_ARTIFACT };
+export { DUST_COVENANT_ARTIFACT };
 
-/** Same namespace value-space quirk artifact.ts documents: these do not resolve as types. */
 type Compiled = InstanceType<typeof arkade.ArkadeProgramScript>;
 type Args = ConstructorParameters<typeof arkade.ArkadeProgramScript>[1];
 
@@ -15,7 +14,7 @@ const NO_ASSET = new Uint8Array(32);
  * `hasAsset` and `assetFare` pick which branch of each covenant runs. Both are
  * pushed as literals, so a spender cannot choose: the branch is in the address.
  */
-export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
+export function dustCovenantArgs(p: DustCovenantParams, serverKey: Uint8Array): Args {
     const { operatorSats, assetFare } = recycleFare(p);
     return {
         receiverKey: p.receiverKey,
@@ -25,7 +24,6 @@ export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
         operatorSats,
         loan: loanSats(p),
         locktime: p.locktime,
-        // Encoded here: artifact.ts's typed v1 mirror passes the bare value instead.
         exitDelay: BigInt(timelockToSequence(p.exitDelay)),
         hasAsset: p.assetId ? 1n : 0n,
         assetTxid: p.assetId?.txid ?? NO_ASSET,
@@ -35,13 +33,13 @@ export function v2Args(p: DustCovenantParams, serverKey: Uint8Array): Args {
     };
 }
 
-export const compileV2 = (
+export const compileDustCovenant = (
     p: DustCovenantParams,
     serverKey: Uint8Array,
     emulatorKey: Uint8Array,
 ): Compiled =>
     new arkade.ArkadeProgramScript(
-        (program ??= arkade.programFromArtifact(V2_ARTIFACT)),
-        v2Args(p, serverKey),
+        (program ??= arkade.programFromArtifact(DUST_COVENANT_ARTIFACT)),
+        dustCovenantArgs(p, serverKey),
         { serverKey, emulatorKey },
     );

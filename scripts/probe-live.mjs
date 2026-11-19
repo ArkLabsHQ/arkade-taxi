@@ -6,7 +6,11 @@
  *   node scripts/probe-live.mjs [arkdUrl] [emulatorUrl]
  */
 
-import { DustCovenantScript, V2_ARTIFACT, exitTimelock } from "../packages/covenant/dist/index.js";
+import {
+    DustCovenantScript,
+    DUST_COVENANT_ARTIFACT,
+    exitTimelock,
+} from "../packages/covenant/dist/index.js";
 import { arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
@@ -67,7 +71,7 @@ for (const [label, p] of [
     console.log(`  pkScript     ${hex.encode(script.pkScript)}`);
     for (const name of ["recycle", "purchase", "refund", "reclaim", "renew"])
         console.log(`  ${name.padEnd(12)} ${covenant[name].length} bytes`);
-    console.log(`  artifact fns ${V2_ARTIFACT.functions.map((f) => f.name).join(", ")}`);
+    console.log(`  artifact fns ${DUST_COVENANT_ARTIFACT.functions.map((f) => f.name).join(", ")}`);
 
     // Decoding proves the bytes are a well-formed Arkade script under the same
     // opcode table the emulator runs, not merely a buffer we produced.

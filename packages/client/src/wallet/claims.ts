@@ -1,6 +1,7 @@
 import { VtxoScript, type ExtendedVirtualCoin, type Identity } from "@arkade-os/sdk";
 import {
     ClientErrorCode,
+    CovenantSpendAmbiguousError,
     fundingInputsFromVtxos,
     sdkAssetId,
     type CovenantSpendConfig,
@@ -355,6 +356,8 @@ export const watchReceiverClaims = (watch: ClaimWatch): (() => void) => {
 
 /** A recycle that ran and failed: the client's capability is one-shot, so only a reload can retry. */
 export class ClaimSpent extends Error {
+    readonly mayHaveSubmitted: boolean;
+
     constructor(readonly reason: unknown) {
         super(
             reason instanceof Error
@@ -365,6 +368,7 @@ export class ClaimSpent extends Error {
             { cause: reason },
         );
         this.name = "ClaimSpent";
+        this.mayHaveSubmitted = reason instanceof CovenantSpendAmbiguousError;
     }
 }
 

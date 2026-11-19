@@ -139,6 +139,7 @@ describe("SQLite SDK boundary", () => {
             expiresAtHeight: 999,
             tapTree: tree.encode(),
             forfeitTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
+            proofTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
             intentTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
         };
         await createOperatorStorage(db).walletRepository.saveVtxos(address.encode(), [coin]);

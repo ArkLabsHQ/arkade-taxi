@@ -49,7 +49,10 @@ it.each([false, true])(
                 [],
             ),
         ]).serialize();
-        if (assetFare) req.fare = { currency: "asset", assetId: req.params.assetId, units: 3n };
+        if (assetFare) {
+            req.fare = { currency: "asset", assetId: req.params.assetId, units: 3n };
+            delete req.satsFarePayer;
+        }
         req.funding.totalValue = req.params.topup + config().dust;
         req.funding.inputs[0]!.value = Number(req.funding.totalValue);
         req.covenantAddress = new DustCovenantScript({

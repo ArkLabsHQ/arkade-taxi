@@ -13,7 +13,7 @@ import {
     RecoveryBudgetConflictError,
     ReservationRepository,
     ProceedsRepository,
-    applyMigrations,
+    initializeSchema,
     openDatabase,
 } from "../src/index.js";
 
@@ -55,7 +55,7 @@ let reservations: ReservationRepository;
 beforeEach(() => {
     db = new DatabaseCtor(":memory:");
     db.pragma("foreign_keys = ON");
-    applyMigrations(db);
+    initializeSchema(db);
     advances = new AdvanceRepository(db);
     policy = new PolicyRepository(db);
     policy.update(
@@ -180,7 +180,7 @@ describe("durable reservations", () => {
         async (maxOutstandingSats, maxConcurrentAdvances, code) => {
             const directory = mkdtempSync(join(tmpdir(), "taxi-claim-cap-"));
             const first = new DatabaseCtor(join(directory, "taxi.sqlite"));
-            applyMigrations(first);
+            initializeSchema(first);
             const second = new DatabaseCtor(join(directory, "taxi.sqlite"));
             try {
                 const p = new PolicyRepository(first);
@@ -330,7 +330,7 @@ describe("durable reservations", () => {
             const first = new DatabaseCtor(join(dir, "taxi.sqlite"));
             let second: Database | undefined;
             try {
-                applyMigrations(first);
+                initializeSchema(first);
                 const terms = new PolicyRepository(first);
                 terms.update(policy.get(), "test");
                 const owner = new ReservationRepository(first);
@@ -471,7 +471,7 @@ describe("durable reservations", () => {
         const first = new DatabaseCtor(path);
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             const firstPolicy = new PolicyRepository(first);
             firstPolicy.update(policy.get(), "test");
             const firstReservations = new ReservationRepository(first);
@@ -545,7 +545,7 @@ describe("durable reservations", () => {
         const first = new DatabaseCtor(path);
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             const firstPolicy = new PolicyRepository(first);
             firstPolicy.update(policy.get(), "test");
             const revision = firstPolicy.getSnapshot().revision;
@@ -555,7 +555,7 @@ describe("durable reservations", () => {
                 recoveryExecutionBudget: { kind: "time", value: 1n },
             });
             second = new DatabaseCtor(path);
-            applyMigrations(second);
+            initializeSchema(second);
             expect(new PolicyRepository(second).getSnapshot().revision).toBe(revision);
             const other = new ReservationRepository(second);
             expect(other.listForAdvance("quote-1")).toEqual([input()]);

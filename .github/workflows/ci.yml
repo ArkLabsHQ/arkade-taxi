@@ -18,7 +18,6 @@ jobs:
               with:
                   node-version: 22
                   cache: pnpm
-            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
             # Run all four. build passing while typecheck fails, and the reverse, have
             # both happened here.
@@ -26,8 +25,6 @@ jobs:
             - run: pnpm typecheck
             - run: pnpm test
             - run: pnpm format:check
-            # What proves the verifier can fail; it refuses an unclean tree.
-            - run: pnpm verify:artifacts:battery
 
     vectors:
         runs-on: ubuntu-latest
@@ -41,9 +38,7 @@ jobs:
             - uses: actions/setup-go@v6
               with:
                   go-version: "1.26"
-            - run: node scripts/carrier-artifacts/verify.mjs
             - run: pnpm install --frozen-lockfile
-            - run: node scripts/carrier-artifacts/verify.mjs
             # arkadec ships only as a digest-pinned pre-release asset, so the tag
             # can move under us; this diff, not the tag, is what pins the
             # covenant's bytes.
@@ -51,5 +46,5 @@ jobs:
             - run: git diff --exit-code packages/covenant/contracts packages/covenant/src/dust-covenant-artifact.ts
             # Executes the covenant's leaves in the emulator engine instead of comparing
             # bytes, so it fails when a leaf's semantics change while its bytes
-            # still match a stale fixture. Clones the ref named in v2-vectors.json.
+            # still match a stale fixture. Clones the ref named in vectors.json.
             - run: node packages/covenant/test/engine/run.mjs

@@ -8,21 +8,13 @@ stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
-## Candidate packages this suite runs against
+## Packages this suite runs against
 
-`pnpm-lock.yaml` resolves `@arkade-os/sdk` and `@arkade-os/swap` from
-`vendor/carrier/*.tgz`, which are **tracked** and hash-pinned against
-`vendor/carrier/manifest.json`, so `pnpm install`, `docker build` and the
-harness's client pack all work from a clean checkout. The temporary consumer
-takes its overrides from that same manifest, so the packed client is exercised
-against the frozen candidates rather than silently falling back to the registry
-build of the same version numbers.
-
-The override alone is not the proof. Those version numbers are published, so an
-override that stopped applying would install cleanly against other bytes. After
-the consumer installs, the harness resolves both packages from the installed
-client and requires the frozen version plus a symbol only the `adc6b329` build
-exports; an import that merely succeeds cannot tell the two apart.
+The lockfile pins published SDK `0.5.6` and swap `0.1.6` packages with their
+registry integrity hashes. The harness packs this checkout's client, covenant
+and protocol packages and installs those three tarballs in a fresh consumer.
+It checks their identities, verifies the consumer resolves each local tarball,
+and rejects stale build output before running the suite.
 
 ## Running it
 
@@ -35,13 +27,20 @@ node e2e/assert-ran.mjs e2e-results.json
 
 For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
-build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
-same stack before the SDK actor scenarios. This explicit local mode requires
+build. This explicit local mode requires
 21 named scenarios and both integrity assertions plus the isolated runs below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
-The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
-(whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
-the run before any stack starts.
+Wallet browser tests use the wallet repository's native harness, which owns its
+pinned solver, Taxi, regtest stack and Electrum endpoint. Run both browser lanes
+from that prepared checkout:
+
+```bash
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Mobile Chrome"
+```
+
+Append `--manual` for a local interactive session. The retired Taxi `--wallet`
+option reports this command before starting any services.
 
 ### The renewal scenario
 
@@ -71,10 +70,11 @@ depends on.
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
 chain time a day ahead. `fill-undersigned-foreign-input` tests pre-submit refusal
 without spending any Taxi input. `fill-pending-accepted-quarantine` drops an
-accepted arkd submit reply before finalization, retains the bound liability past
-TTL, and checks fresh observation, admission on other coins and outage refusal.
-It retrieves the original pending transaction and finalizes that same graph,
-then claims and recycles it. Both modes run each isolated scenario before the
+accepted arkd submit reply while output proof is unavailable, retains the bound
+liability past TTL, and checks fresh source observation, admission on other coins
+and outage refusal. Restoring proof settles the original one-shot transaction
+without another submission or finalization call, then claims and recycles it.
+Both modes run each isolated scenario before the
 shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
 checks one such run, whose artifacts land in `e2e-artifacts/isolated/<test>/` (or

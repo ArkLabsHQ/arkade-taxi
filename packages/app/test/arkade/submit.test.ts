@@ -342,15 +342,24 @@ describe("persisted-fact submission validation", () => {
             }
             const signed = await signedEnvelope(encoded);
             const validate = () => validateLockupSubmission(persisted, signed, config());
-            if (discriminator === "stripped") expect(validate).toThrow(/persisted/);
+            if (discriminator === "stripped")
+                expect(validate).toThrow("a positive sats fare requires a sender sats fare payer");
             else expect(validate).not.toThrow();
         },
     );
 
     it("rejects when the persisted fare no longer matches the original unsigned graph", async () => {
-        const persisted = advance();
+        const request = buildRequest();
+        request.senderSats = request.senderInputs[0]!.value = 1_000n;
+        const unsigned = buildLockupEnvelope(request, config(), unroll);
+        const persisted = {
+            ...advance(),
+            unsignedLockupTx: unsigned,
+            unsignedLockupId: decodeLockupEnvelope(unsigned).unsignedTxId,
+        };
+        const encoded = await signedEnvelope(unsigned);
+        expect(() => validateLockupSubmission(persisted, encoded, config())).not.toThrow();
         persisted.fare = { currency: "sats", units: persisted.fare.units + 1n };
-        const encoded = await signedEnvelope();
         expect(() => validateLockupSubmission(persisted, encoded, config())).toThrow(
             /fare|persisted|graph/,
         );
