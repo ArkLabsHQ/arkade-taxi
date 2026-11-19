@@ -1,46 +1,94 @@
 {
     "package": "@arkade-os/swap",
-    "version": "0.2.0-taxi.0",
-    "file": "arkade-os-swap-0.2.0-taxi.0-37aa317a.tgz",
-    "sha256": "faa05b0abb38570bebf603e2c79f94c2fb3c2d8087e43d59d11b4790d9e0f7da",
-    "integrity": "sha512-cUTofSeNbcJRRN6vNE0R1CEa2p0Dqijrj0M2Lk3y0e7pK82d6j0ztKHvN4cwcroSVv/buUmlZl/YiYnbwhUy1A==",
-    "bytes": 676360,
+    "version": "0.2.0-taxi.2",
+    "file": "arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz",
+    "sha256": "5860499a2f4962ce2749bd81a789e3ffb1e729a436db1d7c4191b6679778071e",
+    "integrity": "sha512-W4el3BcY/SWOJkgTQ6TPvbRIc9xWNlCaazgL6AvSVXvEPwQXcGdk8WjWpLT538yhuMGq9m/oCRO0zLp3k/j47w==",
+    "bytes": 687606,
     "sourceRepository": "https://github.com/arkade-os/ts-sdk",
-    "sourceCommit": "37aa317a08750dd39b5a9f639f4d0452d46655fa",
-    "sourceTree": "e501340fb5478c818695705857ddf7a97f50c01e",
+    "sourceCommit": "fdf784fbb8d1e8a4ddf50ac7d5e239bcbe2e681f",
+    "sourceTree": "9de2c493e39f51ba0953aed3072583f60bbd8f23",
     "sourceDirectory": "packages/swap",
-    "sourceDirectoryTree": "86f474277188acda7ec3969acb4d5f2d31f11404",
-    "baseCommit": "ec5155987fc97f249a13ba4208d78e5b007b9a98",
+    "sourceDirectoryTree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
+    "source": {
+        "repository": "https://github.com/arkade-os/ts-sdk.git",
+        "commit": "fdf784fbb8d1e8a4ddf50ac7d5e239bcbe2e681f",
+        "directory": "packages/swap",
+        "tree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
+        "directoryTree": "d6982efa2b71307e7ef4d3de04b30abd3e88652f",
+        "repositoryTree": "9de2c493e39f51ba0953aed3072583f60bbd8f23"
+    },
+    "baseCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
     "node": "v24.22.1",
     "pnpm": "10.25.0",
     "typescript": "Version 5.9.2",
-    "compiler": {
-        "compilerRevision": "e264d5e6ecd044de7130d5c8a0e1f49d43958c11",
-        "binarySha256": "eb41bbd3574d5716627c6a93c985d422f325b670b18855c7cdd4011822c7944e",
-        "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
-        "artifacts": [
-            {
-                "source": "swap-want-btc.ark",
-                "artifact": "swap-want-btc.artifact.json",
-                "fingerprint": "sha256:1e24bf908b23615806b6070c47f9089070674fad6a8bc799a8fc56f4a26e54f1"
-            },
-            {
-                "source": "swap-want-asset.ark",
-                "artifact": "swap-want-asset.artifact.json",
-                "fingerprint": "sha256:7ff7fc6fbdf3312d6f20503159d487c495f87a37fd49c7c92b7fe0606092d9e7"
-            }
-        ]
-    },
-    "packCommand": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261116/arkade-os-swap-0.2.0-taxi.0-37aa317a.tgz",
+    "platform": "win32-x64",
+    "packCommand": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz",
     "registryPublished": false,
     "license": "MIT",
-    "sdkDependency": "0.5.6",
-    "swapUnitTestsPassed": 2142,
-    "workerSdkRequirement": "0.5.7-taxi.2",
+    "licenseFrom": "archive package manifest",
+    "sdkDependency": "0.5.8",
+    "swapUnitTestsPassed": 2173,
+    "swapUnitTestFilesPassed": 87,
+    "workerSdkRequirement": "0.5.9-taxi.0",
     "testedWorkerSdk": null,
-    "localTestSdk": {
-        "version": "0.5.6",
-        "sourceDirectory": "packages/sdk",
-        "sourceDirectoryTree": "2ff58662d8cabd9bd88abf66a0cdfc3b6d9726d9"
+    "validation": {
+        "unitLog": "C:/Git/outputs/arkade-taxi/release-compat-20261119T090044Z/swap-upstream-unit.log",
+        "publishedSdkFloor": "0.5.8 source typecheck and built dist smoke passed; worker qualification excluded",
+        "independentSourceReview": "SDK agent, narrow delta reviewed without blocker",
+        "canonicalCompilerArtifacts": "byte-identical to d9 and b053; not regenerated in this refresh",
+        "frozenRecoveryArtifacts": "byte-identical to37aa; exact-script reader only",
+        "fundedConsumerQualification": "pending"
+    },
+    "toolchain": {
+        "node": "v24.22.1",
+        "pnpm": "10.25.0",
+        "typescript": "Version 5.9.2",
+        "platform": "win32-x64",
+        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-swap-0.2.0-taxi.2-fdf784fb.tgz"
+    },
+    "compiler": {
+        "sourceRepository": "https://github.com/arkade-os/ts-sdk",
+        "sourceCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
+        "executedDuringRefresh": false,
+        "compilerRevision": null,
+        "binarySha256": null,
+        "provenance": "Canonical files are byte-identical to upstream committed artifacts; no compiler binary identity is encoded. This refresh did not regenerate them or execute the historical recovery compiler.",
+        "artifacts": [
+            {
+                "source": "src/contracts/asset-swap.ark",
+                "sourceSha256": "ca8f8d5fd37bc1ae652001528c0e4fa9aba391e6e5f7218dfa753b712482b399",
+                "artifact": "src/contracts/asset-swap.json",
+                "artifactSha256": "82719d002c65277fdf4e5c8b06e48c7c37e5463c02b1bcf4613d13532ca5ea76",
+                "fingerprint": "sha256:e2b80add6237f6c7e2c69a96ae46d55abe6de5f71c3718106f4d5b22ac9e6d0a",
+                "codeHash": null,
+                "compiler": {
+                    "name": "arkadec",
+                    "version": "0.1.0-rc.1",
+                    "options": {
+                        "optimize": true
+                    }
+                },
+                "embeddedSourceEntry": "asset-swap.ark"
+            },
+            {
+                "source": "src/contracts/sats-swap.ark",
+                "sourceSha256": "1b449cf6d009a508abab78f63e895c979fc895339260d68627df832809b76f5e",
+                "artifact": "src/contracts/sats-swap.json",
+                "artifactSha256": "1542c885ab5af379e459670687ccddeb3af33367641a33d8955b6f68f883ece9",
+                "fingerprint": "sha256:d7a60ab2178ede40a2e4867816689ea022641531cc662b562bebd7caa1ef96c4",
+                "codeHash": null,
+                "compiler": {
+                    "name": "arkadec",
+                    "version": "0.1.0-rc.1",
+                    "options": {
+                        "optimize": true
+                    }
+                },
+                "embeddedSourceEntry": "sats-swap.ark"
+            }
+        ],
+        "recoverySourceCommit": "37aa317a08750dd39b5a9f639f4d0452d46655fa",
+        "recoveryIdentityLedger": "swap-source-program-identity.json"
     }
 }

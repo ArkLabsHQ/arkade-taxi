@@ -11,8 +11,8 @@
 
 - Compiler cache reuse authenticates the pinned archive and restores the executable from it.
 - Covenant and wire validation reject impossible reclaim deadlines and malformed asset IDs.
-- The client candidate is `0.2.0-taxi.0` and requires SDK `0.5.7-taxi.2`; covenant and protocol remain `0.1.0`.
-- The workspace pins authenticated SDK and swap `0.2.0-taxi.0` candidate archives with source provenance.
+- The client candidate is `0.2.0-taxi.1` and requires SDK `0.5.9-taxi.0`; covenant and protocol remain `0.1.0`.
+- The workspace pins authenticated SDK and swap `0.2.0-taxi.2` candidate archives with source provenance.
 - Wallet sends and claims require durable input reservations and retain ambiguous submissions.
 - Operator registration requires a durable matching proof; unresolved deletion keeps input locks.
 - Registration rechecks current authorization after asynchronous preparation and records bounded phase outcomes.

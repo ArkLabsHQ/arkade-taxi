@@ -362,7 +362,7 @@ that guard destroys the operational guarantee.
 
 ## Upgrade and rollback
 
-This repository pins unpublished SDK `0.5.7-taxi.2` and swap `0.2.0-taxi.0`
+This repository pins unpublished SDK `0.5.9-taxi.0` and swap `0.2.0-taxi.2`
 archives in its manifests and lockfile. Their source commits and authenticated
 bytes are recorded in [vendor/sdk](../vendor/sdk/manifest.json) and
 [vendor/swap](../vendor/swap/manifest.json). The SDK's durable reservation APIs and

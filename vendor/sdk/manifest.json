@@ -1,20 +1,85 @@
 {
     "package": "@arkade-os/sdk",
-    "version": "0.5.7-taxi.2",
-    "file": "arkade-os-sdk-0.5.7-taxi.2-8c428b36.tgz",
-    "sha256": "0964b40ca54d4573426ab1a63fadf4661a8e7fa56a442ef0231a1467d10e1237",
-    "bytes": 2960521,
+    "version": "0.5.9-taxi.0",
+    "file": "C:/Git/outputs/arkade-taxi/bundles-20261119/arkade-os-sdk-0.5.9-taxi.0-9b3a8fcf.tgz",
+    "sha256": "6cb4605bd57806edfcf447859ffd6573c302ee601aeb313af48835ef318aa94e",
+    "integrity": "sha512-nez6PTdANtd4K1EMEXelEDCD3IpJlOd969aOiHfzFCoCnObp9X61XnvgDeR3mnXoaXIu/SGFX6xgTDQrOaczbw==",
+    "bytes": 2984735,
     "sourceRepository": "https://github.com/arkade-os/ts-sdk",
-    "sourceCommit": "8c428b36d33f5c19584b652bdd98243f15900db1",
-    "sourceTree": "3cacd34f7f8bab9481dcd04be4f7f219fb45ebb6",
-    "baseCommit": "5f33a90223f26d86f13beabd085515fe280b289f",
-    "sourceDir": "C:/Git/ts-sdk-wt-taxi-hygiene-20261116",
+    "sourceCommit": "9b3a8fcf2dbcde47d1a0efe2b229efc57f289014",
+    "sourceTree": "18b2abfabea02b56ec26973833dfa3f869807201",
+    "packageTree": "2d97c05c4179d60b386e761687dd68bf163b77b1",
+    "baseCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
+    "basePackageTree": "57c7da767e077722189f552b8ad38d61014642e6",
+    "sourceDir": "C:/Git/ts-sdk-wt-taxi-upstream-20261119",
     "node": "v24.22.1",
     "pnpm": "10.25.0",
     "typescript": "Version 5.9.2",
-    "packCommand": "pnpm -C packages/sdk pack --pack-destination C:/Git/outputs/arkade-taxi/bundles-20261116",
+    "packCommand": "pnpm -C packages/sdk pack --pack-destination C:/Git/outputs/arkade-taxi/bundles-20261119",
     "packInvocations": 1,
     "builtFromCleanTree": true,
+    "sourceCleanAfterPack": true,
     "registryPublished": false,
-    "license": "MIT"
+    "license": "MIT",
+    "archiveEntries": 104,
+    "pullRequest": "https://github.com/arkade-os/ts-sdk/pull/1251",
+    "gates": [
+        {
+            "name": "workspace-lint",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-workspace-lint.log"
+        },
+        {
+            "name": "workspace-build",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-workspace-build.log"
+        },
+        {
+            "name": "sdk-type-fixtures",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-sdk-type-fixtures.log"
+        },
+        {
+            "name": "swap-types",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-swap-types.log"
+        },
+        {
+            "name": "dist-smoke",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-dist-smoke.log"
+        },
+        {
+            "name": "consumer-runtime",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-consumer-runtime.log"
+        },
+        {
+            "name": "consumer-types",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-consumer-types.log"
+        },
+        {
+            "name": "sdk-unit",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-sdk-unit.log"
+        },
+        {
+            "name": "swap-unit",
+            "exitCode": 0,
+            "log": "C:\\Git\\outputs\\arkade-taxi\\release-compat-20261119T090044Z\\sdk-final-swap-unit.log"
+        }
+    ],
+    "fullSdkUnit": {
+        "files": 259,
+        "passed": 4633,
+        "existingSkipped": 1,
+        "typeErrors": 0
+    },
+    "baselineSwapUnit": {
+        "files": 87,
+        "passed": 2141
+    },
+    "qualification": "Local source gates passed. New-cohort consumer runtime qualification and new PR CI pending.",
+    "createdAt": "2026-11-19T09:55:27.274Z"
 }
