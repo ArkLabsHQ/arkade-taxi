@@ -5,7 +5,16 @@
  */
 import { writeFileSync } from "node:fs";
 import { expect } from "vitest";
-import { Transaction, VtxoScript, asset, type ExtendedVirtualCoin } from "@arkade-os/sdk";
+import {
+    Extension,
+    MultisigTapscript,
+    Transaction,
+    VtxoScript,
+    arkade,
+    asset,
+    scriptFromTapLeafScript,
+    type ExtendedVirtualCoin,
+} from "@arkade-os/sdk";
 import { buildOfferFillPlan } from "@arkade-os/swap";
 import { createOffer } from "@arkade-os/swap/protocol";
 import { base64, hex } from "@scure/base";
@@ -35,8 +44,8 @@ export const taxiAssetId = (id: string) => {
 };
 export const txOf = (psbt: string): Transaction => Transaction.fromPSBT(base64.decode(psbt));
 export const psbtOf = (tx: Transaction): string => base64.encode(tx.toPSBT());
-export const sigCount = (tx: Transaction, index: number): number =>
-    tx.getInput(index).tapScriptSig?.length ?? 0;
+export const signers = (tx: Transaction, index: number): string[] =>
+    (tx.getInput(index).tapScriptSig ?? []).map(([meta]) => hex.encode(meta.pubKey));
 
 export function evidence(scenario: string, fields: Record<string, unknown>) {
     const value = JSON.parse(
@@ -145,10 +154,12 @@ export async function quotedFill(live: Live) {
     expect(quote.operatorInputs.length).toBeGreaterThan(0);
     expect(quote.operatorScript).toMatch(/^5120[0-9a-f]{64}$/);
 
+    const takerKey = hex.encode(await solver.identity.xOnlyPublicKey());
     const offer = await createOffer(maker.wallet, {
         wantAmount: DELIVERED,
         wantAsset: sdkAssetId,
         receiveAddress: quote.covenantAddress,
+        taker: hex.decode(takerKey),
     });
     const depositTxid = await maker.wallet.send({
         address: offer.address,
@@ -207,6 +218,21 @@ export async function quotedFill(live: Live) {
         owner === "sponsor" ? [index] : [],
     );
     expect(taxiInputIndexes).toHaveLength(operatorInputs.length);
+    // The Taxi derives the deposit's gate from the packet entry at its vin.
+    const planned = txOf(graph.arkTx);
+    const depositIndex = graph.inputOwners.indexOf(null);
+    const entry = Extension.fromTx(planned)
+        .getEmulatorPacket()
+        ?.entries.find(({ vin }) => vin === depositIndex);
+    expect(entry).toBeDefined();
+    const emulator = hex.decode(live.info.emulatorKey);
+    const gateKey = hex.encode(arkade.computeArkadeScriptPublicKey(emulator, entry!.script));
+    const fulfill = scriptFromTapLeafScript(planned.getInput(depositIndex).tapLeafScript![0]!);
+    expect(MultisigTapscript.decode(fulfill).params.pubkeys.map(hex.encode)).toEqual([
+        takerKey,
+        live.info.serverKey,
+        gateKey,
+    ]);
     return {
         live,
         bob,
@@ -219,22 +245,24 @@ export async function quotedFill(live: Live) {
         quote,
         graph,
         taxiInputIndexes,
+        takerKey,
+        gateKey,
     };
 }
 
 /**
- * Signs only the inputs the caller holds the key for: its own asset coins. The
- * Taxi's inputs stay unsigned because the Taxi signs last, and the offer
- * covenant stays unsigned because only the emulator may sign that one.
+ * Signs every input but the Taxi's: the caller's coins and the directed deposit, whose
+ * fulfill leaf names the caller as taker. `underSign` leaves the last coin unsigned.
  */
 export async function signAsCaller(
     quoted: Awaited<ReturnType<typeof quotedFill>>,
     options: { underSign?: boolean } = {},
 ) {
     const { graph, solver } = quoted;
-    const mine = graph.inputOwners.flatMap((owner, index) => (owner === "solver" ? [index] : []));
-    if (mine.length === 0) throw new Error("fill graph assigns the caller no input to sign");
-    const signable = options.underSign ? mine.slice(0, Math.max(0, mine.length - 1)) : mine;
+    const mine = graph.inputOwners.flatMap((owner, index) => (owner === "sponsor" ? [] : [index]));
+    const coins = mine.filter((index) => graph.inputOwners[index] === "solver");
+    if (coins.length === 0) throw new Error("fill graph assigns the caller no coin to sign");
+    const signable = options.underSign ? mine.filter((index) => index !== coins.at(-1)) : mine;
     let arkTx = txOf(graph.arkTx);
     const checkpoints = graph.checkpoints.map((psbt) => txOf(psbt));
     for (const index of signable) {

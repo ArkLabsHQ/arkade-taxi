@@ -10,11 +10,21 @@ liveScenario("fill-undersigned-foreign-input", async () => {
     const observed: Record<string, unknown> = {};
     try {
         const quoted = await quotedFill(live);
-        const { quote, taxiInputIndexes } = quoted;
-        const posted = await signAsCaller(quoted, { underSign: true });
-        expect(posted.unsigned.length).toBeGreaterThan(0);
-        observed.signedInputs = posted.signed;
-        observed.unsignedInputs = posted.unsigned;
+        const { quote, graph, taxiInputIndexes } = quoted;
+        const undersigned = await signAsCaller(quoted, { underSign: true });
+        expect(undersigned.unsigned.length).toBeGreaterThan(0);
+        // The taker signs the deposit's arkTx input and omits its checkpoint signature.
+        const signed = await signAsCaller(quoted);
+        const deposit = graph.inputOwners.indexOf(null);
+        const depositCheckpoint = {
+            arkTx: signed.arkTx,
+            checkpoints: signed.checkpoints.map((psbt, i) =>
+                i === deposit ? graph.checkpoints[i]! : psbt,
+            ),
+        };
+        observed.signedInputs = undersigned.signed;
+        observed.unsignedInputs = undersigned.unsigned;
+        observed.unsignedDepositCheckpoint = deposit;
         observed.operatorInputs = quote.operatorInputs.map(({ txid, vout }) => ({ txid, vout }));
 
         const reservedBefore = await Promise.all(
@@ -35,29 +45,34 @@ liveScenario("fill-undersigned-foreign-input", async () => {
                 return response;
             },
         });
-        const refusal = await submitClient
-            .submitFill({
-                operationId: randomUUID(),
-                quoteId: quote.quoteId,
-                arkTx: posted.arkTx,
-                checkpoints: posted.checkpoints,
-                taxiInputIndexes,
-                covenantOutputIndex: 0,
-                assetUnits: DELIVERED,
-            })
-            .then(
-                (value) => ({ accepted: true, value }) as const,
-                (error: unknown) => ({ accepted: false, error }) as const,
-            );
-        observed.accepted = refusal.accepted;
-        if (!refusal.accepted) {
-            const error = refusal.error as { code?: string; message?: string };
-            observed.refusal = {
-                code: error.code,
-                status: responseStatuses[0],
-                message: error.message,
-            };
-        } else observed.submitted = refusal.value;
+        const refusals: Record<string, unknown> = {};
+        observed.refusals = refusals;
+        const cases = { callerCoin: undersigned, depositCheckpoint };
+        for (const [name, posted] of Object.entries(cases)) {
+            const refusal = await submitClient
+                .submitFill({
+                    operationId: randomUUID(),
+                    quoteId: quote.quoteId,
+                    arkTx: posted.arkTx,
+                    checkpoints: posted.checkpoints,
+                    taxiInputIndexes,
+                    covenantOutputIndex: 0,
+                    assetUnits: DELIVERED,
+                })
+                .then(
+                    (value) => ({ accepted: true, value }) as const,
+                    (error: unknown) => ({ accepted: false, error }) as const,
+                );
+            if (!refusal.accepted) {
+                const error = refusal.error as { code?: string; message?: string };
+                refusals[name] = {
+                    accepted: false,
+                    code: error.code,
+                    status: responseStatuses.at(-1),
+                    message: error.message,
+                };
+            } else refusals[name] = { accepted: true, submitted: refusal.value };
+        }
 
         const ready = await poll(
             "under-signed fill leaves service ready",
@@ -92,15 +107,16 @@ liveScenario("fill-undersigned-foreign-input", async () => {
         observed.advanceRow =
             (await admin("advances")).advances.find((row: any) => row.id === quote.quoteId) ?? null;
 
-        expect(refusal.accepted).toBe(false);
-        expect(responseStatuses).toEqual([400]);
+        expect(responseStatuses).toEqual([400, 400]);
         expect(quoteAfter.state).toBe("quoted");
         expect(observed.advance).toBeNull();
         expect(observed.advanceRow).toBeNull();
-        expect(observed.refusal).toMatchObject({
-            code: "fill_foreign_signature_invalid",
-            status: 400,
-        });
+        for (const refusal of Object.values(refusals))
+            expect(refusal).toMatchObject({
+                accepted: false,
+                code: "fill_foreign_signature_invalid",
+                status: 400,
+            });
         for (const coin of reservedAfter) {
             expect(coin.spent).toBe(false);
             expect(coin.arkTxId).toBeFalsy();
