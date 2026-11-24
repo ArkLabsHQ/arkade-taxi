@@ -12,6 +12,12 @@ export {
 export { computeExposure, sweepable } from "./exposure.js";
 export { admit, type LendingGate } from "./admission.js";
 export {
+    exposureCapRefusal,
+    quoteFenceRefusal,
+    type QuoteFenceCode,
+    type QuoteFenceRefusal,
+} from "./quoteFence.js";
+export {
     assessSolvency,
     computeReceivables,
     type AssetAmount,
