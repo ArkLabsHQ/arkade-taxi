@@ -74,7 +74,7 @@ raw claims, receiver keys, proofs and exception payloads are not logged.
 ### First v1 deployment
 
 Taxi has one initial schema. Start v1 with a new database path and the matching
-`1.0.0` client, covenant and protocol packages. Existing development or unsupported
+`1.1.0` client, covenant and protocol packages. Existing development or unsupported
 databases are refused without schema or data conversion. Preserve any development
 records needed for investigation; the service does not erase them automatically.
 

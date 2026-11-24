@@ -155,8 +155,8 @@ install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs 
 client, covenant and protocol packages, then installs those exact tarballs in a
 fresh consumer and verifies their identity and resolution before testing.
 
-Taxi's client, covenant, protocol and service packages share version `1.0.0`.
-This is the first release baseline, with one wire protocol and one covenant.
+Taxi's client, covenant, protocol and service packages share version `1.1.0`.
+It adds directed fills to the `1.0.0` baseline, keeping its wire protocol and covenant.
 Worker wallets require the same SDK candidate in the page and worker. Reload
 existing tabs after updating the worker so both sides use the scoped requests.
 

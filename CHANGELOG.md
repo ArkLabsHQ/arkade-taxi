@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0 (unreleased)
+
+- Caller-built fills of directed asset-swap offers, whose deposit arrives signed by its taker.
+- SDK `0.5.14-taxi.1` and Swap `0.1.16-taxi.1` snapshots; the Swap negotiates only directed contracts.
+
 ## 1.0.0 (unreleased)
 
 - One Taxi release, wire protocol and compiler-defined covenant.
