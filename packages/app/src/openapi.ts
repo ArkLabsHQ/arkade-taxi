@@ -422,7 +422,8 @@ const schemas: Record<string, Schema> = {
                 arkTx: {
                     ...text,
                     maxLength: 4000000,
-                    description: "base64 PSBT. Every non-Taxi input signed; the Taxi's unsigned.",
+                    description:
+                        "base64 PSBT. Each non-Taxi input is signed by every key its spend leaf names but the server's and a gated input's tweaked emulator key; the Taxi's are unsigned.",
                 },
                 checkpoints: {
                     type: "array",

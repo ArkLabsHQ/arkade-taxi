@@ -14,3 +14,6 @@ packages/covenant/test/vectors.json
 # Same deal, from arkadec: `pnpm artifact` writes both and CI diffs the result.
 packages/covenant/contracts/dust_covenant.json
 packages/covenant/src/dust-covenant-artifact.ts
+
+# Byte-identical to ts-sdk's packages/swap/src/contracts copy at c8dd9368.
+packages/app/test/fixtures/asset-swap-directed.json

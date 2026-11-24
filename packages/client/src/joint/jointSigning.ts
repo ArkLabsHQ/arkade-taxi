@@ -15,6 +15,7 @@ import {
     type Identity,
 } from "@arkade-os/sdk";
 import {
+    assertNoKeyOrFinalSigs,
     assertSameUnsignedTx,
     assertUnsignedInput,
     assertUnsignedPsbt,
@@ -142,6 +143,9 @@ const sameDeal = (a: JointGraph, b: JointGraph): boolean =>
 const entryId = (e: TapScriptSigEntry): string =>
     `${e.pubKeyHex}:${e.leafHashHex}:${hex.encode(e.signature)}`;
 
+const sigIds = (tx: Transaction, index: number): string =>
+    tapScriptSigEntries(tx, index).map(entryId).sort().join();
+
 interface TrustedGraphs {
     ark: Transaction;
     checkpoints: Transaction[];
@@ -212,11 +216,13 @@ const loadTrustedForSigning = async (
     }
     try {
         // Only where a signature would be ours to add or the emulator's: an
-        // ungated foreign input arrives signed, and that is the point of it.
+        // ungated foreign input arrives signed, and that is the point of it. A
+        // gated one may carry its caller's script-path signatures, verified below.
         for (let i = 0; i < trusted.ark.inputsLength; i++) {
             if (trusted.owners[i] === null && !trusted.gated.has(i)) continue;
-            assertUnsignedInput(trusted.ark, i, `trusted arkTx input ${i}`);
-            assertUnsignedInput(trusted.checkpoints[i], 0, `trusted checkpoint ${i}`);
+            const check = trusted.gated.has(i) ? assertNoKeyOrFinalSigs : assertUnsignedInput;
+            check(trusted.ark, i, `trusted arkTx input ${i}`);
+            check(trusted.checkpoints[i], 0, `trusted checkpoint ${i}`);
         }
         // Transaction-level and nothing to do with ownership: a non-DEFAULT
         // declared sighash is refused on every input, signed or not.
@@ -225,6 +231,11 @@ const loadTrustedForSigning = async (
             assertAllowedSighashTypes(checkpoint, [SigHash.DEFAULT]);
     } catch (error) {
         fail("trusted graph must be unsigned", error);
+    }
+    for (const i of trusted.gated) {
+        assertJointInputSigs(trusted.ark, trusted.ark, i, "trusted arkTx");
+        const checkpoint = trusted.checkpoints[i];
+        assertJointInputSigs(checkpoint, checkpoint, 0, `trusted checkpoint ${i}`);
     }
     assertEdges(trusted);
     const boundKeys = new Map<number, string>();
@@ -392,15 +403,16 @@ const assertAccumulatedSigs = (
 ): void => {
     for (let i = 0; i < trusted.ark.inputsLength; i++) {
         if (trusted.owners[i] === null) {
-            // A gated input is the emulator's to sign and nobody else's. An
+            // A gated input carries exactly the trusted graph's signatures (its
+            // caller's, if any) until the emulator signs it at submission. An
             // ungated one is someone else's ordinary coin, which arrives signed
             // by its holder under a key we were never told, so it is left alone.
             if (!trusted.gated.has(i)) continue;
-            if (tapScriptSigEntries(acc.ark, i).length > 0) {
-                fail(`${context} signs the provider input`);
+            if (sigIds(acc.ark, i) !== sigIds(trusted.ark, i)) {
+                fail(`${context} alters the provider input's signatures`);
             }
-            if (tapScriptSigEntries(acc.checkpoints[i], 0).length > 0) {
-                fail(`${context} signs the provider checkpoint`);
+            if (sigIds(acc.checkpoints[i], 0) !== sigIds(trusted.checkpoints[i], 0)) {
+                fail(`${context} alters the provider checkpoint's signatures`);
             }
             continue;
         }
@@ -808,6 +820,7 @@ export async function submitJointFill(args: {
         assertResponseSigs({
             signedArk,
             trustedArk,
+            preparedArk,
             matched,
             preparedCps,
             owners: [...expected.inputOwners],
@@ -836,9 +849,13 @@ const assertSigsPreserved = (before: Transaction, after: Transaction, what: stri
     }
 };
 
+const signerKeys = (tx: Transaction, index: number): Set<string> =>
+    new Set(tapScriptSigEntries(tx, index).map((e) => e.pubKeyHex));
+
 const assertResponseSigs = (args: {
     signedArk: Transaction;
     trustedArk: Transaction;
+    preparedArk: Transaction;
     matched: { server: Transaction; local: Transaction }[];
     preparedCps: Transaction[];
     owners: readonly (string | null)[];
@@ -850,6 +867,7 @@ const assertResponseSigs = (args: {
     const {
         signedArk,
         trustedArk,
+        preparedArk,
         matched,
         preparedCps,
         owners,
@@ -889,11 +907,14 @@ const assertResponseSigs = (args: {
             }
             continue;
         }
-        if (entries.length === 0) {
+        // A preserved caller signature is allowed, but never counts as the provider's.
+        const pinned = (key: string) => key === providerPin || key === serverPin;
+        if (!entries.some((entry) => pinned(entry.pubKeyHex))) {
             throw new Error(`provider input ${i} carries no server or provider signature`);
         }
+        const prepared = signerKeys(preparedArk, i);
         for (const entry of entries) {
-            if (entry.pubKeyHex !== providerPin && entry.pubKeyHex !== serverPin) {
+            if (!pinned(entry.pubKeyHex) && !prepared.has(entry.pubKeyHex)) {
                 throw new Error(
                     `provider input ${i} carries a signature from unpinned key ${entry.pubKeyHex}`,
                 );
@@ -915,14 +936,16 @@ const assertResponseSigs = (args: {
                     assertEntryValid(server, local, 0, entry, `emulator checkpoint ${i}`);
                 return;
             }
-            if (cpEntries.length === 0) {
+            const pinned = (key: string) => key === providerPin || key === serverPin;
+            if (!cpEntries.some((entry) => pinned(entry.pubKeyHex))) {
                 throw new Error(`emulator checkpoint ${i} carries no server or emulator signature`);
             }
+            const prepared = signerKeys(local, 0);
             for (const entry of cpEntries) {
                 const cosigned =
                     entry.pubKeyHex === emulatorPin ||
-                    entry.pubKeyHex === serverPin ||
-                    entry.pubKeyHex === providerPin;
+                    pinned(entry.pubKeyHex) ||
+                    prepared.has(entry.pubKeyHex);
                 if (!cosigned) {
                     throw new Error(
                         `emulator checkpoint ${i} carries a signature from unpinned key ${entry.pubKeyHex}`,
