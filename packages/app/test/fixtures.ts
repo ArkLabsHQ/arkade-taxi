@@ -152,7 +152,7 @@ export function quoteInfrastructure(
                 const existing = advances.get(id);
                 if (!existing) throw new LockupClaimError("not_found", id);
                 if (existing.state === "quoted" && existing.expiresAt <= at) {
-                    advances.update({
+                    advances.unsafeOverwrite({
                         ...existing,
                         state: "expired",
                         updatedAt: Math.max(at, existing.updatedAt),
@@ -181,7 +181,7 @@ export function quoteInfrastructure(
                     submittedAt: at,
                     updatedAt: Math.max(at, existing.updatedAt),
                 };
-                advances.update(claimed);
+                advances.unsafeOverwrite(claimed);
                 return { advance: claimed, claimed: true };
             },
             listReservedOutpoints: () =>
@@ -192,7 +192,7 @@ export function quoteInfrastructure(
             expireQuotes: (at) => {
                 const expired = advances.byState("quoted").filter((a) => a.expiresAt <= at);
                 for (const a of expired)
-                    advances.update({
+                    advances.unsafeOverwrite({
                         ...a,
                         state: "expired",
                         updatedAt: Math.max(at, a.updatedAt),
@@ -348,7 +348,7 @@ export const quoteBody = (over: Record<string, unknown> = {}) => {
  * is exercised in @arkade-taxi/db. */
 export class MemoryAdvances {
     readonly rows = new Map<string, Advance>();
-    /** 1-based index of the `update` call that should throw. */
+    /** 1-based index of the `unsafeOverwrite` call that should throw. */
     failUpdateAt: number | null = null;
     updateCalls = 0;
 
@@ -379,7 +379,7 @@ export class MemoryAdvances {
             .sort((a, b) => a.updatedAt - b.updatedAt || a.id.localeCompare(b.id))
             .map((advance) => ({ ...advance }));
     }
-    update(a: Advance): void {
+    unsafeOverwrite(a: Advance): void {
         this.updateCalls++;
         if (this.failUpdateAt === this.updateCalls) throw new Error("db write failed");
         if (!this.rows.has(a.id)) throw new Error(`advance ${a.id} not found`);
@@ -388,7 +388,7 @@ export class MemoryAdvances {
 
     recordLockupSubmission(id: string, arkTxid: string, at: number): void {
         const current = this.get(id)!;
-        this.update({
+        this.unsafeOverwrite({
             ...current,
             arkTxid: current.arkTxid ?? arkTxid,
             updatedAt: Math.max(current.updatedAt, at),
@@ -398,7 +398,7 @@ export class MemoryAdvances {
     recordLockupFailure(id: string, code: string, detail: string, at: number): void {
         const current = this.get(id);
         if (current?.state !== "locking") return;
-        this.update({
+        this.unsafeOverwrite({
             ...current,
             failureCode: code,
             failureDetail: detail,
@@ -408,23 +408,10 @@ export class MemoryAdvances {
 
     recordRecoverySubmission(id: string, txid: string, at: number): void {
         const current = this.get(id)!;
-        this.update({
+        this.unsafeOverwrite({
             ...current,
             recoveryTxid: current.recoveryTxid ?? txid,
             updatedAt: Math.max(current.updatedAt, at),
         });
-    }
-
-    claimRecovery(id: string, at: number): Advance | undefined {
-        const current = this.get(id);
-        if (current?.state !== "locked") return undefined;
-        const claimed = {
-            ...current,
-            state: "recovering" as const,
-            recoverySubmittedAt: at,
-            updatedAt: Math.max(current.updatedAt, at),
-        };
-        this.update(claimed);
-        return claimed;
     }
 }

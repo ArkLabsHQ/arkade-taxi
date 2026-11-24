@@ -1411,7 +1411,7 @@ describe("getTransfer", () => {
     it("includes the outpoint once locked", async () => {
         const id = (await createQuote(deps(), quoteBody())).transferId;
         await submitLockup(deps(), id, "psbt");
-        advances.update({
+        advances.unsafeOverwrite({
             ...advances.get(id)!,
             state: "locked",
             outpoint: lockupBuilder.outpoint,
@@ -1423,7 +1423,7 @@ describe("getTransfer", () => {
 
     it("exposes an actionable quarantined submission status", async () => {
         const id = (await createQuote(deps(), quoteBody())).transferId;
-        advances.update({
+        advances.unsafeOverwrite({
             ...advances.get(id)!,
             state: "locking",
             submissionPhase: "failed",

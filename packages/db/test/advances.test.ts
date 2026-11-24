@@ -185,7 +185,7 @@ describe("round-trip fidelity", () => {
         });
         expect(() => repo.insert(row)).toThrow(/asset.*quantity/i);
         repo.insert(advance());
-        expect(() => repo.update(row)).toThrow(/asset.*quantity/i);
+        expect(() => repo.unsafeOverwrite(row)).toThrow(/asset.*quantity/i);
     });
 
     it("rejects a bitcoin advance with an asset quantity", () => {
@@ -463,7 +463,7 @@ describe("round-trip fidelity", () => {
         });
         repo.insert(a);
         expect(new AdvanceRepository(db).get(a.id)).toEqual(a);
-        repo.update(advance());
+        repo.unsafeOverwrite(advance());
         expect(repo.get(a.id)).toEqual(advance());
     });
 
@@ -576,7 +576,7 @@ describe("round-trip fidelity", () => {
         expect(Array.from(got.assetId!.txid)).toEqual(Array.from(assetId.txid));
         expect(got.assetId!.groupIndex).toBe(4);
         expect(got.assetUnits).toBe(ABOVE_MAX_SAFE);
-        repo.update({ ...got, assetUnits: ABOVE_MAX_SAFE + 1n });
+        repo.unsafeOverwrite({ ...got, assetUnits: ABOVE_MAX_SAFE + 1n });
         expect(repo.get(got.id)?.assetUnits).toBe(ABOVE_MAX_SAFE + 1n);
         expect(typeof got.assetId!.groupIndex).toBe("number");
         const byAsset = db
@@ -971,35 +971,6 @@ describe("update", () => {
         expect(repo.get("b")!.failureCode).toBeUndefined();
     });
 
-    it("shares the recovery claim across independent database connections", () => {
-        const dir = mkdtempSync(join(tmpdir(), "taxi-recovery-claim-"));
-        const first = new DatabaseCtor(join(dir, "taxi.sqlite"));
-        let second: Database | undefined;
-        try {
-            initializeSchema(first);
-            second = new DatabaseCtor(join(dir, "taxi.sqlite"));
-            const firstRepo = new AdvanceRepository(first);
-            const secondRepo = new AdvanceRepository(second);
-            firstRepo.insert(advance({ state: "locked" }));
-            expect(firstRepo.claimRecovery("adv-1", 100)).toBeDefined();
-            expect(secondRepo.claimRecovery("adv-1", 101)).toBeUndefined();
-            expect(secondRepo.get("adv-1")!.recoverySubmittedAt).toBe(100);
-        } finally {
-            second?.close();
-            first.close();
-            rmSync(dir, { recursive: true, force: true });
-        }
-    });
-
-    it("rolls back a recovery claim when the persisted snapshot is unsafe", () => {
-        repo.insert(advance({ state: "locked" }));
-        db.prepare("UPDATE advances SET unsigned_lockup_tx = NULL WHERE id = 'adv-1'").run();
-        expect(() => repo.claimRecovery("adv-1", 100)).toThrow(/missing funding snapshot/);
-        expect(db.prepare("SELECT state FROM advances WHERE id = 'adv-1'").get()).toEqual({
-            state: "locked",
-        });
-    });
-
     it("records unresolved failure metadata while retaining observed timestamps", () => {
         const before = advance({ state: "locking", lastObservedAt: 50, updatedAt: 200 });
         repo.insert(before);
@@ -1035,26 +1006,6 @@ describe("update", () => {
         expect(repo.get(observed.id)).toEqual({ ...observed, recoveryTxid: "recovery" });
     });
 
-    it("atomically claims locked recovery once across repository instances", () => {
-        repo.insert(advance({ state: "locked", lastObservedAt: 50 }));
-        const other = new AdvanceRepository(db);
-        expect(repo.claimRecovery("adv-1", 100)).toMatchObject({
-            state: "recovering",
-            recoverySubmittedAt: 100,
-            lastObservedAt: 50,
-        });
-        expect(other.claimRecovery("adv-1", 101)).toBeUndefined();
-        expect(other.get("adv-1")!.recoverySubmittedAt).toBe(100);
-    });
-
-    it.each(["quoted", "locking", "recovering", "recovered", "expired"] as const)(
-        "does not claim recovery from %s",
-        (state) => {
-            repo.insert(advance({ state }));
-            expect(repo.claimRecovery("adv-1", 100)).toBeUndefined();
-            expect(repo.get("adv-1")!.state).toBe(state);
-        },
-    );
     it("overwrites every mutable field", () => {
         repo.insert(advance());
         const moved: Advance = {
@@ -1066,7 +1017,7 @@ describe("update", () => {
             updatedAt: 1_757_000_900,
         };
 
-        repo.update(moved);
+        repo.unsafeOverwrite(moved);
 
         expect(repo.get("adv-1")).toEqual(moved);
     });
@@ -1081,7 +1032,7 @@ describe("update", () => {
             }),
         );
 
-        repo.update(advance());
+        repo.unsafeOverwrite(advance());
 
         const got = repo.get("adv-1")!;
         expect(got.outpoint).toBeUndefined();
@@ -1091,7 +1042,7 @@ describe("update", () => {
     });
 
     it("refuses to silently no-op on an unknown id", () => {
-        expect(() => repo.update(advance({ id: "ghost" }))).toThrow(/ghost/);
+        expect(() => repo.unsafeOverwrite(advance({ id: "ghost" }))).toThrow(/ghost/);
     });
 });
 

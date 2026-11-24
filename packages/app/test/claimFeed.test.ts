@@ -124,7 +124,7 @@ describe("ReceiverClaimFeed", () => {
             expect(b.onChanged.mock.calls[0]![0].claims).toHaveLength(1);
             await vi.advanceTimersByTimeAsync(250);
             expect(a.onChanged).toHaveBeenCalledTimes(1);
-            advances.update({ ...row, state: "purchased", spentTxid: "ef".repeat(32) });
+            advances.unsafeOverwrite({ ...row, state: "purchased", spentTxid: "ef".repeat(32) });
             await vi.advanceTimersByTimeAsync(250);
             expect(a.onChanged).toHaveBeenLastCalledWith({
                 claims: [
@@ -160,9 +160,9 @@ describe("ReceiverClaimFeed", () => {
         const closeFast = feed.subscribe([receiverKey], fast);
         try {
             await vi.advanceTimersByTimeAsync(250);
-            advances.update(advance({ state: "recovering" }));
+            advances.unsafeOverwrite(advance({ state: "recovering" }));
             await vi.advanceTimersByTimeAsync(250);
-            advances.update(advance({ state: "recovered" }));
+            advances.unsafeOverwrite(advance({ state: "recovered" }));
             await vi.advanceTimersByTimeAsync(250);
             expect(reads).toHaveBeenCalledTimes(3);
             expect(slow.onChanged).toHaveBeenCalledTimes(1);
@@ -188,7 +188,7 @@ describe("ReceiverClaimFeed", () => {
         const slow = { onChanged: vi.fn(() => blocked), onError: vi.fn() };
         const close = feed.subscribe([receiverKey], slow);
         await vi.advanceTimersByTimeAsync(250);
-        advances.update(advance({ state: "purchased" }));
+        advances.unsafeOverwrite(advance({ state: "purchased" }));
         await vi.advanceTimersByTimeAsync(250);
         close();
         release();

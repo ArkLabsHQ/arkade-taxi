@@ -445,7 +445,7 @@ describe("durable reservations", () => {
         reserve();
         reserve(quote({ id: "fresh", operatorInputs: [input(1)], expiresAt: 61 }));
         reserve(quote({ id: "submitted", operatorInputs: [input(2)] }));
-        advances.update(transition(advances.get("submitted")!, "locking", 59));
+        advances.unsafeOverwrite(transition(advances.get("submitted")!, "locking", 59));
         expect(reservations.expireQuotes(59)).toBe(0);
         expect(reservations.expireQuotes(60)).toBe(1);
         expect(advances.get("quote-1")).toMatchObject({ state: "expired", updatedAt: 60 });
@@ -480,7 +480,7 @@ describe("durable reservations", () => {
                 expectedPolicyRevision: firstPolicy.getSnapshot().revision,
                 recoveryExecutionBudget: { kind: "time", value: 1n },
             });
-            new AdvanceRepository(first).update(transition(quote(), "expired", 60));
+            new AdvanceRepository(first).unsafeOverwrite(transition(quote(), "expired", 60));
             first.close();
             second = new DatabaseCtor(path);
             const reopened = new ReservationRepository(second);
@@ -689,14 +689,14 @@ describe("durable reservations", () => {
         "does not release %s reservations",
         (state) => {
             reserve();
-            advances.update(quote({ state }));
+            advances.unsafeOverwrite(quote({ state }));
             expect(() => reservations.releaseForAdvance("quote-1")).toThrow(/release/);
             expect(reservations.listForAdvance("quote-1")).toEqual([input()]);
         },
     );
     it("releases an expired quote", () => {
         reserve();
-        advances.update(transition(advances.get("quote-1")!, "expired", 60));
+        advances.unsafeOverwrite(transition(advances.get("quote-1")!, "expired", 60));
         reservations.releaseForAdvance("quote-1");
         expect(reservations.listForAdvance("quote-1")).toEqual([]);
     });
@@ -705,9 +705,9 @@ describe("durable reservations", () => {
         (state) => {
             reserve();
             const a = quote({ state });
-            advances.update(a);
+            advances.unsafeOverwrite(a);
             expect(() => reservations.releaseForAdvance(a.id)).toThrow(/observed/);
-            advances.update({ ...a, spentTxid: "cc".repeat(32), lastObservedAt: 100 });
+            advances.unsafeOverwrite({ ...a, spentTxid: "cc".repeat(32), lastObservedAt: 100 });
             reservations.releaseForAdvance(a.id);
             expect(reservations.listReservedOutpoints()).toEqual([]);
         },

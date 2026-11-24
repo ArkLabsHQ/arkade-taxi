@@ -9,6 +9,20 @@ const HEIGHT = 900_000n;
  * case adds to it is exactly the `remaining` the sweeper reports. */
 const DEADLINE = BigInt(NOW);
 
+/** The row the real runner leaves before it reports a submission. */
+const submitted = (id: string, txid: string) => {
+    const current = advances.get(id)!;
+    advances.unsafeOverwrite({
+        ...current,
+        state: "recovering",
+        recoveryPhase: "submitted",
+        recoveryTxid: txid,
+        recoverySubmittedAt: clock,
+        updatedAt: Math.max(current.updatedAt, clock),
+    });
+    return { txid, submittedAt: clock, alreadyKnown: false };
+};
+
 class FakeRecovery implements RecoveryRunner {
     readonly seen: string[] = [];
     failFor = new Set<string>();
@@ -19,7 +33,7 @@ class FakeRecovery implements RecoveryRunner {
     ): Promise<{ txid: string; submittedAt: number; alreadyKnown: boolean }> {
         this.seen.push(a.id);
         if (this.failFor.has(a.id)) throw new Error(`recovery failed for ${a.id}`);
-        return { txid: this.txidFor(a.id), submittedAt: clock, alreadyKnown: false };
+        return submitted(a.id, this.txidFor(a.id));
     }
 }
 
@@ -342,7 +356,7 @@ describe("tick", () => {
             lastObservedAt: NOW + 2,
             updatedAt: NOW + 2,
         };
-        advances.update(observed);
+        advances.unsafeOverwrite(observed);
         finish();
         await tick;
         expect(advances.get("a")).toMatchObject(observed);
@@ -459,7 +473,7 @@ describe("renewal race", () => {
         ]);
 
         const renewed = advances.get("v2")!;
-        advances.update({ ...renewed, renewals: 1, lastRenewedAt: NOW });
+        advances.unsafeOverwrite({ ...renewed, renewals: 1, lastRenewedAt: NOW });
         expiry = BigInt(NOW) + 100_000n;
         await sweeper.tick(HEIGHT, BigInt(NOW));
 
@@ -540,7 +554,7 @@ describe("resilience", () => {
             recovery: {
                 recover: async () => {
                     const current = advances.get("expired-now")!;
-                    advances.update({
+                    advances.unsafeOverwrite({
                         ...current,
                         state: "recovering",
                         recoveryPhase: "failed",
@@ -575,9 +589,7 @@ describe("resilience", () => {
         const never = new Promise<never>(() => {});
         const stop = vi.fn();
         const recover = vi.fn((row: Advance) =>
-            row.id === "hung"
-                ? never
-                : Promise.resolve({ txid: `tx-${row.id}`, submittedAt: NOW, alreadyKnown: false }),
+            row.id === "hung" ? never : Promise.resolve(submitted(row.id, `tx-${row.id}`)),
         );
         const sweeper = createSweeper({
             ...deps(),
