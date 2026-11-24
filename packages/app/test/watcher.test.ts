@@ -1252,6 +1252,24 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    // Pinned as found, not as intended: adoption requires `locked`, so this stops lending.
+    it("pauses and stalls recovery when a renewal lands on a recovering covenant", async () => {
+        const state = await setupV2(undefined);
+        expect(state.advances.claimRecovery(state.advance.id, NOW + 9)).toBeDefined();
+        expect(state.policy.get().paused).toBe(false);
+        renew(state, { txid: "7a".repeat(32), vout: 1 });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "recovering",
+            outpoint: state.outpoint,
+            failureCode: "covenant_spend_unknown",
+            failureDetail: expect.stringContaining("renewal successor could not be adopted"),
+        });
+        expect(state.policy.get().paused).toBe(true);
+        expect(state.watcher.isRecoverable(state.advance.id)).toBe(false);
+        state.db.close();
+    });
+
     // Spec 3.2 again: a twin differing only in paymentSats lives at the same
     // script, so value is the only thing separating its coin from a successor.
     it("does not confuse two covenants differing only in value by a renewal", async () => {

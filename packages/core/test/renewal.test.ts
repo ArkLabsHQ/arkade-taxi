@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Advance } from "../src/types.js";
-import { renewable } from "../src/renewal.js";
+import { renewable, renewalDue } from "../src/renewal.js";
 
 const NOW = 1_800_000_000n;
 const GUARD = 43_200n;
@@ -44,5 +44,27 @@ describe("renewable", () => {
         ["no recovery locktime", { recoveryLocktime: undefined }],
     ])("refuses %s", (_, over) => {
         expect(renewable(advance(over), NOW, GUARD)).toBe(false);
+    });
+});
+
+describe("renewalDue", () => {
+    const WINDOW = { beforeExpirySeconds: 259_200n, guardSeconds: GUARD };
+    const expiring = (value: bigint) => ({ kind: "time" as const, value });
+
+    it("is due from the window's edge on, and not a second before", () => {
+        expect(renewalDue(advance(), expiring(NOW + 259_200n), NOW, WINDOW)).toBe(true);
+        expect(renewalDue(advance(), expiring(NOW + 259_201n), NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), expiring(NOW - 1n), NOW, WINDOW)).toBe(true);
+    });
+
+    it("is never due within the recovery guard, however close the expiry", () => {
+        const atGuard = { recoveryLocktime: { kind: "time" as const, value: NOW + GUARD } };
+        expect(renewalDue(advance(atGuard), expiring(NOW + 1n), NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), expiring(NOW + 1n), NOW, WINDOW)).toBe(true);
+    });
+
+    it("is never due for a height expiry or an unobserved coin", () => {
+        expect(renewalDue(advance(), { kind: "height", value: 1n }, NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), undefined, NOW, WINDOW)).toBe(false);
     });
 });

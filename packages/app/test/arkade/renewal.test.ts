@@ -1,0 +1,63 @@
+import { describe, expect, it, vi } from "vitest";
+import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { covenantParamsOf } from "@arkade-taxi/core";
+import { bytesToHex } from "@arkade-taxi/protocol";
+import { covenantKeeper, type RenewalProviders } from "../../src/arkade/renewal.js";
+import { advance, config, fundingCoin, NOW } from "../fixtures.js";
+
+const outpoint = { txid: "cc".repeat(32), vout: 0 };
+// A claim-mode tree: the SDK's helper refuses it, since the artifact derives another script.
+const covenantAdvance = advance({ outpoint, claimMode: "recycle" });
+const script = bytesToHex(
+    new DustCovenantScript({
+        serverKey: config().serverPubkey,
+        emulatorKey: config().emulatorPubkey,
+        vtxoMinAmount: config().vtxoMinAmount,
+        params: covenantParamsOf(covenantAdvance),
+    }).pkScript,
+);
+const expiringIn = (seconds: bigint) => ({
+    swept: false,
+    expiry: { kind: "time" as const, value: BigInt(NOW) + seconds },
+});
+
+const keeper = (coin: object, intentFee: Record<string, string> = {}) => {
+    const providers = {
+        arkProvider: { getInfo: vi.fn(async () => ({ fees: { intentFee } })) },
+        emulator: { submitIntent: vi.fn() },
+        indexer: { getVtxos: vi.fn(async () => ({ vtxos: [coin] })) },
+        network: {},
+    };
+    const renew = covenantKeeper({
+        providers: providers as unknown as RenewalProviders,
+        config: config(),
+        now: () => NOW,
+        signal: new AbortController().signal,
+        onRenewed: vi.fn(),
+    });
+    return { providers, renew };
+};
+
+describe("covenant keeper", () => {
+    it("waits until the coin's expiry is inside the renewal window", () => {
+        const { providers, renew } = keeper(fundingCoin({ ...outpoint, script }));
+        const window = config().renewalBeforeExpirySeconds;
+        expect(renew(covenantAdvance, expiringIn(window + 1n))).toBeUndefined();
+        expect(renew(covenantAdvance, undefined)).toBeUndefined();
+        expect(providers.indexer.getVtxos).not.toHaveBeenCalled();
+    });
+
+    it("leaves a coin a batch already consumed to the watcher", async () => {
+        const { providers, renew } = keeper(fundingCoin({ ...outpoint, script, isSpent: true }));
+        await expect(renew(covenantAdvance, expiringIn(3_600n))).resolves.toBeUndefined();
+        expect(providers.arkProvider.getInfo).not.toHaveBeenCalled();
+    });
+
+    it("refuses a claim-mode coin's renewal when the server charges an intent fee", async () => {
+        const { providers, renew } = keeper(fundingCoin({ ...outpoint, script, value: 330 }), {
+            offchainInput: "1.0",
+        });
+        await expect(renew(covenantAdvance, expiringIn(3_600n))).rejects.toThrow(/charges 1 sats/);
+        expect(providers.emulator.submitIntent).not.toHaveBeenCalled();
+    });
+});
