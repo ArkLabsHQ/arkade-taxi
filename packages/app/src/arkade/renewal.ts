@@ -30,8 +30,6 @@ export interface RenewalProviders {
 }
 
 const ABORTED = "covenant renewal aborted before the batch completed";
-// ponytail: fixed bound per attempt; a slower batch cadence only costs re-registration.
-const ATTEMPT_MS = 10 * 60_000;
 
 /**
  * The SDK's `renewProgramContractOutputs`, over the covenant's own tree: the SDK derives
@@ -199,12 +197,17 @@ export function covenantKeeper(deps: {
                 vtxoMinAmount: deps.config.vtxoMinAmount,
                 params: covenantParamsOf(advance),
             });
+            // As long as the guard allows, within Node's 2^31-1 ms timer: an abandoned intent
+            // cannot be withdrawn, and arkd convicts the script of one whose cosigner has gone.
+            const bound = AbortSignal.timeout(
+                Math.min(Number(window.guardSeconds) * 1000, 2 ** 31 - 1),
+            );
             const { commitmentTxid } = await renewCovenant(
                 deps.providers,
                 covenant,
                 coin,
                 advance.covenantAddress,
-                { signal: AbortSignal.any([deps.signal, AbortSignal.timeout(ATTEMPT_MS)]) },
+                { signal: AbortSignal.any([deps.signal, bound]) },
             );
             deps.onRenewed(advance.id, commitmentTxid);
         })();
