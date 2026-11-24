@@ -61,6 +61,7 @@ import {
     createRecoveryRunner,
     type RecoveryIntent,
 } from "../../src/arkade/recovery.js";
+import { createSweeper } from "../../src/sweeper.js";
 
 const directories: string[] = [];
 const databases: Database[] = [];
@@ -1534,6 +1535,47 @@ describe("durable recovery runner", () => {
                 )
                 .get(row.id),
         ).toEqual({ total: 1n });
+    });
+
+    it("leaves a swept row recovering and submitted, written by the runner alone", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance();
+        advances.insert(row);
+        const runner = createRecoveryRunner({
+            advances,
+            emulator: signingEmulator(),
+            config: config(),
+            workerId: "worker",
+            now: () => NOW + 100,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+        });
+        const read = new Set<string>();
+        let recovered: Promise<unknown> | undefined;
+        const sweeper = createSweeper({
+            advances: new Proxy(advances, {
+                get: (target, key) => {
+                    read.add(String(key));
+                    const value = Reflect.get(target, key);
+                    return typeof value === "function" ? value.bind(target) : value;
+                },
+            }),
+            recovery: { recover: (advance) => (recovered = runner.recover(advance)) },
+            now: () => NOW + 100,
+            config: config(),
+        });
+
+        await sweeper.tick(null, row.locktime);
+        await recovered;
+
+        expect(advances.get(row.id)).toMatchObject({
+            state: "recovering",
+            recoveryPhase: "submitted",
+            recoveryTxid: buildRecoveryIntent(row, config()).expectedTxid,
+            recoverySubmittedAt: NOW + 100,
+        });
+        expect([...read].sort()).toEqual(["byState", "get"]);
     });
 });
 

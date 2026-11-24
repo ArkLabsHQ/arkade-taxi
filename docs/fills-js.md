@@ -4,7 +4,11 @@ Use `requestVerifiedReceiveQuote` to obtain and verify the covenant, reserved
 `operatorInputs`, `operatorScript`, fare and expiry floor. Build the whole graph
 with the integration that owns the payment rail. Swap callers use
 `buildOfferFillPlan` from `@arkade-os/swap`. Check the caller's own payouts and
-sign only its inputs, leaving the declared Taxi inputs unsigned.
+sign only its inputs, leaving the declared Taxi inputs unsigned. A
+provider-gated input whose spend leaf names the caller's key, as a directed
+swap's `fulfill` leaf names the taker, is the caller's to sign on both the Arkade
+transaction and its checkpoint; one that names only the server and the emulator
+stays unsigned.
 
 Call `TaxiClient.submitFill` once with the quote ID, a durable operation ID,
 the signed Arkade PSBT and index-aligned checkpoints, Taxi input indexes,

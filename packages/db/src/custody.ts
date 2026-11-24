@@ -174,8 +174,15 @@ export function openCustodyRow(
 }
 
 export class CustodyRepository {
+    #policyRepository: PolicyRepository | undefined;
+
     constructor(private readonly db: Database) {
         assertNativeAccess(db);
+    }
+
+    /** Built on first use: its constructor seeds the policy row, which must wait until then. */
+    get #policy(): PolicyRepository {
+        return (this.#policyRepository ??= new PolicyRepository(this.db));
     }
 
     get(advanceId: string): CustodyRecord | undefined {
@@ -425,7 +432,7 @@ export class CustodyRepository {
                     )
                     .run(actor, at, advanceId).changes;
                 if (changed !== 1) throw new CustodyError("custody_release_in_progress", advanceId);
-                new PolicyRepository(this.db).recordOperation("custody-write-off", actor);
+                this.#policy.recordOperation("custody-write-off", actor);
             })
             .immediate();
     }

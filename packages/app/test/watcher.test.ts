@@ -1255,7 +1255,17 @@ describe("canonical covenant observation", () => {
     // Pinned as found, not as intended: adoption requires `locked`, so this stops lending.
     it("pauses and stalls recovery when a renewal lands on a recovering covenant", async () => {
         const state = await setupV2(undefined);
-        expect(state.advances.claimRecovery(state.advance.id, NOW + 9)).toBeDefined();
+        const intent = buildRecoveryIntent(state.advances.get(state.advance.id)!, config());
+        expect(
+            state.advances.claimRecoveryLease(
+                state.advance.id,
+                "worker",
+                "token",
+                NOW + 9,
+                NOW + 60,
+                intent,
+            ),
+        ).toBeDefined();
         expect(state.policy.get().paused).toBe(false);
         renew(state, { txid: "7a".repeat(32), vout: 1 });
         await state.watcher.catchUp();
@@ -2324,7 +2334,17 @@ describe("canonical covenant observation", () => {
                         if (race) {
                             race = false;
                             expect(
-                                state.advances.claimRecovery(state.advance.id, NOW + 9),
+                                state.advances.claimRecoveryLease(
+                                    state.advance.id,
+                                    "worker",
+                                    "token",
+                                    NOW + 9,
+                                    NOW + 60,
+                                    buildRecoveryIntent(
+                                        state.advances.get(state.advance.id)!,
+                                        config(),
+                                    ),
+                                ),
                             ).toBeDefined();
                         }
                         return state.advances.recordSpendObservation(...args);
@@ -2577,20 +2597,20 @@ describe("canonical covenant observation", () => {
                     { script: addedScript, label: "taxi-covenant" },
                 ]),
             );
-            state.advances.update({ ...added, state: "expired" });
+            state.advances.unsafeOverwrite({ ...added, state: "expired" });
             await watcher.catchUp();
             await vi.waitFor(async () =>
                 expect(await first.manager.getWatchedScripts()).toEqual([
                     { script: initialScript, label: "existing-owner" },
                 ]),
             );
-            state.advances.update({ ...added, covenantAddress: "invalid-address" });
+            state.advances.unsafeOverwrite({ ...added, covenantAddress: "invalid-address" });
             await watcher.catchUp();
             expect(state.advances.get(added.id)?.failureCode).toBe("covenant_spend_unknown");
             await vi.waitFor(async () =>
                 expect(await first.manager.getWatchedScripts()).toHaveLength(1),
             );
-            state.advances.update(added);
+            state.advances.unsafeOverwrite(added);
             await watcher.catchUp();
             wallet = second.wallet;
             await watcher.catchUp();

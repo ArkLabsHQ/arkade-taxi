@@ -110,7 +110,7 @@ jobs:
             - uses: actions/checkout@v5
               with:
                   repository: ArkLabsHQ/arkade-regtest
-                  ref: 78d0b7a9677077ca64bf09b4e825520ba462446b
+                  ref: 185da8e2863fb461d12b898a0a692b0623476254
                   path: arkade-regtest
                   persist-credentials: false
             - uses: pnpm/action-setup@v4
