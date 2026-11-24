@@ -10,6 +10,11 @@ export {
     validateFundingSnapshot,
 } from "./ledger.js";
 export { computeExposure, sweepable } from "./exposure.js";
+export {
+    spendObservationVerdict,
+    stableObservationVerdict,
+    type StableObservationVerdict,
+} from "./observation.js";
 export { admit, type LendingGate } from "./admission.js";
 export {
     exposureCapRefusal,

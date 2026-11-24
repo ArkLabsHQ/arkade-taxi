@@ -1,6 +1,10 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { Advance, AdvanceState, Outpoint } from "@arkade-taxi/core";
-import { validateFundingSnapshot } from "@arkade-taxi/core";
+import {
+    spendObservationVerdict,
+    stableObservationVerdict,
+    validateFundingSnapshot,
+} from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination.js";
 import { openCustodyRow } from "./custody.js";
 import { PolicyRepository } from "./policy.js";
@@ -1143,19 +1147,14 @@ export class AdvanceRepository {
             .transaction(() => {
                 const current = this.get(id);
                 if (!current) throw new Error(`advance ${id} not found`);
-                if (current.state === terminalState && current.spentTxid === spentTxid) {
-                    return "duplicate" as const;
-                }
-                const compatibleForwardDrift =
-                    (expectedState === "locking" && current.state === "locked") ||
-                    ((expectedState === "locking" || expectedState === "locked") &&
-                        current.state === "recovering");
-                if (current.state !== expectedState && compatibleForwardDrift)
-                    return "retry" as const;
-                if (
-                    ["recycled", "purchased", "refunded", "recovered"].includes(current.state) ||
-                    current.state !== expectedState
-                ) {
+                const verdict = spendObservationVerdict(
+                    current,
+                    expectedState,
+                    terminalState,
+                    spentTxid,
+                );
+                if (verdict === "duplicate" || verdict === "retry") return verdict;
+                if (verdict === "disagreement") {
                     this.#markObservationDisagreement(
                         id,
                         `canonical spend ${spentTxid} classified ${terminalState} at ${tip.hash}:${tip.height} conflicts with persisted ${current.spentTxid ?? "none"}/${current.state}`,
@@ -1318,7 +1317,8 @@ export class AdvanceRepository {
                 if (!current) throw new Error(`advance ${id} not found`);
                 if (current.state !== terminalState || current.spentTxid !== spentTxid)
                     return "ignored" as const;
-                const disagree = (reason: string) => {
+                const verdict = stableObservationVerdict(current, at, tip);
+                if (verdict.kind === "disagree") {
                     const changed = this.#db
                         .prepare(
                             `UPDATE advances SET failure_code = 'covenant_observation_disagreement',
@@ -1327,42 +1327,14 @@ export class AdvanceRepository {
                              observation_stable_count = 0, updated_at = max(updated_at, ?)
                              WHERE id = ? AND state = ? AND spent_txid = ?`,
                         )
-                        .run(reason, at, id, terminalState, spentTxid).changes;
+                        .run(verdict.reason, at, id, terminalState, spentTxid).changes;
                     if (changed !== 1) return "ignored" as const;
                     new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
                     return "disagreement" as const;
-                };
-                if (
-                    !Number.isSafeInteger(at) ||
-                    at < 0 ||
-                    !/^[0-9a-f]{64}$/.test(tip.hash) ||
-                    !Number.isSafeInteger(tip.height) ||
-                    tip.height < 0 ||
-                    !Number.isSafeInteger(tip.time) ||
-                    tip.time < 0
-                )
-                    return disagree("stable canonical tip identity is malformed");
-                const previousHash = current.observationTipHash;
-                const previousHeight = current.observationTipHeight;
-                if (
-                    previousHash === undefined ||
-                    !/^[0-9a-f]{64}$/.test(previousHash) ||
-                    previousHeight === undefined ||
-                    !Number.isSafeInteger(previousHeight) ||
-                    previousHeight < 0
-                )
-                    return disagree("persisted terminal tip identity is malformed");
-                if (current.failureCode !== "covenant_observation_disagreement") {
-                    if (
-                        tip.height < previousHeight ||
-                        (tip.height === previousHeight && tip.hash !== previousHash) ||
-                        (tip.height > previousHeight && tip.hash === previousHash)
-                    )
-                        return disagree(
-                            `stale or contradictory canonical tip ${tip.hash}:${tip.height} conflicts with persisted observation`,
-                        );
-                    if (previousHash === tip.hash && previousHeight === tip.height)
-                        return "ignored" as const;
+                }
+                if (verdict.kind === "ignore") return "ignored" as const;
+                const { previous } = verdict;
+                if (verdict.kind === "advance") {
                     const changed = this.#db
                         .prepare(
                             `UPDATE advances SET last_observed_at = ?, observation_tip_hash = ?,
@@ -1379,25 +1351,12 @@ export class AdvanceRepository {
                             id,
                             terminalState,
                             spentTxid,
-                            previousHash,
-                            previousHeight,
+                            previous.hash,
+                            previous.height,
                         ).changes;
                     return changed === 1 ? ("advanced" as const) : ("ignored" as const);
                 }
-                if (
-                    tip.height < previousHeight ||
-                    (tip.height > previousHeight && tip.hash === previousHash)
-                )
-                    return disagree(
-                        `stable candidate ${tip.hash}:${tip.height} is below or contradicts persisted observation ${previousHash}:${previousHeight}`,
-                    );
-                const previousStableHash = current.observationStableTipHash;
-                const previousStableHeight = current.observationStableTipHeight;
-                const count =
-                    previousStableHash === tip.hash && previousStableHeight === tip.height
-                        ? (current.observationStableCount ?? 0) + 1
-                        : 1;
-                const cleared = count >= 2;
+                const { count, cleared } = verdict;
                 const changed = this.#db
                     .prepare(
                         `UPDATE advances SET observation_stable_tip_hash = ?,
@@ -1428,8 +1387,8 @@ export class AdvanceRepository {
                         id,
                         terminalState,
                         spentTxid,
-                        previousHash,
-                        previousHeight,
+                        previous.hash,
+                        previous.height,
                         current.observationStableCount ?? 0,
                     ).changes;
                 if (changed !== 1) return "ignored" as const;
