@@ -1,5 +1,6 @@
 import type { Database } from "better-sqlite3";
 import {
+    exposureCapRefusal,
     resolveClaimMode,
     ruleFor,
     type ExpiryDeadline,
@@ -513,11 +514,10 @@ export class ReceiveQuoteRepository {
                     )
                         throw new ReceiveQuoteReservationConflictError();
                 }
-                const exposure = totalExposure(this.db);
-                if (exposure.total + q.loanSats > policy.maxOutstandingSats)
+                const refusal = exposureCapRefusal(totalExposure(this.db), q.loanSats, policy);
+                if (refusal === "exceeds_max_outstanding")
                     throw new Error("receive quote: exceeds max outstanding");
-                if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
-                    throw new Error("receive quote: max concurrent advances");
+                if (refusal) throw new Error("receive quote: max concurrent advances");
                 const held = new Set(current.map(({ txid, vout }) => `${txid}:${vout}`));
                 if (q.operatorInputs.some(({ txid, vout }) => held.has(`${txid}:${vout}`)))
                     throw new ReceiveQuoteReservationConflictError();
