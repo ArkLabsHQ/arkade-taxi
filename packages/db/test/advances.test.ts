@@ -971,35 +971,6 @@ describe("update", () => {
         expect(repo.get("b")!.failureCode).toBeUndefined();
     });
 
-    it("shares the recovery claim across independent database connections", () => {
-        const dir = mkdtempSync(join(tmpdir(), "taxi-recovery-claim-"));
-        const first = new DatabaseCtor(join(dir, "taxi.sqlite"));
-        let second: Database | undefined;
-        try {
-            initializeSchema(first);
-            second = new DatabaseCtor(join(dir, "taxi.sqlite"));
-            const firstRepo = new AdvanceRepository(first);
-            const secondRepo = new AdvanceRepository(second);
-            firstRepo.insert(advance({ state: "locked" }));
-            expect(firstRepo.claimRecovery("adv-1", 100)).toBeDefined();
-            expect(secondRepo.claimRecovery("adv-1", 101)).toBeUndefined();
-            expect(secondRepo.get("adv-1")!.recoverySubmittedAt).toBe(100);
-        } finally {
-            second?.close();
-            first.close();
-            rmSync(dir, { recursive: true, force: true });
-        }
-    });
-
-    it("rolls back a recovery claim when the persisted snapshot is unsafe", () => {
-        repo.insert(advance({ state: "locked" }));
-        db.prepare("UPDATE advances SET unsigned_lockup_tx = NULL WHERE id = 'adv-1'").run();
-        expect(() => repo.claimRecovery("adv-1", 100)).toThrow(/missing funding snapshot/);
-        expect(db.prepare("SELECT state FROM advances WHERE id = 'adv-1'").get()).toEqual({
-            state: "locked",
-        });
-    });
-
     it("records unresolved failure metadata while retaining observed timestamps", () => {
         const before = advance({ state: "locking", lastObservedAt: 50, updatedAt: 200 });
         repo.insert(before);
@@ -1035,26 +1006,6 @@ describe("update", () => {
         expect(repo.get(observed.id)).toEqual({ ...observed, recoveryTxid: "recovery" });
     });
 
-    it("atomically claims locked recovery once across repository instances", () => {
-        repo.insert(advance({ state: "locked", lastObservedAt: 50 }));
-        const other = new AdvanceRepository(db);
-        expect(repo.claimRecovery("adv-1", 100)).toMatchObject({
-            state: "recovering",
-            recoverySubmittedAt: 100,
-            lastObservedAt: 50,
-        });
-        expect(other.claimRecovery("adv-1", 101)).toBeUndefined();
-        expect(other.get("adv-1")!.recoverySubmittedAt).toBe(100);
-    });
-
-    it.each(["quoted", "locking", "recovering", "recovered", "expired"] as const)(
-        "does not claim recovery from %s",
-        (state) => {
-            repo.insert(advance({ state }));
-            expect(repo.claimRecovery("adv-1", 100)).toBeUndefined();
-            expect(repo.get("adv-1")!.state).toBe(state);
-        },
-    );
     it("overwrites every mutable field", () => {
         repo.insert(advance());
         const moved: Advance = {

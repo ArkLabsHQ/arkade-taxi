@@ -252,18 +252,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             const submitted = await deps.recovery.recover(a);
             if (!submitted) return undefined;
             const latest = deps.advances.get(a.id);
-            if (latest?.state === "locked") {
-                const claimed = deps.advances.claimRecovery(a.id, deps.now());
-                if (claimed)
-                    deps.advances.recordRecoverySubmission(
-                        a.id,
-                        submitted.txid,
-                        submitted.submittedAt,
-                    );
-                const recorded = deps.advances.get(a.id);
-                if (recorded?.state === "recovering" && !recorded.recoveryPhase)
-                    deps.advances.update({ ...recorded, recoveryPhase: "submitted" });
-            } else if (latest?.state === "recovered") {
+            if (latest?.state === "recovered") {
                 deps.advances.recordRecoverySubmission(a.id, submitted.txid, submitted.submittedAt);
             }
             lastSuccessfulRecoveryAt =

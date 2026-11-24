@@ -165,12 +165,10 @@ export interface AdvanceStore {
     get(id: string): Advance | undefined;
     byState(s: AdvanceState): Advance[];
     byReceiverKeys(keys: readonly Uint8Array[]): Advance[];
-    update(a: Advance): void;
     exposureTotals(): { outstandingSats: bigint; lockedCount: number };
     recordLockupSubmission(id: string, arkTxid: string, at: number): void;
     recordLockupFailure(id: string, code: string, detail: string, at: number): void;
     recordRecoverySubmission(id: string, txid: string, at: number): void;
-    claimRecovery(id: string, at: number): Advance | undefined;
 }
 
 export interface QuoteDeps {

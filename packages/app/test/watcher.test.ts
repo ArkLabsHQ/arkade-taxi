@@ -2306,7 +2306,17 @@ describe("canonical covenant observation", () => {
                         if (race) {
                             race = false;
                             expect(
-                                state.advances.claimRecovery(state.advance.id, NOW + 9),
+                                state.advances.claimRecoveryLease(
+                                    state.advance.id,
+                                    "worker",
+                                    "token",
+                                    NOW + 9,
+                                    NOW + 60,
+                                    buildRecoveryIntent(
+                                        state.advances.get(state.advance.id)!,
+                                        config(),
+                                    ),
+                                ),
                             ).toBeDefined();
                         }
                         return state.advances.recordSpendObservation(...args);

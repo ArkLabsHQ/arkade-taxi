@@ -414,17 +414,4 @@ export class MemoryAdvances {
             updatedAt: Math.max(current.updatedAt, at),
         });
     }
-
-    claimRecovery(id: string, at: number): Advance | undefined {
-        const current = this.get(id);
-        if (current?.state !== "locked") return undefined;
-        const claimed = {
-            ...current,
-            state: "recovering" as const,
-            recoverySubmittedAt: at,
-            updatedAt: Math.max(current.updatedAt, at),
-        };
-        this.update(claimed);
-        return claimed;
-    }
 }

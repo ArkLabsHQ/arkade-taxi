@@ -80,7 +80,6 @@ describe("SQLite SDK boundary", () => {
                 () => advances.recordLockupSubmission(a.id, "aa".repeat(32), 1),
                 () => advances.recordLockupFailure(a.id, "test", "test", 1),
                 () => advances.recordRecoverySubmission(a.id, "tx", 1),
-                () => advances.claimRecovery(a.id, 1),
                 () => reservations.listReservedOutpoints(),
                 () => reservations.listForAdvance(a.id),
                 () =>

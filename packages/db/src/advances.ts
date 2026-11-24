@@ -519,7 +519,6 @@ export class AdvanceRepository {
     >;
     readonly #exposureTotals: Statement<[], { total: bigint; count: bigint }>;
     readonly #recoverySubmission: Statement<[string, number, string]>;
-    readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
     #policyRepository: PolicyRepository | undefined;
 
     /** Built on first use: its constructor seeds the policy row, which must wait until then. */
@@ -592,9 +591,6 @@ export class AdvanceRepository {
         this.#recoverySubmission =
             db.prepare(`UPDATE advances SET recovery_txid = coalesce(recovery_txid, ?),
             updated_at = max(updated_at, ?) WHERE id = ?`);
-        this.#claimRecovery =
-            read(`UPDATE advances SET state = 'recovering', recovery_submitted_at = ?,
-            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' AND kind = 'covenant' RETURNING *`);
     }
 
     insert(a: Advance): void {
@@ -1408,16 +1404,6 @@ export class AdvanceRepository {
         if (this.#recoverySubmission.run(txid, at, id).changes === 0) {
             throw new Error(`advance ${id} not found`);
         }
-    }
-
-    claimRecovery(id: string, at: number): Advance | undefined {
-        assertNativeAccess(this.#db);
-        return this.#db
-            .transaction(() => {
-                const row = this.#claimRecovery.get(at, at, id);
-                return row && fromRow(row);
-            })
-            .immediate();
     }
 
     listSweepable(currentHeight: bigint, medianTime?: bigint): Advance[] {

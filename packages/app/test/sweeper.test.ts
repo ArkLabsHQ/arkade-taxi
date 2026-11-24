@@ -9,6 +9,20 @@ const HEIGHT = 900_000n;
  * case adds to it is exactly the `remaining` the sweeper reports. */
 const DEADLINE = BigInt(NOW);
 
+/** The row the real runner leaves before it reports a submission. */
+const submitted = (id: string, txid: string) => {
+    const current = advances.get(id)!;
+    advances.update({
+        ...current,
+        state: "recovering",
+        recoveryPhase: "submitted",
+        recoveryTxid: txid,
+        recoverySubmittedAt: clock,
+        updatedAt: Math.max(current.updatedAt, clock),
+    });
+    return { txid, submittedAt: clock, alreadyKnown: false };
+};
+
 class FakeRecovery implements RecoveryRunner {
     readonly seen: string[] = [];
     failFor = new Set<string>();
@@ -19,7 +33,7 @@ class FakeRecovery implements RecoveryRunner {
     ): Promise<{ txid: string; submittedAt: number; alreadyKnown: boolean }> {
         this.seen.push(a.id);
         if (this.failFor.has(a.id)) throw new Error(`recovery failed for ${a.id}`);
-        return { txid: this.txidFor(a.id), submittedAt: clock, alreadyKnown: false };
+        return submitted(a.id, this.txidFor(a.id));
     }
 }
 
@@ -575,9 +589,7 @@ describe("resilience", () => {
         const never = new Promise<never>(() => {});
         const stop = vi.fn();
         const recover = vi.fn((row: Advance) =>
-            row.id === "hung"
-                ? never
-                : Promise.resolve({ txid: `tx-${row.id}`, submittedAt: NOW, alreadyKnown: false }),
+            row.id === "hung" ? never : Promise.resolve(submitted(row.id, `tx-${row.id}`)),
         );
         const sweeper = createSweeper({
             ...deps(),
