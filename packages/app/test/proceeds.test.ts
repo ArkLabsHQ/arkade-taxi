@@ -1318,12 +1318,12 @@ describe("durable proceeds collector", () => {
                 ],
                 [{ ...locked, outpoint: { txid: tx.id, vout: 1 } }, "proceeds_lockup_mismatch"],
             ] as const) {
-                advances.update(changed);
+                advances.unsafeOverwrite(changed);
                 await expect(
                     discoverProceeds(s.deps, [{ ...fareCoin, txid: changed.arkTxid! }]),
                 ).rejects.toThrow(code);
             }
-            advances.update(locked);
+            advances.unsafeOverwrite(locked);
             observed = { ...fareCoin, vout: 2 };
             expect(await discoverProceeds(s.deps, [fareCoin])).toEqual([]);
             observed = { ...fareCoin, isSpent: true };

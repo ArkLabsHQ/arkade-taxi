@@ -666,7 +666,8 @@ export class AdvanceRepository {
         return this.#sponsoredLocked.all().map(fromRow);
     }
 
-    update(a: Advance): void {
+    /** Writes every column with no state guard, so only test fixtures call it. */
+    unsafeOverwrite(a: Advance): void {
         assertNativeAccess(this.#db);
         if (this.#update.run(toParams(a)).changes === 0) {
             throw new Error(`advance ${a.id} not found`);

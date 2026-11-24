@@ -187,7 +187,7 @@ describe("locking reconciliation", () => {
 
     it("blocks readiness for an absent failed submission but still promotes exact observation", async () => {
         const state = setup();
-        state.advances.update({
+        state.advances.unsafeOverwrite({
             ...state.advances.get(state.quote.id)!,
             submissionPhase: "failed",
             failureCode: "lockup_submission_failed",

@@ -12,7 +12,7 @@ const DEADLINE = BigInt(NOW);
 /** The row the real runner leaves before it reports a submission. */
 const submitted = (id: string, txid: string) => {
     const current = advances.get(id)!;
-    advances.update({
+    advances.unsafeOverwrite({
         ...current,
         state: "recovering",
         recoveryPhase: "submitted",
@@ -356,7 +356,7 @@ describe("tick", () => {
             lastObservedAt: NOW + 2,
             updatedAt: NOW + 2,
         };
-        advances.update(observed);
+        advances.unsafeOverwrite(observed);
         finish();
         await tick;
         expect(advances.get("a")).toMatchObject(observed);
@@ -473,7 +473,7 @@ describe("renewal race", () => {
         ]);
 
         const renewed = advances.get("v2")!;
-        advances.update({ ...renewed, renewals: 1, lastRenewedAt: NOW });
+        advances.unsafeOverwrite({ ...renewed, renewals: 1, lastRenewedAt: NOW });
         expiry = BigInt(NOW) + 100_000n;
         await sweeper.tick(HEIGHT, BigInt(NOW));
 
@@ -554,7 +554,7 @@ describe("resilience", () => {
             recovery: {
                 recover: async () => {
                     const current = advances.get("expired-now")!;
-                    advances.update({
+                    advances.unsafeOverwrite({
                         ...current,
                         state: "recovering",
                         recoveryPhase: "failed",

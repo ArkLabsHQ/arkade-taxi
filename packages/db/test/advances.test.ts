@@ -185,7 +185,7 @@ describe("round-trip fidelity", () => {
         });
         expect(() => repo.insert(row)).toThrow(/asset.*quantity/i);
         repo.insert(advance());
-        expect(() => repo.update(row)).toThrow(/asset.*quantity/i);
+        expect(() => repo.unsafeOverwrite(row)).toThrow(/asset.*quantity/i);
     });
 
     it("rejects a bitcoin advance with an asset quantity", () => {
@@ -463,7 +463,7 @@ describe("round-trip fidelity", () => {
         });
         repo.insert(a);
         expect(new AdvanceRepository(db).get(a.id)).toEqual(a);
-        repo.update(advance());
+        repo.unsafeOverwrite(advance());
         expect(repo.get(a.id)).toEqual(advance());
     });
 
@@ -576,7 +576,7 @@ describe("round-trip fidelity", () => {
         expect(Array.from(got.assetId!.txid)).toEqual(Array.from(assetId.txid));
         expect(got.assetId!.groupIndex).toBe(4);
         expect(got.assetUnits).toBe(ABOVE_MAX_SAFE);
-        repo.update({ ...got, assetUnits: ABOVE_MAX_SAFE + 1n });
+        repo.unsafeOverwrite({ ...got, assetUnits: ABOVE_MAX_SAFE + 1n });
         expect(repo.get(got.id)?.assetUnits).toBe(ABOVE_MAX_SAFE + 1n);
         expect(typeof got.assetId!.groupIndex).toBe("number");
         const byAsset = db
@@ -1017,7 +1017,7 @@ describe("update", () => {
             updatedAt: 1_757_000_900,
         };
 
-        repo.update(moved);
+        repo.unsafeOverwrite(moved);
 
         expect(repo.get("adv-1")).toEqual(moved);
     });
@@ -1032,7 +1032,7 @@ describe("update", () => {
             }),
         );
 
-        repo.update(advance());
+        repo.unsafeOverwrite(advance());
 
         const got = repo.get("adv-1")!;
         expect(got.outpoint).toBeUndefined();
@@ -1042,7 +1042,7 @@ describe("update", () => {
     });
 
     it("refuses to silently no-op on an unknown id", () => {
-        expect(() => repo.update(advance({ id: "ghost" }))).toThrow(/ghost/);
+        expect(() => repo.unsafeOverwrite(advance({ id: "ghost" }))).toThrow(/ghost/);
     });
 });
 
