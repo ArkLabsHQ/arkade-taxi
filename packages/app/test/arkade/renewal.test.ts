@@ -1,21 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
+import { Transaction, networks, type Proof } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { covenantParamsOf } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { covenantKeeper, type RenewalProviders } from "../../src/arkade/renewal.js";
+import { covenantKeeper, renewCovenant, type RenewalProviders } from "../../src/arkade/renewal.js";
 import { advance, config, fundingCoin, NOW } from "../fixtures.js";
 
 const outpoint = { txid: "cc".repeat(32), vout: 0 };
 // A claim-mode tree: the SDK's helper refuses it, since the artifact derives another script.
 const covenantAdvance = advance({ outpoint, claimMode: "recycle" });
-const script = bytesToHex(
-    new DustCovenantScript({
-        serverKey: config().serverPubkey,
-        emulatorKey: config().emulatorPubkey,
-        vtxoMinAmount: config().vtxoMinAmount,
-        params: covenantParamsOf(covenantAdvance),
-    }).pkScript,
-);
+const covenant = new DustCovenantScript({
+    serverKey: config().serverPubkey,
+    emulatorKey: config().emulatorPubkey,
+    vtxoMinAmount: config().vtxoMinAmount,
+    params: covenantParamsOf(covenantAdvance),
+});
+const script = bytesToHex(covenant.pkScript);
 const expiringIn = (seconds: bigint) => ({
     swept: false,
     expiry: { kind: "time" as const, value: BigInt(NOW) + seconds },
@@ -59,5 +59,48 @@ describe("covenant keeper", () => {
         });
         await expect(renew(covenantAdvance, expiringIn(3_600n))).rejects.toThrow(/charges 1 sats/);
         expect(providers.emulator.submitIntent).not.toHaveBeenCalled();
+    });
+
+    it("registers with the register proof alone, the only message renew() admits", async () => {
+        const funding = new Transaction();
+        funding.addInput({ txid: "00".repeat(32), index: 0 });
+        funding.addOutput({ script: covenant.pkScript, amount: 330n });
+        const coin = {
+            ...fundingCoin({ txid: funding.id, vout: 0, script, value: 330 }),
+            prevTx: funding.toBytes(),
+        };
+        const stop = new AbortController();
+        const submitIntent = vi.fn(async (intent: { proof: string; message: Proof.Message }) => {
+            if (intent.message.type !== "register") throw new Error("renew refuses the message");
+            return intent.proof;
+        });
+        const registerIntent = vi.fn(async () => {
+            stop.abort();
+            return "intent-1";
+        });
+        const providers = {
+            arkProvider: {
+                getInfo: async () => ({ fees: { intentFee: {} } }),
+                registerIntent,
+                getEventStream: () => (async function* () {})(),
+            },
+            emulator: { submitIntent },
+            indexer: {},
+            network: networks.regtest,
+        };
+
+        await expect(
+            renewCovenant(
+                providers as unknown as RenewalProviders,
+                covenant,
+                coin,
+                covenant.address("ark", config().serverPubkey).encode(),
+                { signal: stop.signal },
+            ),
+        ).rejects.toThrow(/aborted/);
+        expect(submitIntent.mock.calls.map(([intent]) => intent.message.type)).toEqual([
+            "register",
+        ]);
+        expect(registerIntent).toHaveBeenCalledOnce();
     });
 });

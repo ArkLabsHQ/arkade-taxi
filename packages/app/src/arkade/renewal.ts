@@ -1,5 +1,4 @@
 import {
-    ArkErrorName,
     Batch,
     EmulatorPacket,
     Estimator,
@@ -8,7 +7,6 @@ import {
     TreeSignerSession,
     arkade,
     createAssetPacket,
-    isArkError,
     isVtxoSpent,
     withPrevTxs,
     type EmulatorProvider,
@@ -76,6 +74,8 @@ export async function renewCovenant(
                 tapTree: covenant.encode(),
                 forfeitTapLeafScript: leaf,
                 proofTapLeafScript: leaf,
+                // The SDK reads this deprecated field first, and a wallet's coin carries its own.
+                intentTapLeafScript: leaf,
             },
         ],
         indexer,
@@ -98,37 +98,32 @@ export async function renewCovenant(
         expire_at: 0,
         cosigners_public_keys: [sessionKey],
     };
-    const deleteMessage: Proof.DeleteMessage = { type: "delete", expire_at: 0 };
     // `renew` tunnels proof input 1 into output 0, which keeps script, value and assets.
     const outputs = [
         { script: covenant.pkScript, amount: BigInt(coin.value) },
         Extension.create(packets).txOut(),
     ];
-    const [signedProof, deleteProof] = await Promise.all(
-        [message, deleteMessage].map((m) =>
-            emulator.submitIntent({
-                proof: base64.encode(Proof.create(m, [input!], outputs).toPSBT()),
-                message: m,
-            }),
-        ),
-    );
+    // No delete proof, unlike the SDK's: the emulator runs `renew` on every proof it signs,
+    // and `renew` admits only a register message, so a failed intent waits for arkd to drop it.
+    const signedProof = await emulator.submitIntent({
+        proof: base64.encode(Proof.create(message, [input!], outputs).toPSBT()),
+        message,
+    });
     if (opts.signal?.aborted) throw new Error(ABORTED);
     const abort = new AbortController();
     let onAbort = () => {};
-    let registering = false;
     let forfeiting = false;
     try {
         // Primed first: a batch that starts before the registration returns is still seen.
         const events = Batch.prime(
             arkProvider.getEventStream(abort.signal, [sessionKey, outpoint]),
         );
-        registering = true;
-        const intentId = await arkProvider.registerIntent({ proof: signedProof!, message });
+        const intentId = await arkProvider.registerIntent({ proof: signedProof, message });
         const handler = arkade.createArkadeBatchHandler(
             intentId,
             [{ ...input!, arkadeScriptBytes: renew }],
             undefined,
-            signedProof!,
+            signedProof,
             message,
             session,
             arkProvider,
@@ -160,20 +155,6 @@ export async function renewCovenant(
             aborted,
         ]);
         return { commitmentTxid, intentId };
-    } catch (error) {
-        if (registering && !forfeiting)
-            await arkProvider
-                .deleteIntent({ proof: deleteProof!, message: deleteMessage })
-                .catch((cause: unknown) => {
-                    if (
-                        isArkError(cause, ArkErrorName.INVALID_INTENT_PROOF) &&
-                        cause.message.includes("no matching intents found")
-                    )
-                        return;
-                    const reason = error instanceof Error ? error.message : String(error);
-                    throw new Error(`${reason}; its intent stays until arkd drops it`, { cause });
-                });
-        throw error;
     } finally {
         opts.signal?.removeEventListener("abort", onAbort);
         abort.abort();
