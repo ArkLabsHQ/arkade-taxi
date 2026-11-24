@@ -57,8 +57,10 @@ stands up its own in-process Taxi — a fresh operator key, its own SQLite ledge
 the production lockup builder, submitter and spend watcher — because it drives
 the renewal directly rather than through a delegatee.
 
-It renews the covenant itself through leaf 5 with a `register` intent the
-emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
+It renews a `recycle`-mode covenant, the shape production quotes, through the
+Taxi's own keeper (`renewCovenant` in `packages/app/src/arkade/renewal.ts`): leaf
+5 with a `register` intent the emulator co-signs, so it needs no delegatee. Its
+`renewal-r2.json` artifact
 records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator
