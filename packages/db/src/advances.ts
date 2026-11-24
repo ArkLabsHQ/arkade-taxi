@@ -5,7 +5,7 @@ import { assertNativeAccess } from "./coordination.js";
 import { openCustodyRow } from "./custody.js";
 import { PolicyRepository } from "./policy.js";
 
-const COLUMNS = [
+export const COLUMNS = [
     "id",
     "state",
     "kind",
@@ -172,6 +172,13 @@ interface AdvanceRow {
     failure_code: string | null;
     failure_detail: string | null;
 }
+
+/** Fails to compile unless every row field is a bound column and every column a field. */
+type NoUnmatchedColumn<T extends never> = T;
+export type _RowMatchesColumns = NoUnmatchedColumn<
+    | Exclude<keyof AdvanceRow, (typeof COLUMNS)[number]>
+    | Exclude<(typeof COLUMNS)[number], keyof AdvanceRow>
+>;
 
 type RetryExpediteResult = "expedited" | "not_found" | "incompatible" | "live_lease";
 
