@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { base64, hex } from "@scure/base";
 import { SigHash } from "@scure/btc-signer";
@@ -12,6 +14,7 @@ import {
     Transaction,
     VtxoScript,
     VtxoTaprootTree,
+    arkade,
     asset,
     scriptFromTapLeafScript,
     setArkPsbtField,
@@ -23,7 +26,7 @@ import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade
 import { assertFillGraph, type FillGraphArgs } from "../src/fills.js";
 import { assertForeignInput } from "../src/arkade/fillForeignInputs.js";
 import type { ServiceError } from "../src/errors.js";
-import { runtimeSafety, serverUnroll } from "./fixtures.js";
+import { emulatorKey, runtimeSafety, serverUnroll } from "./fixtures.js";
 import { WANTED_ASSET } from "./jointFillFixtures.js";
 import { asIndexed } from "./graphFixtures.js";
 import { receiverPaidFill } from "./realFillFixtures.js";
@@ -818,8 +821,7 @@ const FULFILL = MultisigTapscript.encode({ pubkeys: [takerKey, serverXOnly, gate
 const CANCEL = MultisigTapscript.encode({ pubkeys: [userKey, serverXOnly] }).script;
 
 /** A deposit spent through `leaf`, posted with its checkpoint and Ark edge. */
-const depositSpend = (leaf: Uint8Array) => {
-    const source = new VtxoScript([leaf, CANCEL]);
+const depositSpend = (leaf: Uint8Array, source: VtxoScript = new VtxoScript([leaf, CANCEL])) => {
     const next = new VtxoScript([serverUnroll.script, leaf]);
     const coin = {
         ...fixture.args.observed.values().next().value!,
@@ -949,5 +951,34 @@ describe("a gated input whose spend leaf also names the caller", () => {
         expect(() => assertForeignInput(spend)).not.toThrow();
         const posted = { ...spend, arkTx: await GATE.sign(spend.arkTx, [0]) };
         expect(refusal(posted)).toMatch(/provider-only input arrives signed/);
+    });
+
+    it("admits the deposit ts-sdk c8dd9368's asset-swap-directed compiles, taker-signed", async () => {
+        const artifact = JSON.parse(
+            readFileSync(resolve(import.meta.dirname, "fixtures/asset-swap-directed.json"), "utf8"),
+        );
+        const deposit = new arkade.ArkadeProgramScript(
+            arkade.programFromArtifact(artifact),
+            {
+                receiver: userKey,
+                amount: 5n,
+                assetTxid: new Uint8Array(32).fill(0x11),
+                assetGroupIndex: 0n,
+                user: userKey,
+                taker: takerKey,
+                server: serverXOnly,
+            },
+            { serverKey: serverXOnly, emulatorKey },
+        );
+        const fulfill = deposit.functionByName("fulfill")!;
+        const tweaked = arkade.computeArkadeScriptPublicKey(emulatorKey, fulfill.arkadeScript!);
+        expect(MultisigTapscript.decode(fulfill.leafScript).params.pubkeys.map(hex.encode)).toEqual(
+            [takerKey, serverXOnly, tweaked].map(hex.encode),
+        );
+        const spend = depositSpend(fulfill.leafScript, deposit);
+        const arkTx = await TAKER.sign(spend.arkTx, [0]);
+        const checkpoint = await TAKER.sign(spend.checkpoint, [0]);
+        const posted = { ...spend, arkTx, checkpoint, emulatorCosigner: hex.encode(tweaked) };
+        expect(() => assertForeignInput(posted)).not.toThrow();
     });
 });
