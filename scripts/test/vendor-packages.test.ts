@@ -40,7 +40,7 @@ it.each(["sdk", "swap"])(
         );
         expect(packed.name).toBe(declared.package);
         expect(packed.version).toBe(declared.version);
-        expect(packed.version).toMatch(/-taxi-v1$/);
+        expect(packed.version).toMatch(/-taxi\.\d+$/);
         const installed = packageRoot(declared.package);
         expect(manifest(join(installed, "package.json"))).toEqual(packed);
         const entry = realpathSync(require.resolve(declared.package));

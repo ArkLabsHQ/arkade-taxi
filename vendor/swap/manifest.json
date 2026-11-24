@@ -1,39 +1,39 @@
 {
     "package": "@arkade-os/swap",
-    "version": "0.2.0-taxi-v1",
-    "file": "arkade-os-swap-0.2.0-taxi-v1-ba2996cd.tgz",
-    "sha256": "7dadccc3d89b117e17fd0a42cbcef6d57afa329cc41c0748143e94880996ecf7",
-    "integrity": "sha512-zqMO0Yj5KMUs5lDvmpe+QYTVqSwHjaNVfBSbR4c+JbbN7/G2/Ti2lFhKEdqmnM2EmlzQibMLmD+zSP5MrcQ4ew==",
-    "bytes": 682763,
+    "version": "0.1.16-taxi.1",
+    "file": "arkade-os-swap-0.1.16-taxi.1-7584c23c.tgz",
+    "sha256": "282c308dc3ac4529c52b05e488bf962e9edaa0678b3dafec7fd16ec7140808c8",
+    "integrity": "sha512-XZFFnRhToFsQI6begvqjKv0Q2bV+jFFwR67ILEF8FStqlng728bsY53/vPMqDY+GXW2miyp77h8+ZTa4VKqJWQ==",
+    "bytes": 743881,
     "license": "MIT",
     "source": {
         "repository": "https://github.com/arkade-os/ts-sdk.git",
-        "commit": "ba2996cdf2cb93c6906c2eeef952df00a6209cc7",
+        "commit": "7584c23ce08b974e0e5e8e7651f8b45399bee7d7",
         "directory": "packages/swap",
-        "tree": "08c68ffeacbbdc1a4bca2b5c1feb9f14d7202f34",
-        "directoryTree": "08c68ffeacbbdc1a4bca2b5c1feb9f14d7202f34",
-        "repositoryTree": "3336ea2dea3cbb0f8e0142945c3fa1bedb714d6d"
+        "tree": "0ff4b237641bdd4c9185fa76c41ffe58225e0895",
+        "directoryTree": "0ff4b237641bdd4c9185fa76c41ffe58225e0895",
+        "repositoryTree": "6d4a652c84e4297143c2190e821b54191cb9d3e6"
     },
     "toolchain": {
         "node": "v24.22.1",
         "pnpm": "10.25.0",
-        "typescript": "Version 5.9.2",
+        "typescript": "5.9.2",
         "platform": "win32-x64",
-        "command": "pnpm -C packages/swap pack --out C:/Git/outputs/arkade-taxi/bundles-v1-20261119/arkade-os-swap-0.2.0-taxi-v1-ba2996cd.tgz"
+        "command": "pnpm -C packages/swap pack --pack-destination C:/Git/outputs/ts-sdk/taxi-cohort-20261124/pack/final"
     },
     "compiler": {
-        "upstreamSourceCommit": "d9e55f619c0f097a29b4f4f6360c7aac709315ad",
+        "upstreamSourceCommit": "f02262d389498badaf775622d0e6fc1edac29c9d",
         "executedDuringRefresh": false,
         "compilerRevision": null,
         "binarySha256": null,
-        "provenance": "Committed canonical artifacts remain unchanged from upstream d9, fdf and b1; compiler binary identity is not encoded. No regeneration during packaging closure.",
+        "provenance": "Committed canonical artifacts unchanged from upstream f02262d3 (#1270); compiler binary identity is not encoded. No regeneration during packaging.",
         "artifacts": [
             {
-                "source": "src/contracts/asset-swap.ark",
-                "sourceSha256": "ca8f8d5fd37bc1ae652001528c0e4fa9aba391e6e5f7218dfa753b712482b399",
-                "artifact": "src/contracts/asset-swap.json",
-                "artifactSha256": "82719d002c65277fdf4e5c8b06e48c7c37e5463c02b1bcf4613d13532ca5ea76",
-                "fingerprint": "sha256:e2b80add6237f6c7e2c69a96ae46d55abe6de5f71c3718106f4d5b22ac9e6d0a",
+                "source": "src/contracts/asset-swap-directed.ark",
+                "sourceSha256": "ebe6884af784528e0945952791f61b903486b42d7ec0e9abef0dda6d8ff1ef07",
+                "artifact": "src/contracts/asset-swap-directed.json",
+                "artifactSha256": "77e1eb484ba5934c08271422e36b9961ca2454da13a33fb85cc9e28339933c37",
+                "fingerprint": "sha256:d830de32cd1d286a0a1fac698ff114a6c8ef5338a69f9f813717d1038ab2fb4a",
                 "compiler": {
                     "name": "arkadec",
                     "version": "0.1.0-rc.1",
@@ -44,11 +44,41 @@
                 "embeddedSourceMatches": true
             },
             {
-                "source": "src/contracts/sats-swap.ark",
-                "sourceSha256": "1b449cf6d009a508abab78f63e895c979fc895339260d68627df832809b76f5e",
-                "artifact": "src/contracts/sats-swap.json",
-                "artifactSha256": "1542c885ab5af379e459670687ccddeb3af33367641a33d8955b6f68f883ece9",
-                "fingerprint": "sha256:d7a60ab2178ede40a2e4867816689ea022641531cc662b562bebd7caa1ef96c4",
+                "source": "src/contracts/asset-swap-directed-nonce.ark",
+                "sourceSha256": "bfd93466743dc2c6b43f4e46386e34e4aeb9062858be18d9f706bb847cfa902a",
+                "artifact": "src/contracts/asset-swap-directed-nonce.json",
+                "artifactSha256": "62eb893513a0fb6f7d2c803de7a33920fbede5bc04a563211fb757489a19cc3c",
+                "fingerprint": "sha256:2f73e3cff1728678b084400eec2cac058c6f4ba5fe131859d31a2723a75c56a6",
+                "compiler": {
+                    "name": "arkadec",
+                    "version": "0.1.0-rc.1",
+                    "options": {
+                        "optimize": true
+                    }
+                },
+                "embeddedSourceMatches": true
+            },
+            {
+                "source": "src/contracts/sats-swap-directed.ark",
+                "sourceSha256": "4386110d3575b8bc63556ea1c3a6ea044a90539386216e1c2b2206a5f6d34f8e",
+                "artifact": "src/contracts/sats-swap-directed.json",
+                "artifactSha256": "9e75c023698accfdb6200ea1943492a2a40ddd9ca9452de514469518988dd05d",
+                "fingerprint": "sha256:6ca61bf7ed8d8f65af3141da4e95fcc896863650127dd20949a84e72258053f4",
+                "compiler": {
+                    "name": "arkadec",
+                    "version": "0.1.0-rc.1",
+                    "options": {
+                        "optimize": true
+                    }
+                },
+                "embeddedSourceMatches": true
+            },
+            {
+                "source": "src/contracts/sats-swap-directed-nonce.ark",
+                "sourceSha256": "d44fecbd4beb3b166d85a6a422665cb05380741f8adef4d0b5abf1244156dd41",
+                "artifact": "src/contracts/sats-swap-directed-nonce.json",
+                "artifactSha256": "5e90a9342249bc87d6ce7eb49d36073085c954977896397148b3f98aae77c1db",
+                "fingerprint": "sha256:833b559dc05031b170c4376f2a894f59986ae0f815bdc8a63e97de6feccec8cb",
                 "compiler": {
                     "name": "arkadec",
                     "version": "0.1.0-rc.1",
@@ -60,6 +90,6 @@
             }
         ]
     },
-    "sdkDependency": "0.5.9-taxi-v1",
-    "workerSdkRequirement": "0.5.9-taxi-v1"
+    "sdkDependency": "0.5.14-taxi.1",
+    "workerSdkRequirement": "0.5.14-taxi.1"
 }

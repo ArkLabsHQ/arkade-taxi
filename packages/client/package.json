@@ -24,7 +24,7 @@
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*",
         "@arkade-taxi/protocol": "workspace:*",
-        "@arkade-os/sdk": "0.5.9-taxi-v1",
+        "@arkade-os/sdk": "0.5.14-taxi.1",
         "@noble/hashes": "^2.0.1",
         "@scure/base": "^2.0.0",
         "@scure/btc-signer": "2.4.1"

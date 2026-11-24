@@ -146,10 +146,10 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-The service uses the unpublished `@arkade-os/sdk@0.5.9-taxi-v1` candidate in
+The service uses the unpublished `@arkade-os/sdk@0.5.14-taxi.1` candidate in
 `vendor/sdk`, whose source and archive hash are recorded in its manifest. The
 workspace override applies those same bytes to every SDK consumer. The test suite
-uses the compiler-defined `@arkade-os/swap@0.2.0-taxi-v1` candidate recorded in
+uses the compiler-defined `@arkade-os/swap@0.1.16-taxi.1` candidate recorded in
 `vendor/swap`. The committed lockfile pins dependency integrity;
 install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
 client, covenant and protocol packages, then installs those exact tarballs in a

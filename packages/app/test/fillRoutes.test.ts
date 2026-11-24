@@ -46,6 +46,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
                 return {
                     signerPubkey: `02${state.serverKey}`,
                     checkpointTapscript: state.checkpoint,
+                    network: "regtest",
                 };
             }
         },
