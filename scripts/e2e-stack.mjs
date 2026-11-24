@@ -98,6 +98,7 @@ const SERVICES = [
     "postgres",
     "nbxplorer",
     "fulcrum",
+    "mempool_mock_pools",
     "mempool_mariadb",
     "mempool_api",
     "mempool_web",
@@ -133,6 +134,7 @@ const PORT_NAMES = [
     "NBXPLORER_PORT",
     "FULCRUM_TCP_PORT",
     "FULCRUM_WS_PORT",
+    "MEMPOOL_MOCK_POOLS_PORT",
     "MEMPOOL_API_PORT",
     "MEMPOOL_WEB_PORT",
     "LND_P2P_PORT",
@@ -904,7 +906,7 @@ async function main(isolatedFile = undefined) {
         assertRenderedCompose(rendered, {
             project,
             services: SERVICES,
-            publishedPorts: 18,
+            publishedPorts: 19,
             network,
             daemonAssigned: true,
         });
