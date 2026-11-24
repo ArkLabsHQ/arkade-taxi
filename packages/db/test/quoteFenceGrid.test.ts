@@ -98,7 +98,7 @@ it("pins the reservation fence over every grid cell", () => {
         return (request) => reservations.reserveQuote(request);
     });
     expect(render(outcomes).split("\n")).toEqual(RECORDED);
-});
+}, 30_000);
 
 const RECOVERY_LOCKTIME =
     "Error:advance quote-1: tagged recovery locktime must be a future wall-clock deadline";

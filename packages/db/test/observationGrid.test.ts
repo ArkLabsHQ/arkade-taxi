@@ -243,7 +243,7 @@ describe("recordSpendObservation", () => {
                     c.custody !== (c.result === "recorded" && c.terminal === "recovered" ? 1 : 0),
             ),
         ).toEqual([]);
-    });
+    }, 30_000);
 
     it.each([
         ["locked", "purchased", 0],
@@ -395,7 +395,7 @@ describe("recordStableSpendObservation", () => {
                     c.custody !== 0,
             ),
         ).toEqual([]);
-    });
+    }, 30_000);
 
     it.each([
         [

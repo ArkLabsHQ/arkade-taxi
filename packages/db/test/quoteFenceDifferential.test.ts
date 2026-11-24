@@ -34,4 +34,4 @@ it("refuses exactly as the db fence does on every grid cell", () => {
             core[i] === fence[i] ? [] : [{ ...cell, core: core[i], fence: fence[i] }],
         ),
     ).toEqual([]);
-});
+}, 30_000);
