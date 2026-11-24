@@ -520,6 +520,12 @@ export class AdvanceRepository {
     readonly #exposureTotals: Statement<[], { total: bigint; count: bigint }>;
     readonly #recoverySubmission: Statement<[string, number, string]>;
     readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
+    #policyRepository: PolicyRepository | undefined;
+
+    /** Built on first use: its constructor seeds the policy row, which must wait until then. */
+    get #policy(): PolicyRepository {
+        return (this.#policyRepository ??= new PolicyRepository(this.#db));
+    }
 
     constructor(db: Database, options: AdvanceRepositoryOptions = {}) {
         assertNativeAccess(db);
@@ -918,7 +924,7 @@ export class AdvanceRepository {
                              WHERE id = ? AND state = 'locked' AND recovery_phase IS NULL`,
                         )
                         .run(at, code, detail, at, id).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "recovery");
+                if (changed) this.#policy.update({ paused: true }, "recovery");
                 return changed;
             })
             .immediate();
@@ -1029,7 +1035,7 @@ export class AdvanceRepository {
                              AND recovery_lease_owner = ? AND recovery_lease_token = ?`,
                         )
                         .run(at, code, detail, at, id, owner, token).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "recovery");
+                if (changed) this.#policy.update({ paused: true }, "recovery");
                 return changed;
             })
             .immediate();
@@ -1083,7 +1089,7 @@ export class AdvanceRepository {
                              AND submission_lease_owner = ? AND submission_lease_token = ?`,
                         )
                         .run(at, code, detail, at, id, owner, token).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "submission");
+                if (changed) this.#policy.update({ paused: true }, "submission");
                 return changed;
             })
             .immediate();
@@ -1241,7 +1247,7 @@ export class AdvanceRepository {
                         id,
                         current.state,
                     );
-                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                this.#policy.update({ paused: true }, "spend-watcher");
             })
             .immediate();
     }
@@ -1300,7 +1306,7 @@ export class AdvanceRepository {
                  WHERE id = ?`,
             )
             .run(detail, at, id);
-        new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+        this.#policy.update({ paused: true }, "spend-watcher");
     }
 
     recordStableSpendObservation(
@@ -1329,7 +1335,7 @@ export class AdvanceRepository {
                         )
                         .run(verdict.reason, at, id, terminalState, spentTxid).changes;
                     if (changed !== 1) return "ignored" as const;
-                    new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                    this.#policy.update({ paused: true }, "spend-watcher");
                     return "disagreement" as const;
                 }
                 if (verdict.kind === "ignore") return "ignored" as const;

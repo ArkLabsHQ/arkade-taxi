@@ -437,10 +437,20 @@ const decodeRow = (row: Row): ReceiveQuote => {
 
 export class ReceiveQuoteRepository {
     readonly #policy: PolicyRepository;
+    #fillRepository: FillRepository | undefined;
+    #advanceRepository: AdvanceRepository | undefined;
 
     constructor(private readonly db: Database) {
         assertNativeAccess(db);
         this.#policy = new PolicyRepository(db);
+    }
+
+    get #fills(): FillRepository {
+        return (this.#fillRepository ??= new FillRepository(this.db));
+    }
+
+    get #advances(): AdvanceRepository {
+        return (this.#advanceRepository ??= new AdvanceRepository(this.db));
     }
 
     insert(request: InsertReceiveQuoteRequest): void {
@@ -636,9 +646,9 @@ export class ReceiveQuoteRepository {
                 this.db
                     .prepare("DELETE FROM receive_quote_reservations WHERE quote_id = ?")
                     .run(quote.id);
-                new FillRepository(this.db).insert(fill);
+                this.#fills.insert(fill);
                 this.db.prepare("DELETE FROM fill_reservations WHERE fill_id = ?").run(fill.id);
-                new AdvanceRepository(this.db).insert(advance);
+                this.#advances.insert(advance);
                 const reserve = this.db.prepare(
                     "INSERT INTO operator_input_reservations (outpoint_txid, outpoint_vout, advance_id, batch_expiry_kind, batch_expiry_value, created_at) VALUES (?, ?, ?, ?, ?, ?)",
                 );
