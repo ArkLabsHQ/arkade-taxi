@@ -38,3 +38,4 @@ export {
     type FareSpec,
     type ResolvedClaimMode,
 } from "./fares.js";
+export { renewable } from "./renewal.js";

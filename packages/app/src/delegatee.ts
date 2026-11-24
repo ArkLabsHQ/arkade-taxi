@@ -1,6 +1,8 @@
 import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { DUST_COVENANT_ARTIFACT, type DustCovenantScript } from "@arkade-taxi/covenant";
+import { DUST_COVENANT_ARTIFACT, DustCovenantScript } from "@arkade-taxi/covenant";
+import { covenantParamsOf, renewable, type Advance } from "@arkade-taxi/core";
+import type { RuntimeConfig } from "./config.js";
 
 export interface DelegateeRegistration {
     templateId: string;
@@ -185,4 +187,42 @@ export async function registerRenewal(
         throw new DelegateeError(
             `delegatee derives ${address} for template ${registration.templateId}, the covenant is ${args.covenantAddress}`,
         );
+}
+
+/** The sweeper's renewal hook with an Executor: one registration per covenant per process.
+ * A restart registers again, which the Executor answers with the active delegation. */
+export function delegationRenewal(deps: {
+    client: Pick<DelegateeClient, "delegate">;
+    registration: DelegateeRegistration;
+    config: Pick<
+        RuntimeConfig,
+        | "serverPubkey"
+        | "emulatorPubkey"
+        | "vtxoMinAmount"
+        | "renewalBeforeExpirySeconds"
+        | "recoveryBroadcastSeconds"
+    >;
+    now(): number;
+}): (advance: Advance) => Promise<void> | undefined {
+    const guard = deps.config.recoveryBroadcastSeconds;
+    const registered = new Set<string>();
+    return (advance) => {
+        if (registered.has(advance.id) || !renewable(advance, BigInt(deps.now()), guard))
+            return undefined;
+        return (async () => {
+            const covenant = new DustCovenantScript({
+                serverKey: deps.config.serverPubkey,
+                emulatorKey: deps.config.emulatorPubkey,
+                vtxoMinAmount: deps.config.vtxoMinAmount,
+                params: covenantParamsOf(advance),
+            });
+            await registerRenewal(deps.client, deps.registration, {
+                covenant,
+                covenantAddress: advance.covenantAddress,
+                renewalBeforeExpirySeconds: deps.config.renewalBeforeExpirySeconds,
+                expiresAt: Number(advance.recoveryLocktime!.value - guard),
+            });
+            registered.add(advance.id);
+        })();
+    };
 }

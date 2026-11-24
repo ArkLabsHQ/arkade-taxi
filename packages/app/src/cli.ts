@@ -25,7 +25,7 @@ import { advanceKind, computeReceivables } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit.js";
 import { createLockupReconciler } from "./reconciler.js";
 import { custodySolvencyView } from "./custody.js";
-import { DelegateeClient } from "./delegatee.js";
+import { DelegateeClient, delegationRenewal } from "./delegatee.js";
 import { createFillReconciler } from "./fillReconciler.js";
 import { createSpendWatcher } from "./watcher.js";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery.js";
@@ -145,6 +145,15 @@ async function runServe(): Promise<void> {
         onScanMetrics: (metrics) => log.debug(metrics, "watcher indexer round trips"),
     });
 
+    // Once, before the first sweep registers a covenant; idempotent on its derived id.
+    const delegatee = config.delegateeUrl
+        ? await (async () => {
+              const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
+              const registration = await client.register();
+              log.info({ ...registration }, "delegatee renewal template registered");
+              return { client, registration };
+          })()
+        : undefined;
     const intervalSeconds = Math.max(1, Math.ceil(config.reconcileIntervalMs / 1000));
     const recovery = createRecoveryRunner({
         advances,
@@ -178,6 +187,11 @@ async function runServe(): Promise<void> {
                 },
                 "v2 covenant renewal is overdue",
             ),
+        ...(delegatee
+            ? { renewal: delegationRenewal({ ...delegatee, config, now: seconds }) }
+            : {}),
+        onRenewalError: (id, error) =>
+            log.error({ advanceId: id, error: error.message }, "covenant renewal failed"),
     });
     reconciler = createLockupReconciler({
         advances,
@@ -250,15 +264,6 @@ async function runServe(): Promise<void> {
         },
         getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
     };
-    // Once, before any quote; both calls are idempotent on their derived id.
-    const delegatee = config.delegateeUrl
-        ? await (async () => {
-              const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
-              const registration = await client.register();
-              log.info({ ...registration }, "delegatee renewal template registered");
-              return { client, registration };
-          })()
-        : undefined;
     const providerLimits = async () => {
         const info = await runtime.providers.arkProvider.getInfo();
         return { vtxoMaxAmount: info.vtxoMaxAmount };

@@ -2,14 +2,28 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
+import { covenantParamsOf } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import {
     DelegateeClient,
+    DelegateeError,
+    delegationRenewal,
     registerRenewal,
     renewalTemplate,
     renewalVariables,
 } from "../src/delegatee.js";
-import { config, emulatorKey, operatorKey, receiverKey, senderKey, serverKey } from "./fixtures.js";
+import {
+    advance,
+    config,
+    emulatorKey,
+    NOW,
+    operatorKey,
+    receiverKey,
+    senderKey,
+    serverKey,
+    V2_DEADLINE,
+    VTXO_MIN,
+} from "./fixtures.js";
 
 const covenant = new DustCovenantScript({
     params: {
@@ -198,6 +212,65 @@ describe("delegatee registration", () => {
         await expect(client.delegate(RENEW_TEMPLATE_ID, {}, 1)).rejects.toThrow(
             /answered 400: .*24h0m0s ahead/,
         );
+    });
+});
+
+describe("per-covenant delegation", () => {
+    const registrar = (delegate: (...args: unknown[]) => Promise<string>) =>
+        delegationRenewal({
+            client: { delegate },
+            registration: { templateId: RENEW_TEMPLATE_ID },
+            config: config(),
+            now: () => NOW,
+        });
+
+    it("registers a covenant once per process, expiring a guard before its reclaim", async () => {
+        const delegate = vi.fn(async () => advance().covenantAddress);
+        const renew = registrar(delegate);
+        await renew(advance());
+        expect(renew(advance())).toBeUndefined();
+        const tree = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: VTXO_MIN,
+            params: covenantParamsOf(advance()),
+        });
+        expect(delegate).toHaveBeenCalledExactlyOnceWith(
+            RENEW_TEMPLATE_ID,
+            renewalVariables(tree, config().renewalBeforeExpirySeconds),
+            Number(V2_DEADLINE - config().recoveryBroadcastSeconds),
+        );
+
+        // A restart registers again; the Executor answers with the delegation unchanged.
+        await expect(registrar(delegate)(advance())).resolves.toBeUndefined();
+        expect(delegate).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects a failed registration and tries again on the next offer", async () => {
+        const down = new DelegateeError("delegatee /v1/delegation is unreachable");
+        const delegate = vi
+            .fn<(...args: unknown[]) => Promise<string>>()
+            .mockRejectedValueOnce(down)
+            .mockResolvedValueOnce("ark1qstranger")
+            .mockResolvedValueOnce(advance().covenantAddress);
+        const renew = registrar(delegate);
+
+        await expect(renew(advance())).rejects.toBe(down);
+        await expect(renew(advance())).rejects.toThrow(/delegatee derives ark1qstranger/);
+        await expect(renew(advance())).resolves.toBeUndefined();
+        expect(renew(advance())).toBeUndefined();
+        expect(delegate).toHaveBeenCalledTimes(3);
+    });
+
+    it("leaves a covenant inside the recovery guard, or not locked, unregistered", () => {
+        const delegate = vi.fn(async () => "unused");
+        const renew = registrar(delegate);
+        const guard = BigInt(NOW) + config().recoveryBroadcastSeconds;
+        expect(
+            renew(advance({ recoveryLocktime: { kind: "time", value: guard } })),
+        ).toBeUndefined();
+        expect(renew(advance({ state: "recovering" }))).toBeUndefined();
+        expect(delegate).not.toHaveBeenCalled();
     });
 });
 
