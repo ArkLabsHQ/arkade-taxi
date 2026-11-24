@@ -40,12 +40,18 @@ export function tapLeavesOfInput(tx: Transaction, inputIndex: number): TapLeafRe
 /** Reject any input carrying a signature, finalization, or non-DEFAULT declared sighash. */
 /** One input carries nothing a signer has added yet. */
 export function assertUnsignedInput(tx: Transaction, index: number, context: string): void {
+    assertNoKeyOrFinalSigs(tx, index, context);
+    const input = tx.getInput(index);
+    if (input.tapScriptSig && input.tapScriptSig.length > 0) {
+        throw new Error(`${context}: carries script-path signatures`);
+    }
+}
+
+/** No key-path, partial or final signature; script-path entries are the caller's to judge. */
+export function assertNoKeyOrFinalSigs(tx: Transaction, index: number, context: string): void {
     const input = tx.getInput(index);
     if (input.tapKeySig && input.tapKeySig.length > 0) {
         throw new Error(`${context}: carries a key-path signature`);
-    }
-    if (input.tapScriptSig && input.tapScriptSig.length > 0) {
-        throw new Error(`${context}: carries script-path signatures`);
     }
     if (input.partialSig && input.partialSig.length > 0) {
         throw new Error(`${context}: carries partial signatures`);
