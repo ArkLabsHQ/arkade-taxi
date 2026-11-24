@@ -65,27 +65,32 @@ import {
     stubDelegateProvider,
 } from "../e2e-wallets.mjs";
 
-describe("ephemeral regtest Esplora", () => {
+describe.each(['"', "'"])("ephemeral regtest Esplora quoted with %s", (q) => {
     const source = `services:
   another:
     environment:
-      DATABASE_ENABLED: "true"
+      DATABASE_ENABLED: ${q}true${q}
+  mempool_mock_pools:
+    ports:
+      - '\${MEMPOOL_MOCK_POOLS_PORT:-8123}:8123'
   mempool_api:
+    depends_on:
+      - mempool_mock_pools
     environment:
-      DATABASE_ENABLED: "true"
+      DATABASE_ENABLED: ${q}true${q}
       MEMPOOL_BACKEND: electrum
       ELECTRUM_HOST: fulcrum
       CORE_RPC_HOST: bitcoin
   mempool_web:
     environment:
-      DATABASE_ENABLED: "true"
+      DATABASE_ENABLED: ${q}true${q}
 `;
+    const api = (setting: string) =>
+        `  mempool_api:\n    depends_on:\n      - mempool_mock_pools\n    environment:\n      ${setting}`;
+    const enabled = api(`DATABASE_ENABLED: ${q}true${q}`);
 
     it("preserves real RPC and Electrum while disabling only mining analytics", () => {
-        const expected = source.replace(
-            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "true"',
-            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "false"',
-        );
+        const expected = source.replace(enabled, api(`DATABASE_ENABLED: ${q}false${q}`));
         expect(withoutMempoolMiningAnalytics(source)).toBe(expected);
         expect(withoutMempoolMiningAnalytics(expected)).toBe(expected);
     });
@@ -94,10 +99,9 @@ describe("ephemeral regtest Esplora", () => {
         source.replace("  mempool_api:", "  renamed_api:"),
         source.replace("  mempool_web:", "  renamed_web:"),
         source.replace("  mempool_api:", "  mempool_api:\n  mempool_api:"),
-        source.replace(
-            '  mempool_api:\n    environment:\n      DATABASE_ENABLED: "true"',
-            "  mempool_api:\n    environment:\n      DATABASE_ENABLED: true",
-        ),
+        source.replace(enabled, api("DATABASE_ENABLED: true")),
+        source.replace(enabled, api(`DATABASE_ENABLED: ${q}true${q === '"' ? "'" : '"'}`)),
+        source.replace(enabled, `${enabled}\n      DATABASE_ENABLED: ${q}false${q}`),
     ])("refuses a changed compose contract", (changed) => {
         expect(() => withoutMempoolMiningAnalytics(changed)).toThrow(/changed/);
     });

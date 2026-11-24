@@ -504,11 +504,12 @@ export function withoutMempoolMiningAnalytics(compose) {
     const stop = compose.indexOf(end);
     if (stop < start) throw new Error("arkade-regtest mempool service order changed");
     const service = compose.slice(start, stop);
-    if ([...service.matchAll(/DATABASE_ENABLED: "(true|false)"/g)].length !== 1)
+    const setting = /DATABASE_ENABLED: (["'])(?:true|false)\1/g;
+    if ([...service.matchAll(setting)].length !== 1)
         throw new Error("arkade-regtest mempool API database setting changed");
     return (
         compose.slice(0, start) +
-        service.replace('DATABASE_ENABLED: "true"', 'DATABASE_ENABLED: "false"') +
+        service.replace(setting, "DATABASE_ENABLED: $1false$1") +
         compose.slice(stop)
     );
 }

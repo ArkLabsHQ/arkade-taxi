@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const regtest = resolve(process.env.ARKADE_REGTEST_DIR ?? join(root, "arkade-regtest"));
-const revision = "78d0b7a9677077ca64bf09b4e825520ba462446b";
+const revision = "185da8e2863fb461d12b898a0a692b0623476254";
 const client = join(root, "packages/client");
 const env = join(client, ".env.regtest.example");
 const command = process.argv[2];
