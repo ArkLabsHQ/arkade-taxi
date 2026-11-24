@@ -21,9 +21,9 @@ const expiringIn = (seconds: bigint) => ({
     expiry: { kind: "time" as const, value: BigInt(NOW) + seconds },
 });
 
-const keeper = (coin: object, intentFee: Record<string, string> = {}) => {
+const keeper = (coin: object, intentFee: Record<string, string> = {}, vtxoTreeExpiry?: bigint) => {
     const providers = {
-        arkProvider: { getInfo: vi.fn(async () => ({ fees: { intentFee } })) },
+        arkProvider: { getInfo: vi.fn(async () => ({ fees: { intentFee }, vtxoTreeExpiry })) },
         emulator: { submitIntent: vi.fn() },
         indexer: { getVtxos: vi.fn(async () => ({ vtxos: [coin] })) },
         network: {},
@@ -45,6 +45,19 @@ describe("covenant keeper", () => {
         expect(renew(covenantAdvance, expiringIn(window + 1n))).toBeUndefined();
         expect(renew(covenantAdvance, undefined)).toBeUndefined();
         expect(providers.indexer.getVtxos).not.toHaveBeenCalled();
+    });
+
+    it("waits for half the VTXO lifetime when the window is longer", async () => {
+        const lifetime = 172_800n;
+        const coin = fundingCoin({ ...outpoint, script, value: 330 });
+        const { providers, renew } = keeper(coin, {}, lifetime);
+        await expect(renew(covenantAdvance, expiringIn(lifetime / 2n + 1n))).resolves.toBe(
+            undefined,
+        );
+        expect(providers.arkProvider.getInfo).toHaveBeenCalledOnce();
+        // Past the bound it renews, here to the prevout lookup this fixture leaves unanswered.
+        await expect(renew(covenantAdvance, expiringIn(lifetime / 2n))).rejects.toThrow();
+        expect(providers.arkProvider.getInfo).toHaveBeenCalledTimes(3);
     });
 
     it("leaves a coin a batch already consumed to the watcher", async () => {
