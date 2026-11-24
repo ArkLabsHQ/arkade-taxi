@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { DustCovenantScript, type DustCovenantParams } from "@arkade-taxi/covenant";
 import { bytesToHex } from "@arkade-taxi/protocol";
@@ -35,6 +37,27 @@ const covenantAddress = (params: DustCovenantParams): string =>
 
 const json = (body: unknown) =>
     ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+
+const fixture = (name: string): Buffer =>
+    readFileSync(new URL(`./fixtures/executor-v0.0.5/${name}`, import.meta.url));
+// Computed by executor v0.0.5 `template.Decode`, which also wrote the canonical fixture.
+const RENEW_TEMPLATE_ID = "6eb1a0333929e447ad37b927df3c8ea5073ec82da1186e6b45ef9dcf6e070673";
+
+describe("executor v0.0.5 fixtures", () => {
+    it("holds the service spec exactly as tagged", () => {
+        const spec = fixture("service.openapi.json");
+        const blob = createHash("sha1").update(`blob ${spec.length}\0`).update(spec);
+        expect(blob.digest("hex")).toBe("d7e447bd929a951ffc9c2787f1d71c5fcad5f32d");
+    });
+
+    it("records the template id as the hash of the document's canonical form", () => {
+        const canonical = fixture("renew.template.canonical.json");
+        expect(createHash("sha256").update(canonical).digest("hex")).toBe(RENEW_TEMPLATE_ID);
+        expect(JSON.parse(canonical.toString())).toEqual(
+            JSON.parse(fixture("renew.template.json").toString()),
+        );
+    });
+});
 
 describe("delegatee registration", () => {
     it("fails the lockup when the returned address differs from the Taxi's derivation", async () => {
