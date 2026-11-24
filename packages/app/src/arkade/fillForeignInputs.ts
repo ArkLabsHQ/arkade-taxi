@@ -96,13 +96,15 @@ export function assertForeignInput(args: {
             hex.encode(key),
         );
         const server = hex.encode(args.serverKey);
-        const providerOnly =
-            args.emulatorCosigner !== undefined &&
-            keys.length === 2 &&
-            new Set(keys).size === 2 &&
-            keys.includes(server) &&
-            keys.includes(args.emulatorCosigner);
-        const required = keys.filter((key) => key !== server);
+        const gate = args.emulatorCosigner;
+        if (
+            gate !== undefined &&
+            (new Set(keys).size !== keys.length || !keys.includes(server) || !keys.includes(gate))
+        )
+            throw new Error("gated leaf lacks distinct server and emulator keys");
+        // A gated input's server and emulator sign after admission; only the caller signs first.
+        const required = keys.filter((key) => key !== server && key !== gate);
+        const providerOnly = gate !== undefined && required.length === 0;
         if (!providerOnly && required.length === 0) throw new Error("no caller signer in leaf");
         for (const [tx, vin] of [
             [arkTx, index],
@@ -119,11 +121,11 @@ export function assertForeignInput(args: {
                 throw new Error("unsupported signature or sighash");
             if (providerOnly && input.tapScriptSig?.length)
                 throw new Error("provider-only input arrives signed");
+            if (providerOnly) continue;
             const hash = hex.decode(tapLeavesOfInput(tx, vin)[0]!.leafHashHex);
-            if (providerOnly && !input.tapScriptSig?.length) continue;
             assertDefaultTapScriptSigs(tx, vin, {
-                allowedPubKeys: keys,
-                requiredPubKeys: providerOnly ? [] : required,
+                allowedPubKeys: gate === undefined ? keys : required,
+                requiredPubKeys: required,
                 leafHash: hash,
                 context: `foreign input ${index}`,
             });
