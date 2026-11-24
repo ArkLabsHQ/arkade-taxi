@@ -17,11 +17,11 @@ A confirmed send still returns its txid if reservation release fails; `onHistory
 
 Wallet adapters must supply all reservations, a transaction lock shared by sends and claims, active authorization and wallet reload. `FailedDirectTaxi.forget()` overrides the local journal only. The operator may still finish that submission, so retrying can pay twice.
 
-The shared-regtest test uses two real SDK wallets to send exactly 50 sats, recycle the verified delivery into one spendable receiver coin, and prove the Taxi float is repaid. It runs the Taxi profile of `ArkLabsHQ/arkade-regtest` at `78d0b7a9677077ca64bf09b4e825520ba462446b`.
+The shared-regtest test uses two real SDK wallets to send exactly 50 sats, recycle the verified delivery into one spendable receiver coin, and prove the Taxi float is repaid. It runs the Taxi profile of `ArkLabsHQ/arkade-regtest` at `185da8e2863fb461d12b898a0a692b0623476254`.
 
 ```sh
 git clone https://github.com/ArkLabsHQ/arkade-regtest.git arkade-regtest
-git -C arkade-regtest checkout 78d0b7a9677077ca64bf09b4e825520ba462446b
+git -C arkade-regtest checkout 185da8e2863fb461d12b898a0a692b0623476254
 pnpm -r build
 docker build -t arkade-taxi:regtest .
 pnpm regtest:up:client
