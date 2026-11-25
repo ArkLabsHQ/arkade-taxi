@@ -788,3 +788,64 @@ describe("liveness", () => {
         expect(logged.message).not.toContain("never-log-this");
     });
 });
+
+describe("renewal hook", () => {
+    it("offers each locked covenant once while its renewal is in flight", async () => {
+        locked("slow", DEADLINE + 1_000_000n);
+        locked("idle", DEADLINE + 1_000_000n);
+        let release = () => {};
+        const pending = new Promise<void>((resolve) => (release = resolve));
+        const seen = { swept: false, expiry: { kind: "time" as const, value: DEADLINE + 900n } };
+        const renewal = vi.fn<NonNullable<SweeperDeps["renewal"]>>((a) =>
+            a.id === "slow" ? pending : undefined,
+        );
+        const sweeper = createSweeper({ ...deps(), renewal, observed: () => seen });
+
+        await sweeper.tick(HEIGHT, DEADLINE);
+        await sweeper.tick(HEIGHT, DEADLINE);
+        expect(renewal.mock.calls.map(([a]) => a.id)).toEqual(["slow", "idle", "idle"]);
+        expect(renewal.mock.calls[0]![1]).toBe(seen);
+
+        release();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await sweeper.tick(HEIGHT, DEADLINE);
+        expect(renewal.mock.calls.map(([a]) => a.id)).toEqual([
+            "slow",
+            "idle",
+            "idle",
+            "slow",
+            "idle",
+        ]);
+    });
+
+    it("reports each distinct renewal failure once and never fails the tick", async () => {
+        locked("v2", DEADLINE + 1_000_000n);
+        const failures = ["arkd down", "arkd down", "emulator refused"];
+        const renewal = vi.fn(async () => {
+            throw new Error(failures.shift() ?? "arkd down");
+        });
+        const onRenewalError = vi.fn();
+        const sweeper = createSweeper({ ...deps(), renewal, onRenewalError });
+
+        for (let tick = 0; tick < 3; tick++) {
+            const result = await sweeper.tick(HEIGHT, DEADLINE);
+            expect(result).toMatchObject({ failed: 0, results: [] });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(renewal).toHaveBeenCalledTimes(3);
+        expect(onRenewalError.mock.calls.map(([id, error]) => [id, error.message])).toEqual([
+            ["v2", "arkd down"],
+            ["v2", "emulator refused"],
+        ]);
+        expect(sweeper.status()).toMatchObject({ lastError: null, failedTotal: 0 });
+    });
+
+    it("leaves a covenant whose recovery is in flight to the recovery", async () => {
+        locked("due", DEADLINE - 200_000n);
+        const renewal = vi.fn(() => undefined);
+        const result = await createSweeper({ ...deps(), renewal }).tick(HEIGHT, DEADLINE);
+        expect(recovery.seen).toEqual(["due"]);
+        expect(renewal).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ failed: 0, results: [{ id: "due", ok: true }] });
+    });
+});

@@ -33,6 +33,10 @@ export interface SweeperDeps {
     /** A renewal fell behind. Fired on change, not per tick: an alarm that
      * repeats at tick rate is one an operator learns to skip. */
     onRenewalWarning?: (warning: { delegation: string; deadline: RecoveryDeadline }) => void;
+    /** Offered every locked covenant not in flight: an Executor delegation or the keeper. */
+    renewal?: (advance: Advance, seen: ObservedCovenant | undefined) => Promise<void> | undefined;
+    /** A renewal attempt failed. Fired on change, like the warning above. */
+    onRenewalError?: (advanceId: string, error: Error) => void;
 }
 
 export interface SweepResult {
@@ -122,6 +126,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const inFlight = new Map<string, Promise<void>>();
     const completed: SweepResult[] = [];
     const warned = new Map<string, string>();
+    const renewalErrors = new Map<string, string>();
 
     const threshold = (kind: "height" | "time", critical: boolean): bigint => {
         if (!deps.config) return 0n;
@@ -376,6 +381,25 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                         .finally(() => inFlight.delete(advance.id));
                     inFlight.set(advance.id, work);
                     launched.push(work);
+                }
+                for (const id of renewalErrors.keys()) if (!byId.has(id)) renewalErrors.delete(id);
+                for (const advance of locked) {
+                    if (inFlight.has(advance.id)) continue;
+                    const work = deps.renewal?.(advance, deps.observed?.(advance));
+                    if (!work) continue;
+                    const settled = work.then(
+                        () => void renewalErrors.delete(advance.id),
+                        (error: unknown) => {
+                            const message = sanitizeOperationalError(error, "renewal failed");
+                            if (renewalErrors.get(advance.id) !== message)
+                                deps.onRenewalError?.(advance.id, new Error(message));
+                            renewalErrors.set(advance.id, message);
+                        },
+                    );
+                    inFlight.set(
+                        advance.id,
+                        settled.finally(() => inFlight.delete(advance.id)),
+                    );
                 }
             }
             await Promise.race([

@@ -15,5 +15,8 @@ packages/covenant/test/vectors.json
 packages/covenant/contracts/dust_covenant.json
 packages/covenant/src/dust-covenant-artifact.ts
 
+# Executor bytes: the spec is copied verbatim and the template id hashes these exact bytes.
+packages/app/test/fixtures/executor-v0.0.5
+
 # Byte-identical to ts-sdk's packages/swap/src/contracts copy at c8dd9368.
 packages/app/test/fixtures/asset-swap-directed.json

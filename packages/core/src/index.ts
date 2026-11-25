@@ -49,3 +49,4 @@ export {
     type FareSpec,
     type ResolvedClaimMode,
 } from "./fares.js";
+export { renewable, renewalDue } from "./renewal.js";

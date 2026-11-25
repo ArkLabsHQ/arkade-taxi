@@ -1,13 +1,10 @@
 import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import {
-    DUST_COVENANT_ARTIFACT,
-    dustCovenantArgs,
-    type DustCovenantParams,
-} from "@arkade-taxi/covenant";
+import { DUST_COVENANT_ARTIFACT, DustCovenantScript } from "@arkade-taxi/covenant";
+import { covenantParamsOf, renewable, type Advance } from "@arkade-taxi/core";
+import type { RuntimeConfig } from "./config.js";
 
 export interface DelegateeRegistration {
-    artifactId: string;
     templateId: string;
 }
 
@@ -16,82 +13,75 @@ export interface DelegateeOptions {
     fetch?: typeof globalThis.fetch;
 }
 
-/** The renewal history an operator reads when the sweeper's alarm fires. */
+/** What an operator reads when the sweeper's alarm fires. Times are unix seconds. */
 export interface DelegationView {
     /** `active`, `cancelled`, `expired` or `done` upstream. */
     status: string;
-    attempts: number;
-    succeeded: number;
-    lastAttemptAt?: number;
-    lastError?: string;
+    expiresAt?: number;
+    coins: {
+        outpoint: string;
+        amount: number;
+        status: string;
+        expiresAt?: number;
+        due?: number;
+        spentBy?: string;
+    }[];
 }
 
 export class DelegateeError extends Error {}
 
-const TEMPLATE_FORMAT = "delegateed-template/v1";
-
-const snake = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-
-/** Derived from the artifact, so a new constructor field cannot be forgotten
- * here. `renewal_window` drives the schedule alone and names no field. */
-export function renewalTemplate(artifactId: string): string {
-    const variables: Record<string, string> = { renewal_window: "int" };
-    const args: Record<string, string> = {};
-    for (const { name, type } of DUST_COVENANT_ARTIFACT.constructorInputs) {
-        variables[snake(name)] = type;
-        args[name] = `<${snake(name)}>`;
-    }
+/** One template for every covenant. The full artifact cannot be delegated: a claim mode
+ * swaps one claim leaf out of the tree, and the Executor refuses a declared leaf the
+ * given tree lacks. The renew leaf names no constructor field, so it alone is declared. */
+export function renewalTemplate(): string {
+    const { contractName, functions } = DUST_COVENANT_ARTIFACT;
     return JSON.stringify({
-        format: TEMPLATE_FORMAT,
-        type: "intent",
-        variables,
+        format: "template/v1",
+        type: "proof",
+        variables: { renewal_window: "int", tree: "bytes" },
         inputs: [
             {
                 name: "covenant",
-                schedule: { before_expiry_seconds: "<renewal_window>" },
-                contract: { definition: { artifact: artifactId }, arguments: args },
+                contract: {
+                    definition: {
+                        contractName,
+                        constructorInputs: [],
+                        structs: [],
+                        functions: functions.filter((f) => f.name === "renew"),
+                    },
+                    taptree: "<tree>",
+                },
                 spend: { function: "renew", leaf: "renew" },
             },
         ],
-        // Flags 7 preserves value, script and assets: every route is a remainder.
+        // No `fees`: the tunnel keeps the value whole, so only a zero intent fee builds.
         outputs: [
             {
                 name: "renewed",
-                index: 0,
                 value: { from: "covenant" },
                 locking: { from: "covenant" },
                 assets: [{ from: "covenant" }],
             },
         ],
-        packets: { output_index: 1 },
+        packets: { unmatched: "drop" },
+        delegation: { schedule: { covenant: { before_expiry_seconds: "<renewal_window>" } } },
     });
 }
 
-/** Lower-case hex of raw bytes (`service.go:702-709`): an int as a minimal
- * sign-magnitude number, a pubkey as 33 compressed bytes, which the delegatee
- * x-onlys again before it reaches a leaf (`contract.go:101-107`). */
-export function delegationVariables(
-    params: DustCovenantParams,
-    serverKey: Uint8Array,
+/** Lower-case hex, an int as a minimal script number. */
+export const renewalVariables = (
+    covenant: DustCovenantScript,
     renewalBeforeExpirySeconds: bigint,
-): Record<string, string> {
-    const args = dustCovenantArgs(params, serverKey);
-    const out: Record<string, string> = {
-        renewal_window: bytesToHex(arkade.BigNum.encode(renewalBeforeExpirySeconds)),
-    };
-    for (const { name, type } of DUST_COVENANT_ARTIFACT.constructorInputs) {
-        const value = (args as Record<string, unknown>)[name];
-        if (type === "int") {
-            if (typeof value !== "bigint") throw new DelegateeError(`${name} is not an integer`);
-            out[snake(name)] = bytesToHex(arkade.BigNum.encode(value));
-            continue;
-        }
-        if (!(value instanceof Uint8Array)) throw new DelegateeError(`${name} is not bytes`);
-        out[snake(name)] =
-            type === "pubkey" ? bytesToHex(Uint8Array.of(2, ...value)) : bytesToHex(value);
-    }
-    return out;
-}
+): Record<string, string> => ({
+    renewal_window: bytesToHex(arkade.BigNum.encode(renewalBeforeExpirySeconds)),
+    tree: bytesToHex(covenant.encode()),
+});
+
+/** protojson writes an int64 as a decimal string; 0 means "never" in this API. */
+const int64 = (value: unknown): number | undefined => {
+    const n = typeof value === "string" && /^-?\d+$/.test(value) ? Number(value) : value;
+    return typeof n === "number" && Number.isSafeInteger(n) && n !== 0 ? n : undefined;
+};
 
 export class DelegateeClient {
     private readonly fetch: typeof globalThis.fetch;
@@ -102,53 +92,48 @@ export class DelegateeClient {
         this.fetch = options.fetch ?? globalThis.fetch;
     }
 
-    /** Idempotent on their derived id, so startup may repeat them. */
+    /** Idempotent on the template's content id, so startup may repeat it. */
     async register(): Promise<DelegateeRegistration> {
-        const artifact = await this.post<{ artifact?: { id?: string } }>("/v1/artifact", {
-            document: JSON.stringify(DUST_COVENANT_ARTIFACT),
+        const body = await this.post<{ template?: { id?: string } }>("/v1/template", {
+            document: renewalTemplate(),
         });
-        const artifactId = artifact.artifact?.id;
-        if (!artifactId) throw new DelegateeError("delegatee returned no artifact id");
-        const template = await this.post<{ template?: { id?: string } }>("/v1/template", {
-            document: renewalTemplate(artifactId),
-        });
-        const templateId = template.template?.id;
+        const templateId = body.template?.id;
         if (!templateId) throw new DelegateeError("delegatee returned no template id");
-        return { artifactId, templateId };
+        return { templateId };
     }
 
+    /** Registering an active delegation again returns it unchanged. */
     async delegate(
         templateId: string,
         variables: Record<string, string>,
         expiresAt: number,
     ): Promise<string> {
-        const body = await this.post<{ delegation?: { address?: string } }>("/v1/delegate", {
-            template_id: templateId,
-            variables,
-            expires_at: expiresAt,
-        });
-        const address = body.delegation?.address;
+        const body = await this.post<{ delegation?: { inputs?: { address?: string }[] } }>(
+            "/v1/delegation",
+            { templateId, variables, expiresAt },
+        );
+        const address = body.delegation?.inputs?.[0]?.address;
         if (!address) throw new DelegateeError("delegatee returned no delegation address");
         return address;
     }
 
-    /** Read-only, and keyed by the address the covenant already stores: why a
-     * renewal was missed, never a renewal of our own (D6). */
+    /** Read-only, and keyed by the address the covenant already stores. */
     async getDelegation(address: string): Promise<DelegationView> {
         const body = await this.get<{
-            delegation?: { status?: string; expires_at?: number };
-            renewals?: { success?: boolean; error?: string; attempted_at?: number }[];
-        }>(`/v1/delegate/${encodeURIComponent(address)}`);
-        const renewals = body.renewals ?? [];
-        const failed = renewals.filter((r) => r.success !== true);
+            delegation?: { status?: string; expiresAt?: unknown };
+            coins?: Record<string, unknown>[];
+        }>(`/v1/delegation?address=${encodeURIComponent(address)}`);
         return {
             status: body.delegation?.status ?? "unknown",
-            attempts: renewals.length,
-            succeeded: renewals.length - failed.length,
-            ...(renewals.length
-                ? { lastAttemptAt: renewals[renewals.length - 1]!.attempted_at }
-                : {}),
-            ...(failed.length ? { lastError: failed[failed.length - 1]!.error } : {}),
+            expiresAt: int64(body.delegation?.expiresAt),
+            coins: (body.coins ?? []).map((coin) => ({
+                outpoint: String(coin.outpoint ?? ""),
+                amount: int64(coin.amount) ?? 0,
+                status: String(coin.status ?? "unknown"),
+                expiresAt: int64(coin.expiresAt),
+                due: int64(coin.due),
+                spentBy: coin.spentBy ? String(coin.spentBy) : undefined,
+            })),
         };
     }
 
@@ -171,7 +156,12 @@ export class DelegateeClient {
         } catch (cause) {
             throw new DelegateeError(`delegatee ${path} is unreachable`, { cause });
         }
-        if (!response.ok) throw new DelegateeError(`delegatee ${path} answered ${response.status}`);
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+            throw new DelegateeError(
+                `delegatee ${path} answered ${response.status}: ${detail.slice(0, 200)}`,
+            );
+        }
         return (await response.json()) as T;
     }
 }
@@ -182,8 +172,7 @@ export async function registerRenewal(
     client: Pick<DelegateeClient, "delegate">,
     registration: DelegateeRegistration,
     args: {
-        params: DustCovenantParams;
-        serverKey: Uint8Array;
+        covenant: DustCovenantScript;
         covenantAddress: string;
         renewalBeforeExpirySeconds: bigint;
         expiresAt: number;
@@ -191,11 +180,49 @@ export async function registerRenewal(
 ): Promise<void> {
     const address = await client.delegate(
         registration.templateId,
-        delegationVariables(args.params, args.serverKey, args.renewalBeforeExpirySeconds),
+        renewalVariables(args.covenant, args.renewalBeforeExpirySeconds),
         args.expiresAt,
     );
     if (address !== args.covenantAddress)
         throw new DelegateeError(
             `delegatee derives ${address} for template ${registration.templateId}, the covenant is ${args.covenantAddress}`,
         );
+}
+
+/** The sweeper's renewal hook with an Executor: one registration per covenant per process.
+ * A restart registers again, which the Executor answers with the active delegation. */
+export function delegationRenewal(deps: {
+    client: Pick<DelegateeClient, "delegate">;
+    registration: DelegateeRegistration;
+    config: Pick<
+        RuntimeConfig,
+        | "serverPubkey"
+        | "emulatorPubkey"
+        | "vtxoMinAmount"
+        | "renewalBeforeExpirySeconds"
+        | "recoveryBroadcastSeconds"
+    >;
+    now(): number;
+}): (advance: Advance) => Promise<void> | undefined {
+    const guard = deps.config.recoveryBroadcastSeconds;
+    const registered = new Set<string>();
+    return (advance) => {
+        if (registered.has(advance.id) || !renewable(advance, BigInt(deps.now()), guard))
+            return undefined;
+        return (async () => {
+            const covenant = new DustCovenantScript({
+                serverKey: deps.config.serverPubkey,
+                emulatorKey: deps.config.emulatorPubkey,
+                vtxoMinAmount: deps.config.vtxoMinAmount,
+                params: covenantParamsOf(advance),
+            });
+            await registerRenewal(deps.client, deps.registration, {
+                covenant,
+                covenantAddress: advance.covenantAddress,
+                renewalBeforeExpirySeconds: deps.config.renewalBeforeExpirySeconds,
+                expiresAt: Number(advance.recoveryLocktime!.value - guard),
+            });
+            registered.add(advance.id);
+        })();
+    };
 }
