@@ -102,33 +102,36 @@ async function settleOnShortTree(
     const original = await treeExpiry();
     expect(original).toMatch(/^\d+$/);
     const seed = JSON.parse(readFileSync(required("TAXI_E2E_SECRET_FILE"), "utf8")).sender;
-    const short = await createActorWallets(
-        { sender: seed },
-        {
-            arkdUrl: required("TAXI_E2E_ARKD_URL"),
-            esploraUrl: required("ARKADE_ESPLORA_URL"),
-            minBatchExpirySeconds: 512n,
-        },
-    );
+    let short: Record<string, any> | undefined;
     try {
         await treeExpiry(SHORT_TREE);
         expect(await treeExpiry()).toBe(SHORT_TREE);
+        // Created on the short tree: a wallet pins any tree arkd advertises when it is made.
+        short = await createActorWallets(
+            { sender: seed },
+            {
+                arkdUrl: required("TAXI_E2E_ARKD_URL"),
+                esploraUrl: required("ARKADE_ESPLORA_URL"),
+                minBatchExpirySeconds: 512n,
+            },
+        );
+        const { wallet } = short!.sender;
         const input = await poll(
             "the short-tree wallet sees the sender coin",
             async () =>
-                (await short.sender.wallet.getSpendableVtxos()).find(
+                (await wallet.getSpendableVtxos()).find(
                     (c: ExtendedVirtualCoin) => c.txid === coin.txid && c.vout === coin.vout,
                 ),
             (found) => found !== undefined,
         );
-        evidence.shortBatch = await settleSelectedFunding(short.sender.wallet, {
+        evidence.shortBatch = await settleSelectedFunding(wallet, {
             input,
             outputAmount: BigInt(coin.value),
             label: "short-tree sender",
         });
     } finally {
         await treeExpiry(original);
-        await disposeActorWallets(short);
+        if (short) await disposeActorWallets(short);
     }
     evidence.tree = { original, short: SHORT_TREE, restored: await treeExpiry() };
     expect(evidence.tree.restored).toBe(original);
