@@ -2067,7 +2067,7 @@ const BLOCKER_GROUPS = [
         "recovery_submission_ambiguous",
     ],
     [
-        "The indexer at TAXI_ARKD_URL does not serve the transaction that created a renewed payment's coin, so the Taxi cannot build its recovery; it retries every sweep.",
+        "The Taxi cannot fetch the transaction that created a renewed payment's coin from the indexer at TAXI_ARKD_URL, so it cannot build that payment's recovery; it retries every sweep.",
         "recovery_source_unavailable",
     ],
     [

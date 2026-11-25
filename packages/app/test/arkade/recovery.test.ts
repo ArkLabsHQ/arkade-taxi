@@ -1896,18 +1896,28 @@ describe("durable recovery runner", () => {
             observed: () => ({ swept: false, expiry: { kind: "time", value: expiry } }),
         });
 
-        for (const [headroom, severity, code, paused] of [
-            [86_400n, "eligible", "recovery_source_unavailable", false],
-            [86_400n, "eligible", "recovery_source_unavailable", false],
-            [43_200n, "warning", "recovery_source_unavailable", false],
-            [7_200n, "critical", "covenant_renewal_stopped", true],
+        let release = () => {};
+        for (const [headroom, severity, code, paused, pending] of [
+            [86_400n, "eligible", "recovery_source_unavailable", false, false],
+            [86_400n, "eligible", "recovery_source_unavailable", false, true],
+            [43_200n, "warning", "recovery_source_unavailable", false, false],
+            [7_200n, "critical", "covenant_renewal_stopped", true, false],
         ] as const) {
+            if (pending)
+                indexer.getVirtualTxs.mockImplementationOnce(
+                    () =>
+                        new Promise<{ txs: string[] }>(
+                            (resolve) => (release = () => resolve({ txs: [] })),
+                        ),
+                );
             expiry = row.locktime + headroom;
             await sweeper.tick(null, row.locktime);
             expect(sweeper.status().blockers).toEqual([
                 expect.objectContaining({ advanceId: row.id, severity, code }),
             ]);
             expect(policy.get().paused).toBe(paused);
+            release();
+            await new Promise((resolve) => setTimeout(resolve, 0));
         }
         expect(indexer.getVirtualTxs).toHaveBeenCalledTimes(4);
         expect(sweeper.status().lastRecoveryError).toMatchObject({
