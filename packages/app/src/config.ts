@@ -47,9 +47,9 @@ export interface TaxiConfig {
     /** The guarantee advertised beside `unclaimedMode: "custody"`, not an expiry:
      * past it a release is still honoured while the funds remain (spec §5.6). */
     custodyWindowSeconds: bigint;
-    /** Renews v2 covenants out of the Taxi's reach; unset leaves them unrenewed. */
+    /** The Executor that renews covenants; unset, the Taxi renews them in process. */
     delegateeUrl?: string;
-    /** `before_expiry_seconds` of the delegatee's renewal schedule. */
+    /** How long before a covenant coin expires it is renewed, by either. */
     renewalBeforeExpirySeconds: bigint;
     logLevel: LogLevel;
 }

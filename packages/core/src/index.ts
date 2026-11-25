@@ -10,7 +10,18 @@ export {
     validateFundingSnapshot,
 } from "./ledger.js";
 export { computeExposure, sweepable } from "./exposure.js";
+export {
+    spendObservationVerdict,
+    stableObservationVerdict,
+    type StableObservationVerdict,
+} from "./observation.js";
 export { admit, type LendingGate } from "./admission.js";
+export {
+    exposureCapRefusal,
+    quoteFenceRefusal,
+    type QuoteFenceCode,
+    type QuoteFenceRefusal,
+} from "./quoteFence.js";
 export {
     assessSolvency,
     computeReceivables,
@@ -38,3 +49,4 @@ export {
     type FareSpec,
     type ResolvedClaimMode,
 } from "./fares.js";
+export { renewable, renewalDue } from "./renewal.js";

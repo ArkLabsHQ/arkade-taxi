@@ -495,7 +495,7 @@ describe("createSponsoredQuote", () => {
     it("keeps sponsored transfers out of receiver claims", async () => {
         await createSponsoredQuote(deps(), sponsoredBody());
         const stored = advances.get("adv-1")!;
-        advances.update({ ...stored, state: "locked" });
+        advances.unsafeOverwrite({ ...stored, state: "locked" });
         const claims = listReceiverClaims(
             { config: config(), advances },
             { addresses: [receiverAddress], receiverKeys: [receiverKey] },

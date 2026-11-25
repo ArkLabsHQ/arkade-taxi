@@ -207,11 +207,11 @@ const BLOCKER_GROUPS = [
         "covenant_expiry_unobserved",
     ],
     [
-        "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
+        "A payment's coin was never renewed. Check the Taxi's log for covenant renewal failures, and the Executor at TAXI_DELEGATEE_URL when one is set.",
         "covenant_renewal_missing",
     ],
     [
-        "The renewal service has stopped renewing a payment's coin, so that coin is heading for expiry.",
+        "Renewal has stopped for a payment's coin, so that coin is heading for expiry.",
         "covenant_renewal_stopped",
     ],
     [
@@ -1711,9 +1711,8 @@ const CONFIG_MEANINGS = {
     custodyWindowSeconds:
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     delegateeUrl:
-        "The renewal service that keeps a covenant from expiring. Unset leaves covenants unrenewed.",
-    renewalBeforeExpirySeconds:
-        "How long, in seconds, before a coin expires the renewal service is asked to renew it.",
+        "The Executor that renews covenants before they expire. Unset, the Taxi renews them itself.",
+    renewalBeforeExpirySeconds: "How long, in seconds, before a coin expires it is renewed.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

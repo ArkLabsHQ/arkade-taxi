@@ -346,6 +346,21 @@ describe("receive quote repository", () => {
         db.close();
     });
 
+    it.each([
+        [329n, 4, "receive quote: exceeds max outstanding"],
+        [1_000n, 0, "receive quote: max concurrent advances"],
+        [329n, 0, "receive quote: exceeds max outstanding"],
+    ] as const)(
+        "refuses at a %s sat / %s advance cap with %s",
+        (maxOutstandingSats, maxConcurrentAdvances, message) => {
+            const db = openDatabase(":memory:");
+            const policy = configure(db);
+            policy.update({ maxOutstandingSats, maxConcurrentAdvances }, "test");
+            expect(() => insert(new ReceiveQuoteRepository(db), policy)).toThrow(message);
+            db.close();
+        },
+    );
+
     it("rejects a changed reservation snapshot atomically", () => {
         const db = openDatabase(":memory:");
         const policy = configure(db);
