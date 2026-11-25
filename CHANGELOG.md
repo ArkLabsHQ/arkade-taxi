@@ -6,6 +6,8 @@
 - SDK `0.5.14-taxi.1` and Swap `0.1.16-taxi.1` snapshots; the Swap negotiates only directed contracts.
 - A covenant spend arkd refuses with `VTXO_ALREADY_REGISTERED` raises `CovenantSpendBusyError` and
   releases its capability; `TaxiClient` waits for the renewed coin and spends it there.
+- The in-process renewal keeper waits for half a covenant coin's own life, so neither a fresh
+  covenant nor its renewed successor is due at once when arkd advertises no VTXO lifetime.
 
 ## 1.0.0 (unreleased)
 

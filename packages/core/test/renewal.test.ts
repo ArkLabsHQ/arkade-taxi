@@ -49,7 +49,12 @@ describe("renewable", () => {
 
 describe("renewalDue", () => {
     const WINDOW = { beforeExpirySeconds: 259_200n, guardSeconds: GUARD };
-    const expiring = (value: bigint) => ({ kind: "time" as const, value });
+    const TREE = 172_800n;
+    // A month old unless named, so the window binds before half its life does.
+    const expiring = (value: bigint, createdAt = NOW - 2_592_000n) => ({
+        expiry: { kind: "time" as const, value },
+        createdAt,
+    });
 
     it("is due from the window's edge on, and not a second before", () => {
         expect(renewalDue(advance(), expiring(NOW + 259_200n), NOW, WINDOW)).toBe(true);
@@ -64,7 +69,24 @@ describe("renewalDue", () => {
     });
 
     it("is never due for a height expiry or an unobserved coin", () => {
-        expect(renewalDue(advance(), { kind: "height", value: 1n }, NOW, WINDOW)).toBe(false);
+        const height = { expiry: { kind: "height" as const, value: 1n }, createdAt: NOW };
+        expect(renewalDue(advance(), height, NOW, WINDOW)).toBe(false);
         expect(renewalDue(advance(), undefined, NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), { createdAt: NOW }, NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), { expiry: expiring(NOW + 1n).expiry }, NOW, WINDOW)).toBe(
+            false,
+        );
+    });
+
+    it("waits for half the coin's own life when the window is longer", () => {
+        expect(renewalDue(advance(), expiring(NOW + 129_600n, NOW), NOW, WINDOW)).toBe(false);
+        expect(renewalDue(advance(), expiring(NOW - 60n + TREE, NOW - 60n), NOW, WINDOW)).toBe(
+            false,
+        );
+        const half = TREE / 2n;
+        expect(renewalDue(advance(), expiring(NOW + half, NOW - half), NOW, WINDOW)).toBe(true);
+        expect(renewalDue(advance(), expiring(NOW + half + 1n, NOW - half + 1n), NOW, WINDOW)).toBe(
+            false,
+        );
     });
 });
