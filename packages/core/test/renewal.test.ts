@@ -76,6 +76,7 @@ describe("renewalDue", () => {
         expect(renewalDue(advance(), { expiry: expiring(NOW + 1n).expiry }, NOW, WINDOW)).toBe(
             false,
         );
+        expect(renewalDue(advance(), expiring(NOW + 1n, 0n), NOW, WINDOW)).toBe(false);
     });
 
     it("waits for half the coin's own life when the window is longer", () => {
