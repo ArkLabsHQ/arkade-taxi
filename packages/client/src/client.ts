@@ -726,7 +726,11 @@ export class TaxiClient {
                     await new Promise<void>((resolve) =>
                         setTimeout(resolve, Math.min(retryDelay(start), deadline - Date.now())),
                     );
-                    moved = await renewedTransfer(current, await this.status(current.transferId));
+                    // The caller only ever sees the busy refusal: its capability is released.
+                    const status = await this.status(current.transferId).catch(() => undefined);
+                    if (status && status.state !== "locked") throw cause;
+                    moved =
+                        status && (await renewedTransfer(current, status).catch(() => undefined));
                 }
                 current = moved;
             }

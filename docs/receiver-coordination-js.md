@@ -26,7 +26,7 @@ must supply each reserved input's own signing identity.
 intent, usually Taxi renewing the covenant, holds an input named in `outpoints`, and
 nothing was accepted. `TaxiClient` `recycle`, `purchase` and `refund` first wait for Taxi
 status to report the renewed coin and spend it there, so the error means the renewal did
-not settle in time; retry from a fresh claim.
+not settle in time or the transfer left `locked`; retry from a fresh claim.
 
 ```ts
 // receiver-store.ts

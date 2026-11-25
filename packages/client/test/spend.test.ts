@@ -1746,12 +1746,14 @@ describe("a covenant its renewal holds", () => {
         let reads = 0;
         const taxi = new TaxiClient({
             baseUrl: "https://taxi.example",
-            fetch: async () =>
-                json(
-                    ++reads < 2
+            fetch: async () => {
+                if (++reads === 1) throw new Error("taxi unreachable");
+                return json(
+                    reads === 2
                         ? base.status
                         : { ...base.status, outpoint: { txid: successor.id, vout: 0 } },
-                ),
+                );
+            },
         });
         vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
         try {
@@ -1760,18 +1762,25 @@ describe("a covenant its renewal holds", () => {
         } finally {
             vi.useRealTimers();
         }
-        expect(reads).toBe(2);
+        expect(reads).toBe(3);
         const [, checkpoints] = base.emulator.submitTx.mock.calls[1]!;
         const spent = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
         expect([hex.encode(spent.txid!), spent.index]).toEqual([successor.id, 0]);
     });
 
-    it("gives up with the busy refusal when the Taxi never reports a renewed coin", async () => {
+    it.each([
+        ["never reports a renewed coin", "locked", (reads: number) => reads > 2],
+        ["reports the transfer is no longer locked", "recovering", (reads: number) => reads === 1],
+    ])("gives up with the busy refusal when the Taxi %s", async (_, state, expectedReads) => {
         const base = await setup();
         busy(base);
+        let reads = 0;
         const taxi = new TaxiClient({
             baseUrl: "https://taxi.example",
-            fetch: async () => json(base.status),
+            fetch: async () => {
+                if (++reads % 2 === 0) throw new Error("taxi unreachable");
+                return json({ ...base.status, state });
+            },
         });
         vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
         try {
@@ -1781,6 +1790,7 @@ describe("a covenant its renewal holds", () => {
         } finally {
             vi.useRealTimers();
         }
+        expect(expectedReads(reads)).toBe(true);
         expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
     });
 
