@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.3 (unreleased)
+
+- `@arkade-os/sdk` `0.5.14` and `@arkade-os/swap` `0.1.16` come from npm, replacing the vendored
+  `0.5.14-taxi.1` and `0.1.16-taxi.1` snapshots and their archive checks. The client, covenant and
+  service pin SDK `0.5.14` exactly, so a wallet installs that release beside the client.
+
 ## 1.1.2 (unreleased)
 
 - An Executor that answers the renewal template under an id other than the Taxi's raises

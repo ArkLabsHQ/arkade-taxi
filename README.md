@@ -146,18 +146,16 @@ pnpm format:check
 Run all four gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
-The service uses the unpublished `@arkade-os/sdk@0.5.14-taxi.1` candidate in
-`vendor/sdk`, whose source and archive hash are recorded in its manifest. The
-workspace override applies those same bytes to every SDK consumer. The test suite
-uses the compiler-defined `@arkade-os/swap@0.1.16-taxi.1` candidate recorded in
-`vendor/swap`. The committed lockfile pins dependency integrity;
+The service, client and covenant pin `@arkade-os/sdk@0.5.14` from npm. The test
+suite uses `@arkade-os/swap@0.1.16`, which depends on that same SDK.
+The committed lockfile pins dependency integrity;
 install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs Taxi's
 client, covenant and protocol packages, then installs those exact tarballs in a
 fresh consumer and verifies their identity and resolution before testing.
 
-Taxi's client, covenant, protocol and service packages share version `1.1.2`.
+Taxi's client, covenant, protocol and service packages share version `1.1.3`.
 It adds directed fills and renewal-aware claims to the `1.0.0` baseline, keeping its wire protocol and covenant.
-Worker wallets require the same SDK candidate in the page and worker. Reload
+Worker wallets require the same SDK version in the page and worker. Reload
 existing tabs after updating the worker so both sides use the scoped requests.
 
 Recompile the covenant from its Arkade source and prove no byte moved:
