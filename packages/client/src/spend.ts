@@ -125,8 +125,8 @@ export class CovenantSpendAmbiguousError extends Error {
     }
 }
 
-/** A definite refusal: arkd turned the spend away because a batch intent, such as the
- * covenant's renewal, holds an input. Nothing was accepted, so the capability is released. */
+/** A definite refusal: a batch intent, such as the covenant's renewal, holds an input or has
+ * already settled the covenant. Nothing was accepted, so the capability is released. */
 export class CovenantSpendBusyError extends Error {
     readonly name = "CovenantSpendBusyError";
 
@@ -1249,6 +1249,14 @@ const refresh = async (
         (coin) => coin.txid === state.outpoint.txid && coin.vout === state.outpoint.vout,
     );
     if (covenantCoin === undefined) return reject("indexer omitted the locked covenant outpoint");
+    // The watcher's renewal test: a batch, not an Ark transaction, took the coin first.
+    if (/^[0-9a-f]{64}$/.test(covenantCoin.settledBy ?? "") && !covenantCoin.arkTxId) {
+        state.lifecycle.state = "available";
+        throw new CovenantSpendBusyError(
+            [`${state.outpoint.txid}:${state.outpoint.vout}`],
+            new Error(`settled by commitment ${covenantCoin.settledBy}`),
+        );
+    }
     const current = strictCoin(covenantCoin, {
         ...state,
         contextAssetUnits: state.holdings[0]?.amount,

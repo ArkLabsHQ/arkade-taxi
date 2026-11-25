@@ -4,6 +4,8 @@
 
 - A covenant spend arkd refuses with `VTXO_ALREADY_REGISTERED` raises `CovenantSpendBusyError` and
   releases its capability; `TaxiClient` waits for the renewed coin and spends it there.
+- A transfer verified before its renewal settled raises the same error before submitting, so
+  `TaxiClient` claims it at the renewed coin rather than failing it as spent.
 - The in-process renewal keeper waits for half a covenant coin's own life, so neither a fresh
   covenant nor its renewed successor is due at once when arkd advertises no VTXO lifetime.
 
