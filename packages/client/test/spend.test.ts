@@ -1767,6 +1767,16 @@ describe("a covenant its renewal holds", () => {
         expect(base.emulator.submitTx).not.toHaveBeenCalled();
     });
 
+    it("reads the inputs arkd says are registered in any hex case", async () => {
+        const base = await setup();
+        base.emulator.submitTx.mockResolvedValueOnce(
+            refusal("VTXO_ALREADY_REGISTERED", held(base).toUpperCase()),
+        );
+        const error = await purchase(base.transfer, destination).catch((cause) => cause);
+        expect(error).toBeInstanceOf(CovenantSpendBusyError);
+        expect(error.outpoints).toEqual([held(base)]);
+    });
+
     it("keeps a coin an Ark transaction spent an ordinary refusal", async () => {
         const base = await setup();
         Object.assign(base.coin, {

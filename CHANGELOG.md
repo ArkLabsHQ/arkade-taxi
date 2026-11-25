@@ -11,6 +11,8 @@
   `recovery_submission_ambiguous` error. The covenant still stays locked for the next sweep.
 - The keeper renewal scenario runs recovery's own lookup on the renewed coin before the claim, and
   checks the transaction arkd's indexer serves holds the covenant's script and value there.
+- `CovenantSpendBusyError` reads the inputs arkd says a batch holds in any hex case, so `TaxiClient`
+  still waits out a renewal whose refusal names the covenant coin in upper case.
 
 ## 1.1.2 (unreleased)
 

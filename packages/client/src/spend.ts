@@ -1322,7 +1322,7 @@ const registeredInputs = (cause: unknown): string[] | undefined => {
     const refusal = maybeArkError(new Error(cause.message.slice(EMULATOR_SUBMIT_FAILED.length)));
     if (refusal?.name !== "VTXO_ALREADY_REGISTERED") return undefined;
     const named = [refusal.message, ...Object.values(refusal.metadata ?? {})].join(" ");
-    return [...new Set(named.match(/[0-9a-f]{64}:\d+/g))];
+    return [...new Set(named.toLowerCase().match(/[0-9a-f]{64}:\d+/g))];
 };
 
 const execute = async (
