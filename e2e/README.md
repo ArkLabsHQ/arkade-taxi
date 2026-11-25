@@ -71,7 +71,9 @@ depends on.
 `covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
 chain time a day ahead. `fill-undersigned-foreign-input` tests pre-submit refusal
-without spending any Taxi input. `fill-pending-accepted-quarantine` drops an
+of an unsigned caller coin, and of a directed deposit its taker signed on the
+arkTx but not the checkpoint, without spending any Taxi input.
+`fill-pending-accepted-quarantine` drops an
 accepted arkd submit reply while output proof is unavailable, retains the bound
 liability past TTL, and checks fresh source observation, admission on other coins
 and outage refusal. Restoring proof settles the original one-shot transaction
@@ -156,9 +158,10 @@ identity, the warning and critical alarms a covenant raises as the coin it sits
 on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
 sponsor each sign only their own inputs while the offer covenant is co-signed by
 nobody but the emulator and the Arkade Service. `receiver-paid-fill-claim` builds
-the same shape for `POST /v1/fills` instead, with a receiver-paid sats fare: the
-caller's own inputs arrive signed, the Taxi's arrive unsigned and the gated
-covenant carries the emulator's tweaked key alone.
+the same shape for `POST /v1/fills` instead, on a directed offer whose `fulfill`
+names the caller as taker, with a receiver-paid sats fare: the caller signs its
+coins and the deposit, the Taxi's inputs arrive unsigned, and the settled deposit
+carries the taker's, the server's and the emulator's tweaked key, never the raw one.
 `receiver-paid-direct-fill-claim` instead uses only ordinary owner/server
 multisig leaves and a native asset packet. It proves one arkd submit and finalize,
 zero emulator submits, both owners' actual signatures and the returned loan plus
