@@ -254,6 +254,12 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         evidence.renewalsAfterFreshWait = fresh;
         expect(fresh.renewed, "renewed again while the successor is fresh").toHaveLength(1);
         expect((await live.client.status(id)).outpoint).toEqual(successorOutpoint);
+        // Asserted after the claim, so a feed the renewal broke still leaves the claim evidence.
+        const feed = await live.client.listClaims({ receiverAddresses: [bobAddress] }).then(
+            ({ claims }) => claims.find((c) => c.transferId === id),
+            (error: unknown) => ({ error: String(error) }),
+        );
+        evidence.feedAfterRenewal = feed;
 
         const txid = await recycleWith(live, transfer, bobCoin, locked.destination);
         evidence.recycleTxid = txid;
@@ -285,6 +291,10 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         evidence.balances = { aliceBefore, bobBefore, taxiBefore, bobAfter, taxiAfter };
         expect(bobAfter).toEqual({ sats: bobBefore.sats + PAYMENT_SATS, units: bobBefore.units });
         expect(taxiAfter).toEqual(taxiBefore);
+        expect(feed, "claim feed after the renewal").toMatchObject({
+            state: "locked",
+            claim: { outpoint: successorOutpoint },
+        });
     } finally {
         writeFileSync(
             artifactPath("keeper-renewal.json"),
