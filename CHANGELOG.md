@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.1.1 (unreleased)
+
+- A covenant spend arkd refuses with `VTXO_ALREADY_REGISTERED` raises `CovenantSpendBusyError` and
+  releases its capability; `TaxiClient` waits for the renewed coin and spends it there.
+- The in-process renewal keeper waits for half a covenant coin's own life, so neither a fresh
+  covenant nor its renewed successor is due at once when arkd advertises no VTXO lifetime.
+
 ## 1.1.0 (unreleased)
 
 - Caller-built fills of directed asset-swap offers, whose deposit arrives signed by its taker.

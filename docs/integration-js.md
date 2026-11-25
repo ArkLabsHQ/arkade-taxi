@@ -46,7 +46,7 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Use `@arkade-taxi/client@1.1.0` with the [pinned SDK](../vendor/sdk/manifest.json).
+Use `@arkade-taxi/client@1.1.1` with the [pinned SDK](../vendor/sdk/manifest.json).
 Wallet apps should use [`createTaxiSender`](../packages/client/WALLET.md) for durable reservations and recovery.
 This lower-level example requires equivalent coordination. Pass Alice's initialized wallet, Bob's full address,
 the selected `fareId` and wallet-configured trust facts. `assetUnits` is Bob's quantity; the fare is additional.
@@ -313,8 +313,8 @@ capability property is a snapshot, not authorization.
 
 Each spend capability and matching outpoint/provider tuple is one-shot within
 the process, including concurrent use and ambiguous results. Pre-submission
-validation failures also consume the capability conservatively. Recovery after
-a restart requires the application's durable record and canonical observation.
+validation failures consume it too; only `CovenantSpendBusyError` releases it.
+A restart needs the application's durable record and canonical observation.
 Live Arkade/emulator acceptance, recovery and settlement assumptions must be
 checked with the production-artifact E2E suite in [e2e/README.md](../e2e/README.md)
 for the deployed provider versions.

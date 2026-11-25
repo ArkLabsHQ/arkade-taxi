@@ -1712,7 +1712,8 @@ const CONFIG_MEANINGS = {
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     delegateeUrl:
         "The Executor that renews covenants before they expire. Unset, the Taxi renews them itself.",
-    renewalBeforeExpirySeconds: "How long, in seconds, before a coin expires it is renewed.",
+    renewalBeforeExpirySeconds:
+        "How long, in seconds, before a coin expires it is renewed. Without an Executor, at most half the coin's own life.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

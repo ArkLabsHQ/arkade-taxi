@@ -11,14 +11,21 @@ export const renewable = (advance: Advance, now: bigint, guardSeconds: bigint): 
     advance.recoveryLocktime?.kind === "time" &&
     advance.recoveryLocktime.value - now > guardSeconds;
 
-/** Due once the coin's observed expiry is inside the window. A height expiry cannot be
- * measured against a window in seconds, so it is never due. */
+/** Due once the coin's expiry is inside the window, capped at half the coin's own life: a
+ * successor is born with all of it left, so a renewal cannot make it due at once. A coin
+ * whose life cannot be measured in seconds, height expiry or unknown birth, is never due. */
 export const renewalDue = (
     advance: Advance,
-    expiry: ExpiryDeadline | undefined,
+    coin: { expiry?: ExpiryDeadline; createdAt?: bigint } | undefined,
     now: bigint,
     window: { beforeExpirySeconds: bigint; guardSeconds: bigint },
-): boolean =>
-    renewable(advance, now, window.guardSeconds) &&
-    expiry?.kind === "time" &&
-    expiry.value - now <= window.beforeExpirySeconds;
+): boolean => {
+    const expiry = coin?.expiry;
+    if (expiry?.kind !== "time" || coin?.createdAt === undefined) return false;
+    const half = (expiry.value - coin.createdAt) / 2n;
+    return (
+        renewable(advance, now, window.guardSeconds) &&
+        expiry.value - now <=
+            (half < window.beforeExpirySeconds ? half : window.beforeExpirySeconds)
+    );
+};

@@ -16,14 +16,17 @@ const covenant = new DustCovenantScript({
     params: covenantParamsOf(covenantAdvance),
 });
 const script = bytesToHex(covenant.pkScript);
-const expiringIn = (seconds: bigint) => ({
+const TREE = 172_800n;
+const observed = (createdAgo: bigint, life: bigint) => ({
     swept: false,
-    expiry: { kind: "time" as const, value: BigInt(NOW) + seconds },
+    createdAt: BigInt(NOW) - createdAgo,
+    expiry: { kind: "time" as const, value: BigInt(NOW) - createdAgo + life },
 });
+const expiringIn = (seconds: bigint) => observed(2_592_000n, 2_592_000n + seconds);
 
-const keeper = (coin: object, intentFee: Record<string, string> = {}, vtxoTreeExpiry?: bigint) => {
+const keeper = (coin: object, intentFee: Record<string, string> = {}) => {
     const providers = {
-        arkProvider: { getInfo: vi.fn(async () => ({ fees: { intentFee }, vtxoTreeExpiry })) },
+        arkProvider: { getInfo: vi.fn(async () => ({ fees: { intentFee } })) },
         emulator: { submitIntent: vi.fn() },
         indexer: { getVtxos: vi.fn(async () => ({ vtxos: [coin] })) },
         network: {},
@@ -47,17 +50,23 @@ describe("covenant keeper", () => {
         expect(providers.indexer.getVtxos).not.toHaveBeenCalled();
     });
 
-    it("waits for half the VTXO lifetime when the window is longer", async () => {
-        const lifetime = 172_800n;
-        const coin = fundingCoin({ ...outpoint, script, value: 330 });
-        const { providers, renew } = keeper(coin, {}, lifetime);
-        await expect(renew(covenantAdvance, expiringIn(lifetime / 2n + 1n))).resolves.toBe(
-            undefined,
-        );
-        expect(providers.arkProvider.getInfo).toHaveBeenCalledOnce();
-        // Past the bound it renews, here to the prevout lookup this fixture leaves unanswered.
-        await expect(renew(covenantAdvance, expiringIn(lifetime / 2n))).rejects.toThrow();
-        expect(providers.arkProvider.getInfo).toHaveBeenCalledTimes(3);
+    it.each([
+        ["a covenant created now with 1.5 days left", observed(0n, 129_600n)],
+        ["a renewal successor a minute into its 2-day tree", observed(60n, TREE)],
+        ["a coin of unknown age", { swept: false, expiry: expiringIn(3_600n).expiry }],
+        ["a coin of unknown expiry", { swept: false, createdAt: BigInt(NOW) }],
+    ])("does not renew %s under the 3-day default window", (_, seen) => {
+        const { providers, renew } = keeper(fundingCoin({ ...outpoint, script }));
+        expect(config().renewalBeforeExpirySeconds).toBe(259_200n);
+        expect(renew(covenantAdvance, seen)).toBeUndefined();
+        expect(providers.indexer.getVtxos).not.toHaveBeenCalled();
+    });
+
+    it("renews a coin once it is inside half its own life", async () => {
+        const { providers, renew } = keeper(fundingCoin({ ...outpoint, script, value: 330 }));
+        // Due, so it renews, here up to the prevout lookup this fixture leaves unanswered.
+        await expect(renew(covenantAdvance, observed(TREE / 2n, TREE))).rejects.toThrow();
+        expect(providers.indexer.getVtxos).toHaveBeenCalledOnce();
     });
 
     it("leaves a coin a batch already consumed to the watcher", async () => {

@@ -181,16 +181,12 @@ export function covenantKeeper(deps: {
     return (advance, seen) => {
         const outpoint = advance.outpoint;
         const now = BigInt(deps.now());
-        if (!outpoint || !renewalDue(advance, seen?.expiry, now, window)) return undefined;
+        if (!outpoint || !renewalDue(advance, seen, now, window)) return undefined;
         return (async () => {
             const { vtxos } = await deps.providers.indexer.getVtxos({ outpoints: [outpoint] });
             const coin = vtxos.find((v) => v.txid === outpoint.txid && v.vout === outpoint.vout);
             // A spent coin is the watcher's to classify, a renewal it has yet to adopt included.
             if (!coin || isVtxoSpent(coin)) return;
-            // At most half the lifetime: a window as long as it makes each successor due at once.
-            const lifetime = (await deps.providers.arkProvider.getInfo()).vtxoTreeExpiry ?? 0n;
-            const half = { ...window, beforeExpirySeconds: lifetime / 2n };
-            if (lifetime >= 512n && !renewalDue(advance, seen!.expiry, now, half)) return;
             const covenant = new DustCovenantScript({
                 serverKey: deps.config.serverPubkey,
                 emulatorKey: deps.config.emulatorPubkey,

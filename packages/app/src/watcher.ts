@@ -55,6 +55,8 @@ const verifySignatures: SignatureCheck = (tx, index, signers) =>
  * no batch expiry, and a renewal re-dates the one it races. */
 export interface ObservedCovenant {
     expiry?: ExpiryDeadline;
+    /** Unix seconds. */
+    createdAt?: bigint;
     swept: boolean;
 }
 
@@ -65,7 +67,12 @@ const observedCoin = (coin: VirtualCoin): ObservedCovenant => {
     } catch {
         expiry = undefined;
     }
-    return { ...(expiry ? { expiry } : {}), swept: coin.isSwept === true };
+    const born = new Date(coin.createdAt).getTime();
+    return {
+        ...(expiry ? { expiry } : {}),
+        ...(Number.isFinite(born) ? { createdAt: BigInt(Math.floor(born / 1000)) } : {}),
+        swept: coin.isSwept === true,
+    };
 };
 
 export type ObservedSpend =
