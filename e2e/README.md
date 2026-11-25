@@ -90,8 +90,10 @@ second one in the 90 s after its watcher adopts the two-day successor, which the
 default three-day window would otherwise make due at once. The receiver then
 recycles a transfer it verified before the renewal through the packed client,
 which moves it to the renewed coin; the claim spends the successor and every
-balance conserves. `keeper-renewal.json` records the tree switch, both coins'
-lives, the renewal log lines and the balances.
+balance conserves. Before the claim, recovery's own lookup fetches the transaction
+that created the successor from arkd's indexer, which must hold the covenant's
+script and value at the successor's output. `keeper-renewal.json` records the tree
+switch, both coins' lives, the renewal log lines, that transaction and the balances.
 Both modes run each isolated scenario before the
 shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`

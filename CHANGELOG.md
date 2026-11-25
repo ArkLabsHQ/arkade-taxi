@@ -9,6 +9,8 @@
   `recovery_source_unavailable` sweeper blocker from the first miss, and pauses the Taxi once the
   coin's expiry turns critical. It had raised no blocker before then, only a
   `recovery_submission_ambiguous` error. The covenant still stays locked for the next sweep.
+- The keeper renewal scenario runs recovery's own lookup on the renewed coin before the claim, and
+  checks the transaction arkd's indexer serves holds the covenant's script and value there.
 
 ## 1.1.2 (unreleased)
 
