@@ -234,7 +234,7 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         const covenant = lifeOf(covenantCoin);
         evidence.covenant = covenant;
         expect(covenant.expiresAt).toBe(evidence.senderCoin.expiresAt);
-        await sleep(Math.max(0, Number(covenant.dueAt) * 1000 - Date.now() - 15_000));
+        await sleep(Math.max(0, Number(covenant.dueAt * 1000n - 15_000n) - Date.now()));
         const moved = await poll(
             "the keeper renews the covenant and the watcher adopts its successor",
             () => live.client.status(id),
@@ -254,7 +254,7 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         Object.assign(evidence, { successor: successorOutpoint, renewals: first });
         expect(first.renewed).toHaveLength(1);
         expect(first.renewed[0].time, "renewed before half its life").toBeGreaterThanOrEqual(
-            (Number(covenant.dueAt) - 2) * 1000,
+            Number((covenant.dueAt - 2n) * 1000n),
         );
 
         const successorCoin = await coinAt(live, successorOutpoint);
@@ -264,13 +264,13 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         expect(BigInt(successorCoin.value)).toBe(lockupSats(locked.verified.params));
         expect(isVtxoSpent(successorCoin)).toBe(false);
         expect(successor.expiresAt - successor.createdAt).toBeGreaterThanOrEqual(SDK_REGTEST_FLOOR);
-        expect(Number(successor.dueAt) * 1000).toBeGreaterThan(Date.now() + FRESH_WAIT_MS);
+        expect(successor.dueAt * 1000n).toBeGreaterThan(BigInt(Date.now() + FRESH_WAIT_MS));
         // The default three-day window outlasts the restored tree: without the half-life cap the
         // successor is due at once and renews again within a session.
         await sleep(FRESH_WAIT_MS);
         const fresh = await keeperLog(id);
         evidence.renewalsAfterFreshWait = fresh;
-        expect(fresh.renewed, "renewed again while the successor is fresh").toHaveLength(1);
+        expect(fresh.renewed, "must not renew again while the successor is fresh").toHaveLength(1);
         const settledStatus = await live.client.status(id);
         evidence.statusBeforeClaim = settledStatus;
         expect(settledStatus.outpoint).toEqual(successorOutpoint);
