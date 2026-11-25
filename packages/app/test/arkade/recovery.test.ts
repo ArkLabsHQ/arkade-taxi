@@ -14,6 +14,7 @@ import {
     arkade,
     getArkPsbtFields,
     type EmulatorProvider,
+    type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
@@ -62,6 +63,7 @@ import {
     type RecoveryIntent,
 } from "../../src/arkade/recovery.js";
 import { createSweeper } from "../../src/sweeper.js";
+import { classifyObservedSpend } from "../../src/watcher.js";
 
 const directories: string[] = [];
 const databases: Database[] = [];
@@ -702,6 +704,40 @@ describe("renewed covenant recovery", () => {
         const foreign = renewedCoin(row, { amount: lockupSats(row) + 1n }).prevTx;
         expect(() => buildRecoveryIntent(renewed, config())).toThrow(/source is missing/);
         expect(() => buildRecoveryIntent(renewed, config(), foreign)).toThrow(/not the successor/);
+    });
+
+    it("has the watcher classify the signed reclaim of a successor as recovered", async () => {
+        const { renewed, prevTx } = renewedCoin(sourceAdvance("time"));
+        const intent = buildRecoveryIntent(renewed, config(), prevTx);
+        const signed = await signingEmulator().submitTx(intent.arkTx, intent.checkpoints);
+        const [checkpoint] = signed.signedCheckpointTxs;
+        const covenant = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: config().vtxoMinAmount,
+            params: covenantParamsOf(renewed),
+        });
+        const coin = {
+            ...renewed.outpoint,
+            value: Number(lockupSats(renewed)),
+            script: hex.encode(covenant.pkScript),
+            isSpent: true,
+            spentBy: Transaction.fromPSBT(base64.decode(checkpoint!)).id,
+            arkTxId: intent.expectedTxid,
+        } as unknown as VirtualCoin;
+        const indexer = {
+            getVtxos: async () => ({ vtxos: [] }),
+            getVirtualTxs: async () => ({ txs: [signed.signedArkTx, checkpoint!] }),
+        };
+
+        await expect(
+            classifyObservedSpend(
+                renewed,
+                coin,
+                { indexer, config: config() },
+                { height: 700000, time: Number(renewed.locktime) },
+            ),
+        ).resolves.toEqual({ kind: "recovered", txid: intent.expectedTxid });
     });
 
     // The asset fixture's hand-built graph never passes the startup lockup audit.
