@@ -53,6 +53,27 @@ export class RecoveryArtifactError extends Error {
     readonly code = "recovery_artifact_invalid";
 }
 
+export class RecoverySourceUnavailableError extends Error {
+    readonly code = "recovery_source_unavailable";
+}
+
+/** The transaction that created a renewed covenant's coin, which its reclaim attaches. */
+export async function renewedCovenantSource(
+    outpoint: { txid: string },
+    indexer: PrevTxSource,
+): Promise<Uint8Array> {
+    try {
+        const raw = (await resolvePrevTxs([outpoint.txid], indexer)).get(outpoint.txid);
+        if (!raw) throw new Error(`the indexer did not return ${outpoint.txid}`);
+        return raw;
+    } catch (cause) {
+        throw new RecoverySourceUnavailableError(
+            cause instanceof Error ? cause.message : String(cause),
+            { cause },
+        );
+    }
+}
+
 function fail(message: string): never {
     throw new RecoveryArtifactError(message);
 }
@@ -116,7 +137,7 @@ function startupRecoveryAdvance(advance: Advance): Advance {
     }
 }
 
-const txidOf = (raw: Uint8Array): string =>
+export const txidOf = (raw: Uint8Array): string =>
     hex.encode(
         createHash("sha256").update(createHash("sha256").update(raw).digest()).digest().reverse(),
     );
@@ -754,7 +775,7 @@ export function createRecoveryRunner(deps: {
                 // Fetched before the try: an unreachable indexer leaves the row locked for retry.
                 const at = latest.renewals ? latest.outpoint : undefined;
                 const renewedSource = at
-                    ? (await resolvePrevTxs([at.txid], deps.indexer)).get(at.txid)
+                    ? await renewedCovenantSource(at, deps.indexer)
                     : undefined;
                 try {
                     prepared = buildRecoveryIntent(latest, deps.config, renewedSource);

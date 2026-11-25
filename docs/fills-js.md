@@ -21,6 +21,6 @@ ambiguous response requires reconciliation; do not build a replacement spend
 from the same inputs. The Taxi returns status rather than signed PSBTs. The
 receiver verifies the incoming covenant before claiming.
 
-Use the Taxi `1.1.3` client with the v1 service. The claim and send helpers,
+Use the Taxi `1.1.4` client with the v1 service. The claim and send helpers,
 transfer builder and sponsored-transfer builder share this protocol.
 See [the wire protocol](protocol.md#post-v1fills) for the request and validation rules.

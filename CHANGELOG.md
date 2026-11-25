@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.4 (unreleased)
+
+- A reclaim that cannot fetch the transaction that created a renewed covenant's coin raises a
+  `recovery_source_unavailable` sweeper blocker from the first miss, and pauses the Taxi once the
+  coin's expiry turns critical. It had raised no blocker before then, only a
+  `recovery_submission_ambiguous` error. The covenant still stays locked for the next sweep.
+- The keeper renewal scenario runs recovery's own lookup on the renewed coin before the claim, and
+  checks the transaction arkd's indexer serves holds the covenant's script and value there.
+- `CovenantSpendBusyError` reads the inputs arkd says a batch holds in any hex case, so `TaxiClient`
+  still waits out a renewal whose refusal names the covenant coin in upper case.
+
 ## 1.1.3 (unreleased)
 
 - `@arkade-os/sdk` `0.5.14` and `@arkade-os/swap` `0.1.16` come from npm, replacing the vendored

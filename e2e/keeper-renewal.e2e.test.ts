@@ -2,9 +2,15 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
-import { isVtxoSpent, type ExtendedVirtualCoin, type VirtualCoin } from "@arkade-os/sdk";
+import {
+    isVtxoSpent,
+    Transaction,
+    type ExtendedVirtualCoin,
+    type VirtualCoin,
+} from "@arkade-os/sdk";
 import { lockupSats } from "@arkade-taxi/covenant";
 import { hex } from "@scure/base";
+import { renewedCovenantSource, txidOf } from "../packages/app/src/arkade/recovery.js";
 import { captureOwnedTaxiLogs, taxiLogArgs } from "../scripts/lib/harness.mjs";
 import { settleWithin } from "../scripts/e2e-settle.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
@@ -285,6 +291,19 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
             (error: unknown) => ({ error: String(error) }),
         );
         evidence.feedAfterRenewal = feed;
+        // Recovery's own lookup of the coin it would reclaim, made once before the claim spends it.
+        const source = await renewedCovenantSource(successorOutpoint, live.indexer)
+            .then((raw) => {
+                const output = Transaction.fromRaw(raw).getOutput(successorOutpoint.vout);
+                return {
+                    txid: txidOf(raw),
+                    amount: output.amount,
+                    script: output.script && hex.encode(output.script),
+                    raw: hex.encode(raw),
+                };
+            })
+            .catch((error: unknown) => ({ error: String(error) }));
+        evidence.successorSource = source;
 
         const txid = await recycleWith(live, transfer, bobCoin, locked.destination).catch(
             (error: Error) => {
@@ -324,6 +343,12 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         expect(feed, "claim feed after the renewal").toMatchObject({
             state: "locked",
             claim: { outpoint: successorOutpoint },
+        });
+        expect(source, "the indexer serves the successor's creating transaction").toEqual({
+            txid: successorOutpoint.txid,
+            amount: lockupSats(locked.verified.params),
+            script: covenantCoin.script,
+            raw: expect.any(String),
         });
     } finally {
         writeFileSync(

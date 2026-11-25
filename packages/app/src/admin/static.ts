@@ -2067,6 +2067,10 @@ const BLOCKER_GROUPS = [
         "recovery_submission_ambiguous",
     ],
     [
+        "The Taxi cannot fetch the transaction that created a renewed payment's coin from the indexer at TAXI_ARKD_URL, so it cannot build that payment's recovery; it retries every sweep.",
+        "recovery_source_unavailable",
+    ],
+    [
         "The Taxi is collecting the fares and repayments it received; new payments wait until it finishes.",
         "proceeds_output_pending proceeds_intent_pending proceeds_worker_active",
     ],
