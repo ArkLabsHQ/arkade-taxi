@@ -2,7 +2,7 @@ import { pollUntil } from "./lib/harness.mjs";
 
 const amount = (value) => BigInt(value ?? 0);
 
-async function settleWithin(wallet, request, timeoutMs, description) {
+export async function settleWithin(wallet, request, timeoutMs, description) {
     const events = [];
     const operation = wallet.settle(request, (event) => events.push(event.type));
     let timeoutHandle;

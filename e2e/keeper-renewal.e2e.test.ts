@@ -6,7 +6,7 @@ import { isVtxoSpent, type ExtendedVirtualCoin, type VirtualCoin } from "@arkade
 import { lockupSats } from "@arkade-taxi/covenant";
 import { hex } from "@scure/base";
 import { captureOwnedTaxiLogs, taxiLogArgs } from "../scripts/lib/harness.mjs";
-import { settleSelectedFunding } from "../scripts/e2e-settle.mjs";
+import { settleWithin } from "../scripts/e2e-settle.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
 import { liveScenario } from "./scenarios.js";
 import {
@@ -102,7 +102,10 @@ async function settleOnShortTree(
     const original = await treeExpiry();
     expect(original).toMatch(/^\d+$/);
     const seed = JSON.parse(readFileSync(required("TAXI_E2E_SECRET_FILE"), "utf8")).sender;
+    const attempts: Record<string, unknown>[] = [];
+    evidence.shortBatches = attempts;
     let short: Record<string, any> | undefined;
+    let minted: ExtendedVirtualCoin | undefined;
     try {
         await treeExpiry(SHORT_TREE);
         expect(await treeExpiry()).toBe(SHORT_TREE);
@@ -116,40 +119,54 @@ async function settleOnShortTree(
             },
         );
         const { wallet } = short!.sender;
-        const input = await poll(
+        const address = await wallet.getAddress();
+        let input: ExtendedVirtualCoin = (await poll(
             "the short-tree wallet sees the sender coin",
             async () =>
                 (await wallet.getSpendableVtxos()).find(
                     (c: ExtendedVirtualCoin) => c.txid === coin.txid && c.vout === coin.vout,
                 ),
             (found) => found !== undefined,
-        );
-        evidence.shortBatch = await settleSelectedFunding(wallet, {
-            input,
-            outputAmount: BigInt(coin.value),
-            label: "short-tree sender",
-        });
+        ))!;
+        // arkd fixes a round's tree when its registration opens, so a settlement can land in a
+        // round opened before the switch; the round after that settlement cannot have been.
+        for (let attempt = 1; attempt <= 3 && !minted; attempt++) {
+            const commitment: string = await settleWithin(
+                wallet,
+                { inputs: [input], outputs: [{ address, amount: BigInt(coin.value) }] },
+                120_000,
+                `short-tree attempt ${attempt}`,
+            );
+            const next: ExtendedVirtualCoin = (await poll(
+                `the coin settlement ${commitment} minted`,
+                async () =>
+                    (await wallet.getSpendableVtxos()).find((c: ExtendedVirtualCoin) =>
+                        c.commitmentTxIds?.includes(commitment),
+                    ),
+                (found) => found?.expiresAt !== undefined,
+            ))!;
+            const life = lifeOf(next);
+            attempts.push({ commitment, txid: next.txid, vout: next.vout, ...life });
+            if (life.expiresAt - life.createdAt < SDK_REGTEST_FLOOR) minted = next;
+            else input = next;
+        }
     } finally {
         await treeExpiry(original);
         if (short) await disposeActorWallets(short);
     }
     evidence.tree = { original, short: SHORT_TREE, restored: await treeExpiry() };
     expect(evidence.tree.restored).toBe(original);
-    const minted = await poll(
-        "the sender's coin from the short-tree batch",
+    expect(minted, "no settlement minted on the short tree; see shortBatches").toBeDefined();
+    const own = (await poll(
+        "the sender's own wallet sees the short-tree coin",
         async () =>
-            (await live.actors.sender.wallet.getSpendableVtxos({ withRecoverable: false })).filter(
-                (c) =>
-                    c.value === coin.value &&
-                    !c.assets?.length &&
-                    c.isPreconfirmed === false &&
-                    c.expiresAt !== undefined &&
-                    lifeOf(c).expiresAt - lifeOf(c).createdAt < SDK_REGTEST_FLOOR,
+            (await live.actors.sender.wallet.getSpendableVtxos({ withRecoverable: false })).find(
+                (c) => c.txid === minted!.txid && c.vout === minted!.vout,
             ),
-        (coins) => coins.length === 1,
-    ).then((coins) => coins[0]!);
-    evidence.senderCoin = { txid: minted.txid, vout: minted.vout, ...lifeOf(minted) };
-    return minted;
+        (found) => found !== undefined,
+    ))!;
+    evidence.senderCoin = { txid: own.txid, vout: own.vout, ...lifeOf(own) };
+    return own;
 }
 
 liveScenario("covenant-keeper-renewal-claim", async () => {
