@@ -492,7 +492,7 @@ const agrees = (
 /** A batch settlement: arkd carries a forfeit in `spentBy` beside the
  * commitment, so an absent `arkTxId` is what separates it from a spend. */
 const renewalCommitment = (coin: VirtualCoin): string | undefined =>
-    /^[0-9a-f]{64}$/.test(coin.settledBy ?? "") && !coin.arkTxId ? coin.settledBy : undefined;
+    /^[0-9a-f]{64}$/i.test(coin.settledBy ?? "") && !coin.arkTxId ? coin.settledBy : undefined;
 
 /** Script, value and assets: the only facts a renewal preserves. */
 const sameCovenant = (coin: VirtualCoin, facts: ReturnType<typeof covenantFacts>): boolean => {

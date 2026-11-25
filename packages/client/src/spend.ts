@@ -1257,7 +1257,7 @@ const refresh = async (
     );
     if (covenantCoin === undefined) return reject("indexer omitted the locked covenant outpoint");
     // The watcher's renewal test: a batch, not an Ark transaction, took the coin first.
-    if (/^[0-9a-f]{64}$/.test(covenantCoin.settledBy ?? "") && !covenantCoin.arkTxId) {
+    if (/^[0-9a-f]{64}$/i.test(covenantCoin.settledBy ?? "") && !covenantCoin.arkTxId) {
         state.lifecycle.state = "available";
         throw new CovenantSpendBusyError(
             [`${state.outpoint.txid}:${state.outpoint.vout}`],

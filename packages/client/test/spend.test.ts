@@ -1758,6 +1758,15 @@ describe("a covenant its renewal holds", () => {
         expect(base.emulator.submitTx).not.toHaveBeenCalled();
     });
 
+    it("reads the renewal's commitment txid in any hex case", async () => {
+        const base = await setup();
+        Object.assign(settled(base), { settledBy: "Ee".repeat(32) });
+        await expect(purchase(base.transfer, destination)).rejects.toBeInstanceOf(
+            CovenantSpendBusyError,
+        );
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
+    });
+
     it("keeps a coin an Ark transaction spent an ordinary refusal", async () => {
         const base = await setup();
         Object.assign(base.coin, {

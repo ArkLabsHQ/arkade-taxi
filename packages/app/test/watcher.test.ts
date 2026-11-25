@@ -1157,6 +1157,21 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    it("adopts a renewal whose commitment txid arrives in upper case", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        renew(state, successor);
+        const key = `${state.outpoint.txid}:${state.outpoint.vout}`;
+        state.coins.set(key, { ...state.coins.get(key)!, settledBy: COMMITMENT.toUpperCase() });
+        await state.watcher.catchUp();
+        expect(state.advances.get(state.advance.id)).toMatchObject({
+            state: "locked",
+            outpoint: successor,
+            renewals: 1,
+        });
+        state.db.close();
+    });
+
     // Mid-batch the consumed coin can carry settledBy before it reads spent, and the
     // adoption guard skips its own row; isVtxoSpent counting settledBy is what holds.
     it("never adopts the predecessor as its own successor", async () => {
