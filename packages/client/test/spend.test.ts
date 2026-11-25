@@ -1769,16 +1769,29 @@ describe("a covenant its renewal holds", () => {
         await expect(purchase(base.transfer, destination)).rejects.toThrow(/already|consumed/i);
     });
 
+    // The flag the 1.1.2 watcher stamped on every scan after adopting a successor (CI 45579569510).
+    const flagged = {
+        failureCode: "covenant_spend_unknown",
+        failureDetail: `candidate unavailable at ${"0f".repeat(32)}:101: unspent covenant evidence could not be validated`,
+    };
+
     it.each([
-        ["while arkd holds it for the renewal", busy, 2, 0x77],
-        ["after the renewal settled it", settled, 1, 0x78],
+        ["while arkd holds it for the renewal", busy, 2, 0x77, {}],
+        ["after the renewal settled it", settled, 1, 0x78, {}],
+        ["after the renewal settled it and the Taxi flagged the row", settled, 1, 0x79, flagged],
     ])(
         "claims the renewed coin once the Taxi reports it, %s",
-        async (_, hold, submissions, fill) => {
+        async (_, hold, submissions, fill, flags) => {
             const successor = source(fill);
             const renewed = { coin: {} as VirtualCoin, source: successor };
             const base = await setup(args(), [], [renewed]);
-            Object.assign(renewed.coin, { ...base.coin, txid: successor.id, vout: 0 });
+            Object.assign(renewed.coin, {
+                ...base.coin,
+                txid: successor.id,
+                vout: 0,
+                isPreconfirmed: false,
+                commitmentTxIds: ["ee".repeat(32)],
+            });
             hold(base);
             let reads = 0;
             const taxi = new TaxiClient({
@@ -1788,7 +1801,11 @@ describe("a covenant its renewal holds", () => {
                     return json(
                         reads === 2
                             ? base.status
-                            : { ...base.status, outpoint: { txid: successor.id, vout: 0 } },
+                            : {
+                                  ...base.status,
+                                  outpoint: { txid: successor.id, vout: 0 },
+                                  ...flags,
+                              },
                     );
                 },
             });

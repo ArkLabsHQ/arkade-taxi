@@ -428,9 +428,11 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
         tagged.kind === "fill" ? tagged.covenantOutpoint.vout : envelope!.covenantOutputIndex;
     const serverUnrollScript =
         tagged.kind === "fill" ? tagged.source.serverUnrollScript : envelope!.serverUnrollScript;
+    // An adopted renewal moved the coin into a batch; the lockup still fixes what it holds.
+    const renewed = (advance.renewals ?? 0) > 0;
     if (
         graphId !== advance.unsignedLockupId ||
-        covenantOutputIndex !== outpoint.vout ||
+        (!renewed && covenantOutputIndex !== outpoint.vout) ||
         serverUnrollScript !==
             hex.encode(CSVMultisigTapscript.decode(hex.decode(serverUnrollScript)).script)
     )
@@ -438,10 +440,10 @@ const covenantFacts = (advance: Advance, config: RuntimeConfig) => {
     const lockup = Transaction.fromPSBT(
         base64.decode(tagged.kind === "fill" ? tagged.source.graph.arkTx : envelope!.arkTx),
     );
-    if (lockup.id !== outpoint.txid || lockup.outputsLength <= outpoint.vout)
+    if ((!renewed && lockup.id !== outpoint.txid) || lockup.outputsLength <= covenantOutputIndex)
         fail("persisted covenant outpoint does not belong to the lockup graph");
     const value = lockupSats(script.options.params);
-    exactOutput(lockup, outpoint.vout, value, script.pkScript, "lockup covenant");
+    exactOutput(lockup, covenantOutputIndex, value, script.pkScript, "lockup covenant");
     if (script.address(config.addressHrp, config.serverPubkey).encode() !== advance.covenantAddress)
         fail("persisted covenant address mismatch");
     const expectedAsset = assetId(advance);

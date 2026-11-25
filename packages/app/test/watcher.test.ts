@@ -1143,6 +1143,19 @@ describe("canonical covenant observation", () => {
         state.db.close();
     });
 
+    it("keeps validating a renewed covenant on every later scan", async () => {
+        const state = await setupV2(undefined);
+        const successor = { txid: "7a".repeat(32), vout: 1 };
+        renew(state, successor);
+        await state.watcher.catchUp();
+        await state.watcher.catchUp();
+        const advance = state.advances.get(state.advance.id)!;
+        expect(advance).toMatchObject({ state: "locked", outpoint: successor, renewals: 1 });
+        expect(advance.failureCode).toBeUndefined();
+        expect(state.watcher.isRecoverable(state.advance.id)).toBe(true);
+        state.db.close();
+    });
+
     // Mid-batch the consumed coin can carry settledBy before it reads spent, and the
     // adoption guard skips its own row; isVtxoSpent counting settledBy is what holds.
     it("never adopts the predecessor as its own successor", async () => {

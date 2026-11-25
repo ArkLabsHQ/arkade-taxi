@@ -9,7 +9,12 @@
   birth, as of unknown age, leaving it to the overdue alarm instead of renewing it at once.
 - A covenant a renewal batch has already settled raises `CovenantSpendBusyError` before anything
   is submitted and releases its capability, so `TaxiClient` re-binds a transfer verified before
-  the renewal to the renewed coin and claims there rather than failing it as spent.
+  the renewal to the renewed coin and claims there rather than failing it as spent. The re-bind
+  checks the renewed coin itself, so a failure the Taxi reports on the locked transfer no longer
+  blocks it.
+- The spend watcher keeps validating a covenant after adopting its renewal successor. It had
+  flagged every renewed covenant `covenant_spend_unknown` and paused the Taxi on each later scan,
+  and could not classify a claim of the renewed coin.
 - An isolated e2e scenario proves the in-process keeper renews a short-lived covenant once, and
   not again while its successor is fresh, and that the receiver claims the renewed coin.
 
