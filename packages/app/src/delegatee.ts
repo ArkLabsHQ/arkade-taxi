@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { DUST_COVENANT_ARTIFACT, DustCovenantScript } from "@arkade-taxi/covenant";
 import { covenantParamsOf, renewable, type Advance } from "@arkade-taxi/core";
+import { canonicalJson } from "./arkade/psbt.js";
 import type { RuntimeConfig } from "./config.js";
 
 export interface DelegateeRegistration {
@@ -28,7 +30,25 @@ export interface DelegationView {
     }[];
 }
 
-export class DelegateeError extends Error {}
+export class DelegateeError extends Error {
+    readonly status?: number;
+    constructor(message: string, options?: ErrorOptions & { status?: number }) {
+        super(message, options);
+        this.status = options?.status;
+    }
+}
+
+export class TemplateRefusedError extends DelegateeError {
+    constructor(
+        readonly templateId: string,
+        options?: ErrorOptions,
+    ) {
+        super(
+            `the Executor refused to register renewal template ${templateId}: install it through the Executor's admin API, or run the Executor with EXECUTOR_PUBLIC_REGISTRY=true`,
+            options,
+        );
+    }
+}
 
 /** One template for every covenant. The full artifact cannot be delegated: a claim mode
  * swaps one claim leaf out of the tree, and the Executor refuses a declared leaf the
@@ -68,6 +88,12 @@ export function renewalTemplate(): string {
     });
 }
 
+/** The Executor's content id: sha256 of the document's RFC 8785 form. */
+export const renewalTemplateId = (): string =>
+    createHash("sha256")
+        .update(canonicalJson(JSON.parse(renewalTemplate())))
+        .digest("hex");
+
 /** Lower-case hex, an int as a minimal script number. */
 export const renewalVariables = (
     covenant: DustCovenantScript,
@@ -92,14 +118,26 @@ export class DelegateeClient {
         this.fetch = options.fetch ?? globalThis.fetch;
     }
 
-    /** Idempotent on the template's content id, so startup may repeat it. */
+    /** Uploads the template only where the Executor lacks it, so startup may repeat it. */
     async register(): Promise<DelegateeRegistration> {
-        const body = await this.post<{ template?: { id?: string } }>("/v1/template", {
-            document: renewalTemplate(),
+        type Body = { template?: { id?: string; status?: string } };
+        const templateId = renewalTemplateId();
+        const body = await this.get<Body>(`/v1/template/${templateId}`).catch((error: unknown) => {
+            if (!(error instanceof DelegateeError) || error.status !== 404) throw error;
+            return this.post<Body>("/v1/template", { document: renewalTemplate() }).catch(
+                (refusal: unknown) => {
+                    throw refusal instanceof DelegateeError && refusal.status === 403
+                        ? new TemplateRefusedError(templateId, { cause: refusal })
+                        : refusal;
+                },
+            );
         });
-        const templateId = body.template?.id;
-        if (!templateId) throw new DelegateeError("delegatee returned no template id");
-        return { templateId };
+        const template = body.template;
+        if (!template?.id) throw new DelegateeError("delegatee returned no template id");
+        // RegisterDelegation refuses every covenant on a disabled template.
+        if (template.status === "disabled")
+            throw new DelegateeError(`delegatee template ${template.id} is disabled`);
+        return { templateId: template.id };
     }
 
     /** Registering an active delegation again returns it unchanged. */
@@ -160,6 +198,7 @@ export class DelegateeClient {
             const detail = await response.text().catch(() => "");
             throw new DelegateeError(
                 `delegatee ${path} answered ${response.status}: ${detail.slice(0, 200)}`,
+                { status: response.status },
             );
         }
         return (await response.json()) as T;

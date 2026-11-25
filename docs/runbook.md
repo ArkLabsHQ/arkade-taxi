@@ -146,6 +146,20 @@ SDK network's Esplora URL and address HRP. Taxi closes admission on provider
 identity, parameter or capability drift. Clients independently verify the same
 trust facts before signing.
 
+With `TAXI_DELEGATEE_URL` set, covenants renew through that Executor (v0.0.5).
+It must hold the Taxi's renewal template,
+`6eb1a0333929e447ad37b927df3c8ea5073ec82da1186e6b45ef9dcf6e070673`. The Taxi
+uploads it when missing, which the Executor's public port accepts only with
+`EXECUTOR_PUBLIC_REGISTRY=true`. Otherwise install it through the Executor's
+admin API: `POST /v1/template` on the admin port, with `document` holding the
+text of `packages/app/test/fixtures/executor-v0.0.5/renew.template.json` as a
+string. The Taxi checks this once, at startup: if the upload is refused, the
+template is disabled or the Executor is unreachable, it logs `delegatee
+unavailable, covenants renew in process` at error level, naming the template
+id, and renews covenants itself. A template disabled while the Taxi runs shows
+as `covenant renewal failed` errors instead. Either way, restart the Taxi once
+the Executor is fixed to return to delegation.
+
 ## Liveness, readiness and first admission
 
 `GET /health` reports liveness after configuration/database initialization and

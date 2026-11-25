@@ -147,12 +147,22 @@ async function runServe(): Promise<void> {
     });
 
     // Once, before the first sweep registers a covenant; idempotent on its derived id.
+    // Without it the keeper below renews in process until a restart retries.
     const delegatee = config.delegateeUrl
         ? await (async () => {
               const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
-              const registration = await client.register();
-              log.info({ ...registration }, "delegatee renewal template registered");
-              return { client, registration };
+              try {
+                  const registration = await client.register();
+                  log.info({ ...registration }, "delegatee renewal template registered");
+                  return { client, registration };
+              } catch (error) {
+                  // Unsanitized: the remedy names the 64-hex template id the sanitizer redacts.
+                  log.error(
+                      { error: error instanceof Error ? error.message : String(error) },
+                      "delegatee unavailable, covenants renew in process",
+                  );
+                  return undefined;
+              }
           })()
         : undefined;
     const shutdown = new AbortController();

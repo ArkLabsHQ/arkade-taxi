@@ -10,7 +10,9 @@ import {
     delegationRenewal,
     registerRenewal,
     renewalTemplate,
+    renewalTemplateId,
     renewalVariables,
+    TemplateRefusedError,
 } from "../src/delegatee.js";
 import {
     advance,
@@ -45,6 +47,13 @@ const covenantAddress = covenant.address("ark", serverKey).encode();
 
 const json = (body: unknown) =>
     ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+const grpcError = (status: number, code: number, message: string) =>
+    ({
+        ok: false,
+        status,
+        text: async () => JSON.stringify({ code, message, details: [] }),
+    }) as unknown as Response;
+const notFound = () => grpcError(404, 5, "template not found");
 
 const fixture = (name: string): Buffer =>
     readFileSync(new URL(`./fixtures/executor-v0.0.5/${name}`, import.meta.url));
@@ -62,6 +71,10 @@ const spec = JSON.parse(fixture("service.openapi.json").toString()) as {
 };
 const schema = (name: string): Schema =>
     spec.components.schemas[name.replace("#/components/schemas/", "")]!;
+const route = (pathname: string): string =>
+    Object.keys(spec.paths).find((path) =>
+        new RegExp(`^${path.replace(/\{\w+\}/g, "[^/]+")}$`).test(pathname),
+    ) ?? pathname;
 
 describe("executor v0.0.5 fixtures", () => {
     it("holds the service spec exactly as tagged", () => {
@@ -82,6 +95,10 @@ describe("executor v0.0.5 fixtures", () => {
         expect(renewalTemplate()).toBe(fixture("renew.template.json").toString());
     });
 
+    it("derives the id v0.0.5 stores that document under", () => {
+        expect(renewalTemplateId()).toBe(RENEW_TEMPLATE_ID);
+    });
+
     it("calls only routes, parameters and request keys the spec declares", async () => {
         const calls: { method: string; url: URL; body?: Record<string, unknown> }[] = [];
         const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
@@ -90,6 +107,7 @@ describe("executor v0.0.5 fixtures", () => {
                 url: new URL(String(url)),
                 ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}),
             });
+            if (calls.length === 1) return notFound();
             return json({
                 template: { id: RENEW_TEMPLATE_ID },
                 delegation: { inputs: [{ address: covenantAddress }] },
@@ -103,20 +121,21 @@ describe("executor v0.0.5 fixtures", () => {
         await client.delegate(RENEW_TEMPLATE_ID, renewalVariables(covenant, 1n), 1_900_000_000);
         await client.getDelegation(covenantAddress);
 
-        expect(calls.map(({ method, url }) => `${method} ${url.pathname}`)).toEqual([
+        expect(calls.map(({ method, url }) => `${method} ${route(url.pathname)}`)).toEqual([
+            "GET /v1/template/{id}",
             "POST /v1/template",
             "POST /v1/delegation",
             "GET /v1/delegation",
         ]);
         for (const { method, url, body } of calls) {
-            const operation = spec.paths[url.pathname]![method.toLowerCase()]!;
+            const operation = spec.paths[route(url.pathname)]![method.toLowerCase()]!;
             const query = (operation.parameters ?? []).filter((p) => p.in === "query");
             expect([...url.searchParams.keys()]).toEqual(query.map((p) => p.name));
             if (!body) continue;
             const request = schema(operation.requestBody!.content["application/json"].schema.$ref);
             expect(Object.keys(body).filter((key) => !(key in request.properties))).toEqual([]);
         }
-        expect(calls[1]!.body).toEqual({
+        expect(calls[2]!.body).toEqual({
             templateId: RENEW_TEMPLATE_ID,
             variables: renewalVariables(covenant, 1n),
             expiresAt: 1_900_000_000,
@@ -126,7 +145,8 @@ describe("executor v0.0.5 fixtures", () => {
     it("reads only response fields the spec declares", () => {
         const fields = (name: string) => Object.keys(schema(name).properties);
         expect(fields("RegisterTemplateResponse")).toContain("template");
-        expect(fields("Template")).toContain("id");
+        expect(fields("GetTemplateResponse")).toContain("template");
+        expect(fields("Template")).toEqual(expect.arrayContaining(["id", "status"]));
         expect(fields("RegisterDelegationResponse")).toContain("delegation");
         expect(fields("Delegation")).toEqual(
             expect.arrayContaining(["status", "expiresAt", "inputs"]),
@@ -180,15 +200,54 @@ describe("delegatee registration", () => {
         });
     });
 
-    it("returns the template id the Executor stored", async () => {
+    const executor = (answer: (method: string) => Response) => {
+        const calls: string[] = [];
         const client = new DelegateeClient({
             baseUrl: "https://executor.example/",
-            fetch: (async () =>
-                json({
-                    template: { id: RENEW_TEMPLATE_ID },
-                })) as unknown as typeof globalThis.fetch,
+            fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+                const method = init?.method ?? "GET";
+                calls.push(`${method} ${new URL(String(url)).pathname}`);
+                return answer(method);
+            }) as typeof globalThis.fetch,
         });
+        return { client, calls };
+    };
+
+    it("uses a template the Executor already holds without uploading it", async () => {
+        const { client, calls } = executor(() =>
+            json({ template: { id: RENEW_TEMPLATE_ID, status: "active" } }),
+        );
         await expect(client.register()).resolves.toEqual({ templateId: RENEW_TEMPLATE_ID });
+        expect(calls).toEqual([`GET /v1/template/${RENEW_TEMPLATE_ID}`]);
+    });
+
+    it("uploads the template the Executor lacks", async () => {
+        const { client, calls } = executor((method) =>
+            method === "GET" ? notFound() : json({ template: { id: RENEW_TEMPLATE_ID } }),
+        );
+        await expect(client.register()).resolves.toEqual({ templateId: RENEW_TEMPLATE_ID });
+        expect(calls).toEqual([`GET /v1/template/${RENEW_TEMPLATE_ID}`, "POST /v1/template"]);
+    });
+
+    it("names the template and both remedies when the public port refuses the upload", async () => {
+        const { client } = executor((method) =>
+            method === "GET" ? notFound() : grpcError(403, 7, "served on the admin port only"),
+        );
+        const refused = await client.register().catch((error: unknown) => error);
+        expect(refused).toBeInstanceOf(TemplateRefusedError);
+        expect(refused).toMatchObject({
+            templateId: RENEW_TEMPLATE_ID,
+            message: expect.stringMatching(
+                `${RENEW_TEMPLATE_ID}: install it through the Executor's admin API, or run the Executor with EXECUTOR_PUBLIC_REGISTRY=true`,
+            ),
+        });
+    });
+
+    it("refuses a template the Executor disabled", async () => {
+        const { client } = executor(() =>
+            json({ template: { id: RENEW_TEMPLATE_ID, status: "disabled" } }),
+        );
+        await expect(client.register()).rejects.toThrow(`${RENEW_TEMPLATE_ID} is disabled`);
     });
 
     it("refuses a registration the delegatee answers without an id", async () => {
