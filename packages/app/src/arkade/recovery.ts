@@ -63,7 +63,9 @@ export async function renewedCovenantSource(
     indexer: PrevTxSource,
 ): Promise<Uint8Array> {
     try {
-        return (await resolvePrevTxs([outpoint.txid], indexer)).get(outpoint.txid)!;
+        const raw = (await resolvePrevTxs([outpoint.txid], indexer)).get(outpoint.txid);
+        if (!raw) throw new Error(`the indexer did not return ${outpoint.txid}`);
+        return raw;
     } catch (cause) {
         throw new RecoverySourceUnavailableError(
             cause instanceof Error ? cause.message : String(cause),
