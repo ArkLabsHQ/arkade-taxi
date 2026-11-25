@@ -466,6 +466,7 @@ describe("package manager process boundary", () => {
                 "e2e/unilateral-exit.e2e.test.ts",
                 "e2e/fill-undersigned.e2e.test.ts",
                 "e2e/fill-pending.e2e.test.ts",
+                "e2e/keeper-renewal.e2e.test.ts",
             ]);
         for (const args of [
             ["--direct", task12Tests[0]],

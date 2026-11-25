@@ -38,6 +38,7 @@ import {
     eventSourceNodeEnvironment,
     formatProcessFailure,
     isTaxiReadyResponse,
+    ISOLATED_TAXI_ENV,
     namespaceRegtestSources,
     nodeEventSourceArgs,
     packageManagerEnvironment,
@@ -725,6 +726,7 @@ async function main(isolatedFile = undefined) {
     const scenarioIds = isolated
         ? isolatedScenarioIds(isolatedFile)
         : readScenarioIds(options.mode);
+    const isolatedTaxiEnv = (isolated && ISOLATED_TAXI_ENV[isolatedFile]) || {};
     const interruption = createInterruptionState();
     activeInterruption = interruption;
     const signalHandlers = {
@@ -1049,6 +1051,7 @@ await import("/app/dist/cli.js");
             TAXI_COVENANT_DEADLINE_SECONDS: COVENANT_DEADLINE_SECONDS,
             TAXI_RECONCILE_INTERVAL_MS: "5000",
             TAXI_LOG_LEVEL: "debug",
+            ...isolatedTaxiEnv,
         });
         await run(
             "docker",
@@ -1225,6 +1228,7 @@ await import("/app/dist/cli.js");
             TAXI_E2E_ADMIN_URL: adminUrl,
             TAXI_E2E_CONTROL_URL: `http://127.0.0.1:${controlServer.address().port}`,
             TAXI_E2E_ARKD_URL: arkdUrl,
+            TAXI_E2E_ARKD_ADMIN_URL: `http://127.0.0.1:${ports.ARKD_ADMIN_PORT}`,
             TAXI_E2E_EMULATOR_URL: emulatorUrl,
             TAXI_E2E_FIXTURE_FILE: fixtureFile,
             TAXI_E2E_SECRET_FILE: secretFile,
@@ -1243,6 +1247,7 @@ await import("/app/dist/cli.js");
             TAXI_RECOVERY_CRITICAL_SECONDS: RECOVERY_CRITICAL_SECONDS,
             TAXI_COVENANT_DEADLINE_SECONDS: COVENANT_DEADLINE_SECONDS,
             TAXI_RECONCILE_INTERVAL_MS: "5000",
+            ...isolatedTaxiEnv,
         });
         const vitestEntry = join(REPO, "node_modules", "vitest", "vitest.mjs");
         await runAndPublishResults(() =>

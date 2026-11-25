@@ -170,7 +170,18 @@ const ISOLATED_TESTS = [
     "e2e/unilateral-exit.e2e.test.ts",
     "e2e/fill-undersigned.e2e.test.ts",
     "e2e/fill-pending.e2e.test.ts",
+    "e2e/keeper-renewal.e2e.test.ts",
 ];
+
+/** Taxi settings one isolated stack runs with: a covenant due within minutes has to be
+ * quotable on a coin that short-lived, and renewable outside a guard that short. */
+export const ISOLATED_TAXI_ENV = {
+    "e2e/keeper-renewal.e2e.test.ts": {
+        TAXI_MIN_EXPIRY_HEADROOM_SECONDS: "300",
+        TAXI_RECOVERY_BROADCAST_SECONDS: "240",
+        TAXI_RECOVERY_CRITICAL_SECONDS: "60",
+    },
+};
 
 /** The artifact sub-directory one isolated run writes to. */
 export const isolatedLabel = (file) => file.replace(/^.*\//, "").replace(/\.e2e\.test\.ts$/, "");
