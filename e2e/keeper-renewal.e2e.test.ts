@@ -10,7 +10,7 @@ import {
 } from "@arkade-os/sdk";
 import { lockupSats } from "@arkade-taxi/covenant";
 import { hex } from "@scure/base";
-import { renewedCovenantSource } from "../packages/app/src/arkade/recovery.js";
+import { renewedCovenantSource, txidOf } from "../packages/app/src/arkade/recovery.js";
 import { captureOwnedTaxiLogs, taxiLogArgs } from "../scripts/lib/harness.mjs";
 import { settleWithin } from "../scripts/e2e-settle.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
@@ -294,10 +294,9 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         // Recovery's own lookup of the coin it would reclaim, made once before the claim spends it.
         const source = await renewedCovenantSource(successorOutpoint, live.indexer)
             .then((raw) => {
-                const created = Transaction.fromRaw(raw);
-                const output = created.getOutput(successorOutpoint.vout);
+                const output = Transaction.fromRaw(raw).getOutput(successorOutpoint.vout);
                 return {
-                    txid: created.id,
+                    txid: txidOf(raw),
                     amount: output.amount,
                     script: output.script && hex.encode(output.script),
                     raw: hex.encode(raw),

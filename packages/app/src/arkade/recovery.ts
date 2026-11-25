@@ -135,7 +135,7 @@ function startupRecoveryAdvance(advance: Advance): Advance {
     }
 }
 
-const txidOf = (raw: Uint8Array): string =>
+export const txidOf = (raw: Uint8Array): string =>
     hex.encode(
         createHash("sha256").update(createHash("sha256").update(raw).digest()).digest().reverse(),
     );
