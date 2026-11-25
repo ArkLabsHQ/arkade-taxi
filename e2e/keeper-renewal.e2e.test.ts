@@ -10,6 +10,7 @@ import { settleWithin } from "../scripts/e2e-settle.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
 import { liveScenario } from "./scenarios.js";
 import {
+    admin,
     artifactPath,
     expectReceipt,
     lock,
@@ -270,7 +271,14 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         const fresh = await keeperLog(id);
         evidence.renewalsAfterFreshWait = fresh;
         expect(fresh.renewed, "renewed again while the successor is fresh").toHaveLength(1);
-        expect((await live.client.status(id)).outpoint).toEqual(successorOutpoint);
+        const settledStatus = await live.client.status(id);
+        evidence.statusBeforeClaim = settledStatus;
+        expect(settledStatus.outpoint).toEqual(successorOutpoint);
+        expect(
+            settledStatus.failureCode,
+            "the watcher flagged the renewed covenant",
+        ).toBeUndefined();
+        expect((await admin("status")).paused, "the watcher paused the Taxi").toBe(false);
         // Asserted after the claim, so a feed the renewal broke still leaves the claim evidence.
         const feed = await live.client.listClaims({ receiverAddresses: [bobAddress] }).then(
             ({ claims }) => claims.find((c) => c.transferId === id),
@@ -278,7 +286,12 @@ liveScenario("covenant-keeper-renewal-claim", async () => {
         );
         evidence.feedAfterRenewal = feed;
 
-        const txid = await recycleWith(live, transfer, bobCoin, locked.destination);
+        const txid = await recycleWith(live, transfer, bobCoin, locked.destination).catch(
+            (error: Error) => {
+                evidence.claimError = { message: error.message, cause: String(error.cause) };
+                throw error;
+            },
+        );
         evidence.recycleTxid = txid;
         const done = await poll(
             "Bob's recycle settles",
