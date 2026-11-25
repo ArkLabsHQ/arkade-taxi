@@ -46,7 +46,7 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Use `@arkade-taxi/client@1.1.1` with the [pinned SDK](../vendor/sdk/manifest.json).
+Use `@arkade-taxi/client@1.1.2` with the [pinned SDK](../vendor/sdk/manifest.json).
 Wallet apps should use [`createTaxiSender`](../packages/client/WALLET.md) for durable reservations and recovery.
 This lower-level example requires equivalent coordination. Pass Alice's initialized wallet, Bob's full address,
 the selected `fareId` and wallet-configured trust facts. `assetUnits` is Bob's quantity; the fare is additional.

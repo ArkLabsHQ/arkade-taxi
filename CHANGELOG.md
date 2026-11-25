@@ -1,11 +1,22 @@
 # Changelog
 
+## 1.1.2 (unreleased)
+
+- An Executor that answers the renewal template under an id other than the Taxi's raises
+  `TemplateMismatchError`, so the Taxi renews in process; `TemplateRefusedError` carries the 403
+  as `status`, like every other `DelegateeError`.
+- The renewal keeper treats a covenant coin born at the epoch, the SDK's reading of a zero or null
+  birth, as of unknown age, leaving it to the overdue alarm instead of renewing it at once.
+- A covenant a renewal batch has already settled raises `CovenantSpendBusyError` before anything
+  is submitted and releases its capability, so `TaxiClient` re-binds a transfer verified before
+  the renewal to the renewed coin and claims there rather than failing it as spent.
+- An isolated e2e scenario proves the in-process keeper renews a short-lived covenant once, and
+  not again while its successor is fresh, and that the receiver claims the renewed coin.
+
 ## 1.1.1 (unreleased)
 
 - A covenant spend arkd refuses with `VTXO_ALREADY_REGISTERED` raises `CovenantSpendBusyError` and
   releases its capability; `TaxiClient` waits for the renewed coin and spends it there.
-- A transfer verified before its renewal settled raises the same error before submitting, so
-  `TaxiClient` claims it at the renewed coin rather than failing it as spent.
 - The in-process renewal keeper waits for half a covenant coin's own life, so neither a fresh
   covenant nor its renewed successor is due at once when arkd advertises no VTXO lifetime.
 
