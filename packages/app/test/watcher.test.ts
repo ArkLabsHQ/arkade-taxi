@@ -818,6 +818,7 @@ describe("canonical covenant observation", () => {
         const state = await setup("purchased");
         const runner = createRecoveryRunner({
             advances: state.advances,
+            indexer: state.indexer,
             config: config(),
             workerId: "worker",
             now: () => NOW + 3,

@@ -12,9 +12,17 @@
   the renewal to the renewed coin and claims there rather than failing it as spent. The re-bind
   checks the renewed coin itself, so a failure the Taxi reports on the locked transfer no longer
   blocks it.
-- The spend watcher keeps validating a covenant after adopting its renewal successor. It had
-  flagged every renewed covenant `covenant_spend_unknown` and paused the Taxi on each later scan,
-  and could not classify a claim of the renewed coin.
+- The spend watcher no longer pauses the Taxi after a renewal: it keeps validating a covenant once
+  it adopts the renewal successor. It had flagged every renewed covenant `covenant_spend_unknown`,
+  paused the Taxi on each later scan, and could not classify a claim of the renewed coin.
+- Recovery reclaims a renewed covenant at its adopted successor, whose transaction the indexer
+  serves and which must hold the covenant's script, value and assets. Recovery had built the
+  reclaim against the lockup output the renewal spent, and the startup audit refused every
+  renewed row, so the Taxi could not restart after a renewal. An unreachable indexer leaves the
+  covenant locked for the next sweep.
+- The claim feed serves a renewed covenant at its successor. It had failed the receiver's whole
+  snapshot for a joint-fill covenant, and for a direct one whose successor sat at another output
+  index than the lockup's covenant.
 - An isolated e2e scenario proves the in-process keeper renews a short-lived covenant once, and
   not again while its successor is fresh, and that the receiver claims the renewed coin.
 

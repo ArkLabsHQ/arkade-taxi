@@ -170,6 +170,7 @@ async function runServe(): Promise<void> {
     const recovery = createRecoveryRunner({
         advances,
         emulator: runtime.providers.emulatorProvider,
+        indexer: runtime.providers.indexerProvider,
         config,
         workerId: randomUUID(),
         now: seconds,
