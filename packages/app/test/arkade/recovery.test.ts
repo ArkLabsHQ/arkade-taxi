@@ -706,38 +706,92 @@ describe("renewed covenant recovery", () => {
         expect(() => buildRecoveryIntent(renewed, config(), foreign)).toThrow(/not the successor/);
     });
 
-    it("has the watcher classify the signed reclaim of a successor as recovered", async () => {
-        const { renewed, prevTx } = renewedCoin(sourceAdvance("time"));
-        const intent = buildRecoveryIntent(renewed, config(), prevTx);
-        const signed = await signingEmulator().submitTx(intent.arkTx, intent.checkpoints);
-        const [checkpoint] = signed.signedCheckpointTxs;
+    /** What the watcher makes of a signed reclaim of the advance's current coin. */
+    const classifyReclaim = (
+        advance: Advance,
+        arkTx: string,
+        checkpoint: string,
+        assets?: VirtualCoin["assets"],
+    ) => {
         const covenant = new DustCovenantScript({
             serverKey,
             emulatorKey,
             vtxoMinAmount: config().vtxoMinAmount,
-            params: covenantParamsOf(renewed),
+            params: covenantParamsOf(advance),
         });
         const coin = {
-            ...renewed.outpoint,
-            value: Number(lockupSats(renewed)),
+            ...advance.outpoint!,
+            value: Number(lockupSats(advance)),
             script: hex.encode(covenant.pkScript),
             isSpent: true,
-            spentBy: Transaction.fromPSBT(base64.decode(checkpoint!)).id,
-            arkTxId: intent.expectedTxid,
+            spentBy: Transaction.fromPSBT(base64.decode(checkpoint)).id,
+            arkTxId: Transaction.fromPSBT(base64.decode(arkTx)).id,
+            assets,
         } as unknown as VirtualCoin;
         const indexer = {
             getVtxos: async () => ({ vtxos: [] }),
-            getVirtualTxs: async () => ({ txs: [signed.signedArkTx, checkpoint!] }),
+            getVirtualTxs: async () => ({ txs: [arkTx, checkpoint] }),
         };
+        return classifyObservedSpend(
+            advance,
+            coin,
+            { indexer, config: config() },
+            { height: 700000, time: Number(advance.locktime) },
+        );
+    };
 
+    it("has the watcher classify the signed reclaim of a successor as recovered", async () => {
+        const { renewed, prevTx } = renewedCoin(sourceAdvance("time"));
+        const intent = buildRecoveryIntent(renewed, config(), prevTx);
+        const signed = await signingEmulator().submitTx(intent.arkTx, intent.checkpoints);
         await expect(
-            classifyObservedSpend(
-                renewed,
-                coin,
-                { indexer, config: config() },
-                { height: 700000, time: Number(renewed.locktime) },
-            ),
+            classifyReclaim(renewed, signed.signedArkTx, signed.signedCheckpointTxs[0]!),
         ).resolves.toEqual({ kind: "recovered", txid: intent.expectedTxid });
+    });
+
+    it("reclaims a renewed asset covenant through the runner, moving its whole holding", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance("time", true);
+        advances.insert(row);
+        const { renewed, psbt } = renewedCoin(row);
+        expect(advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1)).toBe(true);
+        await createRecoveryRunner({
+            advances,
+            emulator: signingEmulator(),
+            indexer: { getVirtualTxs: async () => ({ txs: [psbt] }) },
+            config: config(),
+            workerId: "worker",
+            now: () => NOW + 100,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+        }).recover(advances.get(row.id)!);
+
+        const reclaimed = advances.get(row.id)!;
+        expect(reclaimed).toMatchObject({ state: "recovering", recoveryPhase: "submitted" });
+        const ark = Transaction.fromPSBT(base64.decode(reclaimed.recoveryResponseArkTx!));
+        const source = Transaction.fromRaw(getArkPsbtFields(ark, 0, PrevArkTxField)[0]!);
+        const [held] = Extension.fromTx(source).getAssetPacket()!.groups;
+        const [moved] = Extension.fromTx(ark).getAssetPacket()!.groups;
+        const id = held!.assetId!.toString();
+        expect(held!.outputs.filter(({ vout }) => vout === renewed.outpoint.vout)).toMatchObject([
+            { amount: row.assetUnits },
+        ]);
+        expect(moved!.assetId!.toString()).toBe(id);
+        expect(moved!.inputs.map(({ vin, amount }) => [vin, amount])).toEqual([
+            [0, row.assetUnits],
+        ]);
+        expect(moved!.outputs.map(({ vout, amount }) => [vout, amount])).toEqual([
+            [0, row.assetUnits],
+        ]);
+        await expect(
+            classifyReclaim(
+                reclaimed,
+                reclaimed.recoveryResponseArkTx!,
+                reclaimed.recoveryResponseCheckpoints![0]!,
+                [{ assetId: id, amount: row.assetUnits! }],
+            ),
+        ).resolves.toEqual({ kind: "recovered", txid: ark.id });
     });
 
     // The asset fixture's hand-built graph never passes the startup lockup audit.
