@@ -22,6 +22,12 @@ the exact transaction and consumption of the reserved outpoint. Observation or
 storage errors after submission retain the reservation. A multi-descriptor wallet
 must supply each reserved input's own signing identity.
 
+`CovenantSpendBusyError` is a definite failure: arkd refused the spend because a batch
+intent, usually Taxi renewing the covenant, holds an input named in `outpoints`, and
+nothing was accepted. `TaxiClient` `recycle`, `purchase` and `refund` first wait for Taxi
+status to report the renewed coin and spend it there, so the error means the renewal did
+not settle in time; retry from a fresh claim.
+
 ```ts
 // receiver-store.ts
 import {

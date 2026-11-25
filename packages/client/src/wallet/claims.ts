@@ -2,6 +2,7 @@ import { VtxoScript, type ExtendedVirtualCoin, type Identity } from "@arkade-os/
 import {
     ClientErrorCode,
     CovenantSpendAmbiguousError,
+    CovenantSpendBusyError,
     fundingInputsFromVtxos,
     sdkAssetId,
     type CovenantSpendConfig,
@@ -432,7 +433,7 @@ export const claimVerified = async (
         try {
             return await offer.client.purchase(offer.transfer, receiverScript(offer.claim));
         } catch (error) {
-            throw new ClaimSpent(error);
+            throw error instanceof CovenantSpendBusyError ? error : new ClaimSpent(error);
         }
     }
     const [funding] = fundingInputsFromVtxos([plan.coin]);
@@ -461,7 +462,7 @@ export const claimVerified = async (
     try {
         return await offer.client.recycle(offer.transfer, input, receiverScript(offer.claim));
     } catch (error) {
-        throw new ClaimSpent(error);
+        throw error instanceof CovenantSpendBusyError ? error : new ClaimSpent(error);
     }
 };
 

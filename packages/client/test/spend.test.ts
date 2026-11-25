@@ -52,6 +52,7 @@ import {
     verifyCovenantTransfer,
     verifyIncomingClaim,
     CovenantSpendAmbiguousError,
+    CovenantSpendBusyError,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type ReceiverWalletInput,
@@ -217,11 +218,16 @@ const setup = async (
                 await SingleKey.fromPrivateKey(new Uint8Array(32).fill(5)).compressedPublicKey(),
             ),
         })),
-        submitTx: vi.fn(async (arkTx: string, checkpoints: string[]) => {
-            submitted = Transaction.fromPSBT(base64.decode(arkTx));
-            const packet = Extension.fromTx(submitted).getEmulatorPacket()!;
-            return finalGraph(arkTx, checkpoints, packet.entries[0].script);
-        }),
+        submitTx: vi.fn(
+            async (
+                arkTx: string,
+                checkpoints: string[],
+            ): Promise<Awaited<ReturnType<typeof finalGraph>> | Response> => {
+                submitted = Transaction.fromPSBT(base64.decode(arkTx));
+                const packet = Extension.fromTx(submitted).getEmulatorPacket()!;
+                return finalGraph(arkTx, checkpoints, packet.entries[0].script);
+            },
+        ),
     };
     const coins = [coin, ...extras.map(({ coin: extra }) => extra)];
     const sources = [previous, ...extras.map(({ source: extra }) => extra)];
@@ -293,7 +299,8 @@ const setup = async (
                 arkTx: string;
                 checkpointTxs: string[];
             };
-            return json(await emulator.submitTx(body.arkTx, body.checkpointTxs));
+            const reply = await emulator.submitTx(body.arkTx, body.checkpointTxs);
+            return reply instanceof Response ? reply : json(reply);
         }
         throw new Error(`unexpected provider request ${url}`);
     });
@@ -1673,6 +1680,119 @@ describe("one-shot covenant capability", () => {
             purchase(base.transfer, new Uint8Array([0x51, 0x20, ...receiverKey])),
         ).rejects.toThrow(/already|consumed/i);
         expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+});
+
+// The emulator's body for arkd's refusal, as the funded Taxi lane logged it.
+const refusal = (name: string, outpoint: string): Response => {
+    const message = `${name} (4): vtxo(s) already registered`;
+    return new Response(
+        JSON.stringify({
+            code: 6,
+            message,
+            details: [
+                {
+                    "@type": "type.googleapis.com/ark.v1.ErrorDetails",
+                    code: 4,
+                    name,
+                    message,
+                    metadata: { vtxo_outpoint: outpoint, vtxo_outpoints: `[${outpoint}]` },
+                },
+            ],
+        }),
+        { status: 409 },
+    );
+};
+
+describe("a covenant its renewal holds", () => {
+    const destination = new Uint8Array([0x51, 0x20, ...receiverKey]);
+    const held = ({ coin }: { coin: VirtualCoin }) => `${coin.txid}:${coin.vout}`;
+    const busy = (base: Awaited<ReturnType<typeof setup>>) =>
+        base.emulator.submitTx.mockResolvedValueOnce(
+            refusal("VTXO_ALREADY_REGISTERED", held(base)),
+        );
+
+    it("refuses the spend as busy, not ambiguous, and releases the capability", async () => {
+        const base = await setup();
+        busy(base);
+        const error = await purchase(base.transfer, destination).catch((cause) => cause);
+        expect(error).toBeInstanceOf(CovenantSpendBusyError);
+        expect(error).not.toBeInstanceOf(CovenantSpendAmbiguousError);
+        expect(error.outpoints).toEqual([held(base)]);
+        const txid = await purchase(base.transfer, destination);
+        expect(txid).toBe(base.submitted()!.id);
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        ["another arkd refusal", (outpoint: string) => refusal("VTXO_ALREADY_SPENT", outpoint)],
+        ["an unparsable error body", () => new Response("bad gateway", { status: 502 })],
+    ])("keeps %s ambiguous and the capability consumed", async (_, reply) => {
+        const base = await setup();
+        base.emulator.submitTx.mockResolvedValueOnce(reply(held(base)));
+        await expect(purchase(base.transfer, destination)).rejects.toBeInstanceOf(
+            CovenantSpendAmbiguousError,
+        );
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/already|consumed/i);
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+
+    it("claims the renewed coin once the Taxi reports it", async () => {
+        const successor = source(0x77);
+        const renewed = { coin: {} as VirtualCoin, source: successor };
+        const base = await setup(args(), [], [renewed]);
+        Object.assign(renewed.coin, { ...base.coin, txid: successor.id, vout: 0 });
+        busy(base);
+        let reads = 0;
+        const taxi = new TaxiClient({
+            baseUrl: "https://taxi.example",
+            fetch: async () =>
+                json(
+                    ++reads < 2
+                        ? base.status
+                        : { ...base.status, outpoint: { txid: successor.id, vout: 0 } },
+                ),
+        });
+        vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
+        try {
+            const txid = await drive(taxi.purchase(base.transfer, destination));
+            expect(txid).toBe(base.submitted()!.id);
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(reads).toBe(2);
+        const [, checkpoints] = base.emulator.submitTx.mock.calls[1]!;
+        const spent = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
+        expect([hex.encode(spent.txid!), spent.index]).toEqual([successor.id, 0]);
+    });
+
+    it("gives up with the busy refusal when the Taxi never reports a renewed coin", async () => {
+        const base = await setup();
+        busy(base);
+        const taxi = new TaxiClient({
+            baseUrl: "https://taxi.example",
+            fetch: async () => json(base.status),
+        });
+        vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
+        try {
+            await expect(drive(taxi.purchase(base.transfer, destination))).rejects.toBeInstanceOf(
+                CovenantSpendBusyError,
+            );
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the wallet queue a busy claim unwrapped, so it is not marked spent", async () => {
+        const refused = new CovenantSpendBusyError([`${"ab".repeat(32)}:0`], new Error("held"));
+        const offer = {
+            client: { purchase: async () => Promise.reject(refused) },
+            claim: { claim: { params: { receiverKey: hex.encode(receiverKey) } } },
+        } as unknown as VerifiedClaim;
+        await expect(
+            claimVerified(offer, { kind: "purchase", receivedSats: 330n }, senderIdentity),
+        ).rejects.toBe(refused);
     });
 });
 
