@@ -18,7 +18,16 @@ it("resolves one SDK for the swap and every Taxi package that pins it", () => {
         expect(realpathSync(createRequire(from).resolve("@arkade-os/sdk"))).toBe(sdk);
 });
 
-it("bundles the directed contract the fill fixture pins in the installed swap", () => {
+// The other directed contracts' compiler fingerprints, as the vendored swap 0.1.16 manifest declared them.
+const DIRECTED_FINGERPRINTS = {
+    "asset-swap-directed-nonce":
+        "sha256:2f73e3cff1728678b084400eec2cac058c6f4ba5fe131859d31a2723a75c56a6",
+    "sats-swap-directed": "sha256:6ca61bf7ed8d8f65af3141da4e95fcc896863650127dd20949a84e72258053f4",
+    "sats-swap-directed-nonce":
+        "sha256:833b559dc05031b170c4376f2a894f59986ae0f815bdc8a63e97de6feccec8cb",
+};
+
+it("bundles every directed contract the Taxi fills against in the installed swap", () => {
     const fixture = join(root, "packages/app/test/fixtures/asset-swap-directed.json");
     const { fingerprint } = JSON.parse(readFileSync(fixture, "utf8"));
     const dist = dirname(require.resolve("@arkade-os/swap"));
@@ -26,5 +35,6 @@ it("bundles the directed contract the fill fixture pins in the installed swap", 
         .filter((file) => file.endsWith(".js"))
         .map((file) => readFileSync(join(dist, file), "utf8"))
         .join("\n");
-    expect(bundled).toContain(fingerprint);
+    for (const expected of [fingerprint, ...Object.values(DIRECTED_FINGERPRINTS)])
+        expect(bundled).toContain(expected);
 });
