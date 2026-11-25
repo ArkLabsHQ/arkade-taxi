@@ -14,7 +14,6 @@ COPY packages/protocol/package.json packages/protocol/
 COPY packages/db/package.json packages/db/
 COPY packages/client/package.json packages/client/
 COPY packages/app/package.json packages/app/
-COPY vendor/ vendor/
 RUN pnpm install --frozen-lockfile
 
 COPY . .

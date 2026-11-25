@@ -4,7 +4,3 @@ packages:
 onlyBuiltDependencies:
     - better-sqlite3
     - esbuild
-
-overrides:
-    "@arkade-os/sdk": file:./vendor/sdk/arkade-os-sdk-0.5.14-taxi.1-7584c23c.tgz
-    "@arkade-os/swap": file:./vendor/swap/arkade-os-swap-0.1.16-taxi.1-7584c23c.tgz

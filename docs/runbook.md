@@ -369,9 +369,8 @@ that guard destroys the operational guarantee.
 
 ## Dependency and image updates
 
-This repository pins SDK `0.5.14-taxi.1` and Swap `0.1.16-taxi.1` snapshots.
-Their source commits and authenticated bytes are recorded in
-[vendor/sdk](../vendor/sdk/manifest.json) and [vendor/swap](../vendor/swap/manifest.json).
+This repository pins SDK `0.5.14` and Swap `0.1.16` from npm, and the committed
+lockfile records their integrity.
 Run all repository, image, package and fresh-master E2E gates after dependency
 changes. Record the actual master SHA from the current run's `stack.json`.
 
