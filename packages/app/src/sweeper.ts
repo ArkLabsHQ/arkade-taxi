@@ -2,7 +2,11 @@ import { advanceKind, type Advance, type ExpiryDeadline } from "@arkade-taxi/cor
 import type { RuntimeConfig } from "./config.js";
 import type { ObservedCovenant } from "./watcher.js";
 import type { AdvanceStore } from "./quotes.js";
-import { RecoveryArtifactError, type RecoverySubmission } from "./arkade/recovery.js";
+import {
+    RecoveryArtifactError,
+    RecoverySourceUnavailableError,
+    type RecoverySubmission,
+} from "./arkade/recovery.js";
 import { sanitizeOperationalError } from "./errors.js";
 
 export interface RecoveryRunner {
@@ -127,6 +131,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const completed: SweepResult[] = [];
     const warned = new Map<string, string>();
     const renewalErrors = new Map<string, string>();
+    // A reclaim that cannot be built leaves its row locked with nothing persisted to alarm on.
+    const unbuilt = new Map<string, string>();
 
     const threshold = (kind: "height" | "time", critical: boolean): bigint => {
         if (!deps.config) return 0n;
@@ -226,7 +232,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
     const hasRecoveryFailure = (advance: Advance): boolean =>
         advance.recoveryPhase === "failed" ||
-        (advance.recoveryPhase === "prepared" && advance.failureCode !== undefined);
+        (advance.recoveryPhase === "prepared" && advance.failureCode !== undefined) ||
+        (advance.state === "locked" && unbuilt.has(advance.id));
 
     const deadlineWithFailure = (
         advance: Advance,
@@ -242,7 +249,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             ? {
                   ...item,
                   severity: advance.recoveryPhase === "failed" ? "critical" : item.severity,
-                  code: advance.failureCode ?? fallbackCode,
+                  code: advance.failureCode ?? unbuilt.get(advance.id) ?? fallbackCode,
               }
             : item;
     };
@@ -255,6 +262,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     async function sweepOne(a: Advance): Promise<SweepResult | undefined> {
         try {
             const submitted = await deps.recovery.recover(a);
+            unbuilt.delete(a.id);
             if (!submitted) return undefined;
             const latest = deps.advances.get(a.id);
             if (latest?.state === "recovered") {
@@ -273,9 +281,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         } catch (error) {
             const message = sanitizeOperationalError(error, "recovery failed");
             const errorCode =
-                error instanceof RecoveryArtifactError
+                error instanceof RecoveryArtifactError ||
+                error instanceof RecoverySourceUnavailableError
                     ? error.code
                     : "recovery_submission_ambiguous";
+            if (error instanceof RecoverySourceUnavailableError) unbuilt.set(a.id, error.code);
+            else unbuilt.delete(a.id);
             deps.onError?.(a.id, new Error(message));
             return { id: a.id, ok: false, error: message, errorCode };
         }
@@ -298,8 +309,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 (advance) => advance.failureCode !== "covenant_unrolled",
             );
             const byId = new Map(active.map((advance) => [advance.id, advance]));
+            for (const id of unbuilt.keys()) if (!byId.has(id)) unbuilt.delete(id);
             for (const advance of active) {
-                if (!hasRecoveryFailure(advance)) continue;
+                if (advance.state === "locked" || !hasRecoveryFailure(advance)) continue;
                 const at = advance.recoveryLastAttemptAt ?? advance.updatedAt;
                 if (lastRecoveryError && lastRecoveryError.at > at) continue;
                 lastRecoveryError = {

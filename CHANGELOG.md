@@ -5,6 +5,10 @@
 - `@arkade-os/sdk` `0.5.14` and `@arkade-os/swap` `0.1.16` come from npm, replacing the vendored
   `0.5.14-taxi.1` and `0.1.16-taxi.1` snapshots and their archive checks. The client, covenant and
   service pin SDK `0.5.14` exactly, so a wallet installs that release beside the client.
+- A reclaim that cannot fetch the transaction that created a renewed covenant's coin raises a
+  `recovery_source_unavailable` sweeper blocker from the first miss, and pauses the Taxi once the
+  coin's expiry turns critical. It had raised no blocker before then, only a
+  `recovery_submission_ambiguous` error. The covenant still stays locked for the next sweep.
 
 ## 1.1.2 (unreleased)
 

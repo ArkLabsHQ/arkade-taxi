@@ -1867,6 +1867,56 @@ describe("durable recovery runner", () => {
         expect(advances.get(row.id)!.failureCode).toBeUndefined();
         expect(policy.get().paused).toBe(false);
     });
+
+    it("alarms a renewed covenant whose source the indexer never serves, up to its deadline", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const policy = new PolicyRepository(database);
+        policy.update({ paused: false }, "setup");
+        const row = sourceAdvance();
+        advances.insert(row);
+        advances.recordCovenantRenewed(row.id, renewedCoin(row).renewed.outpoint, NOW + 1);
+        const indexer = { getVirtualTxs: vi.fn(noIndexer.getVirtualTxs) };
+        let expiry = 0n;
+        const sweeper = createSweeper({
+            advances,
+            recovery: createRecoveryRunner({
+                advances,
+                emulator: signingEmulator(),
+                indexer,
+                config: config(),
+                workerId: "worker",
+                now: () => NOW + 100,
+                leaseSeconds: 30,
+                backoffSeconds: 1,
+            }),
+            now: () => NOW + 100,
+            config: config(),
+            policy,
+            observed: () => ({ swept: false, expiry: { kind: "time", value: expiry } }),
+        });
+
+        for (const [headroom, severity, code, paused] of [
+            [86_400n, "eligible", "recovery_source_unavailable", false],
+            [86_400n, "eligible", "recovery_source_unavailable", false],
+            [43_200n, "warning", "recovery_source_unavailable", false],
+            [7_200n, "critical", "covenant_renewal_stopped", true],
+        ] as const) {
+            expiry = row.locktime + headroom;
+            await sweeper.tick(null, row.locktime);
+            expect(sweeper.status().blockers).toEqual([
+                expect.objectContaining({ advanceId: row.id, severity, code }),
+            ]);
+            expect(policy.get().paused).toBe(paused);
+        }
+        expect(indexer.getVirtualTxs).toHaveBeenCalledTimes(4);
+        expect(sweeper.status().lastRecoveryError).toMatchObject({
+            advanceId: row.id,
+            code: "recovery_source_unavailable",
+        });
+        expect(advances.get(row.id)).toMatchObject({ state: "locked" });
+        expect(advances.get(row.id)!.failureCode).toBeUndefined();
+    });
 });
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
