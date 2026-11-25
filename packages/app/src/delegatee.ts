@@ -41,12 +41,21 @@ export class DelegateeError extends Error {
 export class TemplateRefusedError extends DelegateeError {
     constructor(
         readonly templateId: string,
-        options?: ErrorOptions,
+        options?: ErrorOptions & { status?: number },
     ) {
         super(
             `the Executor refused to register renewal template ${templateId}: install it through the Executor's admin API, or run the Executor with EXECUTOR_PUBLIC_REGISTRY=true`,
             options,
         );
+    }
+}
+
+export class TemplateMismatchError extends DelegateeError {
+    constructor(
+        readonly templateId: string,
+        readonly returnedId: string,
+    ) {
+        super(`the Executor answered template ${returnedId} for renewal template ${templateId}`);
     }
 }
 
@@ -127,17 +136,18 @@ export class DelegateeClient {
             return this.post<Body>("/v1/template", { document: renewalTemplate() }).catch(
                 (refusal: unknown) => {
                     throw refusal instanceof DelegateeError && refusal.status === 403
-                        ? new TemplateRefusedError(templateId, { cause: refusal })
+                        ? new TemplateRefusedError(templateId, { cause: refusal, status: 403 })
                         : refusal;
                 },
             );
         });
         const template = body.template;
         if (!template?.id) throw new DelegateeError("delegatee returned no template id");
+        if (template.id !== templateId) throw new TemplateMismatchError(templateId, template.id);
         // RegisterDelegation refuses every covenant on a disabled template.
         if (template.status === "disabled")
             throw new DelegateeError(`delegatee template ${template.id} is disabled`);
-        return { templateId: template.id };
+        return { templateId };
     }
 
     /** Registering an active delegation again returns it unchanged. */
