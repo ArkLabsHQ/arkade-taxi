@@ -1927,6 +1927,55 @@ describe("durable recovery runner", () => {
         expect(advances.get(row.id)).toMatchObject({ state: "locked" });
         expect(advances.get(row.id)!.failureCode).toBeUndefined();
     });
+
+    it("clears the source alarm on the sweep after the indexer serves the renewed coin's source", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const policy = new PolicyRepository(database);
+        policy.update({ paused: false }, "setup");
+        const row = sourceAdvance();
+        advances.insert(row);
+        const { renewed, psbt } = renewedCoin(row);
+        advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1);
+        const indexer = { getVirtualTxs: vi.fn(noIndexer.getVirtualTxs) };
+        const sweeper = createSweeper({
+            advances,
+            recovery: createRecoveryRunner({
+                advances,
+                emulator: signingEmulator(),
+                indexer,
+                config: config(),
+                workerId: "worker",
+                now: () => NOW + 100,
+                leaseSeconds: 30,
+                backoffSeconds: 1,
+            }),
+            now: () => NOW + 100,
+            config: config(),
+            policy,
+            observed: () => ({
+                swept: false,
+                expiry: { kind: "time", value: row.locktime + 86_400n },
+            }),
+        });
+
+        await sweeper.tick(null, row.locktime);
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: row.id, code: "recovery_source_unavailable" }),
+        ]);
+
+        indexer.getVirtualTxs.mockImplementation(async () => ({ txs: [psbt] }));
+        await sweeper.tick(null, row.locktime);
+        expect(advances.get(row.id)).toMatchObject({
+            state: "recovering",
+            recoveryPhase: "submitted",
+        });
+        // A tick reports the blockers it found before sweeping, so the reclaim it just submitted shows next tick.
+        await sweeper.tick(null, row.locktime);
+        expect(sweeper.status().blockers).toEqual([]);
+        expect(indexer.getVirtualTxs).toHaveBeenCalledTimes(2);
+        expect(policy.get().paused).toBe(false);
+    });
 });
 
 const bytesToNumber = (bytes: Uint8Array): bigint => BigInt(`0x${hex.encode(bytes)}`);
