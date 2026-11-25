@@ -118,9 +118,14 @@ export const SCENARIOS = [
         title: "sender and Taxi exit an unrolled covenant on-chain with arkd and the emulator down",
         timeout: 600_000,
     },
+    {
+        id: "covenant-keeper-renewal-claim",
+        title: "the Taxi's keeper renews a short-lived covenant once, and its receiver claims the renewed coin",
+        timeout: 1_800_000,
+    },
 ] as const;
 
-export const EXPECTED_TOTAL = 29;
+export const EXPECTED_TOTAL = 30;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);

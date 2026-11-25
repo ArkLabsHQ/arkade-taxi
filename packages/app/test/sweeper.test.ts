@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Advance } from "@arkade-taxi/core";
 import { createSweeper, type RecoveryRunner, type SweeperDeps } from "../src/sweeper.js";
 import { RecoveryArtifactError } from "../src/arkade/recovery.js";
+import { covenantKeeper, type RenewalProviders } from "../src/arkade/renewal.js";
 import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures.js";
 
 const HEIGHT = 900_000n;
@@ -519,6 +520,51 @@ describe("renewal race", () => {
             expect(onRenewalWarning).toHaveBeenCalledTimes(1);
         },
     );
+
+    it.each([
+        ["of unknown age", "time", undefined],
+        ["born at the epoch", "time", 0n],
+        ["whose expiry is a height", "height", BigInt(NOW) - 600n],
+    ] as const)("alarms on a covenant the keeper declines as %s", async (_, kind, createdAt) => {
+        v2({ outpoint: { txid: "cc".repeat(32), vout: 0 } });
+        const getVtxos = vi.fn();
+        const onRenewalWarning = vi.fn();
+        const [clock, warning, critical] =
+            kind === "time"
+                ? [BigInt(NOW), config().recoveryBroadcastSeconds, config().recoveryCriticalSeconds]
+                : [HEIGHT, config().recoveryBroadcastBlocks, config().recoveryCriticalBlocks];
+        let expiry = clock + warning;
+        const sweeper = createSweeper({
+            ...deps(),
+            onRenewalWarning,
+            observed: () => ({
+                swept: false,
+                expiry: { kind, value: expiry },
+                ...(createdAt === undefined ? {} : { createdAt }),
+            }),
+            renewal: covenantKeeper({
+                providers: { indexer: { getVtxos } } as unknown as RenewalProviders,
+                config: config(),
+                now: () => NOW,
+                signal: new AbortController().signal,
+                onRenewed: vi.fn(),
+            }),
+        });
+
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(sweeper.status().deadlines).toEqual([
+            expect.objectContaining({ severity: "warning", code: "covenant_renewal_missing" }),
+        ]);
+        expect(onRenewalWarning).toHaveBeenCalledOnce();
+
+        expiry = clock + critical;
+        await sweeper.tick(HEIGHT, BigInt(NOW));
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ severity: "critical", code: "covenant_renewal_missing" }),
+        ]);
+        expect(paused).toBe(true);
+        expect(getVtxos).not.toHaveBeenCalled();
+    });
 
     // A matured deadline is reclaimed rather than alarmed on, even where the
     // coin was swept: the reclaim is the remedy and it is already available.

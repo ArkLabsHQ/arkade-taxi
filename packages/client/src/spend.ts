@@ -125,8 +125,8 @@ export class CovenantSpendAmbiguousError extends Error {
     }
 }
 
-/** A definite refusal: arkd turned the spend away because a batch intent, such as the
- * covenant's renewal, holds an input. Nothing was accepted, so the capability is released. */
+/** A definite refusal: a batch intent, such as the covenant's renewal, holds an input or has
+ * already settled the covenant. Nothing was accepted, so the capability is released. */
 export class CovenantSpendBusyError extends Error {
     readonly name = "CovenantSpendBusyError";
 
@@ -811,6 +811,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
 const assertIncomingStatus = (
     rawStatus: TransferStatusResponse,
     facts: Pick<ObservedClaimBase, "transferId" | "outpoint">,
+    { rebinding = false } = {},
 ): void => {
     const status = immutablePlainCopy(rawStatus, "transfer status");
     exactObjectKeys(
@@ -824,7 +825,7 @@ const assertIncomingStatus = (
         return reject("Taxi status is not the incoming locked transfer");
     exactObjectKeys(status.outpoint, ["txid", "vout"], [], "Taxi locked outpoint");
     exactOutpoint(status.outpoint, facts.outpoint, "Taxi locked outpoint");
-    if (status.spentTxid || status.failureCode || status.failureDetail)
+    if (status.spentTxid || (!rebinding && (status.failureCode || status.failureDetail)))
         reject("Taxi status reports a spent or failed transfer");
 };
 
@@ -961,7 +962,13 @@ export async function renewedTransfer(
     if (retained === undefined) return reject("unrecognized covenant-transfer capability");
     const status = immutablePlainCopy(rawStatus, "transfer status");
     const outpoint = status.outpoint ?? retained.outpoint;
-    assertIncomingStatus(status, { transferId: retained.transferId, outpoint });
+    // The coin is verified below, so a flag the watcher raised on a locked row must not
+    // strand a claim whose original coin is gone.
+    assertIncomingStatus(
+        status,
+        { transferId: retained.transferId, outpoint },
+        { rebinding: true },
+    );
     if (outpoint.txid === retained.outpoint.txid && outpoint.vout === retained.outpoint.vout)
         return undefined;
     const { expiry, holdings, lifecycle, ...facts } = retained;
@@ -1249,6 +1256,14 @@ const refresh = async (
         (coin) => coin.txid === state.outpoint.txid && coin.vout === state.outpoint.vout,
     );
     if (covenantCoin === undefined) return reject("indexer omitted the locked covenant outpoint");
+    // The watcher's renewal test: a batch, not an Ark transaction, took the coin first.
+    if (/^[0-9a-f]{64}$/i.test(covenantCoin.settledBy ?? "") && !covenantCoin.arkTxId) {
+        state.lifecycle.state = "available";
+        throw new CovenantSpendBusyError(
+            [`${state.outpoint.txid}:${state.outpoint.vout}`],
+            new Error(`settled by commitment ${covenantCoin.settledBy}`),
+        );
+    }
     const current = strictCoin(covenantCoin, {
         ...state,
         contextAssetUnits: state.holdings[0]?.amount,

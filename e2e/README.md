@@ -3,7 +3,7 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-six live scenarios in the main run, three isolated scenarios each on a
+Twenty-six live scenarios in the main run, four isolated scenarios each on a
 stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
@@ -78,6 +78,20 @@ accepted arkd submit reply while output proof is unavailable, retains the bound
 liability past TTL, and checks fresh source observation, admission on other coins
 and outage refusal. Restoring proof settles the original one-shot transaction
 without another submission or finalization call, then claims and recycles it.
+`covenant-keeper-renewal-claim` runs the production container's own keeper, with
+no Executor configured. The keeper renews only into a batch the SDK accepts, at
+least 6000 s on regtest, and the Taxi lends only on coins that outlive its renewal
+threshold by 12 h, so this stack keeps the two-day tree and gives the Taxi a 300 s
+expiry headroom and a 240 s recovery guard. Through arkd's admin settings the
+scenario mints one batch on a 1024 s tree for the sender's coin and restores the
+tree; the covenant inherits that coin's expiry. The container must log exactly one
+`covenant renewed` for the advance, not before half the covenant's life, and no
+second one in the 90 s after its watcher adopts the two-day successor, which the
+default three-day window would otherwise make due at once. The receiver then
+recycles a transfer it verified before the renewal through the packed client,
+which moves it to the renewed coin; the claim spends the successor and every
+balance conserves. `keeper-renewal.json` records the tree switch, both coins'
+lives, the renewal log lines and the balances.
 Both modes run each isolated scenario before the
 shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
@@ -231,7 +245,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The harness always clones master afresh; read the tested SHA from the current
-`stack.json` and retain it with all 31 passing assertions. Capture the existing
+`stack.json` and retain it with all 32 passing assertions. Capture the existing
 default project's container, volume and network inventory before and after, and
 verify that no resources with the run's exact ownership labels remain after
 successful cleanup.

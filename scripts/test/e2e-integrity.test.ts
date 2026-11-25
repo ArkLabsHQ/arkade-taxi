@@ -61,6 +61,7 @@ describe("live E2E result gate", () => {
             "covenant-unilateral-exit-with-arkd-down",
             "fill-undersigned-foreign-input",
             "fill-pending-accepted-quarantine",
+            "covenant-keeper-renewal-claim",
         ]);
         expect(readScenarioIds().filter((id: string) => isolated.includes(id))).toEqual([]);
         // One stack per file, each validated against exactly what it registers,
@@ -74,6 +75,9 @@ describe("live E2E result gate", () => {
         expect(isolatedScenarioIds("e2e/fill-pending.e2e.test.ts")).toEqual([
             "fill-pending-accepted-quarantine",
         ]);
+        expect(isolatedScenarioIds("e2e/keeper-renewal.e2e.test.ts")).toEqual([
+            "covenant-keeper-renewal-claim",
+        ]);
         expect(() => isolatedScenarioIds("e2e/receiver-paid-fill.e2e.test.ts")).toThrow(
             /no classified isolated scenario/,
         );
@@ -81,6 +85,7 @@ describe("live E2E result gate", () => {
             "e2e/unilateral-exit.e2e.test.ts",
             "e2e/fill-undersigned.e2e.test.ts",
             "e2e/fill-pending.e2e.test.ts",
+            "e2e/keeper-renewal.e2e.test.ts",
         ])
             expect(
                 validateResults(oneOf(isolatedScenarioIds(file)), isolatedScenarioIds(file)),

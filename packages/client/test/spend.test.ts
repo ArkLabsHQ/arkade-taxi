@@ -165,6 +165,8 @@ const vtxoWire = (coin: VirtualCoin): Record<string, unknown> => ({
     isUnrolled: coin.isUnrolled,
     isSpent: coin.isSpent,
     spentBy: coin.spentBy,
+    settledBy: coin.settledBy,
+    arkTxid: coin.arkTxId,
     commitmentTxids: coin.commitmentTxIds,
     assets: coin.assets?.map(({ assetId, amount }) => ({ assetId, amount: String(amount) })),
 });
@@ -1711,6 +1713,14 @@ describe("a covenant its renewal holds", () => {
         base.emulator.submitTx.mockResolvedValueOnce(
             refusal("VTXO_ALREADY_REGISTERED", held(base)),
         );
+    // What the indexer reports for the coin a renewal batch consumed (renewal-r2.json).
+    const settled = (base: Awaited<ReturnType<typeof setup>>) =>
+        Object.assign(base.coin, {
+            isSpent: true,
+            spentBy: "dd".repeat(32),
+            settledBy: "ee".repeat(32),
+            arkTxId: "",
+        });
 
     it("refuses the spend as busy, not ambiguous, and releases the capability", async () => {
         const base = await setup();
@@ -1737,36 +1747,91 @@ describe("a covenant its renewal holds", () => {
         expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
     });
 
-    it("claims the renewed coin once the Taxi reports it", async () => {
-        const successor = source(0x77);
-        const renewed = { coin: {} as VirtualCoin, source: successor };
-        const base = await setup(args(), [], [renewed]);
-        Object.assign(renewed.coin, { ...base.coin, txid: successor.id, vout: 0 });
-        busy(base);
-        let reads = 0;
-        const taxi = new TaxiClient({
-            baseUrl: "https://taxi.example",
-            fetch: async () => {
-                if (++reads === 1) throw new Error("taxi unreachable");
-                return json(
-                    reads === 2
-                        ? base.status
-                        : { ...base.status, outpoint: { txid: successor.id, vout: 0 } },
-                );
-            },
-        });
-        vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
-        try {
-            const txid = await drive(taxi.purchase(base.transfer, destination));
-            expect(txid).toBe(base.submitted()!.id);
-        } finally {
-            vi.useRealTimers();
+    it("refuses a coin its renewal already settled as busy, before submitting", async () => {
+        const base = await setup();
+        settled(base);
+        for (const _ of [1, 2]) {
+            const error = await purchase(base.transfer, destination).catch((cause) => cause);
+            expect(error).toBeInstanceOf(CovenantSpendBusyError);
+            expect(error.outpoints).toEqual([held(base)]);
         }
-        expect(reads).toBe(3);
-        const [, checkpoints] = base.emulator.submitTx.mock.calls[1]!;
-        const spent = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
-        expect([hex.encode(spent.txid!), spent.index]).toEqual([successor.id, 0]);
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
     });
+
+    it("reads the renewal's commitment txid in any hex case", async () => {
+        const base = await setup();
+        Object.assign(settled(base), { settledBy: "Ee".repeat(32) });
+        await expect(purchase(base.transfer, destination)).rejects.toBeInstanceOf(
+            CovenantSpendBusyError,
+        );
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
+    });
+
+    it("keeps a coin an Ark transaction spent an ordinary refusal", async () => {
+        const base = await setup();
+        Object.assign(base.coin, {
+            isSpent: true,
+            spentBy: "dd".repeat(32),
+            arkTxId: "dd".repeat(32),
+        });
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/not spendable/);
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/already|consumed/i);
+    });
+
+    // The flag the 1.1.2 watcher stamped on every scan after adopting a successor (CI 45579569510).
+    const flagged = {
+        failureCode: "covenant_spend_unknown",
+        failureDetail: `candidate unavailable at ${"0f".repeat(32)}:101: unspent covenant evidence could not be validated`,
+    };
+
+    it.each([
+        ["while arkd holds it for the renewal", busy, 2, 0x77, {}],
+        ["after the renewal settled it", settled, 1, 0x78, {}],
+        ["after the renewal settled it and the Taxi flagged the row", settled, 1, 0x79, flagged],
+    ])(
+        "claims the renewed coin once the Taxi reports it, %s",
+        async (_, hold, submissions, fill, flags) => {
+            const successor = source(fill);
+            const renewed = { coin: {} as VirtualCoin, source: successor };
+            const base = await setup(args(), [], [renewed]);
+            Object.assign(renewed.coin, {
+                ...base.coin,
+                txid: successor.id,
+                vout: 0,
+                isPreconfirmed: false,
+                commitmentTxIds: ["ee".repeat(32)],
+            });
+            hold(base);
+            let reads = 0;
+            const taxi = new TaxiClient({
+                baseUrl: "https://taxi.example",
+                fetch: async () => {
+                    if (++reads === 1) throw new Error("taxi unreachable");
+                    return json(
+                        reads === 2
+                            ? base.status
+                            : {
+                                  ...base.status,
+                                  outpoint: { txid: successor.id, vout: 0 },
+                                  ...flags,
+                              },
+                    );
+                },
+            });
+            vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
+            try {
+                const txid = await drive(taxi.purchase(base.transfer, destination));
+                expect(txid).toBe(base.submitted()!.id);
+            } finally {
+                vi.useRealTimers();
+            }
+            expect(reads).toBe(3);
+            expect(base.emulator.submitTx).toHaveBeenCalledTimes(submissions);
+            const [, checkpoints] = base.emulator.submitTx.mock.calls.at(-1)!;
+            const spent = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
+            expect([hex.encode(spent.txid!), spent.index]).toEqual([successor.id, 0]);
+        },
+    );
 
     it.each([
         ["never reports a renewed coin", "locked", (reads: number) => reads > 2],

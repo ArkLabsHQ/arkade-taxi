@@ -12,6 +12,7 @@ import {
     renewalTemplate,
     renewalTemplateId,
     renewalVariables,
+    TemplateMismatchError,
     TemplateRefusedError,
 } from "../src/delegatee.js";
 import {
@@ -237,9 +238,27 @@ describe("delegatee registration", () => {
         expect(refused).toBeInstanceOf(TemplateRefusedError);
         expect(refused).toMatchObject({
             templateId: RENEW_TEMPLATE_ID,
+            status: 403,
             message: expect.stringMatching(
                 `${RENEW_TEMPLATE_ID}: install it through the Executor's admin API, or run the Executor with EXECUTOR_PUBLIC_REGISTRY=true`,
             ),
+        });
+    });
+
+    it.each([
+        ["holds", () => json({ template: { id: "ff".repeat(32), status: "active" } })],
+        [
+            "uploads",
+            (method: string) =>
+                method === "GET" ? notFound() : json({ template: { id: "ff".repeat(32) } }),
+        ],
+    ])("refuses a template the Executor %s under another id", async (_, answer) => {
+        const { client } = executor(answer);
+        const refused = await client.register().catch((error: unknown) => error);
+        expect(refused).toBeInstanceOf(TemplateMismatchError);
+        expect(refused).toMatchObject({
+            templateId: RENEW_TEMPLATE_ID,
+            returnedId: "ff".repeat(32),
         });
     });
 

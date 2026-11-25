@@ -1,4 +1,4 @@
-import type { CovenantTransfer } from "@arkade-taxi/client";
+import type { CovenantSpendConfig, CovenantTransfer } from "@arkade-taxi/client";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -247,6 +247,39 @@ export async function openLive() {
     };
     const originalFetch = globalThis.fetch;
     const owned = new Map<string, { offered?: any; locked?: any }>();
+    const renewedCovenant = async (
+        id: string,
+        request: { receiverKey: Uint8Array; assetId?: typeof assetId },
+        config: CovenantSpendConfig,
+    ) => {
+        const receiverAddress = new ArkAddress(
+            hex.decode(info.serverKey),
+            request.receiverKey,
+            "tark",
+        ).encode();
+        const claim = (
+            await client.listClaims({ receiverAddresses: [receiverAddress] })
+        ).claims.find((item) => item.transferId === id && item.state === "locked");
+        if (!claim?.claim) throw new Error(`owned refund ${id}: no claim at the renewed covenant`);
+        const units = claim.claim.assetUnits;
+        return client.verifyIncomingClaim(
+            claim,
+            {
+                receiverAddress,
+                ...(units === undefined
+                    ? {}
+                    : { assetId: request.assetId!, assetUnits: BigInt(units) }),
+            },
+            {
+                serverKey: hex.decode(info.serverKey),
+                emulatorKey: hex.decode(info.emulatorKey),
+                operatorKey: hex.decode(info.operatorKey),
+                vtxoMinAmount: BigInt(info.vtxoMinAmount),
+                hrp: "tark",
+            },
+            config,
+        );
+    };
     const live = {
         fixture,
         actors,
@@ -299,18 +332,27 @@ export async function openLive() {
                                 );
                                 return;
                             }
-                            const transfer =
-                                item.locked?.transfer ??
-                                (await client.verifyTransfer(
-                                    item.offered.verified,
-                                    { txid: state.outpoint!.txid, outpoint: state.outpoint! },
-                                    {
-                                        arkdUrl: info.arkdUrl,
-                                        emulatorUrl: info.emulatorUrl,
-                                        network: arkInfo.network,
-                                        serverUnrollScript: hex.encode(unroll.script),
-                                    },
-                                ));
+                            const spendConfig = {
+                                arkdUrl: info.arkdUrl,
+                                emulatorUrl: info.emulatorUrl,
+                                network: arkInfo.network,
+                                serverUnrollScript: hex.encode(unroll.script),
+                            };
+                            const lockup = item.locked?.lockup.outpoint;
+                            const renewed =
+                                lockup !== undefined &&
+                                (state.outpoint!.txid !== lockup.txid ||
+                                    state.outpoint!.vout !== lockup.vout);
+                            // A renewed covenant is refunded where the feed places it, not through
+                            // the client's re-bind a scenario may be testing.
+                            const transfer = renewed
+                                ? await renewedCovenant(id, item.offered.request, spendConfig)
+                                : (item.locked?.transfer ??
+                                  (await client.verifyTransfer(
+                                      item.offered.verified,
+                                      { txid: state.outpoint!.txid, outpoint: state.outpoint! },
+                                      spendConfig,
+                                  )));
                             const spare = (
                                 await actors.sender.wallet.getSpendableVtxos({
                                     withRecoverable: false,

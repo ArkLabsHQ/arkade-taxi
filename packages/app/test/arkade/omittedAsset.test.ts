@@ -173,6 +173,7 @@ it.each([false, true])(
             assertRecoveryStartupInvariants([locked], config());
             const runner = createRecoveryRunner({
                 advances,
+                indexer: { getVirtualTxs: async () => ({ txs: [] }) },
                 config: config(),
                 workerId: "restarted",
                 now: () => NOW + 3,
