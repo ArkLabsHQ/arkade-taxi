@@ -212,6 +212,10 @@ export const INDEX_HTML = `<!doctype html>
                         <dt>On-chain expired</dt>
                         <dd id="funding-boarding-expired">—</dd>
                     </div>
+                    <div>
+                        <dt>On-chain awaiting checks</dt>
+                        <dd id="funding-boarding-unknown">—</dd>
+                    </div>
                 </dl>
                 <div class="panel__body">
                     <p class="label">Arkade address</p>
@@ -2033,11 +2037,11 @@ const BLOCKER_GROUPS = [
         "covenant_expiry_unobserved",
     ],
     [
-        "A payment's coin was never renewed, so its registration with the renewal service probably failed. Check TAXI_DELEGATEE_URL.",
+        "A payment's coin was never renewed. Check the Taxi's log for covenant renewal failures, and the Executor at TAXI_DELEGATEE_URL when one is set.",
         "covenant_renewal_missing",
     ],
     [
-        "The renewal service has stopped renewing a payment's coin, so that coin is heading for expiry.",
+        "Renewal has stopped for a payment's coin, so that coin is heading for expiry.",
         "covenant_renewal_stopped",
     ],
     [
@@ -2046,6 +2050,10 @@ const BLOCKER_GROUPS = [
         "covenant_swept_before_deadline",
     ],
     ["A payment's lent sats can now be recovered.", "recovery_eligible"],
+    [
+        "The wallet could not save recovery data, so no settlement was submitted. Check the Taxi's database and logs.",
+        "operator_registration_not_persisted",
+    ],
     [
         "A payment's recovery time is invalid, so the Taxi cannot recover its sats on its own.",
         "recovery_locktime_invalid",
@@ -2057,6 +2065,10 @@ const BLOCKER_GROUPS = [
     [
         "The emulator did not confirm a recovery; the Taxi retries it.",
         "recovery_submission_ambiguous",
+    ],
+    [
+        "The Taxi cannot fetch the transaction that created a renewed payment's coin from the indexer at TAXI_ARKD_URL, so it cannot build that payment's recovery; it retries every sweep.",
+        "recovery_source_unavailable",
     ],
     [
         "The Taxi is collecting the fares and repayments it received; new payments wait until it finishes.",
@@ -2895,6 +2907,7 @@ function renderFunding(funding) {
     $("funding-boarding-confirmed").textContent = sats(boarding.confirmedSats);
     $("funding-boarding-unconfirmed").textContent = sats(boarding.unconfirmedSats);
     $("funding-boarding-expired").textContent = sats(boarding.expiredSats);
+    $("funding-boarding-unknown").textContent = sats(boarding.unknownSats);
     $("funding-loaded").textContent = "loaded " + new Date().toLocaleTimeString();
 }
 
@@ -3532,9 +3545,9 @@ const CONFIG_MEANINGS = {
     custodyWindowSeconds:
         "How long, in seconds, the Taxi guarantees to hold an unclaimed delivery for its receiver. Past it a claim is still honoured while the funds remain, but the operator may write the delivery off.",
     delegateeUrl:
-        "The renewal service that keeps a covenant from expiring. Unset leaves covenants unrenewed.",
+        "The Executor that renews covenants before they expire. Unset, the Taxi renews them itself.",
     renewalBeforeExpirySeconds:
-        "How long, in seconds, before a coin expires the renewal service is asked to renew it.",
+        "How long, in seconds, before a coin expires it is renewed. Without an Executor, at most half the coin's own life.",
     logLevel: "How much the Taxi writes to its logs.",
     operatorKey: "Where repayments and fares are paid: the Taxi wallet's output key.",
     operatorSignerKey: "The public key of TAXI_OPERATOR_PRIVKEY, which signs the Taxi's own coins.",

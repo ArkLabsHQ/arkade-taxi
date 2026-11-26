@@ -7,10 +7,16 @@ docs/superpowers
 e2e-artifacts
 e2e-results.json
 
-# Generated from the Go reference. CI regenerates it and fails on any diff, so
-# reformatting it here would make that check fail against correct bytes.
+# Committed reference vectors preserve the covenant's script and address bytes.
+# The engine tests execute these saved cases; formatting must not rewrite them.
 packages/covenant/test/vectors.json
 
 # Same deal, from arkadec: `pnpm artifact` writes both and CI diffs the result.
 packages/covenant/contracts/dust_covenant.json
 packages/covenant/src/dust-covenant-artifact.ts
+
+# Executor bytes: the spec is copied verbatim and the template id hashes these exact bytes.
+packages/app/test/fixtures/executor-v0.0.5
+
+# Byte-identical to ts-sdk's packages/swap/src/contracts copy at c8dd9368.
+packages/app/test/fixtures/asset-swap-directed.json

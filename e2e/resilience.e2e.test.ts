@@ -6,6 +6,7 @@ import { base64 } from "@scure/base";
 import { normalizeExpiry } from "../packages/app/src/arkade/providers";
 import { mineBlocks } from "../scripts/e2e-mine.mjs";
 import { preEffectRequest } from "./admission";
+import { captureScenarioProceeds } from "../scripts/lib/proceeds-diagnostics.mjs";
 import { liveScenario } from "./scenarios";
 import {
     admin,
@@ -64,21 +65,30 @@ const resumeAfterFault = async () => {
 };
 
 async function restart() {
-    const result = await control("restart");
-    expect(result.id).not.toBe(result.previousId);
-    expect(result.volume).toBe(`${required("TAXI_E2E_PROJECT")}-taxi-data`);
-    await poll(
-        "recreated Taxi liveness",
-        async () => {
-            try {
-                return await fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then((r) => r.status);
-            } catch {
-                return 0;
-            }
-        },
-        (status) => status === 200,
-    );
-    return result;
+    await captureScenarioProceeds("before-production-restart");
+    try {
+        const result = await control("restart");
+        expect(result.id).not.toBe(result.previousId);
+        expect(result.volume).toBe(`${required("TAXI_E2E_PROJECT")}-taxi-data`);
+        await poll(
+            "recreated Taxi liveness",
+            async () => {
+                try {
+                    return await fetch(`${required("TAXI_E2E_BASE_URL")}/health`).then(
+                        (r) => r.status,
+                    );
+                } catch {
+                    return 0;
+                }
+            },
+            (status) => status === 200,
+        );
+        await captureScenarioProceeds("after-production-restart");
+        return result;
+    } catch (error) {
+        await captureScenarioProceeds("production-restart-failed");
+        throw error;
+    }
 }
 
 async function mineTo(live: Live, time: number) {

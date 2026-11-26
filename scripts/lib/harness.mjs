@@ -1,7 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:net";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
+const projectManifest = JSON.parse(
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+);
+export const TAXI_VERSIONS = Object.fromEntries(
+    ["client", "covenant", "protocol"].map((name) => {
+        const manifest = JSON.parse(
+            readFileSync(new URL(`../../packages/${name}/package.json`, import.meta.url), "utf8"),
+        );
+        return [manifest.name, manifest.version];
+    }),
+);
 
 const ACTORS = ["operator", "sender", "receiverWithAsset", "receiverSats", "emptyReceiver"];
 const SECRET_KEY =
@@ -9,29 +22,6 @@ const SECRET_KEY =
 
 const stableJson = (value) =>
     JSON.stringify(value, (_, item) => (typeof item === "bigint" ? item.toString() : item));
-
-export async function reserveWalletPorts() {
-    const servers = [createServer(), createServer()];
-    const release = () =>
-        Promise.all(
-            servers.map((server) => new Promise((resolve) => server.close(() => resolve()))),
-        );
-    try {
-        for (const server of servers)
-            await new Promise((resolve, reject) => {
-                server.once("error", reject);
-                server.listen(0, "127.0.0.1", resolve);
-            });
-        return {
-            walletPort: servers[0].address().port,
-            delegatorPort: servers[1].address().port,
-            release,
-        };
-    } catch (error) {
-        await release();
-        throw error;
-    }
-}
 
 export function routeProviderFetch(fetcher, routes) {
     const mappings = routes
@@ -180,7 +170,18 @@ const ISOLATED_TESTS = [
     "e2e/unilateral-exit.e2e.test.ts",
     "e2e/fill-undersigned.e2e.test.ts",
     "e2e/fill-pending.e2e.test.ts",
+    "e2e/keeper-renewal.e2e.test.ts",
 ];
+
+/** Taxi settings one isolated stack runs with: a covenant due within minutes has to be
+ * quotable on a coin that short-lived, and renewable outside a guard that short. */
+export const ISOLATED_TAXI_ENV = {
+    "e2e/keeper-renewal.e2e.test.ts": {
+        TAXI_MIN_EXPIRY_HEADROOM_SECONDS: "300",
+        TAXI_RECOVERY_BROADCAST_SECONDS: "240",
+        TAXI_RECOVERY_CRITICAL_SECONDS: "60",
+    },
+};
 
 /** The artifact sub-directory one isolated run writes to. */
 export const isolatedLabel = (file) => file.replace(/^.*\//, "").replace(/\.e2e\.test\.ts$/, "");
@@ -209,7 +210,7 @@ export function resolveTask12Tests(args) {
 }
 
 export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
-    const options = { mode: "full", emulatorImage: undefined, wallet: undefined };
+    const options = { mode: "full", emulatorImage: undefined };
     const paths = [];
     const seen = new Set();
     for (let index = 0; index < args.length; index++) {
@@ -218,20 +219,22 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
             paths.push(arg);
             continue;
         }
-        if (!["--direct", "--emulator-image", "--wallet"].includes(arg) || seen.has(arg))
+        if (arg === "--wallet")
+            throw new Error(
+                'Wallet browser tests moved to the wallet repository: node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"',
+            );
+        if (!["--direct", "--emulator-image"].includes(arg) || seen.has(arg))
             throw new Error(`unsupported or repeated E2E option: ${arg}`);
         seen.add(arg);
         if (arg === "--direct") options.mode = "direct";
         else {
             const value = args[++index];
             if (!value || value.startsWith("--")) throw new Error(`${arg} requires a value`);
-            options[arg === "--wallet" ? "wallet" : "emulatorImage"] = value;
+            options.emulatorImage = value;
         }
     }
     if (seen.size && ci && ci !== "false")
         throw new Error("local E2E options are forbidden in CI; run the complete default suite");
-    if (options.wallet && options.mode !== "direct")
-        throw new Error("--wallet requires the local --direct mode");
     if (options.mode === "direct" && paths.length)
         throw new Error("--direct accepts no test selection");
     const tests = resolveTask12Tests(paths);
@@ -248,16 +251,6 @@ export function resolveE2eOptions(args, { ci = process.env.CI } = {}) {
                 : tests,
         isolatedTests: [...ISOLATED_TESTS],
     };
-}
-
-// setTimeout runs any delay above 2^31 - 1 ms after 1 ms, killing the wallet run at once.
-export function resolveWalletTimeoutMs(value) {
-    const timeoutMs = Number(value ?? 900_000);
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2 ** 31 - 1)
-        throw new Error(
-            `TAXI_E2E_WALLET_TIMEOUT_MS must be whole milliseconds from 1 to ${2 ** 31 - 1}, got ${JSON.stringify(value)}`,
-        );
-    return timeoutMs;
 }
 
 export function packageManagerInvocation(
@@ -298,6 +291,17 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
     if (!Array.isArray(tarballs) || tarballs.length !== 3)
         throw new Error("consumer requires exactly three Taxi tarballs");
     const paths = platform === "win32" ? win32 : posix;
+    const dependencies = Object.fromEntries(
+        ["@arkade-os/sdk", "@arkade-os/swap"].map((name) => {
+            const spec = projectManifest.devDependencies[name];
+            return [
+                name,
+                spec.startsWith("file:")
+                    ? localTarballSpec(paths.resolve(projectRoot, spec.slice(5)), consumer, paths)
+                    : spec,
+            ];
+        }),
+    );
     const packages = {};
     for (const tarball of tarballs) {
         const name = /arkade-taxi-(client|covenant|protocol)-[^/\\]+\.tgz$/.exec(tarball)?.[1];
@@ -312,14 +316,20 @@ export function buildConsumerManifest(tarballs, consumer, platform = process.pla
         private: true,
         type: "module",
         dependencies: {
+            ...dependencies,
             "@arkade-taxi/client": packages.client,
             "@arkade-taxi/covenant": packages.covenant,
             "@arkade-taxi/protocol": packages.protocol,
         },
         pnpm: {
             overrides: {
-                "@arkade-taxi/covenant@0.0.0": "$@arkade-taxi/covenant",
-                "@arkade-taxi/protocol@0.0.0": "$@arkade-taxi/protocol",
+                ...Object.fromEntries(
+                    Object.entries(dependencies).filter(([, spec]) => spec.startsWith("file:")),
+                ),
+                [`@arkade-taxi/covenant@${TAXI_VERSIONS["@arkade-taxi/covenant"]}`]:
+                    "$@arkade-taxi/covenant",
+                [`@arkade-taxi/protocol@${TAXI_VERSIONS["@arkade-taxi/protocol"]}`]:
+                    "$@arkade-taxi/protocol",
             },
         },
     };
@@ -365,7 +375,8 @@ export function assertPackResult(output, expected, exists = existsSync) {
     const filename = typeof result?.filename === "string" ? paths.resolve(result.filename) : "";
     if (
         result?.name !== expected.name ||
-        result?.version !== "0.0.0" ||
+        !TAXI_VERSIONS[expected.name] ||
+        result?.version !== TAXI_VERSIONS[expected.name] ||
         paths.dirname(filename) !== paths.resolve(expected.packDir) ||
         !exists(filename)
     )
@@ -379,7 +390,7 @@ export function assertTarballIntegrity(before, after) {
 }
 
 export function assertLocalConsumerResolution(manifest, lock, listed) {
-    for (const name of ["@arkade-taxi/client", "@arkade-taxi/covenant", "@arkade-taxi/protocol"]) {
+    for (const [name, version] of Object.entries(TAXI_VERSIONS)) {
         const spec = manifest?.dependencies?.[name];
         const dependency = listed?.dependencies?.[name];
         if (
@@ -387,7 +398,7 @@ export function assertLocalConsumerResolution(manifest, lock, listed) {
             !spec.startsWith("file:") ||
             !lock.includes(spec) ||
             dependency?.resolved !== spec ||
-            dependency?.version !== "0.0.0"
+            dependency?.version !== version
         )
             throw new Error(`${name} did not resolve from its local tarball`);
     }
@@ -494,6 +505,25 @@ const composeServiceNames = (source) => {
     const section = /^services:\s*\r?\n([\s\S]*?)(?=^\S|$(?![\s\S]))/m.exec(source)?.[1] ?? "";
     return [...section.matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)].map((match) => match[1]);
 };
+
+export function withoutMempoolMiningAnalytics(compose) {
+    const begin = "\n  mempool_api:";
+    const end = "\n  mempool_web:";
+    if (compose.split(begin).length !== 2 || compose.split(end).length !== 2)
+        throw new Error("arkade-regtest mempool service boundaries changed");
+    const start = compose.indexOf(begin);
+    const stop = compose.indexOf(end);
+    if (stop < start) throw new Error("arkade-regtest mempool service order changed");
+    const service = compose.slice(start, stop);
+    const setting = /DATABASE_ENABLED: (["'])(?:true|false)\1/g;
+    if ([...service.matchAll(setting)].length !== 1)
+        throw new Error("arkade-regtest mempool API database setting changed");
+    return (
+        compose.slice(0, start) +
+        service.replace(setting, "DATABASE_ENABLED: $1false$1") +
+        compose.slice(stop)
+    );
+}
 
 export function namespaceRegtestSources(sources, project, expectedPortBindings) {
     isolatedProject(project);

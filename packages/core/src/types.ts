@@ -41,7 +41,7 @@ export interface FundingSnapshot {
 export interface SubmissionState {
     submissionKey?: string;
     signedEnvelopeDigest?: string;
-    submissionPhase?: "claimed" | "prepared" | "responded" | "finalized" | "failed" | "legacy";
+    submissionPhase?: "claimed" | "prepared" | "responded" | "finalized" | "failed";
     signedLockupEnvelope?: string;
     preparedArkTx?: string;
     preparedCheckpoints?: string[];
@@ -58,7 +58,7 @@ export interface SubmissionState {
     submittedAt?: number;
     recoveryTxid?: string;
     recoverySubmittedAt?: number;
-    recoveryPhase?: "prepared" | "submitted" | "failed" | "legacy";
+    recoveryPhase?: "prepared" | "submitted" | "failed";
     recoveryGraphDigest?: string;
     recoveryExpectedTxid?: string;
     recoveryPreparedArkTx?: string;
@@ -111,6 +111,9 @@ export interface Advance extends FundingSnapshot, SubmissionState {
     paymentSats?: bigint;
     assetId?: AssetIdRef;
     assetUnits?: bigint;
+    /** The sender's own extension packet, carried after the asset groups. Persisted
+     * because the graph rebuilt at submission must carry it too. */
+    extraPacket?: { type: number; payload: Uint8Array };
     recoveryRecipient?: "sender" | "receiver";
     /** Leaf this covenant committed to; absent enables both claim leaves. */
     claimMode?: "recycle" | "purchase";

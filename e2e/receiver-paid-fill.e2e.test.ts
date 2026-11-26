@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
-import { hex } from "@scure/base";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
 import { preEffectRequest } from "./admission";
 import { liveScenario } from "./scenarios";
@@ -26,8 +25,8 @@ import {
     SATS_FARE,
     evidence,
     quotedFill,
-    sigCount,
     signAsCaller,
+    signers,
     txOf,
 } from "./fillSupport";
 
@@ -40,14 +39,18 @@ liveScenario("receiver-paid-fill-claim", async () => {
         const bobCoin = await freshCoin(live, "receiverSats", BOB_COIN_SATS);
         const quoted = await quotedFill(live);
         const { quote, graph, taxiInputIndexes, bobAddress, assetId, dust, minted, bob } = quoted;
+        const { takerKey, gateKey } = quoted;
         const operatorBefore = await walletBalance(live.actors.operator, minted.assetId);
         const posted = await signAsCaller(quoted);
         expect(posted.unsigned).toEqual([]);
-        // The Taxi signs last, and the gated covenant is the emulator's alone.
+        // The Taxi signs last; the gated deposit arrives with its taker's signature only.
         const postedArk = txOf(posted.arkTx);
-        for (const index of taxiInputIndexes) expect(sigCount(postedArk, index)).toBe(0);
+        for (const index of taxiInputIndexes) expect(signers(postedArk, index)).toEqual([]);
         for (const [index, owner] of graph.inputOwners.entries())
-            if (owner === null) expect(sigCount(postedArk, index)).toBe(0);
+            if (owner === null) {
+                expect(signers(postedArk, index)).toEqual([takerKey]);
+                expect(signers(txOf(posted.checkpoints[index]!), 0)).toEqual([takerKey]);
+            }
 
         const operationId = randomUUID();
         bound.release = ownCleanup(() =>
@@ -113,16 +116,17 @@ liveScenario("receiver-paid-fill-claim", async () => {
                 : graph.inputOwners[index] === null
                   ? "gated"
                   : "caller",
-            keys: (settled.getInput(index).tapScriptSig ?? []).map(([meta]) =>
-                hex.encode(meta.pubKey),
-            ),
+            keys: signers(settled, index),
         }));
-        // Every input is signed, and the gated covenant carries the emulator's
-        // tweaked key rather than the raw one.
+        // Every input is signed, and the gated deposit by its fulfill leaf's three keys:
+        // the emulator's tweaked one, never the raw one.
         for (const input of signatures) expect(input.keys.length).toBeGreaterThan(0);
         const gated = signatures.filter((input) => input.owner === "gated");
         expect(gated.length).toBeGreaterThan(0);
-        for (const input of gated) expect(input.keys).not.toContain(live.info.emulatorKey);
+        for (const input of gated) {
+            expect([...input.keys].sort()).toEqual([takerKey, live.info.serverKey, gateKey].sort());
+            expect(input.keys).not.toContain(live.info.emulatorKey);
+        }
 
         const { claim, transfer } = await claimFromFeed(
             live,
@@ -174,6 +178,8 @@ liveScenario("receiver-paid-fill-claim", async () => {
             signatures,
             emulatorKey: live.info.emulatorKey,
             serverKey: live.info.serverKey,
+            takerKey,
+            gateKey,
             operatorSatsDelta: operatorAfter.sats - operatorBefore.sats,
             recycleAssets: assetOutputs(tx, minted.assetId),
             bobBefore,

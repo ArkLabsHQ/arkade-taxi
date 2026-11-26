@@ -131,10 +131,12 @@ building a graph. `senderKey` replaces `makerPublicKey`.
 
 ## `POST /v1/fills`
 
-The caller builds the complete Arkade graph and signs its own inputs. Submit
-`operationId`, `quoteId`, base64 `arkTx` and index-aligned `checkpoints`,
-`taxiInputIndexes`, `covenantOutputIndex`, decimal `assetUnits` and optional Unix
-`validUntil`. The Taxi validates its economics, binds the quote atomically,
+The caller builds the complete Arkade graph and signs its own inputs, including
+a provider-gated input whose spend leaf names one of its keys, such as the taker
+in a directed swap's `fulfill` leaf. Submit `operationId`, `quoteId`, base64
+`arkTx` and index-aligned `checkpoints`, `taxiInputIndexes`,
+`covenantOutputIndex`, decimal `assetUnits` and optional Unix `validUntil`.
+The Taxi validates its economics, binds the quote atomically,
 signs only its reserved inputs and submits. The response contains `fillId`,
 state and available transaction information; it never returns Taxi-signed bytes.
 
@@ -150,7 +152,7 @@ The validator's contract is:
 8. V8: every output respects dust, asset-hosting floors and provider limits.
 9. V9: asset packets conserve units and consume none at Taxi inputs.
 10. V10: every indexed input is spendable and satisfies the quote's expiry floor.
-11. V11: Taxi inputs arrive unsigned. Provider consensus enforces foreign authorization.
+11. V11: Taxi inputs arrive unsigned. Every other input and its checkpoint arrive signed under SIGHASH_DEFAULT by each key its spend leaf names, other than the server's and, on a provider-gated input, its tweaked emulator key. A gated leaf must name both once, neither may have signed, and one naming no other key arrives unsigned.
 12. V12: admission, policy, reservations, safety and deadlines are checked before binding and submission.
 13. V13: Taxi signs last, submits through the applicable provider and returns status only.
 

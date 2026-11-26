@@ -1,11 +1,15 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { Advance, AdvanceState, Outpoint } from "@arkade-taxi/core";
-import { validateFundingSnapshot } from "@arkade-taxi/core";
+import {
+    spendObservationVerdict,
+    stableObservationVerdict,
+    validateFundingSnapshot,
+} from "@arkade-taxi/core";
 import { assertNativeAccess } from "./coordination";
 import { openCustodyRow } from "./custody";
 import { PolicyRepository } from "./policy";
 
-const COLUMNS = [
+export const COLUMNS = [
     "id",
     "state",
     "kind",
@@ -18,6 +22,7 @@ const COLUMNS = [
     "dust",
     "topup",
     "payment_sats",
+    "extra_packet",
     "asset_txid",
     "asset_group_index",
     "asset_units",
@@ -92,7 +97,7 @@ type AdvanceParams = Record<(typeof COLUMNS)[number], string | number | bigint |
 interface AdvanceRow {
     id: string;
     state: AdvanceState;
-    kind: "covenant" | "sponsored" | null;
+    kind: "covenant" | "sponsored";
     receiver_key: Buffer;
     sender_key: Buffer;
     operator_key: Buffer;
@@ -102,6 +107,7 @@ interface AdvanceRow {
     dust: bigint;
     topup: bigint;
     payment_sats: bigint | null;
+    extra_packet: Buffer | null;
     asset_txid: Buffer | null;
     asset_group_index: bigint | null;
     asset_units: bigint | null;
@@ -131,8 +137,7 @@ interface AdvanceRow {
     unsigned_lockup_id: string | null;
     submission_key: string | null;
     signed_envelope_digest: string | null;
-    submission_phase:
-        "claimed" | "prepared" | "responded" | "finalized" | "failed" | "legacy" | null;
+    submission_phase: "claimed" | "prepared" | "responded" | "finalized" | "failed" | null;
     signed_lockup_envelope: string | null;
     prepared_ark_tx: string | null;
     prepared_checkpoints_json: string | null;
@@ -149,7 +154,7 @@ interface AdvanceRow {
     submitted_at: bigint | null;
     recovery_txid: string | null;
     recovery_submitted_at: bigint | null;
-    recovery_phase: "prepared" | "submitted" | "failed" | "legacy" | null;
+    recovery_phase: "prepared" | "submitted" | "failed" | null;
     recovery_graph_digest: string | null;
     recovery_expected_txid: string | null;
     recovery_prepared_ark_tx: string | null;
@@ -172,6 +177,13 @@ interface AdvanceRow {
     failure_detail: string | null;
 }
 
+/** Fails to compile unless every row field is a bound column and every column a field. */
+type NoUnmatchedColumn<T extends never> = T;
+export type _RowMatchesColumns = NoUnmatchedColumn<
+    | Exclude<keyof AdvanceRow, (typeof COLUMNS)[number]>
+    | Exclude<(typeof COLUMNS)[number], keyof AdvanceRow>
+>;
+
 type RetryExpediteResult = "expedited" | "not_found" | "incompatible" | "live_lease";
 
 export interface PreparedRecoveryRecord {
@@ -190,6 +202,11 @@ const UPDATE_SQL = `UPDATE advances SET ${COLUMNS.filter((c) => c !== "id")
 
 /** Copies out of the pooled Buffer: `.buffer` on it is 8KB of unrelated rows. */
 const bytes = (b: Buffer): Uint8Array => Uint8Array.from(b);
+
+const extraPacketOf = (blob: Buffer, id: string) => {
+    if (blob.length < 2) throw new Error(`advance ${id}: extra_packet holds no payload`);
+    return { type: blob[0]!, payload: bytes(blob.subarray(1)) };
+};
 
 const stringArray = (json: string, id: string): string[] => {
     try {
@@ -224,6 +241,9 @@ function toParams(a: Advance): AdvanceParams {
         dust: a.dust,
         topup: a.topup,
         payment_sats: a.paymentSats ?? null,
+        extra_packet: a.extraPacket
+            ? Buffer.concat([Buffer.from([a.extraPacket.type]), Buffer.from(a.extraPacket.payload)])
+            : null,
         asset_txid: a.assetId?.txid ?? null,
         asset_group_index: a.assetId?.groupIndex ?? null,
         asset_units: a.assetUnits ?? null,
@@ -307,6 +327,18 @@ function toParams(a: Advance): AdvanceParams {
 // says `undefined`. Timestamps and indices are narrowed back to `number`, which
 // safeIntegers would otherwise hand back as BigInt.
 function fromRow(r: AdvanceRow): Advance {
+    if (r.kind !== "covenant" && r.kind !== "sponsored")
+        throw new Error(`advance ${r.id}: unknown kind`);
+    if (
+        r.submission_phase !== null &&
+        !["claimed", "prepared", "responded", "finalized", "failed"].includes(r.submission_phase)
+    )
+        throw new Error(`advance ${r.id}: unknown submission phase`);
+    if (
+        r.recovery_phase !== null &&
+        !["prepared", "submitted", "failed"].includes(r.recovery_phase)
+    )
+        throw new Error(`advance ${r.id}: unknown recovery phase`);
     const sponsored = r.kind === "sponsored";
     if (
         (sponsored && (r.batch_expiry_kind === null || r.batch_expiry_value === null)) ||
@@ -355,6 +387,7 @@ function fromRow(r: AdvanceRow): Advance {
         dust: r.dust,
         topup: r.topup,
         ...(r.payment_sats !== null ? { paymentSats: r.payment_sats } : {}),
+        ...(r.extra_packet !== null ? { extraPacket: extraPacketOf(r.extra_packet, r.id) } : {}),
         locktime: r.locktime,
         covenantAddress: r.covenant_address,
         fare:
@@ -486,7 +519,12 @@ export class AdvanceRepository {
     >;
     readonly #exposureTotals: Statement<[], { total: bigint; count: bigint }>;
     readonly #recoverySubmission: Statement<[string, number, string]>;
-    readonly #claimRecovery: Statement<[number, number, string], AdvanceRow>;
+    #policyRepository: PolicyRepository | undefined;
+
+    /** Built on first use: its constructor seeds the policy row, which must wait until then. */
+    get #policy(): PolicyRepository {
+        return (this.#policyRepository ??= new PolicyRepository(this.#db));
+    }
 
     constructor(db: Database, options: AdvanceRepositoryOptions = {}) {
         assertNativeAccess(db);
@@ -553,9 +591,6 @@ export class AdvanceRepository {
         this.#recoverySubmission =
             db.prepare(`UPDATE advances SET recovery_txid = coalesce(recovery_txid, ?),
             updated_at = max(updated_at, ?) WHERE id = ?`);
-        this.#claimRecovery =
-            read(`UPDATE advances SET state = 'recovering', recovery_submitted_at = ?,
-            updated_at = max(updated_at, ?) WHERE id = ? AND state = 'locked' AND kind = 'covenant' RETURNING *`);
     }
 
     insert(a: Advance): void {
@@ -631,7 +666,8 @@ export class AdvanceRepository {
         return this.#sponsoredLocked.all().map(fromRow);
     }
 
-    update(a: Advance): void {
+    /** Writes every column with no state guard, so only test fixtures call it. */
+    unsafeOverwrite(a: Advance): void {
         assertNativeAccess(this.#db);
         if (this.#update.run(toParams(a)).changes === 0) {
             throw new Error(`advance ${a.id} not found`);
@@ -885,7 +921,7 @@ export class AdvanceRepository {
                              WHERE id = ? AND state = 'locked' AND recovery_phase IS NULL`,
                         )
                         .run(at, code, detail, at, id).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "recovery");
+                if (changed) this.#policy.update({ paused: true }, "recovery");
                 return changed;
             })
             .immediate();
@@ -996,7 +1032,7 @@ export class AdvanceRepository {
                              AND recovery_lease_owner = ? AND recovery_lease_token = ?`,
                         )
                         .run(at, code, detail, at, id, owner, token).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "recovery");
+                if (changed) this.#policy.update({ paused: true }, "recovery");
                 return changed;
             })
             .immediate();
@@ -1050,7 +1086,7 @@ export class AdvanceRepository {
                              AND submission_lease_owner = ? AND submission_lease_token = ?`,
                         )
                         .run(at, code, detail, at, id, owner, token).changes === 1;
-                if (changed) new PolicyRepository(this.#db).update({ paused: true }, "submission");
+                if (changed) this.#policy.update({ paused: true }, "submission");
                 return changed;
             })
             .immediate();
@@ -1114,19 +1150,14 @@ export class AdvanceRepository {
             .transaction(() => {
                 const current = this.get(id);
                 if (!current) throw new Error(`advance ${id} not found`);
-                if (current.state === terminalState && current.spentTxid === spentTxid) {
-                    return "duplicate" as const;
-                }
-                const compatibleForwardDrift =
-                    (expectedState === "locking" && current.state === "locked") ||
-                    ((expectedState === "locking" || expectedState === "locked") &&
-                        current.state === "recovering");
-                if (current.state !== expectedState && compatibleForwardDrift)
-                    return "retry" as const;
-                if (
-                    ["recycled", "purchased", "refunded", "recovered"].includes(current.state) ||
-                    current.state !== expectedState
-                ) {
+                const verdict = spendObservationVerdict(
+                    current,
+                    expectedState,
+                    terminalState,
+                    spentTxid,
+                );
+                if (verdict === "duplicate" || verdict === "retry") return verdict;
+                if (verdict === "disagreement") {
                     this.#markObservationDisagreement(
                         id,
                         `canonical spend ${spentTxid} classified ${terminalState} at ${tip.hash}:${tip.height} conflicts with persisted ${current.spentTxid ?? "none"}/${current.state}`,
@@ -1213,7 +1244,7 @@ export class AdvanceRepository {
                         id,
                         current.state,
                     );
-                new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                this.#policy.update({ paused: true }, "spend-watcher");
             })
             .immediate();
     }
@@ -1272,7 +1303,7 @@ export class AdvanceRepository {
                  WHERE id = ?`,
             )
             .run(detail, at, id);
-        new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+        this.#policy.update({ paused: true }, "spend-watcher");
     }
 
     recordStableSpendObservation(
@@ -1289,7 +1320,8 @@ export class AdvanceRepository {
                 if (!current) throw new Error(`advance ${id} not found`);
                 if (current.state !== terminalState || current.spentTxid !== spentTxid)
                     return "ignored" as const;
-                const disagree = (reason: string) => {
+                const verdict = stableObservationVerdict(current, at, tip);
+                if (verdict.kind === "disagree") {
                     const changed = this.#db
                         .prepare(
                             `UPDATE advances SET failure_code = 'covenant_observation_disagreement',
@@ -1298,42 +1330,14 @@ export class AdvanceRepository {
                              observation_stable_count = 0, updated_at = max(updated_at, ?)
                              WHERE id = ? AND state = ? AND spent_txid = ?`,
                         )
-                        .run(reason, at, id, terminalState, spentTxid).changes;
+                        .run(verdict.reason, at, id, terminalState, spentTxid).changes;
                     if (changed !== 1) return "ignored" as const;
-                    new PolicyRepository(this.#db).update({ paused: true }, "spend-watcher");
+                    this.#policy.update({ paused: true }, "spend-watcher");
                     return "disagreement" as const;
-                };
-                if (
-                    !Number.isSafeInteger(at) ||
-                    at < 0 ||
-                    !/^[0-9a-f]{64}$/.test(tip.hash) ||
-                    !Number.isSafeInteger(tip.height) ||
-                    tip.height < 0 ||
-                    !Number.isSafeInteger(tip.time) ||
-                    tip.time < 0
-                )
-                    return disagree("stable canonical tip identity is malformed");
-                const previousHash = current.observationTipHash;
-                const previousHeight = current.observationTipHeight;
-                if (
-                    previousHash === undefined ||
-                    !/^[0-9a-f]{64}$/.test(previousHash) ||
-                    previousHeight === undefined ||
-                    !Number.isSafeInteger(previousHeight) ||
-                    previousHeight < 0
-                )
-                    return disagree("persisted terminal tip identity is malformed");
-                if (current.failureCode !== "covenant_observation_disagreement") {
-                    if (
-                        tip.height < previousHeight ||
-                        (tip.height === previousHeight && tip.hash !== previousHash) ||
-                        (tip.height > previousHeight && tip.hash === previousHash)
-                    )
-                        return disagree(
-                            `stale or contradictory canonical tip ${tip.hash}:${tip.height} conflicts with persisted observation`,
-                        );
-                    if (previousHash === tip.hash && previousHeight === tip.height)
-                        return "ignored" as const;
+                }
+                if (verdict.kind === "ignore") return "ignored" as const;
+                const { previous } = verdict;
+                if (verdict.kind === "advance") {
                     const changed = this.#db
                         .prepare(
                             `UPDATE advances SET last_observed_at = ?, observation_tip_hash = ?,
@@ -1350,25 +1354,12 @@ export class AdvanceRepository {
                             id,
                             terminalState,
                             spentTxid,
-                            previousHash,
-                            previousHeight,
+                            previous.hash,
+                            previous.height,
                         ).changes;
                     return changed === 1 ? ("advanced" as const) : ("ignored" as const);
                 }
-                if (
-                    tip.height < previousHeight ||
-                    (tip.height > previousHeight && tip.hash === previousHash)
-                )
-                    return disagree(
-                        `stable candidate ${tip.hash}:${tip.height} is below or contradicts persisted observation ${previousHash}:${previousHeight}`,
-                    );
-                const previousStableHash = current.observationStableTipHash;
-                const previousStableHeight = current.observationStableTipHeight;
-                const count =
-                    previousStableHash === tip.hash && previousStableHeight === tip.height
-                        ? (current.observationStableCount ?? 0) + 1
-                        : 1;
-                const cleared = count >= 2;
+                const { count, cleared } = verdict;
                 const changed = this.#db
                     .prepare(
                         `UPDATE advances SET observation_stable_tip_hash = ?,
@@ -1399,8 +1390,8 @@ export class AdvanceRepository {
                         id,
                         terminalState,
                         spentTxid,
-                        previousHash,
-                        previousHeight,
+                        previous.hash,
+                        previous.height,
                         current.observationStableCount ?? 0,
                     ).changes;
                 if (changed !== 1) return "ignored" as const;
@@ -1414,16 +1405,6 @@ export class AdvanceRepository {
         if (this.#recoverySubmission.run(txid, at, id).changes === 0) {
             throw new Error(`advance ${id} not found`);
         }
-    }
-
-    claimRecovery(id: string, at: number): Advance | undefined {
-        assertNativeAccess(this.#db);
-        return this.#db
-            .transaction(() => {
-                const row = this.#claimRecovery.get(at, at, id);
-                return row && fromRow(row);
-            })
-            .immediate();
     }
 
     listSweepable(currentHeight: bigint, medianTime?: bigint): Advance[] {

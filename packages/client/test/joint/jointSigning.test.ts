@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { base64, hex } from "@scure/base";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1.js";
 import { bytesToNumberBE, numberToBytesBE } from "@noble/curves/utils.js";
@@ -11,6 +12,7 @@ import {
     EmulatorPacket,
     Extension,
     MultisigTapscript,
+    P2A,
     PrevArkTxField,
     SingleKey,
     Transaction,
@@ -33,6 +35,12 @@ import {
     providerCosignerKeys,
 } from "../../src/joint/jointSigning";
 import { digestJointGraph } from "../../src/joint/jointGraph";
+import {
+    prepareFillSubmission,
+    sealFillGraph,
+    signFillForTaxi,
+    submitFillGraph,
+} from "../../src/joint/fillSigning";
 import { encodeOffer, offerVtxoScript, type Offer } from "@arkade-os/swap/protocol";
 import {
     OFFER_FILL_TEMPLATE,
@@ -53,15 +61,20 @@ const state = vi.hoisted(() => ({
     prevTxs: new Map<string, string>(),
 }));
 
+afterEach(async () => {
+    await yieldToEventLoop();
+});
+
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const mod = await importOriginal<typeof import("@arkade-os/sdk")>();
-    return {
+    const mocked = {
         ...mod,
         RestArkProvider: class {
             async getInfo() {
                 return {
                     signerPubkey: `02${hex.encode(SERVER_KEY)}`,
                     checkpointTapscript: CHECKPOINT,
+                    network: "regtest",
                 };
             }
         },
@@ -84,6 +97,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
             }
         },
     };
+    return { ...mocked, RestOperatorProvider: mocked.RestArkProvider };
 });
 
 const SERVER_SEED = new Uint8Array(32).fill(0x59);
@@ -1476,5 +1490,191 @@ describe("providerCosignerKeys", () => {
                 template: OFFER_FILL_TEMPLATE,
             }),
         ).toThrow(/gates input 0, which it owns/);
+    });
+});
+
+type FillGraph = ReturnType<typeof sealFillGraph>;
+type TapScriptSigs = NonNullable<ReturnType<Transaction["getInput"]>["tapScriptSig"]>;
+const txOf = (psbt: string) => Transaction.fromPSBT(base64.decode(psbt));
+const TAKER_SEED = new Uint8Array(32).fill(0x5c);
+const takerKey = schnorr.getPublicKey(TAKER_SEED);
+const GATE_SCRIPT = new Uint8Array([0x51]);
+const gateKey = arkade.computeArkadeScriptPublicKey(EMULATOR_KEY, GATE_SCRIPT);
+
+const spendEdge = (leaf: Uint8Array, seed: number) => {
+    const source = new VtxoScript([leaf]);
+    const next = new VtxoScript([hex.decode(CHECKPOINT), leaf]);
+    const checkpoint = new Transaction({ version: 3, lockTime: 0 });
+    checkpoint.addInput({
+        txid: new Uint8Array(32).fill(seed),
+        index: 0,
+        witnessUtxo: { script: source.pkScript, amount: 1_000n },
+        tapLeafScript: source.leaves,
+    });
+    checkpoint.addOutput({ script: next.pkScript, amount: 1_000n });
+    checkpoint.addOutput(P2A);
+    const input = {
+        txid: checkpoint.id,
+        index: 0,
+        witnessUtxo: { script: next.pkScript, amount: 1_000n },
+        tapLeafScript: [next.findLeaf(hex.encode(leaf))],
+    };
+    return { checkpoint, input };
+};
+
+/** A `fill/1` graph whose gated vin 0 the taker pre-signed, as a caller posts it. */
+const directedFill = async (): Promise<FillGraph> => {
+    const fulfill = MultisigTapscript.encode({ pubkeys: [takerKey, SERVER_KEY, gateKey] }).script;
+    const gated = spendEdge(fulfill, 0x71);
+    const taxi = spendEdge(
+        MultisigTapscript.encode({ pubkeys: [taxiKey, SERVER_KEY] }).script,
+        0x72,
+    );
+    const ark = new Transaction({ version: 3, lockTime: 0 });
+    ark.addInput(gated.input);
+    ark.addInput(taxi.input);
+    ark.addOutput({ script: TAXI_CHANGE_SCRIPT, amount: 2_000n });
+    ark.addOutput(
+        Extension.create([EmulatorPacket.create([{ vin: 0, script: GATE_SCRIPT }])]).txOut(),
+    );
+    const taker = SingleKey.fromPrivateKey(TAKER_SEED);
+    const signed = [await taker.sign(ark, [0]), await taker.sign(gated.checkpoint, [0])];
+    return sealFillGraph({
+        arkTx: base64.encode(signed[0].toPSBT()),
+        checkpoints: [signed[1], taxi.checkpoint].map((tx) => base64.encode(tx.toPSBT())),
+        taxiInputIndexes: [1],
+    });
+};
+
+const keysOn = (tx: Transaction, index: number) =>
+    (tx.getInput(index).tapScriptSig ?? []).map(([data]) => hex.encode(data.pubKey)).sort();
+
+const replaceSigs = (
+    tx: Transaction,
+    keep: (key: string) => boolean,
+    extra: TapScriptSigs = [],
+) => {
+    const sigs = tx.getInput(0).tapScriptSig!.filter(([data]) => keep(hex.encode(data.pubKey)));
+    tx.updateInput(0, { tapScriptSig: undefined });
+    tx.updateInput(0, { tapScriptSig: [...sigs, ...extra] });
+};
+
+describe("a gated input the caller pre-signed", () => {
+    const bindings = [{ inputIndex: 1, identity: SingleKey.fromPrivateKey(TAXI_SEED) }];
+    const fillOwners = { taxi: [hex.encode(taxiKey)] };
+    const prepare = async (expected: FillGraph) =>
+        prepareFillSubmission({
+            expected,
+            partial: await signFillForTaxi({ expected, bindings }),
+            ownerKeys: fillOwners,
+        });
+    /** Submits through an honest emulator whose answer `mutate` then edits. */
+    const submitCause = async (mutate: (ark: Transaction, checkpoint: Transaction) => void) => {
+        const expected = await directedFill();
+        const provider = {
+            submitTx: async (arkTx: string, cps: string[]) => {
+                const out = await honestEmulator().submitTx(arkTx, cps);
+                const [ark, cp0] = [out.signedArkTx, out.signedCheckpointTxs[0]].map(txOf);
+                mutate(ark, cp0);
+                return {
+                    signedArkTx: base64.encode(ark.toPSBT()),
+                    signedCheckpointTxs: [
+                        base64.encode(cp0.toPSBT()),
+                        ...out.signedCheckpointTxs.slice(1),
+                    ],
+                };
+            },
+        };
+        const prepared = await prepare(expected);
+        const ownerKeys = fillOwners;
+        const error = await submitFillGraph({ expected, prepared, provider, pins, ownerKeys }).then(
+            () => undefined,
+            (e: unknown) => e,
+        );
+        expect(error).toBeInstanceOf(JointSubmissionAmbiguousError);
+        return String((error as Error).cause);
+    };
+
+    it("signs, prepares and submits around the taker's signature", async () => {
+        const expected = await directedFill();
+        const prepared = await prepare(expected);
+        expect(keysOn(txOf(prepared.arkTx), 0)).toEqual([hex.encode(takerKey)]);
+        const outcome = await submitFillGraph({
+            expected,
+            prepared,
+            provider: honestEmulator(),
+            pins,
+            ownerKeys: fillOwners,
+        });
+        expect(keysOn(txOf(outcome.signedArkTx), 0)).toEqual(
+            [hex.encode(takerKey), pins.serverXOnly].sort(),
+        );
+        expect(keysOn(txOf(outcome.signedCheckpointTxs[0]), 0)).toEqual(
+            [hex.encode(takerKey), hex.encode(gateKey)].sort(),
+        );
+    });
+
+    it("refuses a trusted graph whose gated signature does not verify", async () => {
+        const expected = await directedFill();
+        const ark = txOf(expected.arkTx);
+        const [[data]] = ark.getInput(0).tapScriptSig!;
+        replaceSigs(ark, () => false, [[data, new Uint8Array(64).fill(1)]]);
+        const forged = { ...expected, arkTx: base64.encode(ark.toPSBT()) };
+        await expect(signFillForTaxi({ expected: forged, bindings })).rejects.toThrow(
+            /trusted arkTx input 0 has an invalid signature/,
+        );
+    });
+
+    it.each(["adds", "drops"])("refuses a partial that %s a gated signature", async (change) => {
+        const expected = await directedFill();
+        const alter = async (graph: FillGraph) => {
+            let ark = txOf(graph.arkTx);
+            if (change === "adds") ark = await SingleKey.fromPrivateKey(SERVER_SEED).sign(ark, [0]);
+            else ark.updateInput(0, { tapScriptSig: undefined });
+            return { ...structuredClone(graph), arkTx: base64.encode(ark.toPSBT()) };
+        };
+        await expect(
+            signFillForTaxi({ expected, partial: await alter(expected), bindings }),
+        ).rejects.toThrow(/provider input/);
+        const partial = await alter(await signFillForTaxi({ expected, bindings }));
+        expect(() => prepareFillSubmission({ expected, partial, ownerKeys: fillOwners })).toThrow(
+            /provider input/,
+        );
+    });
+
+    it("treats a response carrying only the preserved taker signature as ambiguous", async () => {
+        const onlyTaker = (key: string) => key === hex.encode(takerKey);
+        expect(await submitCause((ark) => replaceSigs(ark, onlyTaker))).toMatch(
+            /provider input 0 carries no server or provider signature/,
+        );
+        expect(await submitCause((_, cp) => replaceSigs(cp, onlyTaker))).toMatch(
+            /checkpoint 0 carries no server or emulator signature/,
+        );
+    });
+
+    it("refuses a valid response signature from an unpinned key on the gated input", async () => {
+        const rogue = new Uint8Array(32).fill(0x99);
+        const rogueSig = (tx: Transaction): TapScriptSigs => {
+            const leaf = tapLeavesOfInput(tx, 0)[0];
+            const prevouts = Array.from({ length: tx.inputsLength }, (_, i) => tx.getInput(i));
+            const message = tx.preimageWitnessV1(
+                0,
+                prevouts.map((p) => p.witnessUtxo!.script),
+                SigHash.DEFAULT,
+                prevouts.map((p) => p.witnessUtxo!.amount),
+                undefined,
+                leaf.script,
+            );
+            const pubKey = schnorr.getPublicKey(rogue);
+            const leafHash = hex.decode(leaf.leafHashHex);
+            return [[{ pubKey, leafHash }, schnorr.sign(message, rogue)]];
+        };
+        for (const onCheckpoint of [false, true])
+            expect(
+                await submitCause((ark, cp) => {
+                    const tx = onCheckpoint ? cp : ark;
+                    replaceSigs(tx, () => true, rogueSig(tx));
+                }),
+            ).toMatch(/unpinned key/);
     });
 });

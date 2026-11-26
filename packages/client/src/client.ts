@@ -38,9 +38,11 @@ import { assertSignedLockup, signLockup } from "./lockup";
 import { activeQuoteStateFor, immutablePlainCopy } from "./lockup";
 import { fundingInputsFromVtxos } from "./funding";
 import {
+    CovenantSpendBusyError,
     purchase,
     recycle,
     refund,
+    renewedTransfer,
     verifyCovenantTransfer,
     verifyIncomingClaimWithFreshStatus,
     type CovenantSpendConfig,
@@ -116,6 +118,8 @@ export interface QuoteRequest {
     /** Exact sats the receiver must end up with, bitcoin only. Omitted leaves
      * the operator deriving the advance from `senderSats`. */
     paymentSats?: bigint;
+    /** An extension packet the lockup must carry after the asset groups. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface RequestVerifiedQuoteArgs extends Omit<
@@ -133,7 +137,12 @@ export interface RequestVerifiedQuoteArgs extends Omit<
     /** The exact amount to send. Sent as the request and bound as the
      * expectation from this one field, for the same reason. */
     paymentSats?: bigint;
-    expect: Omit<QuoteExpectation, "receiverKey" | "senderKey" | "assetId" | "paymentSats">;
+    /** Declared once, like `paymentSats`: the rebuild checked against the quote carries it. */
+    extraPacket?: { type: number; payload: Uint8Array };
+    expect: Omit<
+        QuoteExpectation,
+        "receiverKey" | "senderKey" | "assetId" | "paymentSats" | "extraPacket"
+    >;
 }
 
 export interface SponsoredQuoteRequest {
@@ -222,6 +231,10 @@ export const requestQuoteWhenReady = async <T>(request: () => Promise<T>): Promi
         }
     }
 };
+
+// One arkd session (30 s by default) for the renewal batch, one Taxi reconcile (30 s) to adopt it.
+const RENEWAL_WAIT_MS = 90_000;
+
 const errorFrom = (status: number, text: string, where: string): TaxiError => {
     try {
         const body = JSON.parse(text) as ErrorResponse;
@@ -306,6 +319,11 @@ export class TaxiClient {
         if (req.paymentSats !== undefined) wire.paymentSats = satsToWire(req.paymentSats);
         if (req.assetUnits !== undefined) wire.assetUnits = satsToWire(req.assetUnits);
         if (req.fareId !== undefined) wire.fareId = req.fareId;
+        if (req.extraPacket !== undefined)
+            wire.extraPacket = {
+                type: req.extraPacket.type,
+                payload: bytesToHex(req.extraPacket.payload),
+            };
         const body = (await this.request("POST", "/v1/transfers", wire)) as QuoteResponse;
         decodeQuote(body);
         return body;
@@ -421,6 +439,7 @@ export class TaxiClient {
                         assetId: request.assetId,
                         claimMode: requestedClaimMode,
                         paymentSats: request.paymentSats,
+                        ...(request.extraPacket ? { extraPacket: request.extraPacket } : {}),
                     },
                 }),
         );
@@ -674,11 +693,48 @@ export class TaxiClient {
         receiverWalletInput: ReceiverWalletInput,
         destination: Uint8Array,
     ): Promise<string> {
-        return recycle(transfer, receiverWalletInput, destination);
+        return this.spendThroughRenewal(transfer, (current) =>
+            recycle(current, receiverWalletInput, destination),
+        );
     }
 
     async purchase(transfer: CovenantTransfer, destination: Uint8Array): Promise<string> {
-        return purchase(transfer, destination);
+        return this.spendThroughRenewal(transfer, (current) => purchase(current, destination));
+    }
+
+    /** Retries a spend its covenant's renewal refused, at the coin the Taxi adopts for it. */
+    private async spendThroughRenewal(
+        transfer: CovenantTransfer,
+        spend: (current: CovenantTransfer) => Promise<string>,
+    ): Promise<string> {
+        const start = Date.now();
+        const deadline = start + RENEWAL_WAIT_MS;
+        for (let current = transfer; ;) {
+            try {
+                return await spend(current);
+            } catch (cause) {
+                const { txid, vout } = current.outpoint;
+                if (
+                    !(cause instanceof CovenantSpendBusyError) ||
+                    !cause.outpoints.includes(`${txid}:${vout}`)
+                )
+                    throw cause;
+                // Status names the spent coin until the watcher adopts its successor, so wait for a move.
+                let moved: CovenantTransfer | undefined;
+                while (!moved) {
+                    if (Date.now() >= deadline) throw cause;
+                    await new Promise<void>((resolve) =>
+                        setTimeout(resolve, Math.min(retryDelay(start), deadline - Date.now())),
+                    );
+                    // The caller only ever sees the busy refusal: its capability is released.
+                    const status = await this.status(current.transferId).catch(() => undefined);
+                    if (status && status.state !== "locked") throw cause;
+                    moved =
+                        status && (await renewedTransfer(current, status).catch(() => undefined));
+                }
+                current = moved;
+            }
+        }
     }
 
     async refund(
@@ -686,7 +742,9 @@ export class TaxiClient {
         senderIdentity: Identity,
         senderWalletInput: ReceiverWalletInput,
     ): Promise<string> {
-        return refund(transfer, senderIdentity, senderWalletInput);
+        return this.spendThroughRenewal(transfer, (current) =>
+            refund(current, senderIdentity, senderWalletInput),
+        );
     }
 
     private claimsPath(path: string, addresses: readonly string[]): string {

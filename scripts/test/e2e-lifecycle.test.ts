@@ -46,6 +46,8 @@ describe("E2E artifact lifecycle", () => {
             ["mempool_api", ["logs", "--no-color", "--tail", "300", "mempool_api"]],
             ["mempool_web", ["logs", "--no-color", "--tail", "300", "mempool_web"]],
             ["arkd-wallet", ["logs", "--no-color", "--tail", "300", "arkd-wallet"]],
+            ["arkd-signer", ["logs", "--no-color", "--tail", "300", "arkd-signer"]],
+            ["redis", ["logs", "--no-color", "--tail", "300", "redis"]],
             ["arkd", ["logs", "--no-color", "--tail", "300", "arkd"]],
             ["emulator", ["logs", "--no-color", "--tail", "300", "emulator"]],
         ]);
@@ -77,6 +79,9 @@ describe("E2E artifact lifecycle", () => {
         const cleanup = source.indexOf("    } finally {");
         expect(source.indexOf("await interruption.waitForOperations()", cleanup)).toBeLessThan(
             source.indexOf("interruption.beginCleanup()", cleanup),
+        );
+        expect(source).toContain(
+            'composeArgs(state, ["down", "--timeout", "10", "--remove-orphans"])',
         );
     });
 

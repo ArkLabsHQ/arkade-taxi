@@ -251,6 +251,16 @@ describe("listReceiverClaims", () => {
         expect(() => listReceiverClaims(source, receivers, ACTIVE_CLAIM_STATES)).toThrow();
     });
 
+    it("serves a renewed covenant at its successor, away from the lockup output", () => {
+        const successor = { txid: "ef".repeat(32), vout: 1 };
+        const [claim] = listReceiverClaims(
+            deps(persisted({ outpoint: successor, renewals: 1 })),
+            receivers,
+            ACTIVE_CLAIM_STATES,
+        );
+        expect(claim?.claim?.outpoint).toEqual(successor);
+    });
+
     it.each([undefined, 1n, 9_007_199_254_740_992n])(
         "rejects asset quantity %s when it disagrees with the validated graph",
         (units) => {
@@ -354,6 +364,25 @@ describe("listReceiverClaims", () => {
                     ACTIVE_CLAIM_STATES,
                 );
                 expect(claim?.claim?.batchExpiry).toEqual(claim?.claim?.recoveryLocktime);
+            } finally {
+                bound.close();
+            }
+        });
+
+        it("serves a renewed joint covenant at its successor", async () => {
+            const bound = await createBoundJointFill();
+            try {
+                settle(bound);
+                const successor = { txid: "ef".repeat(32), vout: 1 };
+                expect(
+                    bound.advances.recordCovenantRenewed(bound.advance.id, successor, NOW + 2),
+                ).toBe(true);
+                const [claim] = listReceiverClaims(
+                    { config: bound.config, advances: bound.advances },
+                    { addresses: [bob.encode()], receiverKeys: [receiverKey] },
+                    ACTIVE_CLAIM_STATES,
+                );
+                expect(claim?.claim?.outpoint).toEqual(successor);
             } finally {
                 bound.close();
             }

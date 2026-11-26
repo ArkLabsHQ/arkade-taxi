@@ -21,10 +21,13 @@ import {
     VtxoTaprootTree,
     asset,
     assertAllowedSighashTypes,
+    getArkPsbtFields,
+    resolvePrevTxs,
     setArkPsbtField,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
     type EmulatorProvider,
+    type PrevTxSource,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { fundingInputFromWire } from "@arkade-taxi/protocol";
@@ -34,6 +37,7 @@ import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt";
 import { operatorPayoutSats } from "../lockup";
 import { validatePersistedLockupGraph } from "./submit";
 import { readFundingSource } from "./fundingSource";
+import { senderPaysSatsFare } from "./lockupBuilder";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -47,6 +51,27 @@ export interface RecoverySubmission {
 
 export class RecoveryArtifactError extends Error {
     readonly code = "recovery_artifact_invalid";
+}
+
+export class RecoverySourceUnavailableError extends Error {
+    readonly code = "recovery_source_unavailable";
+}
+
+/** The transaction that created a renewed covenant's coin, which its reclaim attaches. */
+export async function renewedCovenantSource(
+    outpoint: { txid: string },
+    indexer: PrevTxSource,
+): Promise<Uint8Array> {
+    try {
+        const raw = (await resolvePrevTxs([outpoint.txid], indexer)).get(outpoint.txid);
+        if (!raw) throw new Error(`the indexer did not return ${outpoint.txid}`);
+        return raw;
+    } catch (cause) {
+        throw new RecoverySourceUnavailableError(
+            cause instanceof Error ? cause.message : String(cause),
+            { cause },
+        );
+    }
 }
 
 function fail(message: string): never {
@@ -94,21 +119,45 @@ function assertTaggedLocktime(advance: Advance): NonNullable<Advance["recoveryLo
     return locktime;
 }
 
+function lockupOutpoint(advance: Advance): { txid: string; vout: number } {
+    const tagged = readFundingSource(advance.unsignedLockupTx);
+    if (tagged.kind === "fill") return tagged.covenantOutpoint;
+    const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
+    return { txid: exactBase64(envelope.arkTx).id, vout: envelope.covenantOutputIndex };
+}
+
+/** Offline, a renewed row's successor transaction is unknown, so startup audits its lockup. */
 function startupRecoveryAdvance(advance: Advance): Advance {
-    if (advance.outpoint || advance.state !== "locking") return advance;
+    const renewed = (advance.renewals ?? 0) > 0;
+    if (!renewed && (advance.outpoint || advance.state !== "locking")) return advance;
     try {
-        const tagged = readFundingSource(advance.unsignedLockupTx);
-        if (tagged.kind === "fill") return { ...advance, outpoint: tagged.covenantOutpoint };
-        const envelope = decodeLockupEnvelope(advance.unsignedLockupTx);
-        const source = exactBase64(envelope.arkTx);
-        return {
-            ...advance,
-            outpoint: { txid: source.id, vout: envelope.covenantOutputIndex },
-        };
+        return { ...advance, outpoint: lockupOutpoint(advance), renewals: 0 };
     } catch {
         return fail(`advance ${advance.id}: persisted recovery graph is malformed`);
     }
 }
+
+export const txidOf = (raw: Uint8Array): string =>
+    hex.encode(
+        createHash("sha256").update(createHash("sha256").update(raw).digest()).digest().reverse(),
+    );
+
+const assetPacketOf = (tx: Transaction) =>
+    Array.from({ length: tx.outputsLength }, (_, index) => tx.getOutput(index)).some(
+        (output) => output.script && Extension.isExtension(output.script),
+    )
+        ? Extension.fromTx(tx).getAssetPacket()
+        : undefined;
+
+const holdingsAt = (packet: ReturnType<typeof assetPacketOf>, vout: number) =>
+    packet?.groups.flatMap((group) =>
+        group.outputs
+            .filter((output) => output.vout === vout)
+            .map((output) => ({
+                id: group.assetId?.toString() ?? "issuance",
+                amount: output.amount,
+            })),
+    ) ?? [];
 
 const present = (value: unknown): boolean => value !== undefined;
 
@@ -195,7 +244,7 @@ function assertRecoveryPhaseMatrix(advance: Advance): void {
         !advance.recoveryPhase ||
         !["prepared", "submitted", "failed"].includes(advance.recoveryPhase)
     )
-        fail(`advance ${advance.id}: legacy recovery phase or unknown phase cannot be resumed`);
+        fail(`advance ${advance.id}: unknown recovery phase cannot be resumed`);
     if (lease.some(present) !== lease.every(present))
         fail(`advance ${advance.id}: recovery lease facts are incomplete`);
     assertTimestamp(advance, advance.recoveryLeaseUntil, "recovery lease time");
@@ -251,7 +300,7 @@ export function assertRecoveryStartupInvariants(
             fail(`advance ${advance.id}: the deadline must fall after the lockup`);
         try {
             const source = readFundingSource(advance.unsignedLockupTx);
-            if (source.kind === "legacy") validatePersistedLockupGraph(advance, config);
+            if (source.kind === "direct") validatePersistedLockupGraph(advance, config);
         } catch (cause) {
             fail(
                 `advance ${advance.id}: persisted lockup graph is invalid: ${cause instanceof Error ? cause.message : "validation failed"}`,
@@ -306,10 +355,17 @@ export function assertRecoveryStartupInvariants(
     }
 }
 
-function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): RecoveryIntent {
+function buildRecoveryIntentUnchecked(
+    advance: Advance,
+    config: RuntimeConfig,
+    renewedSource?: Uint8Array,
+): RecoveryIntent {
     assertTaggedLocktime(advance);
     if (!advance.outpoint) fail(`advance ${advance.id}: covenant outpoint is missing`);
-    const outpoint = advance.outpoint;
+    const current = advance.outpoint;
+    const renewed = (advance.renewals ?? 0) > 0;
+    // The lockup graph is audited at its own covenant output; a renewal only moved the coin.
+    const outpoint = renewed ? lockupOutpoint(advance) : current;
     const tagged = readFundingSource(advance.unsignedLockupTx);
     const fareHosting =
         advance.fare.units === 0n
@@ -365,7 +421,9 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         const operatorChange =
             operatorFunding.reduce((sum, input) => sum + input.value, 0n) -
             advance.topup -
-            (envelope.satsFarePayer === undefined ? fareHosting : 0n);
+            (senderPaysSatsFare({ fare: advance.fare, satsFarePayer: envelope.satsFarePayer })
+                ? 0n
+                : fareHosting);
         farePayout = operatorPayoutSats(
             fareHosting,
             operatorChange,
@@ -390,7 +448,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     )
         fail(`advance ${advance.id}: persisted covenant script or value mismatch`);
 
-    if (tagged.kind === "legacy" && fareHosting > 0n) {
+    if (tagged.kind === "direct" && fareHosting > 0n) {
         const fareOutput = source.outputsLength > 1 ? source.getOutput(1) : undefined;
         if (
             !fareOutput ||
@@ -409,22 +467,10 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         fail(`advance ${advance.id}: persisted covenant asset facts mismatch`);
     let sourceHoldings: { id: string; amount: bigint }[];
     try {
-        const hasExtension = Array.from({ length: source.outputsLength }, (_, index) =>
-            source.getOutput(index),
-        ).some((output) => output.script && Extension.isExtension(output.script));
-        const packet = hasExtension ? Extension.fromTx(source).getAssetPacket() : undefined;
-        sourceHoldings = packet
-            ? (packet?.groups.flatMap((group) =>
-                  group.outputs
-                      .filter((output) => output.vout === outpoint.vout)
-                      .map((output) => ({
-                          id: group.assetId?.toString() ?? "issuance",
-                          amount: output.amount,
-                      })),
-              ) ?? [])
-            : [];
+        const packet = assetPacketOf(source);
+        sourceHoldings = holdingsAt(packet, outpoint.vout);
         if (
-            tagged.kind === "legacy" &&
+            tagged.kind === "direct" &&
             advance.fare.currency === "asset" &&
             advance.fare.units > 0n
         ) {
@@ -447,6 +493,25 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         (id !== undefined && (sourceHoldings[0]!.id !== id || sourceHoldings[0]!.amount !== units))
     )
         fail(`advance ${advance.id}: lockup asset holdings differ from persisted facts`);
+    let coin = { outpoint, prevTx: source.toBytes() };
+    if (renewed) {
+        if (!renewedSource) fail(`advance ${advance.id}: renewed covenant source is missing`);
+        // The emulator hashes these exact bytes against the outpoint it spends.
+        if (txidOf(renewedSource) !== current.txid)
+            fail(`advance ${advance.id}: renewed covenant source is not the successor's`);
+        const successor = Transaction.fromRaw(renewedSource);
+        const output =
+            current.vout < successor.outputsLength ? successor.getOutput(current.vout) : undefined;
+        if (
+            output?.amount !== lockup ||
+            !output.script ||
+            !sameBytes(output.script, script.pkScript)
+        )
+            fail(`advance ${advance.id}: renewed covenant script or value mismatch`);
+        if (!isDeepStrictEqual(holdingsAt(assetPacketOf(successor), current.vout), sourceHoldings))
+            fail(`advance ${advance.id}: renewed covenant asset holdings mismatch`);
+        coin = { outpoint: current, prevTx: renewedSource };
+    }
     const sourceAssets =
         id && units
             ? Packet.create([
@@ -454,7 +519,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
                       AssetId.fromString(id),
                       null,
                       [],
-                      [AssetOutput.create(outpoint.vout, units)],
+                      [AssetOutput.create(coin.outpoint.vout, units)],
                       [],
                   ),
               ])
@@ -474,7 +539,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     const input = covenantSpendInput(
         script,
         Leaf.Recovery,
-        outpoint,
+        coin.outpoint,
         lockup,
         sourceAssets?.serialize(),
     );
@@ -516,7 +581,7 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
         tapLeafScript: [checkpointTree.findLeaf(hex.encode(selectedScript))],
     });
     setArkPsbtField(ark, 0, VtxoTaprootTree, checkpointTree.encode());
-    setArkPsbtField(ark, 0, PrevArkTxField, source.toBytes());
+    setArkPsbtField(ark, 0, PrevArkTxField, coin.prevTx);
     outputs.forEach((output) => ark.addOutput(output));
     ark.addOutput(P2A);
     const arkTx = base64.encode(ark.toPSBT());
@@ -529,9 +594,14 @@ function buildRecoveryIntentUnchecked(advance: Advance, config: RuntimeConfig): 
     };
 }
 
-export function buildRecoveryIntent(advance: Advance, config: RuntimeConfig): RecoveryIntent {
+/** `renewedSource` is the raw transaction that created a renewed covenant's current coin. */
+export function buildRecoveryIntent(
+    advance: Advance,
+    config: RuntimeConfig,
+    renewedSource?: Uint8Array,
+): RecoveryIntent {
     try {
-        return buildRecoveryIntentUnchecked(advance, config);
+        return buildRecoveryIntentUnchecked(advance, config, renewedSource);
     } catch (cause) {
         if (cause instanceof RecoveryArtifactError) throw cause;
         return fail(`advance ${advance.id}: persisted recovery graph is malformed`);
@@ -554,7 +624,13 @@ function persistedIntent(advance: Advance, config: RuntimeConfig): RecoveryInten
     };
     if (intent.digest !== recoveryDigest(intent.arkTx, intent.checkpoints))
         fail(`advance ${advance.id}: prepared recovery digest mismatch`);
-    const exact = buildRecoveryIntent(advance, config);
+    let prevTx: Uint8Array | undefined;
+    try {
+        prevTx = getArkPsbtFields(exactBase64(intent.arkTx), 0, PrevArkTxField)[0];
+    } catch {
+        return fail(`advance ${advance.id}: prepared recovery graph is malformed`);
+    }
+    const exact = buildRecoveryIntent(advance, config, prevTx);
     if (
         intent.expectedTxid !== exact.expectedTxid ||
         intent.arkTx !== exact.arkTx ||
@@ -654,6 +730,7 @@ class RecoveryLeaseLostError extends Error {}
 export function createRecoveryRunner(deps: {
     advances: RecoveryStore;
     emulator: Pick<EmulatorProvider, "submitTx">;
+    indexer: PrevTxSource;
     config: RuntimeConfig;
     workerId: string;
     now(): number;
@@ -695,8 +772,13 @@ export function createRecoveryRunner(deps: {
             }
             let prepared: RecoveryIntent | undefined;
             if (latest.state === "locked") {
+                // Fetched before the try: an unreachable indexer leaves the row locked for retry.
+                const at = latest.renewals ? latest.outpoint : undefined;
+                const renewedSource = at
+                    ? await renewedCovenantSource(at, deps.indexer)
+                    : undefined;
                 try {
-                    prepared = buildRecoveryIntent(latest, deps.config);
+                    prepared = buildRecoveryIntent(latest, deps.config, renewedSource);
                 } catch (cause) {
                     if (cause instanceof RecoveryArtifactError)
                         deps.advances.recordRecoveryPreparationFailure(

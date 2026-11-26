@@ -128,7 +128,11 @@ describe("assetIdFromWire", () => {
         expect(() => assetIdFromWire({ ...wire, txid: "zz" })).toThrow(/assetId\.txid/);
     });
 
-    it.each([-1, 1.5, Number.NaN, "0" as unknown as number])(
+    it.each(["", "11", "11".repeat(33)])("rejects a txid of the wrong length: %s", (txid) => {
+        expect(() => assetIdFromWire({ ...wire, txid })).toThrow(/assetId\.txid/);
+    });
+
+    it.each([-1, 1.5, 65536, Number.MAX_SAFE_INTEGER, Number.NaN, "0" as unknown as number])(
         "rejects groupIndex %o, naming the field",
         (groupIndex) => {
             expect(() => assetIdFromWire({ ...wire, groupIndex })).toThrow(/assetId\.groupIndex/);
@@ -137,6 +141,11 @@ describe("assetIdFromWire", () => {
 
     it("round-trips with assetIdToWire", () => {
         expect(assetIdToWire(assetIdFromWire(wire))).toEqual(wire);
+    });
+
+    it("round-trips the largest group index", () => {
+        const largest = { ...wire, groupIndex: 65535 };
+        expect(assetIdToWire(assetIdFromWire(largest))).toEqual(largest);
     });
 });
 

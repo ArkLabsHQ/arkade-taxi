@@ -359,25 +359,39 @@ describe("createSponsoredQuote", () => {
                 stored.unsignedLockupTx = encodeLockupEnvelope(wire);
             }
             const rebuild = () => validatePersistedLockupGraph(stored, config());
-            if (discriminator === "stripped") expect(rebuild).toThrow(/persisted/);
+            if (discriminator === "stripped")
+                expect(rebuild).toThrow("a positive sats fare requires a sender sats fare payer");
             else expect(rebuild).not.toThrow();
         },
     );
 
-    it("still reconstructs a sats-fare graph funded before the fare was charged", async () => {
+    it("rebuilds a sponsored graph carrying the sender's extra packet, and only that packet", async () => {
+        const quote = await createSponsoredQuote(
+            deps(),
+            sponsoredBody({ extraPacket: { type: 5, payload: "abcd" } }),
+        );
+        const stored = advances.get(quote.transferId)!;
+        expect(stored.extraPacket).toEqual({ type: 5, payload: Uint8Array.from([0xab, 0xcd]) });
+        expect(() => validatePersistedLockupGraph(stored, config())).not.toThrow();
+        const swapped = { ...stored, extraPacket: { type: 5, payload: Uint8Array.from([0xab]) } };
+        expect(() => validatePersistedLockupGraph(swapped, config())).toThrow(/persisted/);
+    });
+
+    it("rejects a positive sats fare graph whose sender payer is missing", async () => {
         const d = deps({ policy: satsFarePolicy(10n) });
         const quote = await createSponsoredQuote(d, sponsoredBody({ fareId: "sats-fare" }));
         const built = sponsoredBuilder.built.find((r) => r.advanceId === quote.transferId)!;
         delete built.satsFarePayer;
-        const legacyTx = buildSponsoredEnvelope(built, config(), serverUnroll);
-        expect(decodeLockupEnvelope(legacyTx).satsFarePayer).toBeUndefined();
-        const funded = {
-            ...advances.get(quote.transferId)!,
-            unsignedLockupTx: legacyTx,
-            unsignedLockupId: decodeLockupEnvelope(legacyTx).unsignedTxId,
-        };
-        expect(validatePersistedLockupGraph(funded, config())).toEqual(
-            decodeLockupEnvelope(legacyTx),
+        expect(() => buildSponsoredEnvelope(built, config(), serverUnroll)).toThrow(
+            "a positive sats fare requires a sender sats fare payer",
+        );
+        const stored = advances.get(quote.transferId)!;
+        expect(() => validatePersistedLockupGraph(stored, config())).not.toThrow();
+        const wire = decodeLockupEnvelope(stored.unsignedLockupTx);
+        delete wire.satsFarePayer;
+        const invalid = { ...stored, unsignedLockupTx: encodeLockupEnvelope(wire) };
+        expect(() => validatePersistedLockupGraph(invalid, config())).toThrow(
+            "a positive sats fare requires a sender sats fare payer",
         );
     });
 
@@ -481,7 +495,7 @@ describe("createSponsoredQuote", () => {
     it("keeps sponsored transfers out of receiver claims", async () => {
         await createSponsoredQuote(deps(), sponsoredBody());
         const stored = advances.get("adv-1")!;
-        advances.update({ ...stored, state: "locked" });
+        advances.unsafeOverwrite({ ...stored, state: "locked" });
         const claims = listReceiverClaims(
             { config: config(), advances },
             { addresses: [receiverAddress], receiverKeys: [receiverKey] },

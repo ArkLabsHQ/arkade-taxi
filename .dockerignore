@@ -4,7 +4,11 @@ node_modules
 .git
 .superpowers
 .reference
+.worktrees
 docs
+e2e-artifacts
+e2e-results.json
+slopo*
 *.db
 *.sqlite
 .env

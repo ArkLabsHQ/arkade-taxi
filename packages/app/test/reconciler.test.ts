@@ -175,13 +175,13 @@ describe("locking reconciliation", () => {
         state.db.close();
     });
 
-    it("blocks readiness for an absent legacy row but still promotes exact observation", async () => {
+    it("blocks readiness for an absent failed submission but still promotes exact observation", async () => {
         const state = setup();
-        state.advances.update({
+        state.advances.unsafeOverwrite({
             ...state.advances.get(state.quote.id)!,
-            submissionPhase: "legacy",
-            failureCode: "lockup_submission_legacy_unresumable",
-            failureDetail: "legacy row has no signed envelope",
+            submissionPhase: "failed",
+            failureCode: "lockup_submission_failed",
+            failureDetail: "submission has no successful response",
         });
         let visible = false;
         const script = hex.encode(state.tx.getOutput(0).script!);
@@ -201,7 +201,7 @@ describe("locking reconciliation", () => {
         });
 
         await reconciler.tick();
-        expect(reconciler.status().blockers).toEqual(["lockup_submission_legacy_unresumable"]);
+        expect(reconciler.status().blockers).toEqual(["lockup_submission_failed"]);
         visible = true;
         await reconciler.tick();
         expect(state.advances.get(state.quote.id)?.state).toBe("locked");
@@ -328,13 +328,13 @@ describe("sponsored settlement", () => {
                 {
                     txid: "ab".repeat(32),
                     vout: 2,
-                    value: 100n,
+                    value: 110n,
                     tapTree: senderTree.encode(),
                     spendLeaf: senderTree.scripts[0],
                     expiry: { kind: "height", value: 910_000n },
                 },
             ],
-            senderSats: 100n,
+            senderSats: 110n,
             funding: {
                 inputs: [fundingCoin()],
                 totalValue: 20_000n,
@@ -349,6 +349,7 @@ describe("sponsored settlement", () => {
             },
             receiverAddress: new ArkAddress(cfg.serverPubkey, receiverKey, cfg.addressHrp).encode(),
             fare: { currency: "sats", units: 10n },
+            satsFarePayer: "sender",
         };
     };
 

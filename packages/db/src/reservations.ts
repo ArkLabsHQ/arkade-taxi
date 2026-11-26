@@ -1,12 +1,14 @@
 import type { Database } from "better-sqlite3";
 import {
     advanceKind,
+    exposureCapRefusal,
     isTerminal,
-    ruleFor,
+    quoteFenceRefusal,
     validateFundingSnapshot,
     type Advance,
     type ExpiryDeadline,
     type Outpoint,
+    type QuoteFenceCode,
 } from "@arkade-taxi/core";
 import { AdvanceRepository } from "./advances";
 import { PolicyRepository } from "./policy";
@@ -51,7 +53,7 @@ const QUOTE_ADMISSION_MESSAGE = {
     no_locktime_headroom: "insufficient batch expiry margin",
     exceeds_max_outstanding: "exceeds max outstanding",
     max_concurrent_advances: "max concurrent advances",
-} as const;
+} as const satisfies Record<QuoteFenceCode, string>;
 
 export type QuoteAdmissionCode = keyof typeof QUOTE_ADMISSION_MESSAGE;
 
@@ -168,55 +170,16 @@ export class ReservationRepository {
                     )
                         throw new ReservationConflictError();
                 }
-                if (advance.state !== "quoted")
+                const refusal = quoteFenceRefusal({
+                    advance,
+                    policy,
+                    exposure: totalExposure(this.#db),
+                    recoveryExecutionBudget,
+                });
+                if (refusal?.kind === "unquoted")
                     throw new Error("reservation: advance must be quoted");
-                validateFundingSnapshot(advance);
-                // A sponsored direct send has no covenant leaf to recover: no
-                // locktime is derived and no recovery budget is scheduled. The
-                // policy gate, asset allowlist and per-payment cap below apply
-                // to both kinds.
-                if (advanceKind(advance) === "covenant") {
-                    const recovery = advance.recoveryLocktime;
-                    const policyMargin = BigInt(policy.locktimeMarginSeconds);
-                    if (
-                        !recovery ||
-                        recovery.kind !== "time" ||
-                        recoveryExecutionBudget?.kind !== "time" ||
-                        recoveryExecutionBudget.value < 0n ||
-                        policyMargin <= recoveryExecutionBudget.value ||
-                        recovery.value <= BigInt(advance.createdAt)
-                    )
-                        throw new RecoveryBudgetConflictError(advance.id);
-                }
-                if (policy.paused) throw new QuoteAdmissionError("paused");
-                const rule = ruleFor(policy.assetRules, advance.assetId);
-                if (!rule?.enabled) throw new QuoteAdmissionError("asset_not_served");
-                if (
-                    advance.topup <= 0n ||
-                    advance.topup > advance.dust ||
-                    advance.topup > (rule.maxTopupSats ?? policy.maxPerPaymentTopupSats)
-                ) {
-                    throw new QuoteAdmissionError("topup_exceeds_max_per_payment");
-                }
-                // A v2 locktime is not a margin off batch expiry, so there is no
-                // headroom between the two to measure.
-                if (
-                    advanceKind(advance) === "covenant" &&
-                    advance.batchExpiry !== undefined &&
-                    advance.batchExpiry.value - advance.locktime <
-                        BigInt(
-                            advance.batchExpiry.kind === "height"
-                                ? policy.locktimeMarginBlocks
-                                : policy.locktimeMarginSeconds,
-                        )
-                ) {
-                    throw new QuoteAdmissionError("no_locktime_headroom");
-                }
-                const exposure = totalExposure(this.#db);
-                if (exposure.total + advance.topup > policy.maxOutstandingSats)
-                    throw new QuoteAdmissionError("exceeds_max_outstanding");
-                if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
-                    throw new QuoteAdmissionError("max_concurrent_advances");
+                if (refusal?.kind === "budget") throw new RecoveryBudgetConflictError(advance.id);
+                if (refusal) throw new QuoteAdmissionError(refusal.code);
                 const conflict = this.#db
                     .prepare<[string, number], { advance_id: string }>(
                         "SELECT advance_id FROM operator_input_reservations WHERE outpoint_txid = ? AND outpoint_vout = ?",
@@ -297,11 +260,8 @@ export class ReservationRepository {
                 }
                 if (advance.state !== "quoted") return new LockupClaimError("invalid_state", id);
                 const policy = this.#policy.get();
-                const exposure = totalExposure(this.#db);
-                if (exposure.total + advance.topup > policy.maxOutstandingSats)
-                    throw new LockupClaimError("exceeds_max_outstanding", id);
-                if (exposure.count >= BigInt(policy.maxConcurrentAdvances))
-                    throw new LockupClaimError("max_concurrent_advances", id);
+                const cap = exposureCapRefusal(totalExposure(this.#db), advance.topup, policy);
+                if (cap) throw new LockupClaimError(cap, id);
                 validateFundingSnapshot(advance);
                 const expected = new Set(
                     advance.operatorInputs.map(({ txid, vout }) => `${txid}:${vout}`),

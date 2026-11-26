@@ -248,6 +248,7 @@ const schemas: Record<string, Schema> = {
             assetUnits,
             fareId,
             paymentSats,
+            extraPacket: ref("ExtraPacket"),
         },
     ),
     QuoteParams: {
@@ -421,7 +422,8 @@ const schemas: Record<string, Schema> = {
                 arkTx: {
                     ...text,
                     maxLength: 4000000,
-                    description: "base64 PSBT. Every non-Taxi input signed; the Taxi's unsigned.",
+                    description:
+                        "base64 PSBT. Each non-Taxi input is signed by every key its spend leaf names but the server's and a gated input's tweaked emulator key; the Taxi's are unsigned.",
                 },
                 checkpoints: {
                     type: "array",
@@ -470,8 +472,11 @@ const schemas: Record<string, Schema> = {
     },
     ExtraPacket: {
         description:
-            "Extension packet the payment must carry, e.g. an offer's packet when funding it. Echoed in `params`.",
-        ...object({ type: { type: "integer", minimum: 0, maximum: 255 }, payload: hex }),
+            "Extension packet the transaction must carry after the asset groups, e.g. an offer's packet when funding it. Types 0 and 1 are reserved for the asset and emulator packets. A sponsored quote echoes it in `params`; a lockup carries it in the graph the sender rebuilds.",
+        ...object({
+            type: { type: "integer", minimum: 2, maximum: 255 },
+            payload: { ...hex, maxLength: 2048 },
+        }),
     },
     SponsoredQuoteRequest: object(
         {

@@ -1,6 +1,6 @@
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
-import { applyMigrations } from "./schema";
+import { initializeSchema } from "./schema";
 
 export {
     AdvanceRepository,
@@ -31,7 +31,7 @@ export {
     type QuoteAdmissionCode,
     type ReserveQuoteRequest,
 } from "./reservations";
-export { ADVANCE_STATES, applyMigrations, MIGRATIONS, type Migration } from "./schema";
+export { ADVANCE_STATES, initializeSchema, SCHEMA_VERSION } from "./schema";
 export {
     FillRepository,
     FillClaimError,
@@ -51,11 +51,16 @@ export { assertNativeAccess, withSdkAccess, DatabaseBusyError } from "./coordina
  * BigInt: sats above 2^53 do not survive the default number mode. */
 export function openDatabase(path: string): Database {
     const db = new DatabaseCtor(path);
-    db.pragma("journal_mode = WAL");
-    db.pragma("synchronous = FULL");
-    db.defaultSafeIntegers(true);
-    applyMigrations(db);
-    return db;
+    try {
+        db.pragma("synchronous = FULL");
+        db.defaultSafeIntegers(true);
+        initializeSchema(db);
+        db.pragma("journal_mode = WAL");
+        return db;
+    } catch (error) {
+        db.close();
+        throw error;
+    }
 }
 export * from "./proceeds";
 export * from "./receiveQuotes";

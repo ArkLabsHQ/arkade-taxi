@@ -261,7 +261,7 @@ describe("quote and runtime refresh interleaving", () => {
             expect(initial.status).toBe(202);
             const expected = await initial.json();
             if (state === "locked")
-                h.advances.update({
+                h.advances.unsafeOverwrite({
                     ...h.advances.get(quoted.transferId)!,
                     state,
                     outpoint: expected.outpoint,

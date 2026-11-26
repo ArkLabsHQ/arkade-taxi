@@ -118,6 +118,20 @@ describe("validateParams", () => {
         expect(() => validateParams({ ...base(), locktime: 500_000_000n }, MIN)).not.toThrow();
     });
 
+    it("rejects a reclaim deadline no transaction locktime can reach", () => {
+        expect(() => validateParams({ ...base(), locktime: 0xffffffffn }, MIN)).not.toThrow();
+        expect(() => validateParams({ ...base(), locktime: 0x100000000n }, MIN)).toThrow(/uint32/);
+    });
+
+    it.each([
+        { txid: new Uint8Array(31), groupIndex: 0 },
+        { txid: assetId.txid, groupIndex: -1 },
+        { txid: assetId.txid, groupIndex: 0.5 },
+        { txid: assetId.txid, groupIndex: 65_536 },
+    ])("rejects an asset id the asset packet cannot encode (%s)", (assetId) => {
+        expect(() => validateParams({ ...base(), assetId }, MIN)).toThrow(/asset id/);
+    });
+
     it("rejects an unknown recovery recipient", () => {
         const params = {
             ...base(),

@@ -52,6 +52,7 @@ import {
     verifyCovenantTransfer,
     verifyIncomingClaim,
     CovenantSpendAmbiguousError,
+    CovenantSpendBusyError,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type ReceiverWalletInput,
@@ -164,6 +165,8 @@ const vtxoWire = (coin: VirtualCoin): Record<string, unknown> => ({
     isUnrolled: coin.isUnrolled,
     isSpent: coin.isSpent,
     spentBy: coin.spentBy,
+    settledBy: coin.settledBy,
+    arkTxid: coin.arkTxId,
     commitmentTxids: coin.commitmentTxIds,
     assets: coin.assets?.map(({ assetId, amount }) => ({ assetId, amount: String(amount) })),
 });
@@ -217,11 +220,16 @@ const setup = async (
                 await SingleKey.fromPrivateKey(new Uint8Array(32).fill(5)).compressedPublicKey(),
             ),
         })),
-        submitTx: vi.fn(async (arkTx: string, checkpoints: string[]) => {
-            submitted = Transaction.fromPSBT(base64.decode(arkTx));
-            const packet = Extension.fromTx(submitted).getEmulatorPacket()!;
-            return finalGraph(arkTx, checkpoints, packet.entries[0].script);
-        }),
+        submitTx: vi.fn(
+            async (
+                arkTx: string,
+                checkpoints: string[],
+            ): Promise<Awaited<ReturnType<typeof finalGraph>> | Response> => {
+                submitted = Transaction.fromPSBT(base64.decode(arkTx));
+                const packet = Extension.fromTx(submitted).getEmulatorPacket()!;
+                return finalGraph(arkTx, checkpoints, packet.entries[0].script);
+            },
+        ),
     };
     const coins = [coin, ...extras.map(({ coin: extra }) => extra)];
     const sources = [previous, ...extras.map(({ source: extra }) => extra)];
@@ -293,7 +301,8 @@ const setup = async (
                 arkTx: string;
                 checkpointTxs: string[];
             };
-            return json(await emulator.submitTx(body.arkTx, body.checkpointTxs));
+            const reply = await emulator.submitTx(body.arkTx, body.checkpointTxs);
+            return reply instanceof Response ? reply : json(reply);
         }
         throw new Error(`unexpected provider request ${url}`);
     });
@@ -1673,6 +1682,202 @@ describe("one-shot covenant capability", () => {
             purchase(base.transfer, new Uint8Array([0x51, 0x20, ...receiverKey])),
         ).rejects.toThrow(/already|consumed/i);
         expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+});
+
+// The emulator's body for arkd's refusal, as the funded Taxi lane logged it.
+const refusal = (name: string, outpoint: string): Response => {
+    const message = `${name} (4): vtxo(s) already registered`;
+    return new Response(
+        JSON.stringify({
+            code: 6,
+            message,
+            details: [
+                {
+                    "@type": "type.googleapis.com/ark.v1.ErrorDetails",
+                    code: 4,
+                    name,
+                    message,
+                    metadata: { vtxo_outpoint: outpoint, vtxo_outpoints: `[${outpoint}]` },
+                },
+            ],
+        }),
+        { status: 409 },
+    );
+};
+
+describe("a covenant its renewal holds", () => {
+    const destination = new Uint8Array([0x51, 0x20, ...receiverKey]);
+    const held = ({ coin }: { coin: VirtualCoin }) => `${coin.txid}:${coin.vout}`;
+    const busy = (base: Awaited<ReturnType<typeof setup>>) =>
+        base.emulator.submitTx.mockResolvedValueOnce(
+            refusal("VTXO_ALREADY_REGISTERED", held(base)),
+        );
+    // What the indexer reports for the coin a renewal batch consumed (renewal-r2.json).
+    const settled = (base: Awaited<ReturnType<typeof setup>>) =>
+        Object.assign(base.coin, {
+            isSpent: true,
+            spentBy: "dd".repeat(32),
+            settledBy: "ee".repeat(32),
+            arkTxId: "",
+        });
+
+    it("refuses the spend as busy, not ambiguous, and releases the capability", async () => {
+        const base = await setup();
+        busy(base);
+        const error = await purchase(base.transfer, destination).catch((cause) => cause);
+        expect(error).toBeInstanceOf(CovenantSpendBusyError);
+        expect(error).not.toBeInstanceOf(CovenantSpendAmbiguousError);
+        expect(error.outpoints).toEqual([held(base)]);
+        const txid = await purchase(base.transfer, destination);
+        expect(txid).toBe(base.submitted()!.id);
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+        ["another arkd refusal", (outpoint: string) => refusal("VTXO_ALREADY_SPENT", outpoint)],
+        ["an unparsable error body", () => new Response("bad gateway", { status: 502 })],
+    ])("keeps %s ambiguous and the capability consumed", async (_, reply) => {
+        const base = await setup();
+        base.emulator.submitTx.mockResolvedValueOnce(reply(held(base)));
+        await expect(purchase(base.transfer, destination)).rejects.toBeInstanceOf(
+            CovenantSpendAmbiguousError,
+        );
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/already|consumed/i);
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a coin its renewal already settled as busy, before submitting", async () => {
+        const base = await setup();
+        settled(base);
+        for (const _ of [1, 2]) {
+            const error = await purchase(base.transfer, destination).catch((cause) => cause);
+            expect(error).toBeInstanceOf(CovenantSpendBusyError);
+            expect(error.outpoints).toEqual([held(base)]);
+        }
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
+    });
+
+    it("reads the renewal's commitment txid in any hex case", async () => {
+        const base = await setup();
+        Object.assign(settled(base), { settledBy: "Ee".repeat(32) });
+        await expect(purchase(base.transfer, destination)).rejects.toBeInstanceOf(
+            CovenantSpendBusyError,
+        );
+        expect(base.emulator.submitTx).not.toHaveBeenCalled();
+    });
+
+    it("reads the inputs arkd says are registered in any hex case", async () => {
+        const base = await setup();
+        base.emulator.submitTx.mockResolvedValueOnce(
+            refusal("VTXO_ALREADY_REGISTERED", held(base).toUpperCase()),
+        );
+        const error = await purchase(base.transfer, destination).catch((cause) => cause);
+        expect(error).toBeInstanceOf(CovenantSpendBusyError);
+        expect(error.outpoints).toEqual([held(base)]);
+    });
+
+    it("keeps a coin an Ark transaction spent an ordinary refusal", async () => {
+        const base = await setup();
+        Object.assign(base.coin, {
+            isSpent: true,
+            spentBy: "dd".repeat(32),
+            arkTxId: "dd".repeat(32),
+        });
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/not spendable/);
+        await expect(purchase(base.transfer, destination)).rejects.toThrow(/already|consumed/i);
+    });
+
+    // The flag the 1.1.2 watcher stamped on every scan after adopting a successor (CI 45579569510).
+    const flagged = {
+        failureCode: "covenant_spend_unknown",
+        failureDetail: `candidate unavailable at ${"0f".repeat(32)}:101: unspent covenant evidence could not be validated`,
+    };
+
+    it.each([
+        ["while arkd holds it for the renewal", busy, 2, 0x77, {}],
+        ["after the renewal settled it", settled, 1, 0x78, {}],
+        ["after the renewal settled it and the Taxi flagged the row", settled, 1, 0x79, flagged],
+    ])(
+        "claims the renewed coin once the Taxi reports it, %s",
+        async (_, hold, submissions, fill, flags) => {
+            const successor = source(fill);
+            const renewed = { coin: {} as VirtualCoin, source: successor };
+            const base = await setup(args(), [], [renewed]);
+            Object.assign(renewed.coin, {
+                ...base.coin,
+                txid: successor.id,
+                vout: 0,
+                isPreconfirmed: false,
+                commitmentTxIds: ["ee".repeat(32)],
+            });
+            hold(base);
+            let reads = 0;
+            const taxi = new TaxiClient({
+                baseUrl: "https://taxi.example",
+                fetch: async () => {
+                    if (++reads === 1) throw new Error("taxi unreachable");
+                    return json(
+                        reads === 2
+                            ? base.status
+                            : {
+                                  ...base.status,
+                                  outpoint: { txid: successor.id, vout: 0 },
+                                  ...flags,
+                              },
+                    );
+                },
+            });
+            vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
+            try {
+                const txid = await drive(taxi.purchase(base.transfer, destination));
+                expect(txid).toBe(base.submitted()!.id);
+            } finally {
+                vi.useRealTimers();
+            }
+            expect(reads).toBe(3);
+            expect(base.emulator.submitTx).toHaveBeenCalledTimes(submissions);
+            const [, checkpoints] = base.emulator.submitTx.mock.calls.at(-1)!;
+            const spent = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
+            expect([hex.encode(spent.txid!), spent.index]).toEqual([successor.id, 0]);
+        },
+    );
+
+    it.each([
+        ["never reports a renewed coin", "locked", (reads: number) => reads > 2],
+        ["reports the transfer is no longer locked", "recovering", (reads: number) => reads === 1],
+    ])("gives up with the busy refusal when the Taxi %s", async (_, state, expectedReads) => {
+        const base = await setup();
+        busy(base);
+        let reads = 0;
+        const taxi = new TaxiClient({
+            baseUrl: "https://taxi.example",
+            fetch: async () => {
+                if (++reads % 2 === 0) throw new Error("taxi unreachable");
+                return json({ ...base.status, state });
+            },
+        });
+        vi.useFakeTimers({ now: NOW * 1000, toFake: ["setTimeout", "clearTimeout", "Date"] });
+        try {
+            await expect(drive(taxi.purchase(base.transfer, destination))).rejects.toBeInstanceOf(
+                CovenantSpendBusyError,
+            );
+        } finally {
+            vi.useRealTimers();
+        }
+        expect(expectedReads(reads)).toBe(true);
+        expect(base.emulator.submitTx).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the wallet queue a busy claim unwrapped, so it is not marked spent", async () => {
+        const refused = new CovenantSpendBusyError([`${"ab".repeat(32)}:0`], new Error("held"));
+        const offer = {
+            client: { purchase: async () => Promise.reject(refused) },
+            claim: { claim: { params: { receiverKey: hex.encode(receiverKey) } } },
+        } as unknown as VerifiedClaim;
+        await expect(
+            claimVerified(offer, { kind: "purchase", receivedSats: 330n }, senderIdentity),
+        ).rejects.toBe(refused);
     });
 });
 

@@ -20,15 +20,16 @@ import { ProductionSponsoredLockupBuilder } from "./sponsoredQuotes";
 import { createSweeper } from "./sweeper";
 import { createAdminApp, createApp, type ServerDeps } from "./server";
 import { createOperatorRuntime } from "./arkade/operatorWallet";
-import { SingleKey } from "@arkade-os/sdk";
+import { SingleKey, networks } from "@arkade-os/sdk";
 import { advanceKind, computeReceivables } from "@arkade-taxi/core";
 import { createSubmissionResumer, productionLockupSubmitter } from "./arkade/submit";
 import { createLockupReconciler } from "./reconciler";
 import { custodySolvencyView } from "./custody";
-import { DelegateeClient } from "./delegatee";
+import { DelegateeClient, delegationRenewal } from "./delegatee";
 import { createFillReconciler } from "./fillReconciler";
 import { createSpendWatcher } from "./watcher";
 import { assertRecoveryStartupInvariants, createRecoveryRunner } from "./arkade/recovery";
+import { covenantKeeper } from "./arkade/renewal";
 import { createServiceLifecycle, shutdownFatalDiagnostic } from "./lifecycle";
 import { createProceedsCollector } from "./proceeds";
 import { createBoarding } from "./boarding";
@@ -145,10 +146,31 @@ async function runServe(): Promise<void> {
         onScanMetrics: (metrics) => log.debug(metrics, "watcher indexer round trips"),
     });
 
+    // Once, before the first sweep registers a covenant; idempotent on its derived id.
+    // Without it the keeper below renews in process until a restart retries.
+    const delegatee = config.delegateeUrl
+        ? await (async () => {
+              const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
+              try {
+                  const registration = await client.register();
+                  log.info({ ...registration }, "delegatee renewal template registered");
+                  return { client, registration };
+              } catch (error) {
+                  // Unsanitized: the remedy names the 64-hex template id the sanitizer redacts.
+                  log.error(
+                      { error: error instanceof Error ? error.message : String(error) },
+                      "delegatee unavailable, covenants renew in process",
+                  );
+                  return undefined;
+              }
+          })()
+        : undefined;
+    const shutdown = new AbortController();
     const intervalSeconds = Math.max(1, Math.ceil(config.reconcileIntervalMs / 1000));
     const recovery = createRecoveryRunner({
         advances,
         emulator: runtime.providers.emulatorProvider,
+        indexer: runtime.providers.indexerProvider,
         config,
         workerId: randomUUID(),
         now: seconds,
@@ -178,6 +200,23 @@ async function runServe(): Promise<void> {
                 },
                 "v2 covenant renewal is overdue",
             ),
+        renewal: delegatee
+            ? delegationRenewal({ ...delegatee, config, now: seconds })
+            : covenantKeeper({
+                  providers: {
+                      arkProvider: runtime.providers.arkProvider,
+                      emulator: runtime.providers.emulatorProvider,
+                      indexer: runtime.providers.indexerProvider,
+                      network: networks[config.networkName],
+                  },
+                  config,
+                  now: seconds,
+                  signal: shutdown.signal,
+                  onRenewed: (id, commitmentTxid) =>
+                      log.info({ advanceId: id, commitmentTxid }, "covenant renewed"),
+              }),
+        onRenewalError: (id, error) =>
+            log.error({ advanceId: id, error: error.message }, "covenant renewal failed"),
     });
     reconciler = createLockupReconciler({
         advances,
@@ -240,7 +279,6 @@ async function runServe(): Promise<void> {
     let closeServer: Promise<void> | undefined;
     const servers: ReturnType<typeof serve>[] = [];
     let accepting = true;
-    const shutdown = new AbortController();
 
     const inventory = {
         getSpendableVtxos: async () => {
@@ -250,15 +288,6 @@ async function runServe(): Promise<void> {
         },
         getLockedVtxoOutpoints: () => runtime.storage.intentRepository.getLockedVtxoOutpoints(),
     };
-    // Once, before any quote; both calls are idempotent on their derived id.
-    const delegatee = config.delegateeUrl
-        ? await (async () => {
-              const client = new DelegateeClient({ baseUrl: config.delegateeUrl! });
-              const registration = await client.register();
-              log.info({ ...registration }, "delegatee renewal template registered");
-              return { client, registration };
-          })()
-        : undefined;
     const providerLimits = async () => {
         const info = await runtime.providers.arkProvider.getInfo();
         return { vtxoMaxAmount: info.vtxoMaxAmount };

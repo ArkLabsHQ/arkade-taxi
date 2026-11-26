@@ -62,6 +62,7 @@ export {
     verifyCovenantTransfer,
     verifyIncomingClaim,
     CovenantSpendAmbiguousError,
+    CovenantSpendBusyError,
     type CovenantSpendConfig,
     type CovenantTransfer,
     type IncomingClaimExpectation,

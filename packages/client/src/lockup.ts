@@ -13,6 +13,7 @@ import {
     MultisigTapscript,
     P2A,
     Transaction,
+    UnknownPacket,
     VtxoScript,
     VtxoTaprootTree,
     asset,
@@ -68,6 +69,7 @@ interface LockupValidationContext {
     trustedServerUnrollScript: Uint8Array;
     vtxoMinAmount: bigint;
     hrp: string;
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 interface ValidatedLockup {
@@ -733,12 +735,10 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
               ? context.fare.units
               : context.params.dust;
     if (
-        envelope.satsFarePayer !== undefined &&
-        (context.fare.currency !== "sats" || context.fare.units <= 0n)
+        envelope.satsFarePayer !==
+        (context.fare.currency === "sats" && context.fare.units > 0n ? "sender" : undefined)
     )
-        reject("satsFarePayer needs a positive sats fare");
-    // Absent, the fare leaves operator change and returns to the operator. The
-    // caller authorised this fare either way, so both layouts are within it.
+        reject("satsFarePayer must name the sender exactly for a positive sats fare");
     const senderFare = envelope.satsFarePayer === undefined ? 0n : fareHosting;
     const operatorFare = fareHosting - senderFare;
     const senderChange = context.senderSats + context.params.topup - lockup - senderFare;
@@ -850,7 +850,12 @@ export function validateLockup(context: LockupValidationContext): ValidatedLocku
                 [],
             );
         });
-    if (groups.length) outputs.push(Extension.create([Packet.create(groups)]).txOut());
+    const extra = context.extraPacket;
+    const packets = [
+        ...(groups.length ? [Packet.create(groups)] : []),
+        ...(extra !== undefined ? [new UnknownPacket(extra.type, extra.payload)] : []),
+    ];
+    if (packets.length) outputs.push(Extension.create(packets).txOut());
 
     const { checkpoints, expectedArk } = rebuildJointTx(
         envelope.checkpoints,

@@ -46,10 +46,11 @@ there is no locktime, recovery, or refund leaf. See
 
 ## Alice: select, verify, submit
 
-Install `@arkade-taxi/client` and `@arkade-os/sdk@0.4.72`. Call this function with Alice's
-initialized wallet, Bob's full address, the selected offer's `fareId`, and policy/trust facts
-from the wallet's own configuration. `assetUnits` is Bob's payment quantity; the fare is additional.
-Offers come from `/v1/info` `assetRules`: USDT's own rule, or the `"*"` rule when it has none.
+Use `@arkade-taxi/client@1.1.4` with `@arkade-os/sdk@0.5.14`.
+Wallet apps should use [`createTaxiSender`](../packages/client/WALLET.md) for durable reservations and recovery.
+This lower-level example requires equivalent coordination. Pass Alice's initialized wallet, Bob's full address,
+the selected `fareId` and wallet-configured trust facts. `assetUnits` is Bob's quantity; the fare is additional.
+Offers come from `/v1/info` `assetRules`: the asset's rule, or `"*"` when absent.
 
 ```ts
 import { TaxiClient, type RequestVerifiedQuoteArgs } from "@arkade-taxi/client";
@@ -262,13 +263,12 @@ already trusts, or a pinned deployment configuration. Decode their compressed
 keys into the trusted fields. Bob also pins Taxi's operator repayment key.
 The address HRP and embedded server key must agree with these trusted facts.
 
-Validate the trusted Arkade Service's `checkpointTapscript` with SDK
-`assertValidServerUnrollScript` and `defaultCheckpointExitDelayPolicy`
-for your locally configured network. Pass the validated `.script` to
-Alice's `trustedServerUnrollScript`; Bob's `config.serverUnrollScript`
-is the same validated script encoded as lowercase hex. His config also names
-the trusted `arkdUrl`, `emulatorUrl`, `network` and current `chainHeight`
-for height-based expiry checks.
+Validate the trusted service's `checkpointTapscript` using
+`assertValidServerUnrollScript(checkpointTapscript, network, forfeitPubkey)` with the locally configured SDK
+network and independently trusted x-only forfeit key. Pass its `.script` as Alice's
+`trustedServerUnrollScript` and its lowercase hex as Bob's `config.serverUnrollScript`.
+Bob's config also names the trusted `arkdUrl`, `emulatorUrl`, `network` and current
+`chainHeight` for height-based expiry checks.
 
 The SDK REST providers use the realm's `globalThis.fetch`.
 `TaxiClient({ fetch })` does not configure covenant provider calls.
@@ -313,8 +313,8 @@ capability property is a snapshot, not authorization.
 
 Each spend capability and matching outpoint/provider tuple is one-shot within
 the process, including concurrent use and ambiguous results. Pre-submission
-validation failures also consume the capability conservatively. Recovery after
-a restart requires the application's durable record and canonical observation.
+validation failures consume it too; only `CovenantSpendBusyError` releases it.
+A restart needs the application's durable record and canonical observation.
 Live Arkade/emulator acceptance, recovery and settlement assumptions must be
 checked with the production-artifact E2E suite in [e2e/README.md](../e2e/README.md)
 for the deployed provider versions.

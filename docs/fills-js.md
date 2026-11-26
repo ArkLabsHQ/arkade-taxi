@@ -4,7 +4,11 @@ Use `requestVerifiedReceiveQuote` to obtain and verify the covenant, reserved
 `operatorInputs`, `operatorScript`, fare and expiry floor. Build the whole graph
 with the integration that owns the payment rail. Swap callers use
 `buildOfferFillPlan` from `@arkade-os/swap`. Check the caller's own payouts and
-sign only its inputs, leaving the declared Taxi inputs unsigned.
+sign only its inputs, leaving the declared Taxi inputs unsigned. A
+provider-gated input whose spend leaf names the caller's key, as a directed
+swap's `fulfill` leaf names the taker, is the caller's to sign on both the Arkade
+transaction and its checkpoint; one that names only the server and the emulator
+stays unsigned.
 
 Call `TaxiClient.submitFill` once with the quote ID, a durable operation ID,
 the signed Arkade PSBT and index-aligned checkpoints, Taxi input indexes,
@@ -17,8 +21,6 @@ ambiguous response requires reconciliation; do not build a replacement spend
 from the same inputs. The Taxi returns status rather than signed PSBTs. The
 receiver verifies the incoming covenant before claiming.
 
-`requestVerifiedSwapFillQuote` and `submitSwapFill` are removed. The claim and
-send helpers, transfer builder and sponsored-transfer builder remain available.
-Migration 18 and the strict receive-quote decoder require re-vendoring clients
-together with the server cutover. See [the wire protocol](protocol.md#post-v1fills)
-for the request and validation rules.
+Use the Taxi `1.1.4` client with the v1 service. The claim and send helpers,
+transfer builder and sponsored-transfer builder share this protocol.
+See [the wire protocol](protocol.md#post-v1fills) for the request and validation rules.

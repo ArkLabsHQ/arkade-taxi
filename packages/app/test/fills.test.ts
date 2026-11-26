@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { base64, hex } from "@scure/base";
+import { SigHash } from "@scure/btc-signer";
+import { tapLeafHash } from "@scure/btc-signer/payment.js";
 import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
 import {
     ArkAddress,
@@ -10,6 +14,7 @@ import {
     Transaction,
     VtxoScript,
     VtxoTaprootTree,
+    arkade,
     asset,
     scriptFromTapLeafScript,
     setArkPsbtField,
@@ -21,7 +26,7 @@ import { openDatabase, ReceiveQuoteRepository, type ReceiveQuote } from "@arkade
 import { assertFillGraph, type FillGraphArgs } from "../src/fills";
 import { assertForeignInput } from "../src/arkade/fillForeignInputs";
 import type { ServiceError } from "../src/errors";
-import { runtimeSafety, serverUnroll } from "./fixtures";
+import { emulatorKey, runtimeSafety, serverUnroll } from "./fixtures";
 import { WANTED_ASSET } from "./jointFillFixtures";
 import { asIndexed } from "./graphFixtures";
 import { receiverPaidFill } from "./realFillFixtures";
@@ -35,13 +40,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const mod = await importOriginal<typeof import("@arkade-os/sdk")>();
-    return {
+    const mocked = {
         ...mod,
         RestArkProvider: class {
             async getInfo() {
                 return {
                     signerPubkey: `02${state.serverKey}`,
                     checkpointTapscript: state.checkpoint,
+                    network: "regtest",
                 };
             }
         },
@@ -58,6 +64,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
             }
         },
     };
+    return { ...mocked, RestOperatorProvider: mocked.RestArkProvider };
 });
 
 const txOf = (psbt: string): Transaction => Transaction.fromPSBT(base64.decode(psbt));
@@ -801,5 +808,178 @@ describe("assertFillGraph against the graph today's builder emits", () => {
                 }),
             ).code,
         ).toBe("fill_taxi_input_signed");
+    });
+});
+
+const keyOf = (fill: number) => SingleKey.fromPrivateKey(new Uint8Array(32).fill(fill));
+const TAKER = keyOf(40);
+const GATE = keyOf(41);
+const SERVER = keyOf(4);
+const [takerKey, gateKey, userKey, serverXOnly] = await Promise.all(
+    [TAKER, GATE, keyOf(42), SERVER].map((key) => key.xOnlyPublicKey()),
+);
+const FULFILL = MultisigTapscript.encode({ pubkeys: [takerKey, serverXOnly, gateKey] }).script;
+const CANCEL = MultisigTapscript.encode({ pubkeys: [userKey, serverXOnly] }).script;
+
+/** A deposit spent through `leaf`, posted with its checkpoint and Ark edge. */
+const depositSpend = (leaf: Uint8Array, source: VtxoScript = new VtxoScript([leaf, CANCEL])) => {
+    const next = new VtxoScript([serverUnroll.script, leaf]);
+    const coin = {
+        ...fixture.args.observed.values().next().value!,
+        value: 1000,
+        script: hex.encode(source.pkScript),
+    };
+    const checkpoint = new Transaction({ version: 3, lockTime: 0 });
+    checkpoint.addInput({
+        txid: coin.txid,
+        index: coin.vout,
+        witnessUtxo: { amount: 1000n, script: source.pkScript },
+        tapLeafScript: [source.findLeaf(hex.encode(leaf))],
+    });
+    setArkPsbtField(checkpoint, 0, VtxoTaprootTree, source.encode());
+    checkpoint.addOutput({ amount: 1000n, script: next.pkScript });
+    checkpoint.addOutput(P2A);
+    const arkTx = new Transaction({ version: 3, lockTime: 0 });
+    arkTx.addInput({
+        txid: checkpoint.id,
+        index: 0,
+        witnessUtxo: { amount: 1000n, script: next.pkScript },
+        tapLeafScript: [next.findLeaf(hex.encode(leaf))],
+    });
+    arkTx.addOutput({ amount: 1000n, script: source.pkScript });
+    const emulatorCosigner = hex.encode(gateKey);
+    return {
+        arkTx,
+        checkpoint,
+        index: 0,
+        coin,
+        serverKey: serverXOnly,
+        serverUnroll,
+        emulatorCosigner,
+    };
+};
+
+const takerSigned = async (leaf = FULFILL) => {
+    const spend = depositSpend(leaf);
+    const arkTx = await TAKER.sign(spend.arkTx, [0]);
+    return { ...spend, arkTx, checkpoint: await TAKER.sign(spend.checkpoint, [0]) };
+};
+
+type TapScriptSigs = NonNullable<ReturnType<Transaction["getInput"]>["tapScriptSig"]>;
+const withSigs = (tx: Transaction, sigs: TapScriptSigs) => {
+    tx.updateInput(0, { tapScriptSig: undefined });
+    tx.updateInput(0, { tapScriptSig: sigs });
+};
+
+const refusal = (spend: Parameters<typeof assertForeignInput>[0]): string => {
+    try {
+        assertForeignInput(spend);
+    } catch (thrown) {
+        expect((thrown as ServiceError).code).toBe("fill_foreign_signature_invalid");
+        return ((thrown as ServiceError).cause as Error).message;
+    }
+    throw new Error("assertForeignInput accepted a spend it must refuse");
+};
+
+describe("a gated input whose spend leaf also names the caller", () => {
+    it("accepts the taker's signature on both transactions, and requires it", async () => {
+        expect(refusal(depositSpend(FULFILL))).toMatch(/missing tapScriptSig/);
+        const spend = await takerSigned();
+        expect(() => assertForeignInput(spend)).not.toThrow();
+    });
+
+    it("refuses a forged taker signature", async () => {
+        const spend = await takerSigned();
+        const [[data]] = spend.arkTx.getInput(0).tapScriptSig!;
+        withSigs(spend.arkTx, [[data, new Uint8Array(64).fill(1)]]);
+        expect(refusal(spend)).toMatch(/Invalid signature/);
+    });
+
+    it("refuses a valid taker signature under the cancel leaf", async () => {
+        const spend = await takerSigned();
+        const prevout = spend.arkTx.getInput(0).witnessUtxo!;
+        const message = spend.arkTx.preimageWitnessV1(
+            0,
+            [prevout.script],
+            SigHash.DEFAULT,
+            [prevout.amount],
+            undefined,
+            CANCEL,
+        );
+        const signature = await TAKER.signMessage(message, "schnorr");
+        withSigs(spend.arkTx, [[{ pubKey: takerKey, leafHash: tapLeafHash(CANCEL) }, signature]]);
+        expect(refusal(spend)).toMatch(/unexpected leaf/);
+    });
+
+    it("refuses a taker signature over an arkTx with one output changed", async () => {
+        const spend = await takerSigned();
+        const changed = depositSpend(FULFILL).arkTx;
+        changed.updateOutput(0, { amount: 999n });
+        withSigs(spend.arkTx, (await TAKER.sign(changed, [0])).getInput(0).tapScriptSig!);
+        expect(refusal(spend)).toMatch(/Invalid signature/);
+    });
+
+    it("refuses a signed arkTx whose checkpoint is unsigned", async () => {
+        const spend = depositSpend(FULFILL);
+        const posted = { ...spend, arkTx: await TAKER.sign(spend.arkTx, [0]) };
+        expect(refusal(posted)).toMatch(/missing tapScriptSig/);
+    });
+
+    it.each(["arkTx", "checkpoint"] as const)(
+        "refuses an emulator or server signature pre-attached to the %s",
+        async (side) => {
+            for (const cosigner of [GATE, SERVER]) {
+                const spend = await takerSigned();
+                spend[side] = await cosigner.sign(spend[side], [0]);
+                expect(refusal(spend)).toMatch(/unexpected key/);
+            }
+        },
+    );
+
+    it.each([
+        ["lacks the emulator key", [takerKey, serverXOnly]],
+        ["lacks the server key", [takerKey, gateKey]],
+        ["repeats a key", [takerKey, takerKey, serverXOnly, gateKey]],
+    ])("refuses a gated leaf that %s, even taker-signed", async (_, pubkeys) => {
+        const spend = await takerSigned(MultisigTapscript.encode({ pubkeys }).script);
+        expect(refusal(spend)).toMatch(/gated leaf/);
+    });
+
+    it("still refuses a provider-only leaf that arrives signed", async () => {
+        const spend = depositSpend(
+            MultisigTapscript.encode({ pubkeys: [serverXOnly, gateKey] }).script,
+        );
+        expect(() => assertForeignInput(spend)).not.toThrow();
+        const posted = { ...spend, arkTx: await GATE.sign(spend.arkTx, [0]) };
+        expect(refusal(posted)).toMatch(/provider-only input arrives signed/);
+    });
+
+    it("admits the deposit ts-sdk c8dd9368's asset-swap-directed compiles, taker-signed", async () => {
+        const artifact = JSON.parse(
+            readFileSync(resolve(import.meta.dirname, "fixtures/asset-swap-directed.json"), "utf8"),
+        );
+        const deposit = new arkade.ArkadeProgramScript(
+            arkade.programFromArtifact(artifact),
+            {
+                receiver: userKey,
+                amount: 5n,
+                assetTxid: new Uint8Array(32).fill(0x11),
+                assetGroupIndex: 0n,
+                user: userKey,
+                taker: takerKey,
+                server: serverXOnly,
+            },
+            { serverKey: serverXOnly, emulatorKey },
+        );
+        const fulfill = deposit.functionByName("fulfill")!;
+        const tweaked = arkade.computeArkadeScriptPublicKey(emulatorKey, fulfill.arkadeScript!);
+        expect(MultisigTapscript.decode(fulfill.leafScript).params.pubkeys.map(hex.encode)).toEqual(
+            [takerKey, serverXOnly, tweaked].map(hex.encode),
+        );
+        const spend = depositSpend(fulfill.leafScript, deposit);
+        const arkTx = await TAKER.sign(spend.arkTx, [0]);
+        const checkpoint = await TAKER.sign(spend.checkpoint, [0]);
+        const posted = { ...spend, arkTx, checkpoint, emulatorCosigner: hex.encode(tweaked) };
+        expect(() => assertForeignInput(posted)).not.toThrow();
     });
 });

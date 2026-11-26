@@ -67,6 +67,8 @@ export interface QuoteExpectation {
      * self-consistently. Omitted accepts the operator's resolution. */
     claimMode?: "recycle" | "purchase";
     recoveryRecipient?: "sender" | "receiver";
+    /** The packet the caller asked the lockup to carry; the rebuild compared byte for byte holds it. */
+    extraPacket?: { type: number; payload: Uint8Array };
 }
 
 export interface VerifyQuoteArgs {
@@ -218,7 +220,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     if (expect.claimMode !== undefined && params.claimMode !== expect.claimMode) {
         reject(
             VerificationErrorCode.ClaimMode,
-            `quote commits to ${params.claimMode ?? "the legacy tree"}, you asked for ${expect.claimMode}`,
+            `quote commits to ${params.claimMode ?? "no claim mode"}, you asked for ${expect.claimMode}`,
         );
     }
     if (
@@ -227,7 +229,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
     ) {
         reject(
             VerificationErrorCode.RecoveryRecipient,
-            `quote recovers to ${params.recoveryRecipient ?? "the legacy sender"}, you asked for ${expect.recoveryRecipient}`,
+            `quote recovers to ${params.recoveryRecipient ?? "sender"}, you asked for ${expect.recoveryRecipient}`,
         );
     }
 
@@ -269,6 +271,7 @@ export function verifyQuote(args: VerifyQuoteArgs): VerifiedQuote {
         trustedServerUnrollScript: args.trustedServerUnrollScript,
         vtxoMinAmount,
         hrp,
+        ...(expect.extraPacket ? { extraPacket: expect.extraPacket } : {}),
     };
     const validated = validateLockup({ quote: args.quote, ...lockupContext });
     const result = Object.freeze({

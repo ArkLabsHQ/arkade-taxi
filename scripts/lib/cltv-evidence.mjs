@@ -16,13 +16,38 @@ function windowOf(value) {
 function records(raw, window) {
     const lines = raw.split(/\r?\n/).filter(Boolean);
     if (lines.length >= 1000) throw new Error("recovery log window may be truncated");
+    const start = new Date(window.startedAt).toISOString().replace("Z", "000000Z");
+    const end = new Date(window.endedAt).toISOString().replace("Z", "000000Z");
     return lines.map((line) => {
         const match = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{9}Z) (.+)$/.exec(line);
-        const at = match ? Date.parse(match[1]) : NaN;
-        if (!Number.isFinite(at) || at < window.startedAt || at > window.endedAt)
+        const at = match?.[1];
+        const parsed = at ? Date.parse(at) : NaN;
+        if (
+            !Number.isFinite(parsed) ||
+            new Date(parsed).toISOString().slice(0, 23) !== at.slice(0, 23) ||
+            at < start ||
+            at > end
+        )
             throw new Error("recovery log is outside its exact observation window");
         return { line, body: match[2], at };
     });
+}
+
+function exactInteger(text, expected) {
+    if (
+        typeof text !== "string" ||
+        text.length > 32 ||
+        !/^(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(text)
+    )
+        return false;
+    const [mantissa, exponent = "0"] = text.toLowerCase().split("e");
+    const [whole, fraction = ""] = mantissa.split(".");
+    const scale = Number(exponent) - fraction.length;
+    if (Math.abs(scale) > 32) return false;
+    const digits = BigInt(whole + fraction);
+    const factor = 10n ** BigInt(Math.abs(scale));
+    if (scale < 0 && digits % factor !== 0n) return false;
+    return (scale < 0 ? digits / factor : digits * factor) === BigInt(expected);
 }
 
 export function matchRecoveryEvidence(value) {
@@ -40,31 +65,69 @@ export function matchRecoveryEvidence(value) {
     if (!(value.error instanceof Error) || !value.error.message.startsWith(prefix))
         throw new Error("missing public emulator refusal");
     const response = JSON.parse(value.error.message.slice(prefix.length));
+    const detail = `FORFEIT_CLOSURE_LOCKED (11): closure is CLTV locked, ${value.locktime} > ${value.currentBlocktime} (block time)`;
+    const reason = response.details?.[0];
     if (
-        response.code !== 13 ||
-        response.message !== "internal error" ||
+        response.code !== 9 ||
+        response.message !== detail ||
         Object.keys(response).some((key) => !["code", "message", "details"].includes(key)) ||
-        (response.details !== undefined &&
-            (!Array.isArray(response.details) || response.details.length))
+        !Array.isArray(response.details) ||
+        response.details.length !== 1 ||
+        reason?.["@type"] !== "type.googleapis.com/ark.v1.ErrorDetails" ||
+        reason?.code !== 11 ||
+        reason?.name !== "FORFEIT_CLOSURE_LOCKED" ||
+        reason?.message !== detail ||
+        Object.keys(reason).some(
+            (key) => !["@type", "code", "name", "message", "metadata"].includes(key),
+        ) ||
+        reason?.metadata?.type !== "time" ||
+        Object.keys(reason.metadata).some(
+            (key) => !["type", "locktime", "current_locktime"].includes(key),
+        ) ||
+        !exactInteger(reason?.metadata?.locktime, value.locktime) ||
+        !exactInteger(reason?.metadata?.current_locktime, value.currentBlocktime)
     )
         throw new Error("unexpected public emulator error classification");
 
     const emulator = records(value.logs.emulator, value);
     const arkd = records(value.logs.arkd, value);
+    const rpcSubmissions = emulator.filter(({ body }) =>
+        body.includes('msg="gRPC method: /emulator.v1.EmulatorService/Submit'),
+    );
     const emuErrors = emulator.filter(
-        ({ body }) => body.includes("level=error") || body.includes('msg="finalizing tx"'),
+        ({ body }) =>
+            body.includes("level=error") ||
+            body.includes(" error=") ||
+            body.includes('msg="failed to process transaction"') ||
+            body.includes('msg="finalizing tx"'),
+    );
+    const executing = emulator.filter(({ body }) => body.includes('msg="executing arkade script:'));
+    const executed = emulator.filter(({ body }) => body.includes('msg="execution of '));
+    const finalizers = emulator.filter(({ body }) =>
+        body.includes('msg="finalizer role analysis completed"'),
     );
     const submissions = arkd.filter(({ body }) =>
         body.includes("method=/ark.v1.ArkService/SubmitTx"),
     );
     const audits = arkd.filter(({ body }) => body.includes("added or updated offchain tx"));
-    if ([emuErrors, submissions, audits].some((items) => items.length > 1))
+    if (
+        [rpcSubmissions, emuErrors, submissions, executing, executed, finalizers].some(
+            (items) => items.length > 1,
+        ) ||
+        audits.length
+    )
         throw new Error("ambiguous recovery observation contains another transaction");
-    const detail = `FORFEIT_CLOSURE_LOCKED (11): ${value.locktime} > ${value.currentBlocktime} (blocktime)`;
+    if (
+        rpcSubmissions.length &&
+        !rpcSubmissions[0].body.endsWith(
+            'level=debug msg="gRPC method: /emulator.v1.EmulatorService/SubmitTx"',
+        )
+    )
+        throw new Error("unexpected emulator submission record");
     if (
         emuErrors.length &&
         !emuErrors[0].body.endsWith(
-            `level=error msg="failed to process transaction" error="failed to submit tx on arkd: rpc error: code = FailedPrecondition desc = ${detail}"`,
+            `level=debug msg="failed to process transaction" error="failed to submit tx on arkd: rpc error: code = FailedPrecondition desc = ${detail}"`,
         )
     )
         throw new Error("emulator refusal is not the exact expected CLTV rejection");
@@ -78,13 +141,26 @@ export function matchRecoveryEvidence(value) {
             !submissions[0].body.endsWith(` error="${detail}"`))
     )
         throw new Error("Arkd refusal is not the exact expected emulator CLTV rejection");
+    const start = executing[0]?.body.match(
+        /level=debug msg="executing arkade script: ([a-f0-9]+)" ark_txid=([a-f0-9]{64}) input_index=0$/,
+    );
+    const finish = executed[0]?.body.match(
+        /level=debug msg="execution of ([a-f0-9]+) succeeded" ark_txid=([a-f0-9]{64}) input_index=0$/,
+    );
     if (
-        audits.length &&
-        !audits[0].body.endsWith(`level=debug msg="added or updated offchain tx ${value.txid}"`)
+        (executing.length && (!start || start[2] !== value.txid || start[1].length % 2)) ||
+        (executed.length && (!finish || finish[2] !== value.txid)) ||
+        (start && finish && start[1] !== finish[1]) ||
+        (finalizers.length &&
+            !finalizers[0].body.endsWith(
+                'level=debug msg="finalizer role analysis completed" is_finalizer=true',
+            ))
     )
-        throw new Error("recovery audit belongs to another graph");
-    if (!emuErrors.length || !submissions.length || !audits.length) return undefined;
-    if (audits[0].at < submissions[0].at) throw new Error("recovery audit predates the rejection");
+        throw new Error("recovery execution belongs to another graph or role");
+    const ordered = [rpcSubmissions, executing, executed, finalizers, submissions, emuErrors];
+    if (ordered.some((items) => !items.length)) return undefined;
+    if (ordered.some((items, index) => index && items[0].at < ordered[index - 1][0].at))
+        throw new Error("recovery observation has incorrect execution order");
     return {
         project: value.project,
         txid: value.txid,
@@ -95,7 +171,9 @@ export function matchRecoveryEvidence(value) {
         publicError: response,
         emulator: emuErrors[0].line,
         arkd: submissions[0].line,
-        audit: audits[0].line,
+        executionStarted: executing[0].line,
+        execution: executed[0].line,
+        finalizer: finalizers[0].line,
     };
 }
 

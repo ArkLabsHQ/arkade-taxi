@@ -71,22 +71,15 @@ raw claims, receiver keys, proofs and exception payloads are not logged.
 
 ## Deployment
 
-### Fill cutover and rollback
+### First v1 deployment
 
-Migration 18 replaces the swap-fill rail and drops its legacy tables. Before
-starting the new image, stop admission, resolve existing swap-fill liabilities,
-and capture the complete SQLite database, operator policy and current image
-digest. Deploy clients that understand `senderKey`, published operator funding
-and `/v1/fills` together with the server. The strict decoder rejects old quotes.
+Taxi has one initial schema. Start v1 with a new database path and the matching
+`1.1.4` client, covenant and protocol packages. Existing development or unsupported
+databases are refused without schema or data conversion. Preserve any development
+records needed for investigation; the service does not erase them automatically.
 
-Keep the backup until settlement and recovery are verified. Rollback stops the
-new process and restores the database, policy and previous image together;
-running the previous image against the migrated database is not a rollback.
-Restore this backup before reopening admission. If new fills have been admitted,
-pause and reconcile their liabilities first; restoring older state would erase
-their submission evidence.
-Merging to `main` triggers deployment, so merge and deployment require the
-operator's explicit go after these artifacts and checks are reviewed.
+Verify the tested image, package hashes, policy, startup reconciliation and
+readiness before admitting payments. Keep the database on its persistent volume.
 
 Build and verify the release before admitting funds:
 
@@ -152,6 +145,20 @@ network, dust and minimum amount; it uses arkd's integrated indexer and the
 SDK network's Esplora URL and address HRP. Taxi closes admission on provider
 identity, parameter or capability drift. Clients independently verify the same
 trust facts before signing.
+
+With `TAXI_DELEGATEE_URL` set, covenants renew through that Executor (v0.0.5).
+It must hold the Taxi's renewal template,
+`6eb1a0333929e447ad37b927df3c8ea5073ec82da1186e6b45ef9dcf6e070673`. The Taxi
+uploads it when missing, which the Executor's public port accepts only with
+`EXECUTOR_PUBLIC_REGISTRY=true`. Otherwise install it through the Executor's
+admin API: `POST /v1/template` on the admin port, with `document` holding the
+text of `packages/app/test/fixtures/executor-v0.0.5/renew.template.json` as a
+string. The Taxi checks this once, at startup: if the upload is refused, the
+template is disabled or the Executor is unreachable, it logs `delegatee
+unavailable, covenants renew in process` at error level, naming the template
+id, and renews covenants itself. A template disabled while the Taxi runs shows
+as `covenant renewal failed` errors instead. Either way, restart the Taxi once
+the Executor is fixed to return to delegation.
 
 ## Liveness, readiness and first admission
 
@@ -259,7 +266,7 @@ financial recovery is complete.
 
 For `locking`, the worker resumes `claimed`, `prepared` or `responded` facts.
 A lost submit response can be reconciled by authenticated lookup of the exact
-pending signed graph. `failed` and `legacy` phases require diagnosis; the
+pending signed graph. `failed` phases require diagnosis; the
 service will not manufacture missing signed facts. For `recovering`, a
 prepared graph survives a timeout and restart; a submitted graph waits for
 canonical observation. Do not edit leases, phases or signed artifacts by hand.
@@ -360,22 +367,15 @@ amount or recovery budgets. Startup validates active graphs against the current
 provider state and configuration and refuses incompatible recovery; bypassing
 that guard destroys the operational guarantee.
 
-## Upgrade and rollback
+## Dependency and image updates
 
-Discover the current stable SDK with
-`pnpm view @arkade-os/sdk version dist-tags --json`; the 2026-09-12 registry
-checkpoint is stable `0.4.72` (the `rc` tag is a separate prerelease). Run all
-repository, image, package and fresh-master E2E gates after dependency changes.
-Record the actual master SHA from the current run's `stack.json`, not a previous
-log or a pinned checkout.
+This repository pins SDK `0.5.14` and Swap `0.1.16` from npm, and the committed
+lockfile records their integrity.
+Run all repository, image, package and fresh-master E2E gates after dependency
+changes. Record the actual master SHA from the current run's `stack.json`.
 
-Pause, drain when changing recovery-sensitive configuration, take a consistent
-backup, stop the old process and start the tested image against the persistent
-volume. Database migrations run at open; retain the pre-upgrade snapshot and
-image. Confirm startup reconciliation, exact active obligations and readiness,
-then resume. If startup fails, preserve diagnostics and the current volume.
-Rollback to the old image with its compatible pre-upgrade backup only after
-accounting for every network effect since that snapshot; never run an old image
-against an unsupported newer schema or erase newer financial facts. An image
-older than the `"*"` asset rule cannot read a policy holding one; remove that
-rule before rolling back.
+Pause and drain admission before changing recovery-sensitive configuration.
+Retain the persistent database and exact submission evidence when replacing an
+image. Confirm startup reconciliation, active obligations and readiness before
+resuming. An unsupported database is refused; changing a version marker or
+restoring older state cannot establish the outcome of a submitted transaction.

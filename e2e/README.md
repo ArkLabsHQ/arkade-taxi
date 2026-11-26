@@ -3,26 +3,18 @@
 End-to-end scenarios against the production Taxi image and the current
 [`ArkLabsHQ/arkade-regtest`](https://github.com/ArkLabsHQ/arkade-regtest) `master`.
 
-Twenty-six live scenarios in the main run, three isolated scenarios each on a
+Twenty-six live scenarios in the main run, four isolated scenarios each on a
 stack of its own, and two integrity assertions must all pass. Skips,
 todos, missing registrations, duplicate registrations, and partial JSON results
 fail the run.
 
-## Candidate packages this suite runs against
+## Packages this suite runs against
 
-`pnpm-lock.yaml` resolves `@arkade-os/sdk` and `@arkade-os/swap` from
-`vendor/carrier/*.tgz`, which are **tracked** and hash-pinned against
-`vendor/carrier/manifest.json`, so `pnpm install`, `docker build` and the
-harness's client pack all work from a clean checkout. The temporary consumer
-takes its overrides from that same manifest, so the packed client is exercised
-against the frozen candidates rather than silently falling back to the registry
-build of the same version numbers.
-
-The override alone is not the proof. Those version numbers are published, so an
-override that stopped applying would install cleanly against other bytes. After
-the consumer installs, the harness resolves both packages from the installed
-client and requires the frozen version plus a symbol only the `adc6b329` build
-exports; an import that merely succeeds cannot tell the two apart.
+The lockfile pins published SDK `0.5.6` and swap `0.1.6` packages with their
+registry integrity hashes. The harness packs this checkout's client, covenant
+and protocol packages and installs those three tarballs in a fresh consumer.
+It checks their identities, verifies the consumer resolves each local tarball,
+and rejects stale build output before running the suite.
 
 ## Running it
 
@@ -35,13 +27,20 @@ node e2e/assert-ran.mjs e2e-results.json
 
 For local direct Taxi testing without Solver or swap offers, use `pnpm e2e:stack
 --direct`. Add `--emulator-image <local-image>` to exercise a local emulator
-build and `--wallet <checkout>` to run its live `playwright.taxi.config.ts` on the
-same stack before the SDK actor scenarios. This explicit local mode requires
+build. This explicit local mode requires
 21 named scenarios and both integrity assertions plus the isolated runs below,
 stores each run in `e2e-artifacts/direct-<run>/`, and is rejected in CI.
-The wallet run is stopped after 15 minutes; set `TAXI_E2E_WALLET_TIMEOUT_MS`
-(whole milliseconds, at most 2147483647) to allow longer. An invalid value fails
-the run before any stack starts.
+Wallet browser tests use the wallet repository's native harness, which owns its
+pinned solver, Taxi, regtest stack and Electrum endpoint. Run both browser lanes
+from that prepared checkout:
+
+```bash
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Google Chrome"
+node --experimental-eventsource scripts/taxi-native-ci.mjs "Mobile Chrome"
+```
+
+Append `--manual` for a local interactive session. The retired Taxi `--wallet`
+option reports this command before starting any services.
 
 ### The renewal scenario
 
@@ -58,8 +57,10 @@ stands up its own in-process Taxi — a fresh operator key, its own SQLite ledge
 the production lockup builder, submitter and spend watcher — because it drives
 the renewal directly rather than through a delegatee.
 
-It renews the covenant itself through leaf 5 with a `register` intent the
-emulator co-signs, so it needs no delegatee. Its `renewal-r2.json` artifact
+It renews a `recycle`-mode covenant, the shape production quotes, through the
+Taxi's own keeper (`renewCovenant` in `packages/app/src/arkade/renewal.ts`): leaf
+5 with a `register` intent the emulator co-signs, so it needs no delegatee. Its
+`renewal-r2.json` artifact
 records what the indexer reports for the coin a renewal batch consumed —
 `isSpent`, `spentBy`, `settledBy`, `arkTxId`, `isSwept` — and is written even when
 the batch fails, because that record is the answer the watcher's discriminator
@@ -70,11 +71,30 @@ depends on.
 `covenant-unilateral-exit-with-arkd-down` exits a covenant on-chain, which
 leaves its advance `locked` for good, as a warning rather than a pause, and moves
 chain time a day ahead. `fill-undersigned-foreign-input` tests pre-submit refusal
-without spending any Taxi input. `fill-pending-accepted-quarantine` drops an
-accepted arkd submit reply before finalization, retains the bound liability past
-TTL, and checks fresh observation, admission on other coins and outage refusal.
-It retrieves the original pending transaction and finalizes that same graph,
-then claims and recycles it. Both modes run each isolated scenario before the
+of an unsigned caller coin, and of a directed deposit its taker signed on the
+arkTx but not the checkpoint, without spending any Taxi input.
+`fill-pending-accepted-quarantine` drops an
+accepted arkd submit reply while output proof is unavailable, retains the bound
+liability past TTL, and checks fresh source observation, admission on other coins
+and outage refusal. Restoring proof settles the original one-shot transaction
+without another submission or finalization call, then claims and recycles it.
+`covenant-keeper-renewal-claim` runs the production container's own keeper, with
+no Executor configured. The keeper renews only into a batch the SDK accepts, at
+least 6000 s on regtest, and the Taxi lends only on coins that outlive its renewal
+threshold by 12 h, so this stack keeps the two-day tree and gives the Taxi a 300 s
+expiry headroom and a 240 s recovery guard. Through arkd's admin settings the
+scenario mints one batch on a 1024 s tree for the sender's coin and restores the
+tree; the covenant inherits that coin's expiry. The container must log exactly one
+`covenant renewed` for the advance, not before half the covenant's life, and no
+second one in the 90 s after its watcher adopts the two-day successor, which the
+default three-day window would otherwise make due at once. The receiver then
+recycles a transfer it verified before the renewal through the packed client,
+which moves it to the renewed coin; the claim spends the successor and every
+balance conserves. Before the claim, recovery's own lookup fetches the transaction
+that created the successor from arkd's indexer, which must hold the covenant's
+script and value at the successor's output. `keeper-renewal.json` records the tree
+switch, both coins' lives, the renewal log lines, that transaction and the balances.
+Both modes run each isolated scenario before the
 shared suite, on a fresh stack of its own.
 `node e2e/assert-ran.mjs --isolated <test> <results.json>`
 checks one such run, whose artifacts land in `e2e-artifacts/isolated/<test>/` (or
@@ -154,9 +174,10 @@ identity, the warning and critical alarms a covenant raises as the coin it sits
 on nears expiry unrenewed, and one two-owner offer fill in which a solver and a
 sponsor each sign only their own inputs while the offer covenant is co-signed by
 nobody but the emulator and the Arkade Service. `receiver-paid-fill-claim` builds
-the same shape for `POST /v1/fills` instead, with a receiver-paid sats fare: the
-caller's own inputs arrive signed, the Taxi's arrive unsigned and the gated
-covenant carries the emulator's tweaked key alone.
+the same shape for `POST /v1/fills` instead, on a directed offer whose `fulfill`
+names the caller as taker, with a receiver-paid sats fare: the caller signs its
+coins and the deposit, the Taxi's inputs arrive unsigned, and the settled deposit
+carries the taker's, the server's and the emulator's tweaked key, never the raw one.
 `receiver-paid-direct-fill-claim` instead uses only ordinary owner/server
 multisig leaves and a native asset packet. It proves one arkd submit and finalize,
 zero emulator submits, both owners' actual signatures and the returned loan plus
@@ -226,7 +247,7 @@ that Taxi implements upstream settlement or a dedicated forfeit mechanism.
 
 Before release, record `pnpm view @arkade-os/sdk version dist-tags --json`.
 The harness always clones master afresh; read the tested SHA from the current
-`stack.json` and retain it with all 31 passing assertions. Capture the existing
+`stack.json` and retain it with all 32 passing assertions. Capture the existing
 default project's container, volume and network inventory before and after, and
 verify that no resources with the run's exact ownership labels remain after
 successful cleanup.

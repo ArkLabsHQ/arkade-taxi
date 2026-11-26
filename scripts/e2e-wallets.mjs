@@ -62,7 +62,7 @@ export function assertDelegateLeaf(address, { pubKey, serverPubKey, csvTimelock 
         throw new Error(`${address} is not the 3-leaf delegate address`);
 }
 
-export async function createActorWallets(records, { arkdUrl, esploraUrl }) {
+export async function createActorWallets(records, { arkdUrl, esploraUrl, minBatchExpirySeconds }) {
     const result = {};
     for (const [name, seed] of Object.entries(records)) {
         const identity = SingleKey.fromHex(seed);
@@ -75,6 +75,7 @@ export async function createActorWallets(records, { arkdUrl, esploraUrl }) {
             storage: storage(),
             settlementConfig: false,
             ...(delegated ? { delegateProvider: stubDelegateProvider } : {}),
+            ...(minBatchExpirySeconds ? { minBatchExpirySeconds } : {}),
         });
         if (delegated)
             assertDelegateLeaf(await wallet.getAddress(), wallet.offchainTapscript.options);

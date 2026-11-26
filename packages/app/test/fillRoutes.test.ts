@@ -37,13 +37,14 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@arkade-os/sdk", async (importOriginal) => {
     const mod = await importOriginal<typeof import("@arkade-os/sdk")>();
-    return {
+    const mocked = {
         ...mod,
         RestArkProvider: class {
             async getInfo() {
                 return {
                     signerPubkey: `02${state.serverKey}`,
                     checkpointTapscript: state.checkpoint,
+                    network: "regtest",
                 };
             }
         },
@@ -60,6 +61,7 @@ vi.mock("@arkade-os/sdk", async (importOriginal) => {
             }
         },
     };
+    return { ...mocked, RestOperatorProvider: mocked.RestArkProvider };
 });
 
 const txOf = (psbt: string): Transaction => Transaction.fromPSBT(base64.decode(psbt));
@@ -632,11 +634,11 @@ describe("POST /v1/fills submission", () => {
     });
 
     /**
-     * What a real caller sends. `/v1/fills` asks for every non-Taxi input signed
-     * and the Taxi's left unsigned, so a graph whose foreign inputs already
-     * carry their holder's signature must be accepted — the Taxi signs on top
-     * of it. Only the gated covenant input must still arrive unsigned, because
-     * the emulator signs that one and nobody else may.
+     * What a real caller sends. `/v1/fills` asks the caller to sign what its keys
+     * spend and leave the Taxi's inputs unsigned, so a graph whose foreign inputs
+     * already carry their holder's signature must be accepted — the Taxi signs on
+     * top of it. This graph's gated covenant still arrives unsigned, because its
+     * leaf names nobody but the server and the emulator.
      */
     it("accepts a graph whose ungated foreign input already carries a signature", async () => {
         const h = open();

@@ -91,12 +91,14 @@ export function listReceiverClaims(
                             : validatePersistedLockupGraph(advance, deps.config)
                                   .covenantOutputIndex;
                     const { outpoint, recoveryLocktime } = advance;
+                    // The watcher adopted a renewal only after checking its script, value and assets.
+                    const renewed = (advance.renewals ?? 0) > 0;
                     const jointScriptMatches =
-                        source.kind === "legacy" ||
+                        source.kind === "direct" ||
                         (() => {
                             const expected = ArkAddress.decode(advance.covenantAddress).pkScript;
                             return (
-                                source.covenantOutpoint.txid === outpoint?.txid &&
+                                (renewed || source.covenantOutpoint.txid === outpoint?.txid) &&
                                 source.covenantScript.length === expected.length &&
                                 source.covenantScript.every(
                                     (byte, index) => byte === expected[index],
@@ -106,7 +108,7 @@ export function listReceiverClaims(
                     if (
                         !outpoint ||
                         !jointScriptMatches ||
-                        outpoint.vout !== covenantOutputIndex ||
+                        (!renewed && outpoint.vout !== covenantOutputIndex) ||
                         !recoveryLocktime ||
                         recoveryLocktime.kind !== "time" ||
                         recoveryLocktime.value !== advance.locktime ||

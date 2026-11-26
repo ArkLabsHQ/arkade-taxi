@@ -76,11 +76,10 @@ describe("SQLite SDK boundary", () => {
                 () => advances.listMissingFundingSnapshotIds(),
                 () => advances.sumTopupByState("locked"),
                 () => advances.listSweepable(999999n),
-                () => advances.update(a),
+                () => advances.unsafeOverwrite(a),
                 () => advances.recordLockupSubmission(a.id, "aa".repeat(32), 1),
                 () => advances.recordLockupFailure(a.id, "test", "test", 1),
                 () => advances.recordRecoverySubmission(a.id, "tx", 1),
-                () => advances.claimRecovery(a.id, 1),
                 () => reservations.listReservedOutpoints(),
                 () => reservations.listForAdvance(a.id),
                 () =>
@@ -139,6 +138,7 @@ describe("SQLite SDK boundary", () => {
             expiresAtHeight: 999,
             tapTree: tree.encode(),
             forfeitTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
+            proofTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
             intentTapLeafScript: tree.findLeaf(bytesToHex(leaf.script)),
         };
         await createOperatorStorage(db).walletRepository.saveVtxos(address.encode(), [coin]);

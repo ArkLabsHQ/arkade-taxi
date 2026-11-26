@@ -1,21 +1,67 @@
 # Changelog
 
-## Unreleased
+## 1.1.4 (unreleased)
 
-### Added
+- A reclaim that cannot fetch the transaction that created a renewed covenant's coin raises a
+  `recovery_source_unavailable` sweeper blocker from the first miss, and pauses the Taxi once the
+  coin's expiry turns critical. It had raised no blocker before then, only a
+  `recovery_submission_ambiguous` error. The covenant still stays locked for the next sweep.
+- The keeper renewal scenario runs recovery's own lookup on the renewed coin before the claim, and
+  checks the transaction arkd's indexer serves holds the covenant's script and value there.
+- `CovenantSpendBusyError` reads the inputs arkd says a batch holds in any hex case, so `TaxiClient`
+  still waits out a renewal whose refusal names the covenant coin in upper case.
 
-- `POST /v1/fills` for caller-built graphs and `GET /v1/fills/{id}` for status.
-- Fill reconciliation and health visibility for unresolved submissions.
+## 1.1.3 (unreleased)
 
-### Changed
+- `@arkade-os/sdk` `0.5.14` and `@arkade-os/swap` `0.1.16` come from npm, replacing the vendored
+  `0.5.14-taxi.1` and `0.1.16-taxi.1` snapshots and their archive checks. The client, covenant and
+  service pin SDK `0.5.14` exactly, so a wallet installs that release beside the client.
 
-- Receive quotes publish reserved `operatorInputs` and `operatorScript`.
-- Receive-quote `makerPublicKey` is renamed to `senderKey`.
-- Migration 18 requires coordinated server and client updates. Back up the
-  database and policy before deployment; rollback restores that backup with
-  the previous image.
+## 1.1.2 (unreleased)
 
-### Removed
+- An Executor that answers the renewal template under an id other than the Taxi's raises
+  `TemplateMismatchError`, so the Taxi renews in process; `TemplateRefusedError` carries the 403
+  as `status`, like every other `DelegateeError`.
+- The renewal keeper treats a covenant coin born at the epoch, the SDK's reading of a zero or null
+  birth, as of unknown age, leaving it to the overdue alarm instead of renewing it at once.
+- A covenant a renewal batch has already settled raises `CovenantSpendBusyError` before anything
+  is submitted and releases its capability, so `TaxiClient` re-binds a transfer verified before
+  the renewal to the renewed coin and claims there rather than failing it as spent. The re-bind
+  checks the renewed coin itself, so a failure the Taxi reports on the locked transfer no longer
+  blocks it.
+- The spend watcher no longer pauses the Taxi after a renewal: it keeps validating a covenant once
+  it adopts the renewal successor. It had flagged every renewed covenant `covenant_spend_unknown`,
+  paused the Taxi on each later scan, and could not classify a claim of the renewed coin.
+- Recovery reclaims a renewed covenant at its adopted successor, whose transaction the indexer
+  serves and which must hold the covenant's script, value and assets. Recovery had built the
+  reclaim against the lockup output the renewal spent, and the startup audit refused every
+  renewed row, so the Taxi could not restart after a renewal. An unreachable indexer leaves the
+  covenant locked for the next sweep.
+- The claim feed serves a renewed covenant at its successor. It had failed the receiver's whole
+  snapshot for a joint-fill covenant, and for a direct one whose successor sat at another output
+  index than the lockup's covenant.
+- An isolated e2e scenario proves the in-process keeper renews a short-lived covenant once, and
+  not again while its successor is fresh, and that the receiver claims the renewed coin.
 
-- The swap-fill quote/submit rail and Taxi-owned swap assembler.
-- Swap and RFQ wallet helpers from the Taxi client.
+## 1.1.1 (unreleased)
+
+- A covenant spend arkd refuses with `VTXO_ALREADY_REGISTERED` raises `CovenantSpendBusyError` and
+  releases its capability; `TaxiClient` waits for the renewed coin and spends it there.
+- The in-process renewal keeper waits for half a covenant coin's own life, so neither a fresh
+  covenant nor its renewed successor is due at once when arkd advertises no VTXO lifetime.
+
+## 1.1.0 (unreleased)
+
+- Caller-built fills of directed asset-swap offers, whose deposit arrives signed by its taker.
+- SDK `0.5.14-taxi.1` and Swap `0.1.16-taxi.1` snapshots; the Swap negotiates only directed contracts.
+
+## 1.0.0 (unreleased)
+
+- One Taxi release, wire protocol and compiler-defined covenant.
+- Direct Bitcoin and asset transfers, sponsored transfers and caller-built fills.
+- Verified receive quotes with reserved operator funding, fees and deadlines.
+- Durable input ownership before signing; ambiguous submissions retain their original journals and holds.
+- Persisted registration, claims, refunds, renewal and recovery with restart reconciliation.
+- A single initial database schema with current financial constraints.
+- Shared wallet orchestration and minimal ordinary send flows.
+- Authenticated SDK and Swap snapshots with public package and regtest validation.

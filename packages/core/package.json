@@ -1,6 +1,6 @@
 {
     "name": "@arkade-taxi/core",
-    "version": "0.0.0",
+    "version": "1.1.4",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -15,5 +15,15 @@
     },
     "dependencies": {
         "@arkade-taxi/covenant": "workspace:*"
-    }
+    },
+    "files": [
+        "dist"
+    ],
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ArkLabsHQ/arkade-taxi.git",
+        "directory": "packages/core"
+    },
+    "private": true
 }

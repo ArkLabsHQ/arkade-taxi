@@ -461,12 +461,19 @@ describe("sender-paid sats fare", () => {
         return [0, 1, 2, 3].map((index) => tx.getOutput(index).amount!);
     };
 
+    it("rejects a positive sats fare without its sender payer", () => {
+        const a = assetArgs();
+        a.quote.unsignedLockupTx = rewrite(a.quote.unsignedLockupTx, (wire) => {
+            delete wire.satsFarePayer;
+        });
+        expect(() => verifyQuote(a)).toThrow(/satsFarePayer/);
+    });
+
     it("accepts the layout that bills the fare to the sender", () => {
         const a = senderPaidAssetArgs();
         const verified = verifyQuote(a);
         expect(verified.envelope.satsFarePayer).toBe("sender");
         expect(amounts(a.quote.unsignedLockupTx)).toEqual([330n, 330n, 660n, 0n]);
-        expect(amounts(assetArgs().quote.unsignedLockupTx)).toEqual([330n, 330n, 990n, 0n]);
     });
 
     it("keeps the discriminator across signing", async () => {
@@ -475,12 +482,14 @@ describe("sender-paid sats fare", () => {
         expect(decodeLockupEnvelope(signed).satsFarePayer).toBe("sender");
     });
 
-    it("refuses a sender-paid claim stapled onto a legacy layout", () => {
+    it("refuses output amounts that contradict the sender-paid fare", () => {
         const a = assetArgs();
         a.quote.unsignedLockupTx = rewrite(
             a.quote.unsignedLockupTx,
             (wire) => {
-                wire.satsFarePayer = "sender";
+                const tx = Transaction.fromPSBT(base64.decode(wire.arkTx));
+                tx.updateOutput(2, { amount: tx.getOutput(2).amount! + 1n });
+                wire.arkTx = base64.encode(tx.toPSBT());
             },
             true,
         );

@@ -2,7 +2,11 @@ import { advanceKind, type Advance, type ExpiryDeadline } from "@arkade-taxi/cor
 import type { RuntimeConfig } from "./config";
 import type { ObservedCovenant } from "./watcher";
 import type { AdvanceStore } from "./quotes";
-import { RecoveryArtifactError, type RecoverySubmission } from "./arkade/recovery";
+import {
+    RecoveryArtifactError,
+    RecoverySourceUnavailableError,
+    type RecoverySubmission,
+} from "./arkade/recovery";
 import { sanitizeOperationalError } from "./errors";
 
 export interface RecoveryRunner {
@@ -33,6 +37,10 @@ export interface SweeperDeps {
     /** A renewal fell behind. Fired on change, not per tick: an alarm that
      * repeats at tick rate is one an operator learns to skip. */
     onRenewalWarning?: (warning: { delegation: string; deadline: RecoveryDeadline }) => void;
+    /** Offered every locked covenant not in flight: an Executor delegation or the keeper. */
+    renewal?: (advance: Advance, seen: ObservedCovenant | undefined) => Promise<void> | undefined;
+    /** A renewal attempt failed. Fired on change, like the warning above. */
+    onRenewalError?: (advanceId: string, error: Error) => void;
 }
 
 export interface SweepResult {
@@ -122,6 +130,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     const inFlight = new Map<string, Promise<void>>();
     const completed: SweepResult[] = [];
     const warned = new Map<string, string>();
+    const renewalErrors = new Map<string, string>();
+    // A reclaim that cannot be built leaves its row locked with nothing persisted to alarm on.
+    const unbuilt = new Map<string, string>();
 
     const threshold = (kind: "height" | "time", critical: boolean): bigint => {
         if (!deps.config) return 0n;
@@ -221,7 +232,8 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
 
     const hasRecoveryFailure = (advance: Advance): boolean =>
         advance.recoveryPhase === "failed" ||
-        (advance.recoveryPhase === "prepared" && advance.failureCode !== undefined);
+        (advance.recoveryPhase === "prepared" && advance.failureCode !== undefined) ||
+        (advance.state === "locked" && unbuilt.has(advance.id));
 
     const deadlineWithFailure = (
         advance: Advance,
@@ -237,7 +249,7 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
             ? {
                   ...item,
                   severity: advance.recoveryPhase === "failed" ? "critical" : item.severity,
-                  code: advance.failureCode ?? fallbackCode,
+                  code: advance.failureCode ?? unbuilt.get(advance.id) ?? fallbackCode,
               }
             : item;
     };
@@ -250,20 +262,10 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
     async function sweepOne(a: Advance): Promise<SweepResult | undefined> {
         try {
             const submitted = await deps.recovery.recover(a);
+            unbuilt.delete(a.id);
             if (!submitted) return undefined;
             const latest = deps.advances.get(a.id);
-            if (latest?.state === "locked") {
-                const claimed = deps.advances.claimRecovery(a.id, deps.now());
-                if (claimed)
-                    deps.advances.recordRecoverySubmission(
-                        a.id,
-                        submitted.txid,
-                        submitted.submittedAt,
-                    );
-                const recorded = deps.advances.get(a.id);
-                if (recorded?.state === "recovering" && !recorded.recoveryPhase)
-                    deps.advances.update({ ...recorded, recoveryPhase: "submitted" });
-            } else if (latest?.state === "recovered") {
+            if (latest?.state === "recovered") {
                 deps.advances.recordRecoverySubmission(a.id, submitted.txid, submitted.submittedAt);
             }
             lastSuccessfulRecoveryAt =
@@ -279,9 +281,12 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
         } catch (error) {
             const message = sanitizeOperationalError(error, "recovery failed");
             const errorCode =
-                error instanceof RecoveryArtifactError
+                error instanceof RecoveryArtifactError ||
+                error instanceof RecoverySourceUnavailableError
                     ? error.code
                     : "recovery_submission_ambiguous";
+            if (error instanceof RecoverySourceUnavailableError) unbuilt.set(a.id, error.code);
+            else unbuilt.delete(a.id);
             deps.onError?.(a.id, new Error(message));
             return { id: a.id, ok: false, error: message, errorCode };
         }
@@ -304,8 +309,9 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                 (advance) => advance.failureCode !== "covenant_unrolled",
             );
             const byId = new Map(active.map((advance) => [advance.id, advance]));
+            for (const id of unbuilt.keys()) if (!byId.has(id)) unbuilt.delete(id);
             for (const advance of active) {
-                if (!hasRecoveryFailure(advance)) continue;
+                if (advance.state === "locked" || !hasRecoveryFailure(advance)) continue;
                 const at = advance.recoveryLastAttemptAt ?? advance.updatedAt;
                 if (lastRecoveryError && lastRecoveryError.at > at) continue;
                 lastRecoveryError = {
@@ -387,6 +393,25 @@ export function createSweeper(deps: SweeperDeps): Sweeper {
                         .finally(() => inFlight.delete(advance.id));
                     inFlight.set(advance.id, work);
                     launched.push(work);
+                }
+                for (const id of renewalErrors.keys()) if (!byId.has(id)) renewalErrors.delete(id);
+                for (const advance of locked) {
+                    if (inFlight.has(advance.id)) continue;
+                    const work = deps.renewal?.(advance, deps.observed?.(advance));
+                    if (!work) continue;
+                    const settled = work.then(
+                        () => void renewalErrors.delete(advance.id),
+                        (error: unknown) => {
+                            const message = sanitizeOperationalError(error, "renewal failed");
+                            if (renewalErrors.get(advance.id) !== message)
+                                deps.onRenewalError?.(advance.id, new Error(message));
+                            renewalErrors.set(advance.id, message);
+                        },
+                    );
+                    inFlight.set(
+                        advance.id,
+                        settled.finally(() => inFlight.delete(advance.id)),
+                    );
                 }
             }
             await Promise.race([

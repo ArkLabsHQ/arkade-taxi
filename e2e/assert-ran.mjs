@@ -15,6 +15,7 @@ const ISOLATED_SCENARIOS = [
     "covenant-unilateral-exit-with-arkd-down",
     "fill-undersigned-foreign-input",
     "fill-pending-accepted-quarantine",
+    "covenant-keeper-renewal-claim",
 ];
 
 export function readScenarioIds(mode = "full") {

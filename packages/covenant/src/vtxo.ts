@@ -1,5 +1,5 @@
 import { arkade, MultisigTapscript, VtxoScript } from "@arkade-os/sdk";
-import { compileV2 } from "./v2-artifact";
+import { compileDustCovenant } from "./artifact";
 import { validateParams, type DustCovenantParams } from "./params";
 
 /** Order fixes the merkle root, so it is part of the address. Do not reorder. */
@@ -51,7 +51,7 @@ function fromArtifact({
     vtxoMinAmount,
 }: DustCovenantOptions): Tree {
     validateParams(params, vtxoMinAmount);
-    const compiled = compileV2(params, serverKey, emulatorKey);
+    const compiled = compileDustCovenant(params, serverKey, emulatorKey);
     const leaf = (name: string) => {
         const fn = compiled.functionByName(name);
         if (!fn?.arkadeScript) throw new Error(`covenant: artifact declares no covenant ${name}`);

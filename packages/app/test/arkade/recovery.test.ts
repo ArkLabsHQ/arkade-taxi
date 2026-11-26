@@ -13,6 +13,7 @@ import {
     arkade,
     getArkPsbtFields,
     type EmulatorProvider,
+    type VirtualCoin,
 } from "@arkade-os/sdk";
 import { base64 } from "@scure/base";
 import { RawPSBTV0 } from "@scure/btc-signer/psbt.js";
@@ -56,6 +57,8 @@ import {
     createRecoveryRunner,
     type RecoveryIntent,
 } from "../../src/arkade/recovery";
+import { createSweeper } from "../../src/sweeper";
+import { classifyObservedSpend } from "../../src/watcher";
 
 const directories: string[] = [];
 const databases: Database[] = [];
@@ -121,7 +124,7 @@ const sourceAdvance = (
     const senderInput = operatorFundingInput(
         fundingCoin({
             txid: "11".repeat(32),
-            value: 330 + Number(terms.paymentSats ?? 0n),
+            value: 330 + Number(terms.paymentSats ?? 0n) + Number(fareSats),
             script: hex.encode(senderTree.pkScript),
             tapTree: senderTree.encode(),
             forfeitTapLeafScript: senderTree.leaves[0],
@@ -167,6 +170,7 @@ const sourceAdvance = (
                 },
                 covenantAddress: script.address(cfg.addressHrp, cfg.serverPubkey).encode(),
                 fare: base.fare,
+                ...(fareSats > 0n ? { satsFarePayer: "sender" as const } : {}),
             },
             cfg,
             serverUnroll,
@@ -206,6 +210,7 @@ const sourceAdvance = (
                     senderInputIndexes: [0],
                     operatorInputIndexes: [1],
                     assetUnits: "9007199254740993",
+                    ...(fareSats > 0n ? { satsFarePayer: "sender" } : {}),
                 }),
             ),
         );
@@ -267,8 +272,8 @@ const mutateLockupGraph = (
     };
 };
 
-const preparedRecovery = (row = sourceAdvance()): Advance => {
-    const intent = buildRecoveryIntent(row, config());
+const preparedRecovery = (row = sourceAdvance(), prevTx?: Uint8Array): Advance => {
+    const intent = buildRecoveryIntent(row, config(), prevTx);
     return {
         ...row,
         state: "recovering",
@@ -280,8 +285,8 @@ const preparedRecovery = (row = sourceAdvance()): Advance => {
     };
 };
 
-const submittedRecovery = async (row = sourceAdvance()): Promise<Advance> => {
-    const prepared = preparedRecovery(row);
+const submittedRecovery = async (row = sourceAdvance(), prevTx?: Uint8Array): Promise<Advance> => {
+    const prepared = preparedRecovery(row, prevTx);
     const response = await signingEmulator().submitTx(
         prepared.recoveryPreparedArkTx!,
         prepared.recoveryPreparedCheckpoints!,
@@ -332,6 +337,49 @@ const startupError = (row: Advance): string | undefined => {
     } catch (cause) {
         return cause instanceof Error ? cause.message : String(cause);
     }
+};
+
+const noIndexer = { getVirtualTxs: async () => ({ txs: [] as string[] }) };
+
+/** A batch leaf holding the renewed covenant at vout 1, away from the lockup's vout 0. */
+const renewedCoin = (
+    row: Advance,
+    leaf: { amount?: bigint; script?: Uint8Array; units?: bigint } = {},
+) => {
+    const covenant = new DustCovenantScript({
+        serverKey,
+        emulatorKey,
+        vtxoMinAmount: config().vtxoMinAmount,
+        params: covenantParamsOf(row),
+    });
+    const tx = new Transaction({ version: 3, lockTime: 0 });
+    tx.addInput({ txid: "77".repeat(32), index: 0, sequence: 0xffffffff });
+    tx.addOutput({ amount: 1_000n, script: payoutPkScript(row.operatorKey, 1_000n, row.dust) });
+    tx.addOutput({
+        amount: leaf.amount ?? lockupSats(row),
+        script: leaf.script ?? covenant.pkScript,
+    });
+    const units = leaf.units ?? row.assetUnits;
+    if (units !== undefined)
+        tx.addOutput(
+            Extension.create([
+                asset.Packet.create([
+                    asset.AssetGroup.create(
+                        asset.AssetId.create("12".repeat(32), 7),
+                        null,
+                        [],
+                        [asset.AssetOutput.create(1, units)],
+                        [],
+                    ),
+                ]),
+            ]).txOut(),
+        );
+    tx.addOutput(P2A);
+    return {
+        renewed: { ...row, outpoint: { txid: tx.id, vout: 1 }, renewals: 1 },
+        prevTx: tx.toBytes(),
+        psbt: base64.encode(tx.toPSBT()),
+    };
 };
 
 describe("recovery graph", () => {
@@ -566,6 +614,17 @@ describe("recovery graph", () => {
         ).toThrow(/fare/);
     });
 
+    it("rejects a direct positive sats fare with a missing payer at startup and recovery", () => {
+        const row = sourceAdvance();
+        const envelope = decodeLockupEnvelope(row.unsignedLockupTx);
+        delete envelope.satsFarePayer;
+        const invalid = { ...row, unsignedLockupTx: encodeLockupEnvelope(envelope) };
+        expect(() => buildRecoveryIntent(invalid, config())).toThrow(/recovery graph is malformed/);
+        expect(() => assertRecoveryStartupInvariants([invalid], config())).toThrow(
+            /sats fare payer/,
+        );
+    });
+
     it("audits a lockup whose operator change rides on the fare output", () => {
         const operatorKey = operatorTree.tweakedPublicKey;
         const row = sourceAdvance("height", false, { operatorKey });
@@ -576,7 +635,7 @@ describe("recovery graph", () => {
         // Covenant, the merged operator payout, sender change, anchor — a separate
         // change output would make five and repeat output 1's script.
         expect(source.outputsLength).toBe(4);
-        expect(source.getOutput(1).amount).toBe(20_000n - row.topup);
+        expect(source.getOutput(1).amount).toBe(20_000n - row.topup + row.fare.units);
         expect(() => buildRecoveryIntent(row, cfg)).not.toThrow();
         expect(() =>
             buildRecoveryIntent({ ...row, fare: { currency: "sats", units: 11n } }, cfg),
@@ -600,6 +659,142 @@ describe("recovery graph", () => {
                 config(),
             ),
         ).toThrow(/unsigned graph/);
+    });
+});
+
+describe("renewed covenant recovery", () => {
+    it.each([false, true])("reclaims at the adopted successor (asset: %s)", (withAsset) => {
+        const row = sourceAdvance("time", withAsset);
+        const { renewed, prevTx } = renewedCoin(row);
+        const intent = buildRecoveryIntent(renewed, config(), prevTx);
+        const arkTx = Transaction.fromPSBT(base64.decode(intent.arkTx));
+        const input = Transaction.fromPSBT(base64.decode(intent.checkpoints[0]!)).getInput(0);
+
+        expect([hex.encode(input.txid!), input.index]).toEqual([renewed.outpoint.txid, 1]);
+        expect(getArkPsbtFields(arkTx, 0, PrevArkTxField)).toEqual([prevTx]);
+        expect(arkTx.getOutput(0)).toEqual({
+            amount: lockupSats(row),
+            script: payoutPkScript(row.operatorKey, lockupSats(row), row.dust),
+        });
+        expect(intent.expectedTxid).toBe(arkTx.id);
+    });
+
+    it.each([
+        ["value", (row: Advance) => ({ amount: lockupSats(row) - 1n }), /renewed .* value/],
+        [
+            "script",
+            (row: Advance) => ({ script: payoutPkScript(row.operatorKey, 1_000n, row.dust) }),
+            /renewed covenant script/,
+        ],
+        ["assets", (row: Advance) => ({ units: row.assetUnits! - 1n }), /renewed .* holdings/],
+    ])("refuses a successor whose %s differs", (_name, leaf, message) => {
+        const row = sourceAdvance("time", true);
+        const { renewed, prevTx } = renewedCoin(row, leaf(row));
+        expect(() => buildRecoveryIntent(renewed, config(), prevTx)).toThrow(message);
+    });
+
+    it("refuses a missing or foreign successor transaction", () => {
+        const row = sourceAdvance("time", true);
+        const { renewed } = renewedCoin(row);
+        const foreign = renewedCoin(row, { amount: lockupSats(row) + 1n }).prevTx;
+        expect(() => buildRecoveryIntent(renewed, config())).toThrow(/source is missing/);
+        expect(() => buildRecoveryIntent(renewed, config(), foreign)).toThrow(/not the successor/);
+    });
+
+    /** What the watcher makes of a signed reclaim of the advance's current coin. */
+    const classifyReclaim = (
+        advance: Advance,
+        arkTx: string,
+        checkpoint: string,
+        assets?: VirtualCoin["assets"],
+    ) => {
+        const covenant = new DustCovenantScript({
+            serverKey,
+            emulatorKey,
+            vtxoMinAmount: config().vtxoMinAmount,
+            params: covenantParamsOf(advance),
+        });
+        const coin = {
+            ...advance.outpoint!,
+            value: Number(lockupSats(advance)),
+            script: hex.encode(covenant.pkScript),
+            isSpent: true,
+            spentBy: Transaction.fromPSBT(base64.decode(checkpoint)).id,
+            arkTxId: Transaction.fromPSBT(base64.decode(arkTx)).id,
+            assets,
+        } as unknown as VirtualCoin;
+        const indexer = {
+            getVtxos: async () => ({ vtxos: [] }),
+            getVirtualTxs: async () => ({ txs: [arkTx, checkpoint] }),
+        };
+        return classifyObservedSpend(
+            advance,
+            coin,
+            { indexer, config: config() },
+            { height: 700000, time: Number(advance.locktime) },
+        );
+    };
+
+    it("has the watcher classify the signed reclaim of a successor as recovered", async () => {
+        const { renewed, prevTx } = renewedCoin(sourceAdvance("time"));
+        const intent = buildRecoveryIntent(renewed, config(), prevTx);
+        const signed = await signingEmulator().submitTx(intent.arkTx, intent.checkpoints);
+        await expect(
+            classifyReclaim(renewed, signed.signedArkTx, signed.signedCheckpointTxs[0]!),
+        ).resolves.toEqual({ kind: "recovered", txid: intent.expectedTxid });
+    });
+
+    it("reclaims a renewed asset covenant through the runner, moving its whole holding", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance("time", true);
+        advances.insert(row);
+        const { renewed, psbt } = renewedCoin(row);
+        expect(advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1)).toBe(true);
+        await createRecoveryRunner({
+            advances,
+            emulator: signingEmulator(),
+            indexer: { getVirtualTxs: async () => ({ txs: [psbt] }) },
+            config: config(),
+            workerId: "worker",
+            now: () => NOW + 100,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+        }).recover(advances.get(row.id)!);
+
+        const reclaimed = advances.get(row.id)!;
+        expect(reclaimed).toMatchObject({ state: "recovering", recoveryPhase: "submitted" });
+        const ark = Transaction.fromPSBT(base64.decode(reclaimed.recoveryResponseArkTx!));
+        const source = Transaction.fromRaw(getArkPsbtFields(ark, 0, PrevArkTxField)[0]!);
+        const [held] = Extension.fromTx(source).getAssetPacket()!.groups;
+        const [moved] = Extension.fromTx(ark).getAssetPacket()!.groups;
+        const id = held!.assetId!.toString();
+        expect(held!.outputs.filter(({ vout }) => vout === renewed.outpoint.vout)).toMatchObject([
+            { amount: row.assetUnits },
+        ]);
+        expect(moved!.assetId!.toString()).toBe(id);
+        expect(moved!.inputs.map(({ vin, amount }) => [vin, amount])).toEqual([
+            [0, row.assetUnits],
+        ]);
+        expect(moved!.outputs.map(({ vout, amount }) => [vout, amount])).toEqual([
+            [0, row.assetUnits],
+        ]);
+        await expect(
+            classifyReclaim(
+                reclaimed,
+                reclaimed.recoveryResponseArkTx!,
+                reclaimed.recoveryResponseCheckpoints![0]!,
+                [{ assetId: id, amount: row.assetUnits! }],
+            ),
+        ).resolves.toEqual({ kind: "recovered", txid: ark.id });
+    });
+
+    // The asset fixture's hand-built graph never passes the startup lockup audit.
+    it("starts with a renewed row locked, prepared and submitted", async () => {
+        const { renewed, prevTx } = renewedCoin(sourceAdvance("time"));
+        expect(startupError(renewed)).toBeUndefined();
+        expect(startupError(preparedRecovery(renewed, prevTx))).toBeUndefined();
+        expect(startupError(await submittedRecovery(renewed, prevTx))).toBeUndefined();
     });
 });
 
@@ -1129,14 +1324,14 @@ describe("startup recovery invariant", () => {
         },
     );
 
-    it("rejects an active legacy or incomplete recovery phase", () => {
-        const legacy = {
+    it("rejects an unknown recovery phase", () => {
+        const invalid = {
             ...sourceAdvance(),
             state: "recovering" as const,
-            recoveryPhase: "legacy" as const,
-        };
-        expect(() => assertRecoveryStartupInvariants([legacy], config())).toThrow(
-            /recovery-height.*legacy recovery phase/,
+            recoveryPhase: "unknown",
+        } as unknown as Advance;
+        expect(() => assertRecoveryStartupInvariants([invalid], config())).toThrow(
+            /recovery-height.*unknown recovery phase/,
         );
     });
 });
@@ -1255,6 +1450,22 @@ describe("joint-fill startup invariants", () => {
         expect(() => assertRecoveryStartupInvariants([moved], world.config)).not.toThrow();
     });
 
+    it("holds a renewed covenant's joint preflight to its lockup", () => {
+        const renewed = {
+            ...world.advance,
+            state: "locked" as const,
+            outpoint: { txid: "ab".repeat(32), vout: 1 },
+            renewals: 1,
+        };
+        expect(() => assertRecoveryStartupInvariants([renewed], world.config)).not.toThrow();
+        const drifted = patchJointSource(renewed, (source) => {
+            source.recoveryPreflight = foreignRecoveryPreflight();
+        });
+        expect(() => assertRecoveryStartupInvariants([drifted], world.config)).toThrow(
+            /joint recovery preflight drifted/,
+        );
+    });
+
     it("fails closed on an unreadable joint tag instead of retrying it as legacy", () => {
         const unknown = {
             ...world.advance,
@@ -1284,6 +1495,7 @@ describe("durable recovery runner", () => {
             const runner = createRecoveryRunner({
                 advances,
                 emulator,
+                indexer: noIndexer,
                 config: config(),
                 workerId: "worker",
                 now: () => 100,
@@ -1315,6 +1527,7 @@ describe("durable recovery runner", () => {
         const runner = createRecoveryRunner({
             advances,
             emulator,
+            indexer: noIndexer,
             config: config(),
             workerId: "worker",
             now: () => 100,
@@ -1349,6 +1562,7 @@ describe("durable recovery runner", () => {
         const first = createRecoveryRunner({
             advances: firstRepo,
             emulator: ambiguous,
+            indexer: noIndexer,
             config: config(),
             workerId: randomUUID(),
             now: () => NOW + 100,
@@ -1368,6 +1582,7 @@ describe("durable recovery runner", () => {
         const second = createRecoveryRunner({
             advances: secondRepo,
             emulator: response,
+            indexer: noIndexer,
             config: config(),
             workerId: randomUUID(),
             now: () => NOW + 102,
@@ -1413,6 +1628,7 @@ describe("durable recovery runner", () => {
             createRecoveryRunner({
                 advances,
                 emulator,
+                indexer: noIndexer,
                 config: config(),
                 workerId,
                 now: () => 100,
@@ -1449,6 +1665,7 @@ describe("durable recovery runner", () => {
                 createRecoveryRunner({
                     advances,
                     emulator,
+                    indexer: noIndexer,
                     config: config(),
                     workerId,
                     now: () => now,
@@ -1495,6 +1712,7 @@ describe("durable recovery runner", () => {
         const runner = createRecoveryRunner({
             advances,
             emulator: malformed,
+            indexer: noIndexer,
             config: config(),
             workerId: "worker",
             now: () => 100,
@@ -1516,6 +1734,242 @@ describe("durable recovery runner", () => {
                 )
                 .get(row.id),
         ).toEqual({ total: 1n });
+    });
+
+    it("leaves a swept row recovering and submitted, written by the runner alone", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance();
+        advances.insert(row);
+        const runner = createRecoveryRunner({
+            advances,
+            emulator: signingEmulator(),
+            indexer: noIndexer,
+            config: config(),
+            workerId: "worker",
+            now: () => NOW + 100,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+        });
+        const read = new Set<string>();
+        let recovered: Promise<unknown> | undefined;
+        const sweeper = createSweeper({
+            advances: new Proxy(advances, {
+                get: (target, key) => {
+                    read.add(String(key));
+                    const value = Reflect.get(target, key);
+                    return typeof value === "function" ? value.bind(target) : value;
+                },
+            }),
+            recovery: { recover: (advance) => (recovered = runner.recover(advance)) },
+            now: () => NOW + 100,
+            config: config(),
+        });
+
+        await sweeper.tick(null, row.locktime);
+        await recovered;
+
+        expect(advances.get(row.id)).toMatchObject({
+            state: "recovering",
+            recoveryPhase: "submitted",
+            recoveryTxid: buildRecoveryIntent(row, config()).expectedTxid,
+            recoverySubmittedAt: NOW + 100,
+        });
+        expect([...read].sort()).toEqual(["byState", "get"]);
+    });
+
+    it("reclaims a renewed covenant at its successor, fetched once across a retry", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance();
+        advances.insert(row);
+        const { renewed, psbt } = renewedCoin(row);
+        expect(advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1)).toBe(true);
+        const indexer = { getVirtualTxs: vi.fn(async () => ({ txs: [psbt] })) };
+        let now = NOW + 100;
+        const runner = (emulator: Pick<EmulatorProvider, "submitTx">) =>
+            createRecoveryRunner({
+                advances,
+                emulator,
+                indexer,
+                config: config(),
+                workerId: randomUUID(),
+                now: () => now,
+                leaseSeconds: 30,
+                backoffSeconds: 1,
+            });
+        const lost = {
+            submitTx: vi.fn(async () => {
+                throw new Error("response lost");
+            }),
+        } as unknown as Pick<EmulatorProvider, "submitTx">;
+
+        await expect(runner(lost).recover(advances.get(row.id)!)).rejects.toThrow(/lost/);
+        const prepared = advances.get(row.id)!;
+        expect(prepared).toMatchObject({ state: "recovering", recoveryPhase: "prepared" });
+        expect(startupError(prepared)).toBeUndefined();
+        now = NOW + 102;
+        const emulator = signingEmulator();
+        const submitted = await runner(emulator).recover(prepared);
+
+        expect(indexer.getVirtualTxs).toHaveBeenCalledOnce();
+        expect(indexer.getVirtualTxs).toHaveBeenCalledWith([renewed.outpoint.txid]);
+        const [, checkpoints] = emulator.submitTx.mock.calls[0]!;
+        const input = Transaction.fromPSBT(base64.decode(checkpoints[0]!)).getInput(0);
+        expect([hex.encode(input.txid!), input.index]).toEqual([renewed.outpoint.txid, 1]);
+        const persisted = advances.get(row.id)!;
+        expect(persisted).toMatchObject({
+            state: "recovering",
+            recoveryPhase: "submitted",
+            recoveryTxid: submitted!.txid,
+        });
+        expect(startupError(persisted)).toBeUndefined();
+    });
+
+    it.each([
+        [
+            "an indexer outage",
+            async (): Promise<{ txs: string[] }> => {
+                throw new Error("indexer down");
+            },
+            /indexer down/,
+        ],
+        ["a successor it does not serve", async () => ({ txs: [] }), /previous transaction/],
+    ])("leaves a renewed covenant locked through %s", async (_name, getVirtualTxs, message) => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const row = sourceAdvance();
+        advances.insert(row);
+        const { renewed } = renewedCoin(row);
+        advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1);
+        const policy = new PolicyRepository(database);
+        policy.update({ paused: false }, "setup");
+        const emulator = signingEmulator();
+        const runner = createRecoveryRunner({
+            advances,
+            emulator,
+            indexer: { getVirtualTxs },
+            config: config(),
+            workerId: "worker",
+            now: () => NOW + 100,
+            leaseSeconds: 30,
+            backoffSeconds: 1,
+        });
+
+        await expect(runner.recover(advances.get(row.id)!)).rejects.toThrow(message);
+        expect(emulator.submitTx).not.toHaveBeenCalled();
+        expect(advances.get(row.id)).toMatchObject({ state: "locked", outpoint: renewed.outpoint });
+        expect(advances.get(row.id)!.failureCode).toBeUndefined();
+        expect(policy.get().paused).toBe(false);
+    });
+
+    it("alarms a renewed covenant whose source the indexer never serves, up to its deadline", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const policy = new PolicyRepository(database);
+        policy.update({ paused: false }, "setup");
+        const row = sourceAdvance();
+        advances.insert(row);
+        advances.recordCovenantRenewed(row.id, renewedCoin(row).renewed.outpoint, NOW + 1);
+        const indexer = { getVirtualTxs: vi.fn(noIndexer.getVirtualTxs) };
+        let expiry = 0n;
+        const sweeper = createSweeper({
+            advances,
+            recovery: createRecoveryRunner({
+                advances,
+                emulator: signingEmulator(),
+                indexer,
+                config: config(),
+                workerId: "worker",
+                now: () => NOW + 100,
+                leaseSeconds: 30,
+                backoffSeconds: 1,
+            }),
+            now: () => NOW + 100,
+            config: config(),
+            policy,
+            observed: () => ({ swept: false, expiry: { kind: "time", value: expiry } }),
+        });
+
+        let release = () => {};
+        for (const [headroom, severity, code, paused, pending] of [
+            [86_400n, "eligible", "recovery_source_unavailable", false, false],
+            [86_400n, "eligible", "recovery_source_unavailable", false, true],
+            [43_200n, "warning", "recovery_source_unavailable", false, false],
+            [7_200n, "critical", "covenant_renewal_stopped", true, false],
+        ] as const) {
+            if (pending)
+                indexer.getVirtualTxs.mockImplementationOnce(
+                    () =>
+                        new Promise<{ txs: string[] }>(
+                            (resolve) => (release = () => resolve({ txs: [] })),
+                        ),
+                );
+            expiry = row.locktime + headroom;
+            await sweeper.tick(null, row.locktime);
+            expect(sweeper.status().blockers).toEqual([
+                expect.objectContaining({ advanceId: row.id, severity, code }),
+            ]);
+            expect(policy.get().paused).toBe(paused);
+            release();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(indexer.getVirtualTxs).toHaveBeenCalledTimes(4);
+        expect(sweeper.status().lastRecoveryError).toMatchObject({
+            advanceId: row.id,
+            code: "recovery_source_unavailable",
+        });
+        expect(advances.get(row.id)).toMatchObject({ state: "locked" });
+        expect(advances.get(row.id)!.failureCode).toBeUndefined();
+    });
+
+    it("clears the source alarm on the sweep after the indexer serves the renewed coin's source", async () => {
+        const database = open(":memory:");
+        const advances = new AdvanceRepository(database);
+        const policy = new PolicyRepository(database);
+        policy.update({ paused: false }, "setup");
+        const row = sourceAdvance();
+        advances.insert(row);
+        const { renewed, psbt } = renewedCoin(row);
+        advances.recordCovenantRenewed(row.id, renewed.outpoint, NOW + 1);
+        const indexer = { getVirtualTxs: vi.fn(noIndexer.getVirtualTxs) };
+        const sweeper = createSweeper({
+            advances,
+            recovery: createRecoveryRunner({
+                advances,
+                emulator: signingEmulator(),
+                indexer,
+                config: config(),
+                workerId: "worker",
+                now: () => NOW + 100,
+                leaseSeconds: 30,
+                backoffSeconds: 1,
+            }),
+            now: () => NOW + 100,
+            config: config(),
+            policy,
+            observed: () => ({
+                swept: false,
+                expiry: { kind: "time", value: row.locktime + 86_400n },
+            }),
+        });
+
+        await sweeper.tick(null, row.locktime);
+        expect(sweeper.status().blockers).toEqual([
+            expect.objectContaining({ advanceId: row.id, code: "recovery_source_unavailable" }),
+        ]);
+
+        indexer.getVirtualTxs.mockImplementation(async () => ({ txs: [psbt] }));
+        await sweeper.tick(null, row.locktime);
+        expect(advances.get(row.id)).toMatchObject({
+            state: "recovering",
+            recoveryPhase: "submitted",
+        });
+        // A tick reports the blockers it found before sweeping, so the reclaim it just submitted shows next tick.
+        await sweeper.tick(null, row.locktime);
+        expect(sweeper.status().blockers).toEqual([]);
+        expect(indexer.getVirtualTxs).toHaveBeenCalledTimes(2);
+        expect(policy.get().paused).toBe(false);
     });
 });
 

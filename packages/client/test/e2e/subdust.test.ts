@@ -110,6 +110,10 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
         const quotes: string[] = [];
         let acceptedQuotes = 0;
         let authorizations = 0;
+        const inputReservations = new Map<
+            string,
+            Awaited<ReturnType<typeof sender.reserveVtxos>>
+        >();
         const send = createTaxiSender({
             storage: {
                 getItem: (key) => storage.get(key) ?? null,
@@ -120,6 +124,14 @@ describe("Taxi exact sub-dust payment on arkade-regtest", () => {
             getContext,
             serverUnrollScript: sender.serverUnrollScript.script,
             unreservedCoins: (target) => target.getSpendableVtxos(),
+            reserveInputs: async (_wallet, record, inputs) => {
+                let hold = inputReservations.get(record.transferId);
+                if (!hold) {
+                    hold = await sender.reserveVtxos(inputs);
+                    inputReservations.set(record.transferId, hold);
+                }
+                return hold;
+            },
             client: (url, fetchImpl = fetch) =>
                 taxiClient(url, async (input, init) => {
                     const request = new Request(input, init);

@@ -138,8 +138,8 @@ liveScenario("premature-recovery-rejected", async () => {
         };
         const evidence = await poll(
             "exact owned recovery CLTV rejection",
-            async () =>
-                matchRecoveryEvidence({
+            async () => {
+                const observation = {
                     ...window,
                     emulatorSdkVersion: JSON.parse(readFileSync(artifactPath("stack.json"), "utf8"))
                         .images.emulator.version,
@@ -148,7 +148,21 @@ liveScenario("premature-recovery-rejected", async () => {
                     currentBlocktime: String(tip.time),
                     error: rejection,
                     logs: readOwnedRecoveryLogs(window),
-                }),
+                };
+                writeFileSync(
+                    artifactPath("recovery-refusal-observation.json"),
+                    `${JSON.stringify(
+                        {
+                            ...observation,
+                            error:
+                                rejection instanceof Error ? rejection.message : String(rejection),
+                        },
+                        null,
+                        2,
+                    )}\n`,
+                );
+                return matchRecoveryEvidence(observation);
+            },
             (value) => value !== undefined,
             2000,
         );

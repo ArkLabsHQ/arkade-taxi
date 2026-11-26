@@ -36,6 +36,7 @@ import {
     attachPrevArkTxs,
     buildOffchainTx,
     canSpendOffchain,
+    maybeArkError,
     scriptFromTapLeafScript,
     verifyTapscriptSignatures,
     type ArkadeInfo,
@@ -119,6 +120,23 @@ export class CovenantSpendAmbiguousError extends Error {
     ) {
         super(
             `taxi: covenant spend submission outcome is ambiguous; observe transaction ${expectedTxid} before retrying: ${cause instanceof Error ? cause.message : String(cause)}`,
+            { cause },
+        );
+    }
+}
+
+/** A definite refusal: a batch intent, such as the covenant's renewal, holds an input or has
+ * already settled the covenant. Nothing was accepted, so the capability is released. */
+export class CovenantSpendBusyError extends Error {
+    readonly name = "CovenantSpendBusyError";
+
+    constructor(
+        /** The registered inputs arkd named, as `txid:vout`. */
+        public readonly outpoints: readonly string[],
+        cause: unknown,
+    ) {
+        super(
+            `taxi: covenant spend refused, nothing accepted: ${outpoints.join(", ") || "an input"} is registered for a batch`,
             { cause },
         );
     }
@@ -793,6 +811,7 @@ const incomingClaimFacts = (args: Omit<VerifyIncomingClaimArgs, "status">): Obse
 const assertIncomingStatus = (
     rawStatus: TransferStatusResponse,
     facts: Pick<ObservedClaimBase, "transferId" | "outpoint">,
+    { rebinding = false } = {},
 ): void => {
     const status = immutablePlainCopy(rawStatus, "transfer status");
     exactObjectKeys(
@@ -806,7 +825,7 @@ const assertIncomingStatus = (
         return reject("Taxi status is not the incoming locked transfer");
     exactObjectKeys(status.outpoint, ["txid", "vout"], [], "Taxi locked outpoint");
     exactOutpoint(status.outpoint, facts.outpoint, "Taxi locked outpoint");
-    if (status.spentTxid || status.failureCode || status.failureDetail)
+    if (status.spentTxid || (!rebinding && (status.failureCode || status.failureDetail)))
         reject("Taxi status reports a spent or failed transfer");
 };
 
@@ -862,7 +881,6 @@ async function verifyObservedClaim(
             `server unroll script is invalid: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
     }
-    const registry = lifecycleRegistry();
     const isolatedArk = pinProvider(new RestArkProvider(arkdUrl), restArkPrototype, arkdUrl);
     const isolatedIndexer = pinProvider(
         new RestIndexerProvider(arkdUrl),
@@ -931,16 +949,51 @@ async function verifyObservedClaim(
     // which renewals re-date; the live expiry is read from the indexer instead.
     const observed = await observe(base);
     if (readStatus !== undefined) assertIncomingStatus(await readStatus(facts.transferId), facts);
+    return capability(base, observed);
+}
+
+/** The capability at the outpoint fresh Taxi status now reports for its covenant, or
+ * undefined while status still names the original coin. */
+export async function renewedTransfer(
+    transfer: CovenantTransfer,
+    rawStatus: TransferStatusResponse,
+): Promise<CovenantTransfer | undefined> {
+    const retained = capabilities.get(transfer);
+    if (retained === undefined) return reject("unrecognized covenant-transfer capability");
+    const status = immutablePlainCopy(rawStatus, "transfer status");
+    const outpoint = status.outpoint ?? retained.outpoint;
+    // The coin is verified below, so a flag the watcher raised on a locked row must not
+    // strand a claim whose original coin is gone.
+    assertIncomingStatus(
+        status,
+        { transferId: retained.transferId, outpoint },
+        { rebinding: true },
+    );
+    if (outpoint.txid === retained.outpoint.txid && outpoint.vout === retained.outpoint.vout)
+        return undefined;
+    const { expiry, holdings, lifecycle, ...facts } = retained;
+    const base: CoinExpectation = {
+        ...facts,
+        outpoint: { ...outpoint },
+        contextAssetUnits: holdings[0]?.amount,
+    };
+    return capability(base, await observe(base));
+}
+
+const capability = (
+    base: CoinExpectation,
+    observed: { expiry: CapabilityState["expiry"]; holdings: Holding[] },
+): CovenantTransfer => {
     const lifecycleKey = [
-        boundDependencies.network,
-        arkdUrl,
-        emulatorUrl,
-        hex.encode(facts.serverKey),
-        hex.encode(facts.emulatorKey),
-        facts.outpoint.txid,
-        facts.outpoint.vout,
+        base.dependencies.network,
+        base.arkdUrl,
+        base.emulatorUrl,
+        hex.encode(base.serverKey),
+        hex.encode(base.emulatorKey),
+        base.outpoint.txid,
+        base.outpoint.vout,
     ].join("|");
-    const lifecycle = registry.getOrCreate(lifecycleKey, () => ({
+    const lifecycle = lifecycleRegistry().getOrCreate(lifecycleKey, () => ({
         state: "available",
     }));
     const retained: CapabilityState = {
@@ -960,7 +1013,7 @@ async function verifyObservedClaim(
     ) as CovenantTransfer;
     capabilities.set(result, retained);
     return result;
-}
+};
 
 const unsignedCopy = (tx: Transaction): Transaction => {
     const copy = Transaction.fromPSBT(tx.toPSBT());
@@ -1203,6 +1256,14 @@ const refresh = async (
         (coin) => coin.txid === state.outpoint.txid && coin.vout === state.outpoint.vout,
     );
     if (covenantCoin === undefined) return reject("indexer omitted the locked covenant outpoint");
+    // The watcher's renewal test: a batch, not an Ark transaction, took the coin first.
+    if (/^[0-9a-f]{64}$/i.test(covenantCoin.settledBy ?? "") && !covenantCoin.arkTxId) {
+        state.lifecycle.state = "available";
+        throw new CovenantSpendBusyError(
+            [`${state.outpoint.txid}:${state.outpoint.vout}`],
+            new Error(`settled by commitment ${covenantCoin.settledBy}`),
+        );
+    }
     const current = strictCoin(covenantCoin, {
         ...state,
         contextAssetUnits: state.holdings[0]?.amount,
@@ -1250,6 +1311,18 @@ const refresh = async (
         )
     )
         reject("receiver funding asset holdings mismatch");
+};
+
+const EMULATOR_SUBMIT_FAILED = "Failed to submit tx to emulator: ";
+
+/** The inputs arkd says a batch intent holds, or undefined for any other submit failure. */
+const registeredInputs = (cause: unknown): string[] | undefined => {
+    if (!(cause instanceof Error) || !cause.message.startsWith(EMULATOR_SUBMIT_FAILED))
+        return undefined;
+    const refusal = maybeArkError(new Error(cause.message.slice(EMULATOR_SUBMIT_FAILED.length)));
+    if (refusal?.name !== "VTXO_ALREADY_REGISTERED") return undefined;
+    const named = [refusal.message, ...Object.values(refusal.metadata ?? {})].join(" ");
+    return [...new Set(named.toLowerCase().match(/[0-9a-f]{64}:\d+/g))];
 };
 
 const execute = async (
@@ -1397,7 +1470,12 @@ const execute = async (
             ownerCheckpoints.map((checkpoint) => base64.encode(checkpoint.toPSBT())),
         );
     } catch (cause) {
-        throw new CovenantSpendAmbiguousError(ownerArk.id, cause);
+        const registered = registeredInputs(cause);
+        if (!registered) throw new CovenantSpendAmbiguousError(ownerArk.id, cause);
+        // arkd refuses a registered input before it records anything (arkd v0.9.16+).
+        state.lifecycle.state = "available";
+        delete state.lifecycle.expectedTxid;
+        throw new CovenantSpendBusyError(registered, cause);
     }
     try {
         const safe = immutablePlainCopy(response, "emulator response") as typeof response;

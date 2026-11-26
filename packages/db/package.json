@@ -1,6 +1,6 @@
 {
     "name": "@arkade-taxi/db",
-    "version": "0.0.0",
+    "version": "1.1.4",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
@@ -19,5 +19,15 @@
     },
     "devDependencies": {
         "@types/better-sqlite3": "^7.6.12"
-    }
+    },
+    "files": [
+        "dist"
+    ],
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/ArkLabsHQ/arkade-taxi.git",
+        "directory": "packages/db"
+    },
+    "private": true
 }

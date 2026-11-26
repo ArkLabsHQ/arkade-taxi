@@ -6,23 +6,16 @@ import { join, resolve, sep } from "node:path";
 import { expect } from "vitest";
 import {
     ArkAddress,
-    Batch,
-    EmulatorPacket,
     EsploraProvider,
-    Extension,
-    Intent,
     RestArkProvider,
     RestEmulatorProvider,
     RestIndexerProvider,
     SingleKey,
     Transaction,
-    arkade,
     isVtxoSpent,
     networks,
-    withPrevTxs,
     type ExtendedVirtualCoin,
     type Identity,
-    type SignerSession,
     type VirtualCoin,
     type Wallet,
 } from "@arkade-os/sdk";
@@ -34,12 +27,7 @@ import {
     ReservationRepository,
     openDatabase,
 } from "@arkade-taxi/db";
-import {
-    DustCovenantScript,
-    Leaf,
-    lockupSats,
-    type DustCovenantParams,
-} from "@arkade-taxi/covenant";
+import { DustCovenantScript, lockupSats, type DustCovenantParams } from "@arkade-taxi/covenant";
 import type { Advance } from "@arkade-taxi/core";
 import { loadConfig, resolveRuntimeConfig, type RuntimeConfig } from "../packages/app/src/config";
 import { createOperatorRuntime } from "../packages/app/src/arkade/operatorWallet";
@@ -48,6 +36,7 @@ import { decodeLockupEnvelope, encodeLockupEnvelope } from "../packages/app/src/
 import type { LockupBuildRequest } from "../packages/app/src/quotes";
 import { productionLockupSubmitter } from "../packages/app/src/arkade/submit";
 import { normalizeExpiry } from "../packages/app/src/arkade/providers";
+import { renewCovenant } from "../packages/app/src/arkade/renewal";
 import { unionReservedOutpoints } from "../packages/app/src/arkade/reservedOutpoints";
 import { createSpendWatcher } from "../packages/app/src/watcher";
 import { buildArkFundingArgs } from "../scripts/lib/harness.mjs";
@@ -77,20 +66,6 @@ const coinReport = (coin: VirtualCoin | undefined) =>
               isPreconfirmed: coin.isPreconfirmed ?? null,
               isUnrolled: coin.isUnrolled ?? null,
           };
-
-/**
- * The renew leaf is `[server, emulator:renew]`, so no caller holds a key on it
- * and `SingleKey.sign` throws rather than returning an untouched PSBT. The
- * forfeit's signatures are both injected downstream — by the emulator at
- * `submitFinalization` and by arkd on receipt.
- */
-const injectedSignaturesOnly = (session: SignerSession): Identity => ({
-    sign: async (tx: Transaction) => tx,
-    signerSession: () => session,
-    signMessage: async () => new Uint8Array(),
-    compressedPublicKey: async () => new Uint8Array(33),
-    xOnlyPublicKey: async () => new Uint8Array(32),
-});
 
 const senderSignedEnvelope = async (encoded: string, identity: Identity): Promise<string> => {
     const envelope = decodeLockupEnvelope(encoded);
@@ -216,6 +191,9 @@ liveScenario("v2-covenant-batch-renewal", async () => {
         dust: config.dust,
         topup: config.dust,
         locktime: BigInt(now) + config.covenantDeadlineSeconds,
+        // What production resolves the seeded "either" rule to: a tree whose purchase
+        // leaf is disabled, which the artifact alone does not derive.
+        claimMode: "recycle",
     };
     const covenant = new DustCovenantScript({
         serverKey: config.serverPubkey,
@@ -330,79 +308,27 @@ liveScenario("v2-covenant-batch-renewal", async () => {
     expect(funded.script).toBe(covenantScript);
     expect(BigInt(funded.value)).toBe(covenantValue);
 
-    const renewLeaf = covenant.findLeaf(hex.encode(covenant.scripts[Leaf.Renew]!));
-    const [proofCoin] = await withPrevTxs(
-        [
-            {
-                ...funded,
-                tapTree: covenant.encode(),
-                forfeitTapLeafScript: renewLeaf,
-                intentTapLeafScript: renewLeaf,
-            },
-        ],
-        indexer,
-    );
-    const session = actors.sender!.identity.signerSession();
-    const sessionPubKey = hex.encode(await session.getPublicKey());
-    // The leaf accepts a register intent with no on-chain outputs and at most
-    // one cosigner, and tunnels output[activeInputIndex - 1]: the proof's real
-    // input is 1, so output 0 is what must preserve script, value and assets.
-    const message: Intent.RegisterMessage = {
-        type: "register",
-        onchain_output_indexes: [],
-        valid_at: 0,
-        expire_at: 0,
-        cosigners_public_keys: [sessionPubKey],
-    };
-    const proof = Intent.create(
-        message,
-        [proofCoin],
-        [
-            { script: covenant.pkScript, amount: covenantValue },
-            Extension.create([
-                EmulatorPacket.create([
-                    { vin: 1, script: covenant.covenant.renew!, witness: new Uint8Array() },
-                ]),
-            ]).txOut(),
-        ],
-    );
-    const signedProof = await emulator.submitIntent({
-        proof: base64.encode(proof.toPSBT()),
-        message,
-    });
-    const intentId = await arkProvider.registerIntent({ proof: signedProof, message });
-    const handler = arkade.createArkadeBatchHandler(
-        intentId,
-        [{ ...proofCoin, arkadeScriptBytes: covenant.covenant.renew! }],
-        injectedSignaturesOnly(session),
-        signedProof,
-        message,
-        session,
-        arkProvider,
-        emulator,
-        networks[config.networkName],
-    );
     // R2 is answered by the coin reports, so they are recorded before any
     // assertion and whether or not the batch itself succeeded.
-    let commitmentTxid: string | undefined;
+    let renewed: Awaited<ReturnType<typeof renewCovenant>> | undefined;
     let renewalError: unknown;
     try {
-        commitmentTxid = await Batch.join(
-            arkProvider.getEventStream(abort.signal, [
-                sessionPubKey,
-                `${funded.txid}:${funded.vout}`,
-            ]),
-            handler,
-            { abortController: abort },
+        renewed = await renewCovenant(
+            { arkProvider, emulator, indexer, network: networks[config.networkName] },
+            covenant,
+            funded,
+            covenantAddress,
+            { signal: abort.signal },
         );
     } catch (error) {
         renewalError = error;
     }
+    const { commitmentTxid, intentId } = renewed ?? {};
     const evidence = {
         project: required("TAXI_E2E_PROJECT"),
         covenantScript,
         covenantValue: Number(covenantValue),
-        intentId,
+        intentId: intentId ?? null,
         commitmentTxid: commitmentTxid ?? null,
         renewalError: renewalError === undefined ? null : String(renewalError),
         consumed: coinReport(

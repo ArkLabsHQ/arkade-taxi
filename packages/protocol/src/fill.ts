@@ -8,7 +8,8 @@ export interface FillRequestBody {
     operationId: string;
     /** The receive quote whose covenant and reservation this fills. */
     quoteId: string;
-    /** base64 PSBT; every non-Taxi input signed, the Taxi's left unsigned. */
+    /** base64 PSBT. Each non-Taxi input is signed by every key its spend leaf names but the
+     * server's and a gated input's tweaked emulator key; the Taxi's are left unsigned. */
     arkTx: string;
     /** base64 PSBTs, one per arkTx input, index-aligned. */
     checkpoints: string[];

@@ -183,6 +183,23 @@ describe("requestQuote", () => {
         expect(JSON.parse(String(fetch.calls[1]!.init.body))).not.toHaveProperty("paymentSats");
     });
 
+    it("encodes an extra packet as type and hex payload, and omits it otherwise", async () => {
+        const { taxi, fetch } = client(ok(quote()));
+        await taxi.requestQuote({
+            receiverKey,
+            senderKey,
+            senderSats: 0n,
+            senderInputs: [],
+            extraPacket: { type: 5, payload: Uint8Array.from([0xab, 0xcd]) },
+        });
+        expect(JSON.parse(String(fetch.calls[0]!.init.body)).extraPacket).toEqual({
+            type: 5,
+            payload: "abcd",
+        });
+        await taxi.requestQuote({ receiverKey, senderKey, senderSats: 0n, senderInputs: [] });
+        expect(JSON.parse(String(fetch.calls[1]!.init.body))).not.toHaveProperty("extraPacket");
+    });
+
     it("throws INVALID_RESPONSE when the quote fails the codecs", async () => {
         const { taxi } = client(ok({ ...quote(), fare: { currency: "sats", units: "1e3" } }));
         await expect(

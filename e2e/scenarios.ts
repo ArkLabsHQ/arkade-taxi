@@ -1,5 +1,6 @@
 import { it } from "vitest";
 import { runWithCleanup } from "../scripts/lib/scenario-cleanup.mjs";
+import { captureScenarioProceeds } from "../scripts/lib/proceeds-diagnostics.mjs";
 
 export const SCENARIOS = [
     {
@@ -101,7 +102,7 @@ export const SCENARIOS = [
     },
     {
         id: "fill-pending-accepted-quarantine",
-        title: "a lost accepted arkd reply quarantines its funding until the original transaction is finalized",
+        title: "a lost accepted arkd reply quarantines its funding until original finalization is proven",
     },
     {
         id: "fill-undersigned-foreign-input",
@@ -117,9 +118,14 @@ export const SCENARIOS = [
         title: "sender and Taxi exit an unrolled covenant on-chain with arkd and the emulator down",
         timeout: 600_000,
     },
+    {
+        id: "covenant-keeper-renewal-claim",
+        title: "the Taxi's keeper renews a short-lived covenant once, and its receiver claims the renewed coin",
+        timeout: 1_800_000,
+    },
 ] as const;
 
-export const EXPECTED_TOTAL = 29;
+export const EXPECTED_TOTAL = 30;
 
 export function liveScenario(id: string, fn: () => void | Promise<void>): void {
     const scenario = SCENARIOS.find((item) => item.id === id);
@@ -131,7 +137,14 @@ export function liveScenario(id: string, fn: () => void | Promise<void>): void {
                 throw new Error(
                     "e2e: run pnpm e2e:stack to provide the isolated production image and packed client",
                 );
-            await runWithCleanup(fn);
+            await runWithCleanup(async () => {
+                try {
+                    await fn();
+                } catch (error) {
+                    await captureScenarioProceeds(`scenario-failed:${id}`);
+                    throw error;
+                }
+            });
         },
         "timeout" in scenario ? scenario.timeout : undefined,
     );

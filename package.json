@@ -1,7 +1,7 @@
 {
     "name": "arkade-taxi",
     "private": true,
-    "version": "0.0.0",
+    "version": "1.1.4",
     "type": "module",
     "packageManager": "pnpm@10.34.5",
     "engines": {
@@ -17,8 +17,6 @@
         "format": "prettier --write .",
         "format:check": "prettier --check .",
         "artifact": "node scripts/gen-artifact.mjs",
-        "verify:artifacts": "node scripts/carrier-artifacts/verify.mjs",
-        "verify:artifacts:battery": "node scripts/carrier-artifacts/fault-battery.mjs",
         "test:integration:client": "node scripts/client-regtest.mjs cycle",
         "regtest:up:client": "node scripts/client-regtest.mjs up",
         "regtest:down:client": "node scripts/client-regtest.mjs down",
@@ -27,8 +25,8 @@
         "lint": "eslint ."
     },
     "devDependencies": {
-        "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz",
-        "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz",
+        "@arkade-os/sdk": "0.5.14",
+        "@arkade-os/swap": "0.1.16",
         "@eslint/js": "^10.0.1",
         "@noble/curves": "^2.4.0",
         "@scure/base": "^2.4.0",
@@ -42,15 +40,5 @@
         "typescript": "^5.9.3",
         "typescript-eslint": "^8.71.0",
         "vitest": "^3.2.7"
-    },
-    "pnpm": {
-        "onlyBuiltDependencies": [
-            "better-sqlite3",
-            "esbuild"
-        ],
-        "overrides": {
-            "@arkade-os/sdk": "file:./vendor/carrier/arkade-os-sdk-0.5.0-rc.18-99313fa7.tgz",
-            "@arkade-os/swap": "file:./vendor/carrier/arkade-os-swap-0.1.0-rc.21-99313fa7.tgz"
-        }
     }
 }

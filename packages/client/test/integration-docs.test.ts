@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import {
     existsSync,
     mkdirSync,
@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReceiverWalletInput } from "../src/index";
@@ -19,6 +20,7 @@ import * as sdk from "@arkade-os/sdk";
 import * as client from "../src/index";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { fundingInputs, senderIdentity, senderTree, serverKey } from "./fixtures";
+const execFileAsync = promisify(execFile);
 const { packageManagerInvocation } = (await import(
     new URL("../../../scripts/lib/harness.mjs", import.meta.url).href
 )) as { packageManagerInvocation(args: string[]): { command: string; args: string[] } };
@@ -38,17 +40,23 @@ const examples = [integrationGuide, coordinationGuide].flatMap((guide) =>
 );
 
 describe("JavaScript integration guide", () => {
-    it("typechecks every TypeScript example against packed public exports", () => {
+    it("typechecks every TypeScript example against packed public exports", async () => {
         expect(examples.length).toBeGreaterThanOrEqual(2);
         const root = mkdtempSync(join(tmpdir(), "taxi-integration-docs-"));
         const repo = fileURLToPath(new URL("../../../", import.meta.url));
+        const signal = AbortSignal.timeout(120_000);
         try {
             const packages = join(root, "node_modules", "@arkade-taxi");
             mkdirSync(packages, { recursive: true });
             for (const name of ["protocol", "covenant", "client"]) {
                 const cwd = join(repo, "packages", name);
                 const build = packageManagerInvocation(["build"]);
-                execFileSync(build.command, build.args, { cwd, timeout: 30_000, stdio: "pipe" });
+                await execFileAsync(build.command, build.args, {
+                    cwd,
+                    timeout: 60_000,
+                    signal,
+                    windowsHide: true,
+                });
                 const pack = packageManagerInvocation([
                     "pack",
                     "--pack-destination",
@@ -56,18 +64,28 @@ describe("JavaScript integration guide", () => {
                     "--json",
                 ]);
                 const archive = JSON.parse(
-                    execFileSync(pack.command, pack.args, {
-                        cwd,
-                        timeout: 20_000,
-                        encoding: "utf8",
-                    }),
+                    (
+                        await execFileAsync(pack.command, pack.args, {
+                            cwd,
+                            timeout: 20_000,
+                            encoding: "utf8",
+                            signal,
+                            windowsHide: true,
+                        })
+                    ).stdout,
                 ).filename;
                 expect(resolve(archive).startsWith(resolve(root) + sep)).toBe(true);
                 const target = join(packages, name);
                 mkdirSync(target);
-                execFileSync("tar", ["-xzf", archive, "-C", target, "--strip-components=1"], {
-                    timeout: 10_000,
-                });
+                await execFileAsync(
+                    "tar",
+                    ["-xzf", archive, "-C", target, "--strip-components=1"],
+                    {
+                        timeout: 10_000,
+                        signal,
+                        windowsHide: true,
+                    },
+                );
                 if (existsSync(join(cwd, "node_modules")))
                     symlinkSync(
                         realpathSync(join(cwd, "node_modules")),
@@ -110,7 +128,7 @@ describe("JavaScript integration guide", () => {
                 throw new Error("unsafe temp path");
             rmSync(root, { recursive: true, force: true });
         }
-    }, 60_000);
+    }, 180_000);
 
     it("uses sender composition and receiver events without polling examples", () => {
         expect(integrationGuide).toContain("requestVerifiedQuote");

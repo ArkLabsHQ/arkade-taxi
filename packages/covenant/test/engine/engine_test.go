@@ -1,6 +1,6 @@
-// Executes the hand-committed v2 vectors in the emulator's arkade engine, through
+// Executes the committed covenant vectors in the emulator's arkade engine, through
 // the ReadArkadeScript -> Execute path its SubmitTx uses. Run via run.mjs.
-package taxiv2_test
+package taxi_test
 
 import (
 	"bytes"
@@ -64,7 +64,7 @@ type fixture struct {
 
 func load(t *testing.T) fixture {
 	t.Helper()
-	raw, err := os.ReadFile(os.Getenv("TAXI_V2_VECTORS"))
+	raw, err := os.ReadFile(os.Getenv("TAXI_VECTORS"))
 	require.NoError(t, err)
 	var f fixture
 	require.NoError(t, json.Unmarshal(raw, &f))
@@ -251,7 +251,7 @@ func multisig(t *testing.T, keys ...*btcec.PublicKey) []byte {
 	return s
 }
 
-// The v2 refund rests on this: input 1's value reads the same in the
+// The refund rests on this: input 1's value reads the same in the
 // sender-signed refund leaf as in the recycle leaf.
 func TestInputOneValue(t *testing.T) {
 	f := load(t)

@@ -6,10 +6,10 @@ import {
     ADVANCE_STATES,
     AdvanceRepository,
     DEFAULT_POLICY,
-    MIGRATIONS,
+    SCHEMA_VERSION,
     openDatabase,
     PolicyRepository,
-    applyMigrations,
+    initializeSchema,
 } from "../src/index";
 
 const dir = mkdtempSync(join(tmpdir(), "arkade-taxi-db-"));
@@ -42,12 +42,10 @@ function seedAdvance(repo: AdvanceRepository, id: string): void {
 }
 
 describe("openDatabase", () => {
-    it("returns a migrated in-memory database", () => {
+    it("returns an initialized in-memory database", () => {
         const db = openDatabase(":memory:");
 
-        expect(Number(db.pragma("user_version", { simple: true }))).toBe(
-            Math.max(...MIGRATIONS.map((m) => m.id)),
-        );
+        expect(Number(db.pragma("user_version", { simple: true }))).toBe(SCHEMA_VERSION);
         const repo = new AdvanceRepository(db);
         seedAdvance(repo, "a1");
         expect(repo.get("a1")?.dust).toBe(ABOVE_MAX_SAFE);
@@ -63,7 +61,7 @@ describe("openDatabase", () => {
         expect(row?.dust).toBe(ABOVE_MAX_SAFE);
     });
 
-    it("persists to a file and re-migrates idempotently on reopen", () => {
+    it("persists to a file and initializes idempotently on reopen", () => {
         const path = join(dir, "taxi.sqlite");
 
         const first = openDatabase(path);
@@ -81,7 +79,7 @@ describe("openDatabase", () => {
 
     it("re-exports the schema surface", () => {
         expect(ADVANCE_STATES).toContain("locked");
-        expect(typeof applyMigrations).toBe("function");
-        expect(MIGRATIONS.length).toBeGreaterThan(0);
+        expect(typeof initializeSchema).toBe("function");
+        expect(SCHEMA_VERSION).toBe(1);
     });
 });

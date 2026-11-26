@@ -611,7 +611,7 @@ export async function discoverProceeds(
         )
             continue;
         const envelope =
-            source.kind === "legacy" ? validatePersistedLockupGraph(advance, config) : undefined;
+            source.kind === "direct" ? validatePersistedLockupGraph(advance, config) : undefined;
         const tx = Transaction.fromPSBT(
             base64.decode(source.kind === "fill" ? source.source.graph.arkTx : envelope!.arkTx),
         );
@@ -625,7 +625,7 @@ export async function discoverProceeds(
         );
         if (spend.kind !== advance.state || spend.txid !== advance.spentTxid)
             fail("proceeds_spend_mismatch");
-        if (source.kind === "legacy" && advance.fare.units > 0n) await checkFare(advance, tx);
+        if (source.kind === "direct" && advance.fare.units > 0n) await checkFare(advance, tx);
         if (advance.state === "recycled") {
             const { operatorSats, assetFare } = recycleFare(covenantParamsOf(advance));
             await check(

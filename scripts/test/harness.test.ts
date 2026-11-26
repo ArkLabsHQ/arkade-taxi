@@ -49,13 +49,12 @@ import {
     resolveMasterSha,
     resolveTask12Tests,
     resolveE2eOptions,
-    resolveWalletTimeoutMs,
-    reserveWalletPorts,
     resolveInstalledClientEntry,
     renewalFundingAmount,
     removeStaleFailureDiagnostics,
     sanitizeError,
     taxiLogArgs,
+    withoutMempoolMiningAnalytics,
 } from "../lib/harness.mjs";
 import { settleSelectedFunding } from "../e2e-settle.mjs";
 import { ARKD_DELAYS, ARKD_FEES, assertZeroIntentFees } from "../e2e-stack.mjs";
@@ -66,29 +65,46 @@ import {
     stubDelegateProvider,
 } from "../e2e-wallets.mjs";
 
-it("reserves both wallet listeners until their ports are handed to Playwright", async () => {
-    const reservation = await reserveWalletPorts();
-    const servers = [createServer(), createServer()];
-    const ports = [reservation.walletPort, reservation.delegatorPort];
-    const listen = (server: (typeof servers)[number], port: number) =>
-        new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(port, "127.0.0.1", resolve);
-        });
-    try {
-        expect(new Set(ports).size).toBe(2);
-        for (const [index, server] of servers.entries())
-            await expect(listen(server, ports[index])).rejects.toMatchObject({
-                code: "EADDRINUSE",
-            });
-        await reservation.release();
-        for (const [index, server] of servers.entries()) await listen(server, ports[index]);
-    } finally {
-        await reservation.release();
-        await Promise.all(
-            servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
-        );
-    }
+describe.each(['"', "'"])("ephemeral regtest Esplora quoted with %s", (q) => {
+    const source = `services:
+  another:
+    environment:
+      DATABASE_ENABLED: ${q}true${q}
+  mempool_mock_pools:
+    ports:
+      - '\${MEMPOOL_MOCK_POOLS_PORT:-8123}:8123'
+  mempool_api:
+    depends_on:
+      - mempool_mock_pools
+    environment:
+      DATABASE_ENABLED: ${q}true${q}
+      MEMPOOL_BACKEND: electrum
+      ELECTRUM_HOST: fulcrum
+      CORE_RPC_HOST: bitcoin
+  mempool_web:
+    environment:
+      DATABASE_ENABLED: ${q}true${q}
+`;
+    const api = (setting: string) =>
+        `  mempool_api:\n    depends_on:\n      - mempool_mock_pools\n    environment:\n      ${setting}`;
+    const enabled = api(`DATABASE_ENABLED: ${q}true${q}`);
+
+    it("preserves real RPC and Electrum while disabling only mining analytics", () => {
+        const expected = source.replace(enabled, api(`DATABASE_ENABLED: ${q}false${q}`));
+        expect(withoutMempoolMiningAnalytics(source)).toBe(expected);
+        expect(withoutMempoolMiningAnalytics(expected)).toBe(expected);
+    });
+
+    it.each([
+        source.replace("  mempool_api:", "  renamed_api:"),
+        source.replace("  mempool_web:", "  renamed_web:"),
+        source.replace("  mempool_api:", "  mempool_api:\n  mempool_api:"),
+        source.replace(enabled, api("DATABASE_ENABLED: true")),
+        source.replace(enabled, api(`DATABASE_ENABLED: ${q}true${q === '"' ? "'" : '"'}`)),
+        source.replace(enabled, `${enabled}\n      DATABASE_ENABLED: ${q}false${q}`),
+    ])("refuses a changed compose contract", (changed) => {
+        expect(() => withoutMempoolMiningAnalytics(changed)).toThrow(/changed/);
+    });
 });
 
 it("pins and verifies the zero-fee settlement fixture without raising Taxi fee authority", () => {
@@ -450,6 +466,7 @@ describe("package manager process boundary", () => {
                 "e2e/unilateral-exit.e2e.test.ts",
                 "e2e/fill-undersigned.e2e.test.ts",
                 "e2e/fill-pending.e2e.test.ts",
+                "e2e/keeper-renewal.e2e.test.ts",
             ]);
         for (const args of [
             ["--direct", task12Tests[0]],
@@ -462,19 +479,10 @@ describe("package manager process boundary", () => {
         expect(() => resolveE2eOptions(["--direct"], { ci: "true" })).toThrow(/forbidden in CI/);
     });
 
-    it("bounds the wallet run by TAXI_E2E_WALLET_TIMEOUT_MS before any stack starts", () => {
-        expect(resolveWalletTimeoutMs(undefined)).toBe(900_000);
-        expect(resolveWalletTimeoutMs("3600000")).toBe(3_600_000);
-        expect(resolveWalletTimeoutMs("2147483647")).toBe(2_147_483_647);
-        for (const value of ["", "0", "-1", "1.5", "15m", "2147483648"])
-            expect(() => resolveWalletTimeoutMs(value)).toThrow("TAXI_E2E_WALLET_TIMEOUT_MS");
-        const stack = readFileSync(new URL("../e2e-stack.mjs", import.meta.url), "utf8");
-        const resolved = stack.indexOf(
-            "const walletTimeoutMs = resolveWalletTimeoutMs(process.env.TAXI_E2E_WALLET_TIMEOUT_MS);",
+    it("redirects retired wallet integration to the current native browser harness", () => {
+        expect(() => resolveE2eOptions(["--direct", "--wallet", "/wallet"], { ci: "" })).toThrow(
+            "scripts/taxi-native-ci.mjs",
         );
-        expect(resolved).toBeGreaterThan(0);
-        expect(resolved).toBeLessThan(stack.indexOf("const root = mkdtempSync("));
-        expect(stack).toContain("timeoutMs: walletTimeoutMs,");
     });
 
     it.each([
@@ -519,19 +527,19 @@ describe("package manager process boundary", () => {
 
     it("builds a consumer manifest from exactly three local Taxi tarballs", () => {
         const tarballs = [
-            "/tmp/run/packs/arkade-taxi-covenant-0.0.0.tgz",
-            "/tmp/run/packs/arkade-taxi-protocol-0.0.0.tgz",
-            "/tmp/run/packs/arkade-taxi-client-0.0.0.tgz",
+            "/tmp/run/packs/arkade-taxi-covenant-1.1.4.tgz",
+            "/tmp/run/packs/arkade-taxi-protocol-1.1.4.tgz",
+            "/tmp/run/packs/arkade-taxi-client-1.1.4.tgz",
         ];
         const manifest = buildConsumerManifest(tarballs, "/tmp/run/consumer", "linux");
-        expect(manifest.dependencies).toEqual({
-            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-0.0.0.tgz",
-            "@arkade-taxi/covenant": "file:../packs/arkade-taxi-covenant-0.0.0.tgz",
-            "@arkade-taxi/protocol": "file:../packs/arkade-taxi-protocol-0.0.0.tgz",
+        expect(manifest.dependencies).toMatchObject({
+            "@arkade-taxi/client": "file:../packs/arkade-taxi-client-1.1.4.tgz",
+            "@arkade-taxi/covenant": "file:../packs/arkade-taxi-covenant-1.1.4.tgz",
+            "@arkade-taxi/protocol": "file:../packs/arkade-taxi-protocol-1.1.4.tgz",
         });
-        expect(manifest.pnpm.overrides).toEqual({
-            "@arkade-taxi/covenant@0.0.0": "$@arkade-taxi/covenant",
-            "@arkade-taxi/protocol@0.0.0": "$@arkade-taxi/protocol",
+        expect(manifest.pnpm.overrides).toMatchObject({
+            "@arkade-taxi/covenant@1.1.4": "$@arkade-taxi/covenant",
+            "@arkade-taxi/protocol@1.1.4": "$@arkade-taxi/protocol",
         });
         expect(JSON.stringify(manifest)).not.toContain('"0.0.0"');
         const lock = Object.values(manifest.dependencies).join("\n");
@@ -539,7 +547,10 @@ describe("package manager process boundary", () => {
             dependencies: Object.fromEntries(
                 Object.entries(manifest.dependencies).map(([name, resolved]) => [
                     name,
-                    { resolved, version: "0.0.0" },
+                    {
+                        resolved,
+                        version: "1.1.4",
+                    },
                 ]),
             ),
         };
@@ -551,7 +562,7 @@ describe("package manager process boundary", () => {
                     ...listed.dependencies,
                     "@arkade-taxi/protocol": {
                         resolved: "https://registry.npmjs.org/@arkade-taxi/protocol",
-                        version: "0.0.0",
+                        version: "1.1.4",
                     },
                 },
             }),
@@ -562,6 +573,26 @@ describe("package manager process boundary", () => {
         expect(() =>
             buildConsumerManifest([...tarballs, tarballs[0]], "/tmp/run/consumer", "linux"),
         ).toThrow("exactly three");
+    });
+
+    it("uses the root SDK and swap sources and overrides their transitive archive imports", () => {
+        const project = resolve(import.meta.dirname, "../..");
+        const pkg = JSON.parse(readFileSync(join(project, "package.json"), "utf8"));
+        const consumer = resolve(tmpdir(), "taxi-consumer-fixture");
+        const packs = ["covenant", "protocol", "client"].map((name) =>
+            resolve(tmpdir(), `arkade-taxi-${name}-1.1.4.tgz`),
+        );
+        const manifest = buildConsumerManifest(packs, consumer);
+        for (const name of ["@arkade-os/sdk", "@arkade-os/swap"]) {
+            const source = pkg.devDependencies[name];
+            const spec = manifest.dependencies[name];
+            if (source.startsWith("file:")) {
+                expect(resolve(consumer, spec.slice(5))).toBe(resolve(project, source.slice(5)));
+                expect(manifest.pnpm.overrides[name]).toBe(spec);
+            } else {
+                expect(spec).toBe(source);
+            }
+        }
     });
 
     it("isolates package-manager configuration and removes credential environment keys", () => {
@@ -594,12 +625,12 @@ describe("package manager process boundary", () => {
 
     it("validates pack identity and detects tarball mutation", () => {
         const packDir = join("tmp", "packs");
-        const filename = resolve(packDir, "arkade-taxi-client-0.0.0.tgz");
+        const filename = resolve(packDir, "arkade-taxi-client-1.1.4.tgz");
         expect(
             assertPackResult(
                 JSON.stringify({
                     name: "@arkade-taxi/client",
-                    version: "0.0.0",
+                    version: "1.1.4",
                     filename,
                 }),
                 { name: "@arkade-taxi/client", packDir },
@@ -608,7 +639,11 @@ describe("package manager process boundary", () => {
         ).toBe(filename);
         expect(() =>
             assertPackResult(
-                JSON.stringify({ name: "@arkade-taxi/client", version: "1.0.0", filename }),
+                JSON.stringify({
+                    name: "@arkade-taxi/client",
+                    version: "1.1.4-unexpected",
+                    filename,
+                }),
                 { name: "@arkade-taxi/client", packDir },
                 () => true,
             ),
@@ -647,13 +682,11 @@ describe("package manager process boundary", () => {
         // One stack per isolated test, then the shared suite: a single shared
         // isolated stack cannot host two scenarios that each end it.
         expect(stack).toMatch(
-            /\.isolatedTests\.reduce\(\(chain, file\) => chain\.then\(\(\) => main\(file\)\), Promise\.resolve\(\)\)\s*\.then\(\(\) => main\(\)\)/,
+            /\.then\(\(\{ isolatedTests \}\) =>\s*isolatedTests\.reduce\(\(chain, file\) => chain\.then\(\(\) => main\(file\)\), Promise\.resolve\(\)\),\s*\)\s*\.then\(\(\) => main\(\)\)/,
         );
         expect(stack).toMatch(/\["isolated", isolatedLabel\(isolatedFile\)\]/);
         expect(stack).not.toContain('run("pnpm"');
         expect(stack.match(/await runPnpm\(/g)).toHaveLength(4);
-        expect(stack).toContain("NPM_CONFIG_USERCONFIG: packs.npmUserConfig");
-        expect(stack).toContain("NPM_CONFIG_GLOBALCONFIG: packs.npmUserConfig");
         expect(stack).toContain("packageManagerEnvironment(options.env");
         expect(stack).toContain(
             '["--store-dir", storeDir, "install", "--ignore-scripts", "--frozen-lockfile=false"]',

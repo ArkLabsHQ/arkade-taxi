@@ -402,7 +402,7 @@ describe("receiver claim routes", () => {
             signedLockupTx: "signed",
         });
         expect(lockup.status).toBe(202);
-        advances.update({
+        advances.unsafeOverwrite({
             ...advances.get(quote.transferId)!,
             state: "locked",
             outpoint: { txid: "cd".repeat(32), vout: 0 },
@@ -419,7 +419,7 @@ describe("receiver claim routes", () => {
             expect(await read()).toContain(
                 'event: claims-snapshot\ndata: {"claims":[{"transferId":"adv-1"',
             );
-            advances.update({
+            advances.unsafeOverwrite({
                 ...advances.get(quote.transferId)!,
                 state: "purchased",
                 spentTxid: "ef".repeat(32),
@@ -498,7 +498,7 @@ describe("receiver claim routes", () => {
                 .then((chunk) => frames.push(new TextDecoder().decode(chunk.value)));
             await vi.advanceTimersByTimeAsync(250);
             expect(frames).toEqual([]);
-            advances.update(advance({ state: "purchased" }));
+            advances.unsafeOverwrite(advance({ state: "purchased" }));
             await vi.advanceTimersByTimeAsync(250);
             await next;
             expect(frames).toHaveLength(1);
@@ -1263,7 +1263,7 @@ describe("GET /v1/transfers/:id", () => {
         const quote = (await (await post("/v1/transfers", quoteBody())).json()) as QuoteResponse;
         const current = advances.get(quote.transferId)!;
         const txid = "ab".repeat(32);
-        advances.update({
+        advances.unsafeOverwrite({
             ...current,
             state: "locking",
             outpoint: { txid, vout: 2 },

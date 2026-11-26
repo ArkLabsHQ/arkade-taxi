@@ -4,7 +4,7 @@ import { p2tr, TAPROOT_UNSPENDABLE_KEY, taprootListToTree } from "@scure/btc-sig
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
 import { DustCovenantScript, Leaf } from "../src/vtxo";
-import { compileV2 } from "../src/v2-artifact";
+import { compileDustCovenant } from "../src/artifact";
 import type { DustCovenantParams } from "../src/params";
 
 // Real curve points. computeArkadeScriptPublicKey lifts the emulator key to do
@@ -34,7 +34,7 @@ describe("DustCovenantScript", () => {
         const s = new DustCovenantScript(opts());
         expect(s.scripts).toHaveLength(6);
         expect(s.scripts[Leaf.Renew]).toEqual(
-            compileV2(params(), key(4), key(5)).functionByName("renew")!.leafScript,
+            compileDustCovenant(params(), key(4), key(5)).functionByName("renew")!.leafScript,
         );
     });
 

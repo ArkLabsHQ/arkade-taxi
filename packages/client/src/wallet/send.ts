@@ -258,6 +258,17 @@ export interface TaxiSenderDependencies {
     getContext: () => Promise<ArkadeContext>;
     serverUnrollScript: Uint8Array;
     unreservedCoins: (wallet: IWallet) => Promise<ExtendedVirtualCoin[]>;
+    /**
+     * Persist the exact input hold before signing. Scope transferId to this wallet/Taxi;
+     * reacquire the same hold idempotently across retries and restarts, rejecting changed inputs.
+     * Release only on proven non-submission or verified spent inputs. After confirmation,
+     * release failures go to onHistoryError without replacing the successful payment result.
+     */
+    reserveInputs?: (
+        wallet: IWallet,
+        record: PendingTaxiRecord,
+        inputs: readonly { txid: string; vout: number }[],
+    ) => Promise<{ release(txid?: string): void | Promise<void> }>;
     client?: typeof taxiClient;
     pageProtocol?: string;
     recordActivity?: (activity: TaxiActivity) => void;
@@ -265,6 +276,7 @@ export interface TaxiSenderDependencies {
         activity: TaxiActivity,
         status: Awaited<ReturnType<TaxiClient["status"]>>,
     ) => void;
+    /** Reports history and reservation-release failures without changing a confirmed payment. */
     onHistoryError?: (error: unknown) => void;
 }
 
@@ -275,6 +287,17 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         } catch {
             // Diagnostics cannot change the payment outcome.
         }
+    };
+    const releaseInputs = async (
+        reservation: { release(txid?: string): void | Promise<void> } | undefined,
+        txid: string,
+    ): Promise<string> => {
+        try {
+            await reservation?.release(txid);
+        } catch (error) {
+            reportHistoryError(error);
+        }
+        return txid;
     };
 
     const pendingKey = (network: string, senderKey: string) =>
@@ -331,6 +354,7 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         record: PendingTaxiRecord,
         client: TaxiClient,
         submit?: () => Promise<void>,
+        wallet?: IWallet,
     ) => {
         const start = Date.now();
         const deadline = start + 30_000;
@@ -376,7 +400,7 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             )
                 throw new FailedDirectTaxi(
                     record,
-                    () => resumeStoredPayment(record),
+                    () => resumeStoredPayment(record, wallet),
                     status.failureCode,
                     status.failureDetail,
                     () => {
@@ -408,7 +432,7 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
         throw new Error("Taxi payment outcome is not confirmed");
     };
 
-    const resumeStoredPayment = async (record: PendingTaxiRecord) => {
+    const resumeStoredPayment = async (record: PendingTaxiRecord, wallet?: IWallet) => {
         const client = (deps.client ?? taxiClient)(record.taxiUrl, boundedFetch);
         const info = await client.info();
         if (info.operatorKey !== record.operatorKey) throw new Error("Taxi operator key changed");
@@ -418,95 +442,108 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             (info.serverKey !== attempt.serverKey || info.emulatorKey !== attempt.emulatorKey)
         )
             throw new Error("Taxi uses a different Arkade server or co-signer");
-        return waitForSettlement(record, client, async () => {
-            if (!attempt) throw new Error("The original Taxi payment authorization is unavailable");
-            const receiver = ArkAddress.decode(record.receiverAddress);
-            if (
-                receiver.encode() !== record.receiverAddress ||
-                receiver.hrp !== attempt.hrp ||
-                hex.encode(receiver.serverPubKey) !== attempt.serverKey
-            )
-                throw new Error("The original Taxi receiver does not match the trusted server");
-            const assetId = record.assetId ? taxiAssetId(record.assetId) : undefined;
-            const units = BigInt(record.assetAmount);
-            const exact = assetId ? {} : { paymentSats: units };
-            const senderInputs = attempt.senderInputs.map((input) => fundingInputFromWire(input));
-            const common = {
-                info,
-                trustedServerKey: hex.decode(attempt.serverKey),
-                trustedServerUnrollScript: hex.decode(attempt.serverUnrollScript),
-                vtxoMinAmount: BigInt(attempt.vtxoMinAmount),
-                hrp: attempt.hrp,
-                senderInputs,
-                senderSats: senderInputs.reduce((sum, input) => sum + input.value, 0n),
-                ...(assetId ? { assetUnits: units } : {}),
-            };
-            const maxFare = {
-                currency: attempt.maxFare.currency,
-                units: BigInt(attempt.maxFare.units),
-                ...(attempt.maxFare.currency === "asset" ? { assetId } : {}),
-            };
-            const validateOriginal = (verified: {
-                quote: { transferId: string };
-                envelope: { arkTx: string; covenantOutputIndex: number };
-            }) => {
-                if (verified.quote.transferId !== record.transferId)
-                    throw new Error("The stored Taxi transfer changed");
-                checkOutpoint(record, {
-                    txid: Transaction.fromPSBT(base64.decode(verified.envelope.arkTx)).id,
-                    vout: verified.envelope.covenantOutputIndex,
-                });
-            };
-            if (attempt.kind === "sponsored" && record.mode === "sponsored") {
-                const verified = verifySponsoredQuote({
-                    ...common,
-                    quote: attempt.quote,
-                    expect: {
-                        receiverAddress: record.receiverAddress,
-                        senderKey: hex.decode(record.senderKey),
-                        assetId,
-                        maxFare,
-                        maxContributionSats: BigInt(attempt.carrierCeiling),
-                        ...exact,
-                    },
-                });
-                validateOriginal(verified);
-                const result = await client.submitSponsoredLockup(verified, attempt.signed);
-                checkOutpoint(record, result.outpoint);
-                if (result.txid !== record.expectedTxid)
-                    throw new Error("Taxi returned a different payment transaction");
-            } else if (attempt.kind === "covenant" && record.mode !== "sponsored") {
-                const verified = verifyQuote({
-                    ...common,
-                    quote: attempt.quote,
-                    trustedEmulatorKey: hex.decode(attempt.emulatorKey),
-                    expect: {
-                        receiverKey: receiver.vtxoTaprootKey,
-                        senderKey: hex.decode(record.senderKey),
-                        assetId,
-                        maxFare,
-                        maxTopupSats: BigInt(attempt.carrierCeiling),
-                        minLocktime: BigInt(attempt.minLocktime),
-                        claimMode: record.mode,
-                        recoveryRecipient: "sender",
-                        ...exact,
-                    },
-                });
-                validateOriginal(verified);
-                const result = await client.submitLockup(verified, attempt.signed);
-                checkOutpoint(record, result.outpoint);
-                if (result.txid !== record.expectedTxid)
-                    throw new Error("Taxi returned a different payment transaction");
-            } else throw new Error("The stored Taxi payment mode changed");
-        });
+        if (!wallet || !deps.reserveInputs)
+            throw new Error("Wallet input reservation is required to resume Taxi sends");
+        const reservation = attempt
+            ? await deps.reserveInputs(wallet, record, attempt.senderInputs)
+            : undefined;
+        return waitForSettlement(
+            record,
+            client,
+            async () => {
+                if (!attempt)
+                    throw new Error("The original Taxi payment authorization is unavailable");
+                const receiver = ArkAddress.decode(record.receiverAddress);
+                if (
+                    receiver.encode() !== record.receiverAddress ||
+                    receiver.hrp !== attempt.hrp ||
+                    hex.encode(receiver.serverPubKey) !== attempt.serverKey
+                )
+                    throw new Error("The original Taxi receiver does not match the trusted server");
+                const assetId = record.assetId ? taxiAssetId(record.assetId) : undefined;
+                const units = BigInt(record.assetAmount);
+                const exact = assetId ? {} : { paymentSats: units };
+                const senderInputs = attempt.senderInputs.map((input) =>
+                    fundingInputFromWire(input),
+                );
+                const common = {
+                    info,
+                    trustedServerKey: hex.decode(attempt.serverKey),
+                    trustedServerUnrollScript: hex.decode(attempt.serverUnrollScript),
+                    vtxoMinAmount: BigInt(attempt.vtxoMinAmount),
+                    hrp: attempt.hrp,
+                    senderInputs,
+                    senderSats: senderInputs.reduce((sum, input) => sum + input.value, 0n),
+                    ...(assetId ? { assetUnits: units } : {}),
+                };
+                const maxFare = {
+                    currency: attempt.maxFare.currency,
+                    units: BigInt(attempt.maxFare.units),
+                    ...(attempt.maxFare.currency === "asset" ? { assetId } : {}),
+                };
+                const validateOriginal = (verified: {
+                    quote: { transferId: string };
+                    envelope: { arkTx: string; covenantOutputIndex: number };
+                }) => {
+                    if (verified.quote.transferId !== record.transferId)
+                        throw new Error("The stored Taxi transfer changed");
+                    checkOutpoint(record, {
+                        txid: Transaction.fromPSBT(base64.decode(verified.envelope.arkTx)).id,
+                        vout: verified.envelope.covenantOutputIndex,
+                    });
+                };
+                if (attempt.kind === "sponsored" && record.mode === "sponsored") {
+                    const verified = verifySponsoredQuote({
+                        ...common,
+                        quote: attempt.quote,
+                        expect: {
+                            receiverAddress: record.receiverAddress,
+                            senderKey: hex.decode(record.senderKey),
+                            assetId,
+                            maxFare,
+                            maxContributionSats: BigInt(attempt.carrierCeiling),
+                            ...exact,
+                        },
+                    });
+                    validateOriginal(verified);
+                    const result = await client.submitSponsoredLockup(verified, attempt.signed);
+                    checkOutpoint(record, result.outpoint);
+                    if (result.txid !== record.expectedTxid)
+                        throw new Error("Taxi returned a different payment transaction");
+                } else if (attempt.kind === "covenant" && record.mode !== "sponsored") {
+                    const verified = verifyQuote({
+                        ...common,
+                        quote: attempt.quote,
+                        trustedEmulatorKey: hex.decode(attempt.emulatorKey),
+                        expect: {
+                            receiverKey: receiver.vtxoTaprootKey,
+                            senderKey: hex.decode(record.senderKey),
+                            assetId,
+                            maxFare,
+                            maxTopupSats: BigInt(attempt.carrierCeiling),
+                            minLocktime: BigInt(attempt.minLocktime),
+                            claimMode: record.mode,
+                            recoveryRecipient: "sender",
+                            ...exact,
+                        },
+                    });
+                    validateOriginal(verified);
+                    const result = await client.submitLockup(verified, attempt.signed);
+                    checkOutpoint(record, result.outpoint);
+                    if (result.txid !== record.expectedTxid)
+                        throw new Error("Taxi returned a different payment transaction");
+                } else throw new Error("The stored Taxi payment mode changed");
+            },
+            wallet,
+        ).then((txid) => releaseInputs(reservation, txid));
     };
 
-    const restorePending = (record: PendingTaxiRecord) =>
-        new PendingDirectTaxi(record, () => resumeStoredPayment(record), undefined);
+    const restorePending = (record: PendingTaxiRecord, wallet: IWallet) =>
+        new PendingDirectTaxi(record, () => resumeStoredPayment(record, wallet), undefined);
 
-    const getPendingDirectTaxi = async (wallet: Pick<IWallet, "identity">, network: string) => {
+    const getPendingDirectTaxi = async (wallet: IWallet, network: string) => {
         const record = readPending(network, hex.encode(await wallet.identity.xOnlyPublicKey()));
-        return record && restorePending(record);
+        return record && restorePending(record, wallet);
     };
 
     /** Journals a signed payment and records it at once: a submit that throws never reaches waitForSettlement. */
@@ -531,13 +568,15 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
 
     /** Resumes the journaled payment only when it is this transfer, under the lock a new send takes. */
     const resumePendingDirectTaxi = async (
-        wallet: Pick<IWallet, "identity">,
+        wallet: IWallet,
         network: string,
         transferId: string,
     ): Promise<string | undefined> => {
         return withTaxiPaymentLock(wallet, network, async (senderKey) => {
             const record = readPending(network, senderKey);
-            return record?.transferId === transferId ? restorePending(record).resume() : undefined;
+            return record?.transferId === transferId
+                ? restorePending(record, wallet).resume()
+                : undefined;
         });
     };
 
@@ -548,7 +587,7 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             );
         return withTaxiPaymentLock(args.wallet, args.network, async (senderKey) => {
             const pending = readPending(args.network, senderKey);
-            if (pending) throw restorePending(pending);
+            if (pending) throw restorePending(pending, args.wallet);
             return sendDirectTaxiLocked(args, senderKey);
         });
     };
@@ -749,16 +788,6 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             )
         )
             throw new Error("Selected coins are no longer available");
-        const signed =
-            quoted.kind === "sponsored"
-                ? await signSponsoredPayment({
-                      verified: quoted.verified,
-                      identity: wallet.identity,
-                  })
-                : await signLockup({
-                      verified: quoted.verified,
-                      identity: wallet.identity,
-                  });
         const expectedTxid = Transaction.fromPSBT(base64.decode(verified.envelope.arkTx)).id;
         const expectedVout = verified.envelope.covenantOutputIndex;
         const transferId = verified.quote.transferId;
@@ -774,7 +803,23 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
             receiverAddress,
             assetId,
             assetAmount: amount.toString(),
-            attempt: {
+        };
+        if (!deps.reserveInputs)
+            throw new Error("Wallet input reservation is required for Taxi sends");
+        const reservation = await deps.reserveInputs(wallet, record, quoted.senderInputs);
+        let signed: string;
+        try {
+            signed =
+                quoted.kind === "sponsored"
+                    ? await signSponsoredPayment({
+                          verified: quoted.verified,
+                          identity: wallet.identity,
+                      })
+                    : await signLockup({
+                          verified: quoted.verified,
+                          identity: wallet.identity,
+                      });
+            record.attempt = {
                 signed,
                 senderInputs: quoted.senderInputs.map(fundingInputToWire),
                 serverKey: hex.encode(ctx.serverKey),
@@ -791,9 +836,12 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                           quote: quoted.verified.quote,
                           minLocktime: minLocktime.toString(),
                       }),
-            },
-        };
-        journalDirectTaxi(record);
+            };
+            journalDirectTaxi(record);
+        } catch (error) {
+            await reservation.release();
+            throw error;
+        }
         const submit = async () => {
             const result =
                 quoted.kind === "sponsored"
@@ -811,13 +859,19 @@ export const createTaxiSender = (deps: TaxiSenderDependencies) => {
                 await submit();
             } catch (cause) {
                 if (!(cause instanceof TaxiError && cause.code === "not_ready")) throw cause;
-                return await waitForSettlement(record, client, submit);
+                return await releaseInputs(
+                    reservation,
+                    await waitForSettlement(record, client, submit, wallet),
+                );
             }
-            return await waitForSettlement(record, client);
+            return await releaseInputs(
+                reservation,
+                await waitForSettlement(record, client, undefined, wallet),
+            );
         } catch (cause) {
             if (cause instanceof ReturnedDirectTaxi || cause instanceof FailedDirectTaxi)
                 throw cause;
-            throw new PendingDirectTaxi(record, () => resumeStoredPayment(record), cause);
+            throw new PendingDirectTaxi(record, () => resumeStoredPayment(record, wallet), cause);
         }
     };
 

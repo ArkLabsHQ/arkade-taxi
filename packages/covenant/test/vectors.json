@@ -4,7 +4,7 @@
     "emulatorKey": "62c0a046dacce86ddd0343c6d3c7c79c2208ba0d9c9cf24a6d046d21d21f90f7",
     "cases": [
         {
-            "name": "v2-btc",
+            "name": "btc",
             "params": {
                 "receiverKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
                 "senderKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -15,8 +15,7 @@
                 "topup": 330,
                 "assetTxid": null,
                 "assetIndex": null,
-                "locktime": 1800000000,
-                "covenantVersion": 2
+                "locktime": 1800000000
             },
             "vtxoMinAmount": 330,
             "recycle": "000020000000000000000000000000000000000000000000000000000000000000000000024a0120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078fcd0088d4528851ca77518851ca75788800cf53798800d177518800d1757b8851d177518851d1757c8851cf00c951c9937b9488518763527900a06300785379ef6953798868005152795479f277635152795479f26977685152795479ef690053795579f2697b93547994886851777777",
@@ -35,7 +34,7 @@
             "pkScript": "512046414b9ae909e01090d1c1e7d68d7e681a150b859dc581b2fa32d51a086556d6"
         },
         {
-            "name": "v2-btc-payment",
+            "name": "btc-payment",
             "params": {
                 "receiverKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
                 "senderKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -47,8 +46,7 @@
                 "paymentSats": 100,
                 "assetTxid": null,
                 "assetIndex": null,
-                "locktime": 1800000000,
-                "covenantVersion": 2
+                "locktime": 1800000000
             },
             "vtxoMinAmount": 330,
             "recycle": "000020000000000000000000000000000000000000000000000000000000000000000000024a0120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078fcd0088d4528851ca77518851ca75788800cf53798800d177518800d1757b8851d177518851d1757c8851cf00c951c9937b9488518763527900a06300785379ef6953798868005152795479f277635152795479f26977685152795479ef690053795579f2697b93547994886851777777",
@@ -67,7 +65,7 @@
             "pkScript": "512046414b9ae909e01090d1c1e7d68d7e681a150b859dc581b2fa32d51a086556d6"
         },
         {
-            "name": "v2-asset",
+            "name": "asset",
             "params": {
                 "receiverKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
                 "senderKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -78,8 +76,7 @@
                 "topup": 330,
                 "assetTxid": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
                 "assetIndex": 0,
-                "locktime": 1800000000,
-                "covenantVersion": 2
+                "locktime": 1800000000
             },
             "vtxoMinAmount": 330,
             "recycle": "0000200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2051024a0120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078fcd0088d4528851ca77518851ca75788800cf53798800d177518800d1757b8851d177518851d1757c8851cf00c951c9937b9488518763527900a06300785379ef6953798868005152795479f277635152795479f26977685152795479ef690053795579f2697b93547994886851777777",
@@ -98,7 +95,7 @@
             "pkScript": "5120c0804b70f2ce60699fca7c2fb2d56d72ea9e310d628297c41d4e21133eee9244"
         },
         {
-            "name": "v2-receiver-paid-sats-fare",
+            "name": "receiver-paid-sats-fare",
             "params": {
                 "receiverKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
                 "senderKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -113,8 +110,7 @@
                 "recoveryRecipient": "receiver",
                 "claimMode": "recycle",
                 "receiverFareCurrency": "sats",
-                "receiverFareUnits": 7,
-                "covenantVersion": 2
+                "receiverFareUnits": 7
             },
             "vtxoMinAmount": 330,
             "recycle": "0000200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f205102510120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078fcd0088d4528851ca77518851ca75788800cf53798800d177518800d1757b8851d177518851d1757c8851cf00c951c9937b9488518763527900a06300785379ef6953798868005152795479f277635152795479f26977685152795479ef690053795579f2697b93547994886851777777",
@@ -133,7 +129,7 @@
             "pkScript": "512066432bd8d9f36474a98236b7be7419d3c09b8ce410d9370d9c03db0c1641981e"
         },
         {
-            "name": "v2-receiver-paid-asset-fare",
+            "name": "receiver-paid-asset-fare",
             "params": {
                 "receiverKey": "1b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f",
                 "senderKey": "4d4b6cd1361032ca9bd2aeb9d900aa4d45d9ead80ac9423374c451a7254d0766",
@@ -148,8 +144,7 @@
                 "recoveryRecipient": "receiver",
                 "claimMode": "recycle",
                 "receiverFareCurrency": "asset",
-                "receiverFareUnits": 9,
-                "covenantVersion": 2
+                "receiverFareUnits": 9
             },
             "vtxoMinAmount": 330,
             "recycle": "5900200102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2051024a0120531fe6068134503d2723133227c867ac8fa6c83c537e9a44c3c5bdbdcb1fe337201b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078fcd0088d4528851ca77518851ca75788800cf53798800d177518800d1757b8851d177518851d1757c8851cf00c951c9937b9488518763527900a06300785379ef6953798868005152795479f277635152795479f26977685152795479ef690053795579f2697b93547994886851777777",

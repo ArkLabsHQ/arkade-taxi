@@ -5,15 +5,19 @@ import {
     Wallet,
     EsploraProvider,
     Transaction,
+    Proof,
     canSpendOffchain,
-    collectIntents,
+    collectBatchRegistrations,
     isSubdust,
     isVtxoSpent,
+    isArkError,
+    ArkErrorName,
     type WalletConfig,
     type ArkadeInfo,
-    type ArkIntentState,
+    type BatchRegistrationState,
     type ArkProvider,
     type ExtendedVirtualCoin,
+    type OnchainProvider,
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import type { Database } from "@arkade-taxi/db";
@@ -32,7 +36,11 @@ const admissionOnlyBlockers = new Set([
     "renewal_threshold_exceeds_vtxo_lifetime",
     "operator_intent_stale",
 ]);
-const WAITING: ArkIntentState[] = ["waiting_to_submit", "waiting_for_batch", "batch_in_progress"];
+const WAITING: BatchRegistrationState[] = [
+    "waiting_to_submit",
+    "waiting_for_batch",
+    "batch_in_progress",
+];
 const STALE_INTENT_MS = 3_600_000;
 
 type SettlementGuard = (
@@ -61,7 +69,7 @@ export interface OperatorRuntimeOptions {
     now?: () => number;
     providers?: Parameters<typeof verifyProviders>[1];
     walletFactory?: (config: WalletConfig) => Promise<Wallet>;
-    onchainProvider?: WalletConfig["onchainProvider"];
+    onchainProvider?: OnchainProvider;
     reservedOutpoints?: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
     /** Coins the SDK's background settlement must never spend. Without it, it spends none. */
     heldOutpoints: () => readonly Outpoint[] | Promise<readonly Outpoint[]>;
@@ -150,55 +158,91 @@ export function createOperatorRuntime(
     // Earlier-process intents the startup pass has cancelled, or left because their batch went through.
     const handled = new Set<string>();
     let earlierIntentsHandled = false;
-    // Settle intents never expire (expire_at 0): one an earlier process left waiting for, or in, a
-    // batch locks its coins for good, since nobody here signs that batch. Once quiet for a few
-    // sessions it is cancelled, unless every VTXO it spends was consumed. A boarding input is
-    // on-chain, unknown to the indexer, and can't be double-spent, so it never stops this.
+    // Quiet time permits a deletion attempt; only terminal evidence releases the locks.
     const handleEarlierIntents = async (info: ArkadeInfo) => {
         const taken = await timed("runtime.earlier.held", held);
         const quiet = Math.max(60_000, 3 * Number(info.sessionDuration) * 1000);
         const earlier = (
             await timed("runtime.earlier.storage", () =>
-                collectIntents(storage.intentRepository, {
-                    states: ["waiting_for_batch", "batch_in_progress"],
+                collectBatchRegistrations(storage.intentRepository, {
+                    states: WAITING,
                 }),
             )
-        ).filter(
+        ).filter((i) => i.createdAt < startedAt && !handled.has(i.proofTxId));
+        const due = earlier.filter(
             (i) =>
-                i.createdAt < startedAt &&
-                !handled.has(i.intentTxId) &&
-                !i.intentVtxos.some((o) => taken.has(outpointKey(o))),
+                now() - i.updatedAt >= quiet &&
+                !i.proofInputs.some((o) => taken.has(outpointKey(o))),
         );
-        const due = earlier.filter((i) => now() - i.updatedAt >= quiet);
         if (due.length) {
             const { vtxos } = await timed("runtime.earlier.coins", () =>
                 providers.indexerProvider.getVtxos({
-                    outpoints: due.flatMap((i) => i.intentVtxos),
+                    outpoints: due.flatMap((i) => i.proofInputs),
                 }),
             );
             const known = new Map(vtxos.map((v) => [outpointKey(v), v]));
             for (const intent of due) {
-                const spends = intent.intentVtxos.flatMap((o) => known.get(outpointKey(o)) ?? []);
-                if (!spends.length || !spends.every(isVtxoSpent)) {
-                    await timed("runtime.earlier.delete", () =>
-                        providers.arkProvider.deleteIntent({
-                            proof: intent.deleteProof,
-                            message: JSON.parse(intent.deleteProofMessage),
-                        }),
-                    ).catch(() => {});
-                    await timed("runtime.earlier.save", () =>
-                        storage.intentRepository.saveIntent({
-                            ...intent,
-                            state: "cancelled",
-                            cancellationReason: "registered by an earlier Taxi process",
-                            updatedAt: now(),
-                        }),
-                    );
+                const currentHolds = await held();
+                if (intent.proofInputs.some((o) => currentHolds.has(outpointKey(o)))) continue;
+                const settled =
+                    intent.proofInputs.length > 0 &&
+                    intent.proofInputs.every((o) => {
+                        const coin = known.get(outpointKey(o));
+                        return coin !== undefined && isVtxoSpent(coin);
+                    });
+                if (!settled) {
+                    try {
+                        await timed("runtime.earlier.delete", () =>
+                            providers.arkProvider.deleteIntent({
+                                proof: intent.deleteProof,
+                                message: JSON.parse(intent.deleteProofMessage),
+                            }),
+                        );
+                    } catch (error) {
+                        if (
+                            !isArkError(error, ArkErrorName.INVALID_INTENT_PROOF) ||
+                            !error.message.includes("no matching intents found")
+                        )
+                            continue;
+                    }
                 }
-                handled.add(intent.intentTxId);
+                const [fresh] = await collectBatchRegistrations(storage.intentRepository, {
+                    proofTxIds: [intent.proofTxId],
+                });
+                if (!fresh || fresh.state !== intent.state) continue;
+                const finalHolds = await held();
+                if (fresh.proofInputs.some((o) => finalHolds.has(outpointKey(o)))) continue;
+                await timed("runtime.earlier.save", () =>
+                    storage.intentRepository.saveBatchRegistration({
+                        ...fresh,
+                        state: settled ? "batch_succeeded" : "cancelled",
+                        ...(settled
+                            ? {}
+                            : { cancellationReason: "registration deleted from server" }),
+                        updatedAt: now(),
+                    }),
+                );
+                handled.add(intent.proofTxId);
             }
         }
-        return due.length === earlier.length;
+        return earlier.every((i) => handled.has(i.proofTxId));
+    };
+    const assertPersistedRegistration = async (
+        intent: Parameters<ArkProvider["registerIntent"]>[0],
+    ) => {
+        const proofTxId = Transaction.fromPSBT(base64.decode(intent.proof)).id;
+        const [record] = await collectBatchRegistrations(storage.intentRepository, {
+            proofTxIds: [proofTxId],
+        });
+        const inputs = proofInputs(intent).sort();
+        if (
+            !record ||
+            !WAITING.includes(record.state) ||
+            record.registerProof !== intent.proof ||
+            record.registerProofMessage !== Proof.encodeMessage(intent.message) ||
+            JSON.stringify(record.proofInputs.map(outpointKey).sort()) !== JSON.stringify(inputs)
+        )
+            throw new Error("operator_registration_not_persisted");
     };
     let stopped = false;
     let infoFingerprint: string | undefined;
@@ -287,6 +331,14 @@ export function createOperatorRuntime(
                             identity: SingleKey.fromPrivateKey(config.operatorPrivkey),
                             arkProvider: Object.assign(Object.create(providers.arkProvider), {
                                 getInfo: async () => verified.info!,
+                                deleteIntent: (
+                                    intent: Parameters<
+                                        typeof providers.arkProvider.deleteIntent
+                                    >[0],
+                                ) =>
+                                    timed("runtime.intent.deleteIntent", () =>
+                                        providers.arkProvider.deleteIntent(intent),
+                                    ),
                                 registerIntent: async (
                                     intent: Parameters<
                                         typeof providers.arkProvider.registerIntent
@@ -300,13 +352,29 @@ export function createOperatorRuntime(
                                             throw new Error(
                                                 "background_settlement_spends_held_coin",
                                             );
-                                        return providers.arkProvider.registerIntent(intent);
+                                        await assertPersistedRegistration(intent);
+                                        if (!backgroundSettling || stopped || live !== token)
+                                            throw new Error("background_settlement_not_authorized");
+                                        return timed("runtime.background.registerIntent", () =>
+                                            providers.arkProvider.registerIntent(intent),
+                                        );
                                     }
                                     if (!settlementGuard || live !== token)
                                         throw new Error("proceeds_submission_not_authorized");
-                                    const enter = await settlementGuard(intent);
+                                    await assertPersistedRegistration(intent);
+                                    const guard = settlementGuard;
+                                    if (!guard || live !== token)
+                                        throw new Error("proceeds_submission_not_authorized");
+                                    const enter = await timed(
+                                        "runtime.proceeds.registrationGuard",
+                                        () => guard(intent),
+                                    );
+                                    if (live !== token || settlementGuard !== guard)
+                                        throw new Error("proceeds_submission_not_authorized");
                                     enter();
-                                    return providers.arkProvider.registerIntent(intent);
+                                    return timed("runtime.proceeds.registerIntent", () =>
+                                        providers.arkProvider.registerIntent(intent),
+                                    );
                                 },
                             }),
                             indexerProvider: providers.indexerProvider,
@@ -416,11 +484,11 @@ export function createOperatorRuntime(
                     return result;
                 }
                 const waiting = await timed("runtime.storage.waitingIntents", () =>
-                    collectIntents(storage.intentRepository, { states: WAITING }),
+                    collectBatchRegistrations(storage.intentRepository, { states: WAITING }),
                 ).catch(() => []);
                 if (
                     waiting.some(
-                        (i) => now() - i.createdAt > STALE_INTENT_MS && !handled.has(i.intentTxId),
+                        (i) => now() - i.createdAt > STALE_INTENT_MS && !handled.has(i.proofTxId),
                     )
                 )
                     result.blockers.push("operator_intent_stale");

@@ -12,7 +12,7 @@ export {
     type RelativeTimelock,
 } from "./params";
 export { payoutPkScript } from "./pin";
-export { compileV2, v2Args, V2_ARTIFACT } from "./v2-artifact";
+export { compileDustCovenant, dustCovenantArgs, DUST_COVENANT_ARTIFACT } from "./artifact";
 export {
     claimLeafDisabled,
     DISABLED_CLAIM_SCRIPT,

@@ -107,6 +107,18 @@ export function validateParams(p: DustCovenantParams, vtxoMinAmount: bigint): vo
     if (p.locktime < 500_000_000n) {
         throw new Error(`covenant: the locktime must be time-domain, got ${p.locktime}`);
     }
+    if (p.locktime > 0xffffffffn) {
+        throw new Error("covenant: locktime exceeds a transaction's uint32 range");
+    }
+    if (
+        p.assetId !== undefined &&
+        (p.assetId.txid?.length !== 32 ||
+            !Number.isInteger(p.assetId.groupIndex) ||
+            p.assetId.groupIndex < 0 ||
+            p.assetId.groupIndex > 0xffff)
+    ) {
+        throw new Error("covenant: asset id requires a 32-byte txid and uint16 group index");
+    }
     if (p.claimMode !== undefined && p.claimMode !== "recycle" && p.claimMode !== "purchase") {
         throw new Error(`covenant: unknown claimMode ${String(p.claimMode)}`);
     }

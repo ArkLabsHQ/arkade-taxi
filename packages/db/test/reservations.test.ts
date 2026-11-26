@@ -13,7 +13,7 @@ import {
     RecoveryBudgetConflictError,
     ReservationRepository,
     ProceedsRepository,
-    applyMigrations,
+    initializeSchema,
     openDatabase,
 } from "../src/index";
 
@@ -55,7 +55,7 @@ let reservations: ReservationRepository;
 beforeEach(() => {
     db = new DatabaseCtor(":memory:");
     db.pragma("foreign_keys = ON");
-    applyMigrations(db);
+    initializeSchema(db);
     advances = new AdvanceRepository(db);
     policy = new PolicyRepository(db);
     policy.update(
@@ -180,7 +180,7 @@ describe("durable reservations", () => {
         async (maxOutstandingSats, maxConcurrentAdvances, code) => {
             const directory = mkdtempSync(join(tmpdir(), "taxi-claim-cap-"));
             const first = new DatabaseCtor(join(directory, "taxi.sqlite"));
-            applyMigrations(first);
+            initializeSchema(first);
             const second = new DatabaseCtor(join(directory, "taxi.sqlite"));
             try {
                 const p = new PolicyRepository(first);
@@ -330,7 +330,7 @@ describe("durable reservations", () => {
             const first = new DatabaseCtor(join(dir, "taxi.sqlite"));
             let second: Database | undefined;
             try {
-                applyMigrations(first);
+                initializeSchema(first);
                 const terms = new PolicyRepository(first);
                 terms.update(policy.get(), "test");
                 const owner = new ReservationRepository(first);
@@ -445,7 +445,7 @@ describe("durable reservations", () => {
         reserve();
         reserve(quote({ id: "fresh", operatorInputs: [input(1)], expiresAt: 61 }));
         reserve(quote({ id: "submitted", operatorInputs: [input(2)] }));
-        advances.update(transition(advances.get("submitted")!, "locking", 59));
+        advances.unsafeOverwrite(transition(advances.get("submitted")!, "locking", 59));
         expect(reservations.expireQuotes(59)).toBe(0);
         expect(reservations.expireQuotes(60)).toBe(1);
         expect(advances.get("quote-1")).toMatchObject({ state: "expired", updatedAt: 60 });
@@ -471,7 +471,7 @@ describe("durable reservations", () => {
         const first = new DatabaseCtor(path);
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             const firstPolicy = new PolicyRepository(first);
             firstPolicy.update(policy.get(), "test");
             const firstReservations = new ReservationRepository(first);
@@ -480,7 +480,7 @@ describe("durable reservations", () => {
                 expectedPolicyRevision: firstPolicy.getSnapshot().revision,
                 recoveryExecutionBudget: { kind: "time", value: 1n },
             });
-            new AdvanceRepository(first).update(transition(quote(), "expired", 60));
+            new AdvanceRepository(first).unsafeOverwrite(transition(quote(), "expired", 60));
             first.close();
             second = new DatabaseCtor(path);
             const reopened = new ReservationRepository(second);
@@ -545,7 +545,7 @@ describe("durable reservations", () => {
         const first = new DatabaseCtor(path);
         let second: Database | undefined;
         try {
-            applyMigrations(first);
+            initializeSchema(first);
             const firstPolicy = new PolicyRepository(first);
             firstPolicy.update(policy.get(), "test");
             const revision = firstPolicy.getSnapshot().revision;
@@ -555,7 +555,7 @@ describe("durable reservations", () => {
                 recoveryExecutionBudget: { kind: "time", value: 1n },
             });
             second = new DatabaseCtor(path);
-            applyMigrations(second);
+            initializeSchema(second);
             expect(new PolicyRepository(second).getSnapshot().revision).toBe(revision);
             const other = new ReservationRepository(second);
             expect(other.listForAdvance("quote-1")).toEqual([input()]);
@@ -689,14 +689,14 @@ describe("durable reservations", () => {
         "does not release %s reservations",
         (state) => {
             reserve();
-            advances.update(quote({ state }));
+            advances.unsafeOverwrite(quote({ state }));
             expect(() => reservations.releaseForAdvance("quote-1")).toThrow(/release/);
             expect(reservations.listForAdvance("quote-1")).toEqual([input()]);
         },
     );
     it("releases an expired quote", () => {
         reserve();
-        advances.update(transition(advances.get("quote-1")!, "expired", 60));
+        advances.unsafeOverwrite(transition(advances.get("quote-1")!, "expired", 60));
         reservations.releaseForAdvance("quote-1");
         expect(reservations.listForAdvance("quote-1")).toEqual([]);
     });
@@ -705,9 +705,9 @@ describe("durable reservations", () => {
         (state) => {
             reserve();
             const a = quote({ state });
-            advances.update(a);
+            advances.unsafeOverwrite(a);
             expect(() => reservations.releaseForAdvance(a.id)).toThrow(/observed/);
-            advances.update({ ...a, spentTxid: "cc".repeat(32), lastObservedAt: 100 });
+            advances.unsafeOverwrite({ ...a, spentTxid: "cc".repeat(32), lastObservedAt: 100 });
             reservations.releaseForAdvance(a.id);
             expect(reservations.listReservedOutpoints()).toEqual([]);
         },

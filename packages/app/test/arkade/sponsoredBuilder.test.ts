@@ -215,7 +215,7 @@ describe("sponsored sender-paid sats fare", () => {
         senderSats?: bigint;
         contribution?: bigint;
         fare?: bigint;
-        legacy?: true;
+        missingFarePayer?: true;
         bitcoin?: true;
     }
 
@@ -230,7 +230,8 @@ describe("sponsored sender-paid sats fare", () => {
         }
         req.params.contribution = over.contribution ?? DUST;
         req.fare = { currency: "sats", units: over.fare ?? 10n };
-        if (!over.legacy) req.satsFarePayer = "sender";
+        req.satsFarePayer = "sender";
+        if (over.missingFarePayer) delete req.satsFarePayer;
         return req;
     };
 
@@ -257,15 +258,9 @@ describe("sponsored sender-paid sats fare", () => {
         ]);
     });
 
-    it("collects nothing without the discriminator, as every funded graph did", () => {
-        const req = satsFare({ legacy: true });
-        expect(layout(req)).toEqual([
-            ["payment", 330n],
-            ["operator-fare", 10n],
-            ["sender-change", 700n],
-            ["operator-change", 19_660n],
-        ]);
-        expect(netFareSats(req)).toBe(0n);
+    it("refuses a positive sats fare without its sender payer", () => {
+        const req = satsFare({ missingFarePayer: true });
+        expect(() => layout(req)).toThrow(/sats fare payer/);
     });
 
     it("charges the same way when the payment carries no asset", () => {
@@ -277,9 +272,6 @@ describe("sponsored sender-paid sats fare", () => {
             ["operator-change", 19_990n],
         ]);
         expect(netFareSats(req)).toBe(10n);
-        expect(netFareSats(satsFare({ bitcoin: true, contribution: VTXO_MIN, legacy: true }))).toBe(
-            0n,
-        );
     });
 
     it.each([10n, 50n, 100n])("never nets a %s sat fare out of the sponsorship", (fare) => {
@@ -315,7 +307,7 @@ describe("sponsored sender-paid sats fare", () => {
         expect(() => sponsoredPlan(req, cfg)).toThrow(/positive sats fare/);
     });
 
-    it("refuses an unrecognised payer rather than falling back to the legacy layout", () => {
+    it("refuses an unrecognised payer", () => {
         const req = satsFare();
         (req as { satsFarePayer?: string }).satsFarePayer = "operator";
         expect(() => sponsoredPlan(req, cfg)).toThrow(/sats fare payer/);
@@ -330,9 +322,5 @@ describe("sponsored sender-paid sats fare", () => {
             wire.unsignedTxId,
         );
         expect(Transaction.fromPSBT(base64.decode(wire.arkTx)).getOutput(2).amount).toBe(690n);
-        const legacy = buildSponsoredEnvelope(satsFare({ legacy: true }), cfg, unroll);
-        expect(
-            JSON.parse(Buffer.from(base64.decode(legacy)).toString()).satsFarePayer,
-        ).toBeUndefined();
     });
 });
