@@ -1,6 +1,6 @@
-import { TaxiClient, TaxiError } from "../index.js";
-import { boundedFetch } from "./context.js";
-import { DECIMAL, isCanonicalTxid, isHttpUrl, isTransferId } from "./wire.js";
+import { TaxiClient, TaxiError } from "../index";
+import { boundedFetch } from "./context";
+import { DECIMAL, isCanonicalTxid, isHttpUrl, isTransferId } from "./wire";
 
 export interface RememberedTaxi {
     network: string;

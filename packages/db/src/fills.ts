@@ -1,5 +1,5 @@
 import type { Database } from "better-sqlite3";
-import { assertNativeAccess } from "./coordination.js";
+import { assertNativeAccess } from "./coordination";
 
 /**
  * A fill is born `submitting`: `/v1/fills` validates, binds and signs inside one

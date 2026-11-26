@@ -6,8 +6,8 @@ import {
     RecoveryBudgetConflictError,
     ReservationRepository,
     totalExposure,
-} from "../src/index.js";
-import { CELLS, runGrid } from "./quoteFenceGrid.js";
+} from "../src/index";
+import { CELLS, runGrid } from "./quoteFenceGrid";
 
 it("refuses exactly as the db fence does on every grid cell", () => {
     const fence = runGrid((db) => {

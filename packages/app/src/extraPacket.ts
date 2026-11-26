@@ -1,5 +1,5 @@
 import { hexToBytes } from "@arkade-taxi/protocol";
-import { ErrorCode, ServiceError } from "./errors.js";
+import { ErrorCode, ServiceError } from "./errors";
 
 export type ExtraPacket = { type: number; payload: Uint8Array };
 

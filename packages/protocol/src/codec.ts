@@ -12,8 +12,8 @@ import type {
     QuoteParams,
     CovenantSpendInputWire,
     SponsoredQuoteParams,
-} from "./index.js";
-import type { FundingInputWire } from "./index.js";
+} from "./index";
+import type { FundingInputWire } from "./index";
 
 export interface FundingInputValue {
     txid: string;

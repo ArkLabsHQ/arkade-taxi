@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { validateParams, type AssetIdRef, type DustCovenantParams } from "@arkade-taxi/covenant";
-import type { Exposure, Policy, QuoteRequest } from "../src/types.js";
-import { admit } from "../src/admission.js";
-import type { CustodySolvency } from "../src/solvency.js";
-import type { AssetRule, FareOption } from "../src/fares.js";
+import type { Exposure, Policy, QuoteRequest } from "../src/types";
+import { admit } from "../src/admission";
+import type { CustodySolvency } from "../src/solvency";
+import type { AssetRule, FareOption } from "../src/fares";
 
 const key = (fill: number) => new Uint8Array(32).fill(fill);
 const pubkey = (fill: number) => schnorr.getPublicKey(key(fill));

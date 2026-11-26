@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QuoteVerificationError, TaxiError } from "../src/errors.js";
+import { QuoteVerificationError, TaxiError } from "../src/errors";
 
 describe("TaxiError", () => {
     it("carries a machine-readable code alongside the prose", () => {

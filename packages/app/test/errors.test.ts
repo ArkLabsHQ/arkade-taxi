@@ -8,9 +8,9 @@ import {
     ServiceError,
     sanitizeOperationalError,
     toErrorResponse,
-} from "../src/errors.js";
-import { policy as basePolicy, receiverKey, senderKey } from "./fixtures.js";
-import { LockupShapeError } from "../src/lockup.js";
+} from "../src/errors";
+import { policy as basePolicy, receiverKey, senderKey } from "./fixtures";
+import { LockupShapeError } from "../src/lockup";
 
 const EXPOSURE = { outstandingSats: 0n, lockedCount: 0, oldestUnsweptLocktime: null };
 

@@ -17,10 +17,9 @@ import {
     createCustodyReleaser,
     custodySolvencyView,
     CustodyAwaitingLiquidityError,
-    CustodyReleaseError,
     planCustodyRelease,
-} from "../src/custody.js";
-import { swapAssetId } from "../src/proceeds.js";
+} from "../src/custody";
+import { swapAssetId } from "../src/proceeds";
 
 const WINDOW = 8_640_000;
 const INT64_MAX = 9_223_372_036_854_775_807n;

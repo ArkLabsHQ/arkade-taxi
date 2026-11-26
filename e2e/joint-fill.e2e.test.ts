@@ -19,9 +19,9 @@ import {
     providerCosignerKey,
     signJointGraphForOwner,
     submitJointFill,
-} from "./offerSigning.js";
-import { liveScenario } from "./scenarios.js";
-import { openLive, poll, required, walletBalance } from "./fixtures.js";
+} from "./offerSigning";
+import { liveScenario } from "./scenarios";
+import { openLive, poll, required, walletBalance } from "./fixtures";
 
 const WANT_UNITS = 1_000n;
 const FARE_UNITS = 100n;

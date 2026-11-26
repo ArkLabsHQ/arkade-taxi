@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { VtxoScript } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
-import { sameTapTree } from "../../src/arkade/tapTree.js";
+import { sameTapTree } from "../../src/arkade/tapTree";
 
 // arkd's own bytes for mutinynet checkpoint
 // 08c71016c0e710a8c537e566bcd47d8f4aeaf88293730cd4fb71b9ca1ebbca46 input 0:

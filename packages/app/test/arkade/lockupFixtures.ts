@@ -8,8 +8,8 @@ import {
     senderKey,
     serverKey,
     V2_DEADLINE,
-} from "../fixtures.js";
-import type { LockupBuildRequest } from "../../src/quotes.js";
+} from "../fixtures";
+import type { LockupBuildRequest } from "../../src/quotes";
 
 export const senderTree = new VtxoScript([
     MultisigTapscript.encode({ pubkeys: [serverKey, senderKey] }).script,

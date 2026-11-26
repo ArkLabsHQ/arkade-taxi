@@ -1,13 +1,13 @@
-import { base64, hex } from "@scure/base";
+import { hex } from "@scure/base";
+import type { VtxoScript } from "@arkade-os/sdk";
 import {
     DefaultVtxo,
     Transaction,
-    VtxoScript,
     type ExtendedVirtualCoin,
     type VirtualCoin,
 } from "@arkade-os/sdk";
 import { digestJointGraph, FILL_TEMPLATE, type JointGraph } from "@arkade-taxi/client";
-import { fundingCoin, serverKey } from "./fixtures.js";
+import { fundingCoin, serverKey } from "./fixtures";
 
 export const asIndexed = (coin: ExtendedVirtualCoin): VirtualCoin => {
     const indexed: Partial<ExtendedVirtualCoin> = { ...coin };

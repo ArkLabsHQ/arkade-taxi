@@ -5,8 +5,8 @@ import {
     ReservationRepository,
     openDatabase,
     type ReserveQuoteRequest,
-} from "../src/index.js";
-import { advance, outcome, render, runGrid, setUp, type Cell } from "./quoteFenceGrid.js";
+} from "../src/index";
+import { advance, outcome, render, runGrid, setUp, type Cell } from "./quoteFenceGrid";
 
 // Letters are LETTER in quoteFenceGrid.ts. Each rule block (absent | disabled | enabled) holds
 // exposure none, outstanding, count, both; each of those the topups zero, dust, dust+1, cap+1.

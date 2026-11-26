@@ -31,13 +31,13 @@ import {
 } from "@arkade-os/sdk";
 import { base64, hex } from "@scure/base";
 import { fundingInputFromWire } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import { sanitizeOperationalError } from "../errors.js";
-import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt.js";
-import { operatorPayoutSats } from "../lockup.js";
-import { validatePersistedLockupGraph } from "./submit.js";
-import { readFundingSource } from "./fundingSource.js";
-import { senderPaysSatsFare } from "./lockupBuilder.js";
+import type { RuntimeConfig } from "../config";
+import { sanitizeOperationalError } from "../errors";
+import { decodeBase64, decodeLockupEnvelope, unsignedGraphId } from "./psbt";
+import { operatorPayoutSats } from "../lockup";
+import { validatePersistedLockupGraph } from "./submit";
+import { readFundingSource } from "./fundingSource";
+import { senderPaysSatsFare } from "./lockupBuilder";
 
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 
@@ -792,7 +792,7 @@ export function createRecoveryRunner(deps: {
             }
             const token = randomUUID();
             const started = deps.now();
-            let advance = deps.advances.claimRecoveryLease(
+            const advance = deps.advances.claimRecoveryLease(
                 latest.id,
                 deps.workerId,
                 token,

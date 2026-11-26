@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeExpiry } from "../../src/arkade/providers.js";
+import { normalizeExpiry } from "../../src/arkade/providers";
 
 describe("canonical SDK expiry", () => {
     it("keeps Unix seconds and chain heights as distinct units", () => {

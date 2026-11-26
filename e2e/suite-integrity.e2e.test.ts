@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { expect, it } from "vitest";
-import { EXPECTED_TOTAL, SCENARIOS } from "./scenarios.js";
+import { EXPECTED_TOTAL, SCENARIOS } from "./scenarios";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const self = basename(fileURLToPath(import.meta.url));

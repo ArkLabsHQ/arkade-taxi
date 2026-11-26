@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Advance } from "../src/types.js";
-import { renewable, renewalDue } from "../src/renewal.js";
+import type { Advance } from "../src/types";
+import { renewable, renewalDue } from "../src/renewal";
 
 const NOW = 1_800_000_000n;
 const GUARD = 43_200n;

@@ -15,7 +15,7 @@ import {
     ProceedsRepository,
     initializeSchema,
     openDatabase,
-} from "../src/index.js";
+} from "../src/index";
 
 const input = (vout = 0) => ({ txid: "aa".repeat(32), vout });
 const DEADLINE = 1_757_000_000n + 8_640_000n;

@@ -7,9 +7,9 @@ import {
     type AssetIdValue,
     type CovenantParamsValue,
 } from "@arkade-taxi/protocol";
-import { QuoteVerificationError, TaxiError } from "../src/errors.js";
-import { exitTimelock } from "../src/index.js";
-import { verifyQuote } from "../src/verify.js";
+import { QuoteVerificationError, TaxiError } from "../src/errors";
+import { exitTimelock } from "../src/index";
+import { verifyQuote } from "../src/verify";
 import {
     addressFor,
     args,
@@ -25,7 +25,7 @@ import {
     receiverKey,
     serverKey,
     VTXO_MIN,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const rejects = (patch: Partial<ReturnType<typeof args>>, code: string) => {
     let thrown: unknown;

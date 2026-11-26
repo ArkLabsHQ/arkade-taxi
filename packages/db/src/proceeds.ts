@@ -1,7 +1,7 @@
 import type { Database } from "better-sqlite3";
 import type { Outpoint } from "@arkade-taxi/core";
-import { assertNativeAccess } from "./coordination.js";
-import { expireReceiveQuotes } from "./reservations.js";
+import { assertNativeAccess } from "./coordination";
+import { expireReceiveQuotes } from "./reservations";
 
 export interface ProceedsPlan {
     inputs: Outpoint[];

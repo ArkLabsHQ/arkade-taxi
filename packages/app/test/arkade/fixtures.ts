@@ -1,6 +1,6 @@
 import { CSVMultisigTapscript, type ArkadeInfo } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { serverKey } from "../fixtures.js";
+import { serverKey } from "../fixtures";
 
 export const arkInfo = (over: Partial<ArkadeInfo> = {}): ArkadeInfo => ({
     signerPubkey: "02" + bytesToHex(serverKey),

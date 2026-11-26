@@ -18,7 +18,7 @@ import {
     type Policy,
 } from "@arkade-taxi/core";
 import { ADVANCE_STATES, type AdvanceRepository, type PolicyRepository } from "@arkade-taxi/db";
-import { totalExposure, type ExposureSource } from "../exposure.js";
+import { totalExposure, type ExposureSource } from "../exposure";
 import {
     assetIdFromWire,
     assetIdToWire,
@@ -26,21 +26,21 @@ import {
     fareToWire,
     satsToWire,
 } from "@arkade-taxi/protocol";
-import { assetRuleToWire } from "../rulesWire.js";
-import type { BoardingDeposits } from "../boarding.js";
-import { sanitizeOperationalError } from "../errors.js";
+import { assetRuleToWire } from "../rulesWire";
+import type { BoardingDeposits } from "../boarding";
+import { sanitizeOperationalError } from "../errors";
 import { taxiAssetId } from "@arkade-taxi/client";
-import type { RuntimeSafety } from "../arkade/types.js";
+import type { RuntimeSafety } from "../arkade/types";
 import {
     ACTOR_CONTROL_CHARS,
     MAX_ACTOR_LENGTH,
     type RuntimeConfig,
     type ShownConfigEntry,
-} from "../config.js";
-import { holdings } from "../proceeds.js";
-import type { DelegationView } from "../delegatee.js";
-import type { OperationalSnapshot } from "../routes.js";
-import type { RecoveryDeadline } from "../sweeper.js";
+} from "../config";
+import { holdings } from "../proceeds";
+import type { DelegationView } from "../delegatee";
+import type { OperationalSnapshot } from "../routes";
+import type { RecoveryDeadline } from "../sweeper";
 
 /** What the admin surface needs to know about the sweeper. Only the first three
  * fields are required, so a sweeper that tracks less can still report. */

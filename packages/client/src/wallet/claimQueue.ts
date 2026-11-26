@@ -9,7 +9,7 @@ import {
     type ClaimPlan,
     type RecyclePlan,
     type VerifiedClaim,
-} from "./claims.js";
+} from "./claims";
 
 export interface ClaimQueueOptions {
     identity: Identity;

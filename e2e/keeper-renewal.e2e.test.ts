@@ -10,11 +10,11 @@ import {
 } from "@arkade-os/sdk";
 import { lockupSats } from "@arkade-taxi/covenant";
 import { hex } from "@scure/base";
-import { renewedCovenantSource, txidOf } from "../packages/app/src/arkade/recovery.js";
+import { renewedCovenantSource, txidOf } from "../packages/app/src/arkade/recovery";
 import { captureOwnedTaxiLogs, taxiLogArgs } from "../scripts/lib/harness.mjs";
 import { settleWithin } from "../scripts/e2e-settle.mjs";
 import { createActorWallets, disposeActorWallets } from "../scripts/e2e-wallets.mjs";
-import { liveScenario } from "./scenarios.js";
+import { liveScenario } from "./scenarios";
 import {
     admin,
     artifactPath,
@@ -29,7 +29,7 @@ import {
     transaction,
     walletBalance,
     type Live,
-} from "./fixtures.js";
+} from "./fixtures";
 
 /**
  * The keeper only renews into a batch the SDK accepts, at least 6000 s on regtest, and the

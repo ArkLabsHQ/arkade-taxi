@@ -1,7 +1,7 @@
 import type { Database } from "better-sqlite3";
 import type { Advance, Outpoint } from "@arkade-taxi/core";
-import { assertNativeAccess } from "./coordination.js";
-import { PolicyRepository } from "./policy.js";
+import { assertNativeAccess } from "./coordination";
+import { PolicyRepository } from "./policy";
 
 /** Derived, not re-imported: this package depends on core alone, and these are
  * by definition the reclaimed advance's own asset and fare. */

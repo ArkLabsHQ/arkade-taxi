@@ -1,6 +1,6 @@
-import { advanceKind, isExposed } from "./ledger.js";
-import { assetIdKey } from "./fares.js";
-import type { Advance } from "./types.js";
+import { advanceKind, isExposed } from "./ledger";
+import { assetIdKey } from "./fares";
+import type { Advance } from "./types";
 import type { AssetIdRef } from "@arkade-taxi/covenant";
 
 export interface AssetAmount {

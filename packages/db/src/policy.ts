@@ -1,7 +1,7 @@
 import type { Database, Statement } from "better-sqlite3";
 import type { AssetRule, Policy } from "@arkade-taxi/core";
-import { assetRulesFromJson, assetRulesToJson } from "./assetRules.js";
-import { assertNativeAccess } from "./coordination.js";
+import { assetRulesFromJson, assetRulesToJson } from "./assetRules";
+import { assertNativeAccess } from "./coordination";
 
 export interface AuditRow {
     id: number;

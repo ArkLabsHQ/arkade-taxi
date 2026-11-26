@@ -1,5 +1,5 @@
 import type { Fill } from "@arkade-taxi/db";
-import type { FillDeps } from "../src/fills.js";
+import type { FillDeps } from "../src/fills";
 
 /** The fills store, in memory, for route tests that stub the whole database. */
 export class MemoryFills {

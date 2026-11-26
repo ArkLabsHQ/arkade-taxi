@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
-import { openDatabase } from "../src/index.js";
-import { COLUMNS } from "../src/advances.js";
+import { openDatabase } from "../src/index";
+import { COLUMNS } from "../src/advances";
 
 it("binds every column of the advances table, and nothing else", () => {
     const db = openDatabase(":memory:");

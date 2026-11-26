@@ -5,7 +5,7 @@ import {
     openDatabase,
     type Database,
     type ReserveQuoteRequest,
-} from "../src/index.js";
+} from "../src/index";
 
 const DEADLINE = 1_757_000_000n + 8_640_000n;
 

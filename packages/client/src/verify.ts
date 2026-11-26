@@ -20,8 +20,8 @@ import {
     type InfoResponse,
     type QuoteResponse,
 } from "@arkade-taxi/protocol";
-import { causeMessage, decodeInfo, decodeQuote } from "./decode.js";
-import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
+import { causeMessage, decodeInfo, decodeQuote } from "./decode";
+import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors";
 import {
     immutablePlainCopy,
     registerVerifiedQuote,
@@ -29,7 +29,7 @@ import {
     sameBytes,
     validateLockup,
     type LockupEnvelope,
-} from "./lockup.js";
+} from "./lockup";
 
 declare const verified: unique symbol;
 

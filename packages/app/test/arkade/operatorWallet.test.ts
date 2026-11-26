@@ -35,15 +35,15 @@ import {
     fundingCoin,
     serverKey,
     policy,
-} from "../fixtures.js";
-import { arkInfo } from "./fixtures.js";
+} from "../fixtures";
+import { arkInfo } from "./fixtures";
 import {
     createOperatorRuntime,
     type OperatorRuntimeOptions,
-} from "../../src/arkade/operatorWallet.js";
-import { resolveRuntimeConfig } from "../../src/config.js";
-import { createSpendWatcher } from "../../src/watcher.js";
-import { reconcileProceeds } from "../../src/proceeds.js";
+} from "../../src/arkade/operatorWallet";
+import { resolveRuntimeConfig } from "../../src/config";
+import { createSpendWatcher } from "../../src/watcher";
+import { reconcileProceeds } from "../../src/proceeds";
 
 const proofOf = (inputs: { txid: string; vout: number }[]) =>
     ({

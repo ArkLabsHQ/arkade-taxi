@@ -1,6 +1,6 @@
-import { ruleFor } from "./fares.js";
-import { advanceKind, validateFundingSnapshot } from "./ledger.js";
-import type { Advance, ExpiryDeadline, Policy } from "./types.js";
+import { ruleFor } from "./fares";
+import { advanceKind, validateFundingSnapshot } from "./ledger";
+import type { Advance, ExpiryDeadline, Policy } from "./types";
 
 export type QuoteFenceCode =
     | "paused"

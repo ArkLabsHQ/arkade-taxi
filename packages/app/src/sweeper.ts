@@ -1,13 +1,13 @@
 import { advanceKind, type Advance, type ExpiryDeadline } from "@arkade-taxi/core";
-import type { RuntimeConfig } from "./config.js";
-import type { ObservedCovenant } from "./watcher.js";
-import type { AdvanceStore } from "./quotes.js";
+import type { RuntimeConfig } from "./config";
+import type { ObservedCovenant } from "./watcher";
+import type { AdvanceStore } from "./quotes";
 import {
     RecoveryArtifactError,
     RecoverySourceUnavailableError,
     type RecoverySubmission,
-} from "./arkade/recovery.js";
-import { sanitizeOperationalError } from "./errors.js";
+} from "./arkade/recovery";
+import { sanitizeOperationalError } from "./errors";
 
 export interface RecoveryRunner {
     recover(a: Advance): Promise<RecoverySubmission | undefined>;

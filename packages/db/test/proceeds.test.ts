@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { openDatabase, ProceedsRepository, ReservationRepository } from "../src/index.js";
+import { openDatabase, ProceedsRepository, ReservationRepository } from "../src/index";
 
 const db = openDatabase(":memory:");
 afterEach(() =>

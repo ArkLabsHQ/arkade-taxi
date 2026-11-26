@@ -1,5 +1,5 @@
 import type { EmulatorProvider } from "@arkade-os/sdk";
-import { digestJointGraph, type JointGraph } from "./jointGraph.js";
+import { digestJointGraph, type JointGraph } from "./jointGraph";
 import {
     prepareJointSubmission as prepareCore,
     providerCosignerKeys as providerCore,
@@ -10,7 +10,7 @@ import {
     type JointSignerBinding,
     type PreparedJointSubmission,
     type SubmittedJointFill,
-} from "./jointSigning.js";
+} from "./jointSigning";
 
 /**
  * `/v1/fills`' own domain string. Separate from `offer-fill/1` on purpose: a

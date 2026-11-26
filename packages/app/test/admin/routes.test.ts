@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
 import { DEFAULT_POLICY } from "@arkade-taxi/db";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { advance, boardingView, harness, healthySweeper, key, type Harness } from "./fixtures.js";
+import { advance, boardingView, harness, healthySweeper, key, type Harness } from "./fixtures";
 import {
     DUST,
     VTXO_MIN,
@@ -11,9 +11,9 @@ import {
     operatorKey,
     operatorPrivkey,
     serverKey,
-} from "../fixtures.js";
-import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes.js";
-import { SHOWN_CONFIG } from "../../src/config.js";
+} from "../fixtures";
+import { PATCHABLE_POLICY_KEYS } from "../../src/admin/routes";
+import { SHOWN_CONFIG } from "../../src/config";
 import { sdkAssetId } from "@arkade-taxi/client";
 
 const INT64_MAX = "9223372036854775807";

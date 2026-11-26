@@ -19,8 +19,8 @@ import {
 import { base64, hex } from "@scure/base";
 import { DustCovenantScript, Leaf } from "@arkade-taxi/covenant";
 import { covenantParamsOf, renewalDue, type Advance } from "@arkade-taxi/core";
-import type { RuntimeConfig } from "../config.js";
-import type { ObservedCovenant } from "../watcher.js";
+import type { RuntimeConfig } from "../config";
+import type { ObservedCovenant } from "../watcher";
 
 export interface RenewalProviders {
     arkProvider: OperatorProvider;

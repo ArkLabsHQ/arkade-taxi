@@ -14,7 +14,7 @@ import {
     renewalVariables,
     TemplateMismatchError,
     TemplateRefusedError,
-} from "../src/delegatee.js";
+} from "../src/delegatee";
 import {
     advance,
     config,
@@ -26,7 +26,7 @@ import {
     serverKey,
     V2_DEADLINE,
     VTXO_MIN,
-} from "./fixtures.js";
+} from "./fixtures";
 
 const covenant = new DustCovenantScript({
     params: {

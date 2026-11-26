@@ -139,11 +139,12 @@ comes from pinned wallet config, never from the URI.
 pnpm install --frozen-lockfile
 pnpm -r build
 pnpm typecheck
+pnpm lint
 pnpm test
 pnpm format:check
 ```
 
-Run all four gates. `build` passing while `typecheck` fails, and the reverse,
+Run all five gates. `build` passing while `typecheck` fails, and the reverse,
 both happen.
 
 The service, client and covenant pin `@arkade-os/sdk@0.5.14` from npm. The test
@@ -153,7 +154,7 @@ install with `pnpm install --frozen-lockfile`. The E2E harness builds and packs 
 client, covenant and protocol packages, then installs those exact tarballs in a
 fresh consumer and verifies their identity and resolution before testing.
 
-Taxi's client, covenant, protocol and service packages share version `1.1.4`.
+Taxi's client, covenant, protocol and service packages share version `1.1.5`.
 It adds directed fills and renewal-aware claims to the `1.0.0` baseline, keeping its wire protocol and covenant.
 Worker wallets require the same SDK version in the page and worker. Reload
 existing tabs after updating the worker so both sides use the scoped requests.

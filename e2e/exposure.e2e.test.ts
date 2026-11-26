@@ -1,6 +1,6 @@
 import { expect } from "vitest";
-import { liveScenario } from "./scenarios.js";
-import { admin, lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures.js";
+import { liveScenario } from "./scenarios";
+import { admin, lock, openLive, quoteFor, sizedSender, terminal } from "./fixtures";
 
 const bitcoinSatsFare = (units: string) =>
     admin("policy", {

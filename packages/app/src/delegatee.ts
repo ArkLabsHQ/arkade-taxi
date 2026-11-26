@@ -3,8 +3,8 @@ import { arkade } from "@arkade-os/sdk";
 import { bytesToHex } from "@arkade-taxi/protocol";
 import { DUST_COVENANT_ARTIFACT, DustCovenantScript } from "@arkade-taxi/covenant";
 import { covenantParamsOf, renewable, type Advance } from "@arkade-taxi/core";
-import { canonicalJson } from "./arkade/psbt.js";
-import type { RuntimeConfig } from "./config.js";
+import { canonicalJson } from "./arkade/psbt";
+import type { RuntimeConfig } from "./config";
 
 export interface DelegateeRegistration {
     templateId: string;

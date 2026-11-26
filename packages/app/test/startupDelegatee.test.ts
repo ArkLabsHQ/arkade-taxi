@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { RuntimeConfig } from "../src/config.js";
-import { renewalTemplateId } from "../src/delegatee.js";
-import { config } from "./fixtures.js";
+import type { RuntimeConfig } from "../src/config";
+import { renewalTemplateId } from "../src/delegatee";
+import { config } from "./fixtures";
 
 const h = vi.hoisted(() => ({
     config: undefined as RuntimeConfig | undefined,
@@ -9,8 +9,8 @@ const h = vi.hoisted(() => ({
     keeper: () => undefined,
     renewal: undefined as unknown,
 }));
-vi.mock("../src/config.js", async (original) => ({
-    ...(await original<typeof import("../src/config.js")>()),
+vi.mock("../src/config", async (original) => ({
+    ...(await original<typeof import("../src/config")>()),
     loadConfig: () => h.config!,
     resolveRuntimeConfig: async () => h.config!,
 }));
@@ -21,16 +21,16 @@ vi.mock("pino", () => {
             void h.logged.push([level, ...args]);
     return { pino: () => ({ isLevelEnabled: () => false, info: at("info"), error: at("error") }) };
 });
-vi.mock("../src/arkade/operatorWallet.js", async (original) => ({
-    ...(await original<typeof import("../src/arkade/operatorWallet.js")>()),
+vi.mock("../src/arkade/operatorWallet", async (original) => ({
+    ...(await original<typeof import("../src/arkade/operatorWallet")>()),
     createOperatorRuntime: () => ({ providers: {} }),
 }));
-vi.mock("../src/arkade/renewal.js", async (original) => ({
-    ...(await original<typeof import("../src/arkade/renewal.js")>()),
+vi.mock("../src/arkade/renewal", async (original) => ({
+    ...(await original<typeof import("../src/arkade/renewal")>()),
     covenantKeeper: () => h.keeper,
 }));
-vi.mock("../src/sweeper.js", async (original) => ({
-    ...(await original<typeof import("../src/sweeper.js")>()),
+vi.mock("../src/sweeper", async (original) => ({
+    ...(await original<typeof import("../src/sweeper")>()),
     createSweeper: (deps: { renewal: unknown }) => {
         h.renewal = deps.renewal;
         throw new Error("startup reached the sweeper");
@@ -73,7 +73,7 @@ it.each([
         const argv = process.argv;
         process.argv = [argv[0]!, "cli", "serve"];
         try {
-            await import("../src/cli.js");
+            await import("../src/cli");
             await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1), { timeout: 10_000 });
         } finally {
             process.argv = argv;

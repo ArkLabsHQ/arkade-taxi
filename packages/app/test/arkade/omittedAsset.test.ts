@@ -14,17 +14,14 @@ import {
 import type { Advance } from "@arkade-taxi/core";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { fareToWire, quoteParamsToWire } from "@arkade-taxi/protocol";
-import { verifyQuote, signLockup } from "../../../client/src/index.js";
-import { args } from "../../../client/test/fixtures.js";
-import { buildRequest, unroll } from "./lockupFixtures.js";
-import { config as baseConfig, operatorTree, NOW, policy } from "../fixtures.js";
-import { ProductionLockupBuilder } from "../../src/arkade/lockupBuilder.js";
-import { decodeLockupEnvelope } from "../../src/arkade/psbt.js";
-import { productionLockupSubmitter } from "../../src/arkade/submit.js";
-import {
-    assertRecoveryStartupInvariants,
-    createRecoveryRunner,
-} from "../../src/arkade/recovery.js";
+import { verifyQuote, signLockup } from "../../../client/src/index";
+import { args } from "../../../client/test/fixtures";
+import { buildRequest, unroll } from "./lockupFixtures";
+import { config as baseConfig, operatorTree, NOW, policy } from "../fixtures";
+import { ProductionLockupBuilder } from "../../src/arkade/lockupBuilder";
+import { decodeLockupEnvelope } from "../../src/arkade/psbt";
+import { productionLockupSubmitter } from "../../src/arkade/submit";
+import { assertRecoveryStartupInvariants, createRecoveryRunner } from "../../src/arkade/recovery";
 
 const directories: string[] = [];
 const config = () => baseConfig({ operatorKey: operatorTree.tweakedPublicKey });

@@ -13,10 +13,10 @@ import {
     type ReceiveQuoteResponse,
 } from "@arkade-taxi/protocol";
 import { hex } from "@scure/base";
-import { decodeInfo, decodeReceiveQuote, type DecodedReceiveQuote } from "./decode.js";
-import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors.js";
-import { immutablePlainCopy } from "./lockup.js";
-import { assertExitDelayFloor } from "./verify.js";
+import { decodeInfo, decodeReceiveQuote, type DecodedReceiveQuote } from "./decode";
+import { QuoteVerificationError, VerificationErrorCode, type VerificationCode } from "./errors";
+import { immutablePlainCopy } from "./lockup";
+import { assertExitDelayFloor } from "./verify";
 
 declare const verifiedReceive: unique symbol;
 

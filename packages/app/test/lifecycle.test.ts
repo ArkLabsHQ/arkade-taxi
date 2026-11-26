@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { createServiceLifecycle, type LifecycleDeps } from "../src/lifecycle.js";
+import { createServiceLifecycle, type LifecycleDeps } from "../src/lifecycle";
 
 function harness(over: Partial<LifecycleDeps> = {}) {
     const calls: string[] = [];

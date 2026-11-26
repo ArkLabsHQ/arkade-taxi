@@ -35,7 +35,7 @@ it("packs executable client entries and declarations without development files o
         for (const entry of [
             manifest.main,
             manifest.types,
-            ...Object.values(manifest.exports["."]),
+            ...Object.values(manifest.exports).flatMap((entry) => Object.values(entry as object)),
         ])
             expect(entries).toContain(`package/${String(entry).replace(/^\.\//, "")}`);
         for (const entry of entries.filter((entry) => /\.(?:js|d\.ts)$/.test(entry))) {

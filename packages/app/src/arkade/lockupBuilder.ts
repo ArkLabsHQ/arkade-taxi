@@ -15,16 +15,11 @@ import {
 import { DustCovenantScript, lockupSats } from "@arkade-taxi/covenant";
 import { fundingInputToWire, type FundingInputValue } from "@arkade-taxi/protocol";
 import { base64, hex } from "@scure/base";
-import type { RuntimeConfig } from "../config.js";
-import type { LockupBuilder, LockupBuildRequest, QuotePhaseObserver } from "../quotes.js";
-import { normalizeExpiry } from "./providers.js";
-import { LockupShapeError, assertDistinctScripts, operatorPayoutSats } from "../lockup.js";
-import {
-    encodeLockupEnvelope,
-    parseLockupEnvelope,
-    unsignedGraphId,
-    type JointPlan,
-} from "./psbt.js";
+import type { RuntimeConfig } from "../config";
+import type { LockupBuilder, LockupBuildRequest, QuotePhaseObserver } from "../quotes";
+import { normalizeExpiry } from "./providers";
+import { LockupShapeError, assertDistinctScripts, operatorPayoutSats } from "../lockup";
+import { encodeLockupEnvelope, parseLockupEnvelope, unsignedGraphId, type JointPlan } from "./psbt";
 import { isDeepStrictEqual } from "node:util";
 const { AssetGroup, AssetId, AssetInput, AssetOutput, Packet } = asset;
 

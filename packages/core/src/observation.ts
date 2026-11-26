@@ -1,4 +1,4 @@
-import type { Advance } from "./types.js";
+import type { Advance } from "./types";
 
 type Tip = { hash: string; height: number };
 

@@ -1,5 +1,5 @@
-import { advanceKind } from "./ledger.js";
-import type { Advance, ExpiryDeadline } from "./types.js";
+import { advanceKind } from "./ledger";
+import type { Advance, ExpiryDeadline } from "./types";
 
 /** Whether a covenant may still be renewed at `now`, wall-clock unix seconds. Within
  * `guardSeconds` of the reclaim CLTV the coin belongs to recovery, which a renewal

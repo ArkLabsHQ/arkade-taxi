@@ -19,10 +19,11 @@ jobs:
                   node-version: 22
                   cache: pnpm
             - run: pnpm install --frozen-lockfile
-            # Run all four. build passing while typecheck fails, and the reverse, have
+            # Run all five. build passing while typecheck fails, and the reverse, have
             # both happened here.
             - run: pnpm -r build
             - run: pnpm typecheck
+            - run: pnpm lint
             - run: pnpm test
             - run: pnpm format:check
 

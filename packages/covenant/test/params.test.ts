@@ -7,8 +7,8 @@ import {
     lockupSats,
     validateParams,
     type DustCovenantParams,
-} from "../src/params.js";
-import { receiverPaid as receiverPaidFixture } from "./fixtures.js";
+} from "../src/params";
+import { receiverPaid as receiverPaidFixture } from "./fixtures";
 
 const key = (fill: number) => pubSchnorr(new Uint8Array(32).fill(fill));
 const assetId = { txid: new Uint8Array(32).fill(0x11), groupIndex: 0 };

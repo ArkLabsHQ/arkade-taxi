@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { Extension } from "@arkade-os/sdk";
 import { hex } from "@scure/base";
 import { ownCleanup } from "../scripts/lib/scenario-cleanup.mjs";
-import { liveScenario } from "./scenarios.js";
+import { liveScenario } from "./scenarios";
 import {
     cleanupDirectFill,
     directCounters,
@@ -11,7 +11,7 @@ import {
     prepareDirectFill,
     recycleDirectFill,
     settledDirectFill,
-} from "./directFillSupport.js";
+} from "./directFillSupport";
 
 liveScenario("receiver-paid-direct-fill-claim", async () => {
     const prepared = await prepareDirectFill();

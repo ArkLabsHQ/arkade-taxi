@@ -3,8 +3,8 @@ import { Transaction, networks, type Proof } from "@arkade-os/sdk";
 import { DustCovenantScript } from "@arkade-taxi/covenant";
 import { covenantParamsOf } from "@arkade-taxi/core";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { covenantKeeper, renewCovenant, type RenewalProviders } from "../../src/arkade/renewal.js";
-import { advance, config, fundingCoin, NOW } from "../fixtures.js";
+import { covenantKeeper, renewCovenant, type RenewalProviders } from "../../src/arkade/renewal";
+import { advance, config, fundingCoin, NOW } from "../fixtures";
 
 const outpoint = { txid: "cc".repeat(32), vout: 0 };
 // A claim-mode tree: the SDK's helper refuses it, since the artifact derives another script.

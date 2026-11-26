@@ -10,20 +10,20 @@ import {
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { createHash } from "node:crypto";
 import { base64, hex } from "@scure/base";
-import { checkpointSpending, sealGraph } from "../graphFixtures.js";
-import { config } from "../fixtures.js";
-import { buildRequest, unroll } from "./lockupFixtures.js";
-import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder.js";
+import { checkpointSpending, sealGraph } from "../graphFixtures";
+import { config } from "../fixtures";
+import { buildRequest, unroll } from "./lockupFixtures";
+import { buildLockupEnvelope } from "../../src/arkade/lockupBuilder";
 import {
     decodeLockupEnvelope,
     encodeLockupEnvelope,
     parseLockupEnvelope,
-} from "../../src/arkade/psbt.js";
+} from "../../src/arkade/psbt";
 import {
     encodeFillSource,
     readFundingSource,
     type FillFundingSource,
-} from "../../src/arkade/fundingSource.js";
+} from "../../src/arkade/fundingSource";
 
 const graph = () => {
     const tx = new Transaction({ version: 3 });

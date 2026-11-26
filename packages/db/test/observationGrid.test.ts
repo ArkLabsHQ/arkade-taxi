@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Advance } from "@arkade-taxi/core";
-import { ADVANCE_STATES, AdvanceRepository, PolicyRepository, openDatabase } from "../src/index.js";
+import { ADVANCE_STATES, AdvanceRepository, PolicyRepository, openDatabase } from "../src/index";
 
 const DEADLINE = 1_757_000_000n + 8_640_000n;
 const SPENT = "11".repeat(32);

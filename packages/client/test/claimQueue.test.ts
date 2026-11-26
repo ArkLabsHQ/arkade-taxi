@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtendedVirtualCoin, Identity } from "@arkade-os/sdk";
-import { TaxiClaimQueue, type ClaimQueueOptions } from "../src/wallet/claimQueue.js";
-import { ClaimSpent, claimVerified, offerKey, type VerifiedClaim } from "../src/wallet/claims.js";
-import { CovenantSpendAmbiguousError } from "../src/spend.js";
+import { TaxiClaimQueue, type ClaimQueueOptions } from "../src/wallet/claimQueue";
+import { ClaimSpent, claimVerified, offerKey, type VerifiedClaim } from "../src/wallet/claims";
+import { CovenantSpendAmbiguousError } from "../src/spend";
 
-vi.mock("../src/wallet/claims.js", async (original) => ({
-    ...(await original<typeof import("../src/wallet/claims.js")>()),
+vi.mock("../src/wallet/claims", async (original) => ({
+    ...(await original<typeof import("../src/wallet/claims")>()),
     claimVerified: vi.fn(),
 }));
 

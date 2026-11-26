@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
 import type { Policy } from "@arkade-taxi/core";
-import { initializeSchema } from "../src/schema.js";
-import { DEFAULT_POLICY, PolicyRepository } from "../src/policy.js";
+import { initializeSchema } from "../src/schema";
+import { DEFAULT_POLICY, PolicyRepository } from "../src/policy";
 
 const RULE = {
     assetId: null,

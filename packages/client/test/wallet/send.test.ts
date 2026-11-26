@@ -13,8 +13,8 @@ import {
     type QuoteRequestBody,
     type SponsoredQuoteRequestBody,
 } from "@arkade-taxi/protocol";
-import { decodeLockupEnvelope } from "../../../app/src/arkade/psbt.js";
-import { taxiAssetId } from "../../src/index.js";
+import { decodeLockupEnvelope } from "../../../app/src/arkade/psbt";
+import { taxiAssetId } from "../../src/index";
 import {
     boundedFetch,
     createTaxiSender,
@@ -22,7 +22,7 @@ import {
     probeBitcoinTaxi,
     type ArkadeContext,
     type TaxiSenderDependencies,
-} from "../../src/wallet/index.js";
+} from "../../src/wallet/index";
 import {
     HRP,
     NOW,
@@ -40,7 +40,7 @@ import {
     sponsoredParams,
     sponsoredQuote,
     unroll,
-} from "../fixtures.js";
+} from "../fixtures";
 
 let taxiUrl = "";
 let taxis = 0;

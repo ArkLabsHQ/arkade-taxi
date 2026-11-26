@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { bytesToHex } from "@arkade-taxi/protocol";
-import { config, emulatorKey } from "../fixtures.js";
-import { verifyProviders, withinVtxoMaxAmount } from "../../src/arkade/providers.js";
-import { arkInfo } from "./fixtures.js";
+import { config, emulatorKey } from "../fixtures";
+import { verifyProviders, withinVtxoMaxAmount } from "../../src/arkade/providers";
+import { arkInfo } from "./fixtures";
 import { defaultEmulatorPubkey, networks } from "@arkade-os/sdk";
 
 const pinnedEmulatorKey = defaultEmulatorPubkey(networks.regtest);

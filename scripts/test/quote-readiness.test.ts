@@ -2,10 +2,10 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
-import { quoteFor, type Live } from "../../e2e/fixtures.js";
-import { config, fundingCoin, receiverKey, senderKey } from "../../packages/app/test/fixtures.js";
+import { quoteFor, type Live } from "../../e2e/fixtures";
+import { config, fundingCoin, receiverKey, senderKey } from "../../packages/app/test/fixtures";
 
-vi.mock("@arkade-taxi/protocol", () => import("../../packages/protocol/src/index.js"));
+vi.mock("@arkade-taxi/protocol", () => import("../../packages/protocol/src/index"));
 vi.mock("node:fs", async (original) => ({
     ...(await original<typeof import("node:fs")>()),
     appendFileSync: vi.fn(),

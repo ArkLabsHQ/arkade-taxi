@@ -13,12 +13,12 @@ import {
 import { sealFillGraph } from "@arkade-taxi/client";
 import { FillRepository, type Fill } from "@arkade-taxi/db";
 import type { Advance } from "@arkade-taxi/core";
-import { createFillReconciler } from "../src/fillReconciler.js";
-import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource.js";
-import { deriveJointOutputs } from "../src/arkade/jointGraphDerivation.js";
-import { insertReceiveQuote, WANTED_ASSET, WANTED_SWAP_ID } from "./jointFillFixtures.js";
-import { fundingCoin, NOW, operatorTree, serverUnroll } from "./fixtures.js";
-import { checkpointSpending } from "./graphFixtures.js";
+import { createFillReconciler } from "../src/fillReconciler";
+import { encodeFillSource, type FillFundingSource } from "../src/arkade/fundingSource";
+import { deriveJointOutputs } from "../src/arkade/jointGraphDerivation";
+import { insertReceiveQuote, WANTED_ASSET, WANTED_SWAP_ID } from "./jointFillFixtures";
+import { fundingCoin, NOW, operatorTree, serverUnroll } from "./fixtures";
+import { checkpointSpending } from "./graphFixtures";
 
 const TAXI = { txid: "cc".repeat(32), vout: 0 };
 const FOREIGN = { txid: "ee".repeat(32), vout: 1 };

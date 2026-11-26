@@ -1,4 +1,4 @@
-import { isHttpUrl } from "./wire.js";
+import { isHttpUrl } from "./wire";
 
 export interface Bip21Taxi {
     url: string;

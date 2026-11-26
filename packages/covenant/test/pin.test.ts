@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { payoutPkScript } from "../src/pin.js";
+import { payoutPkScript } from "../src/pin";
 
 const key = new Uint8Array(32).fill(0xab);
 

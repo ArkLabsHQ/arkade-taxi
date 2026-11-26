@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Advance } from "../src/types.js";
-import { assessSolvency, computeReceivables } from "../src/solvency.js";
+import type { Advance } from "../src/types";
+import { assessSolvency, computeReceivables } from "../src/solvency";
 
 const asset = (byte: number, groupIndex = 0) => ({
     txid: new Uint8Array(32).fill(byte),

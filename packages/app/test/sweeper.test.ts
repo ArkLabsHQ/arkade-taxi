@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Advance } from "@arkade-taxi/core";
-import { createSweeper, type RecoveryRunner, type SweeperDeps } from "../src/sweeper.js";
-import { RecoveryArtifactError } from "../src/arkade/recovery.js";
-import { covenantKeeper, type RenewalProviders } from "../src/arkade/renewal.js";
-import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures.js";
+import { createSweeper, type RecoveryRunner, type SweeperDeps } from "../src/sweeper";
+import { RecoveryArtifactError } from "../src/arkade/recovery";
+import { covenantKeeper, type RenewalProviders } from "../src/arkade/renewal";
+import { advance, config, MemoryAdvances, NOW, policy as basePolicy } from "./fixtures";
 
 const HEIGHT = 900_000n;
 /** Every fixture's deadline sits at the tick's median time, so the headroom a

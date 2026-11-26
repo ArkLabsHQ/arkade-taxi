@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { CSVMultisigTapscript, MultisigTapscript, arkade } from "@arkade-os/sdk";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hex } from "@scure/base";
-import { DustCovenantScript, Leaf } from "../src/vtxo.js";
-import { DUST_COVENANT_ARTIFACT, dustCovenantArgs } from "../src/artifact.js";
-import type { DustCovenantParams } from "../src/params.js";
+import { DustCovenantScript, Leaf } from "../src/vtxo";
+import { DUST_COVENANT_ARTIFACT, dustCovenantArgs } from "../src/artifact";
+import type { DustCovenantParams } from "../src/params";
 
 const key = (fill: number) => schnorr.getPublicKey(new Uint8Array(32).fill(fill));
 const SERVER = key(4);

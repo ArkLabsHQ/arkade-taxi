@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import DatabaseCtor from "better-sqlite3";
 import type { Database } from "better-sqlite3";
-import { ADVANCE_STATES, initializeSchema } from "../src/schema.js";
+import { ADVANCE_STATES, initializeSchema } from "../src/schema";
 
 const handles = new Set<Database>();
 afterEach(() => {

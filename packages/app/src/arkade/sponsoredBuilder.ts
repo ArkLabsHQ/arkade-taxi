@@ -3,11 +3,11 @@ import { ArkAddress, type CSVMultisigTapscript, type Transaction } from "@arkade
 import type { FareSpec } from "@arkade-taxi/core";
 import type { AssetIdRef } from "@arkade-taxi/covenant";
 import type { FundingInputValue } from "@arkade-taxi/protocol";
-import type { RuntimeConfig } from "../config.js";
-import type { FundingSelection } from "./inventory.js";
-import { LockupShapeError } from "../lockup.js";
-import { domainGraphId, parseJointEnvelope } from "./psbt.js";
-import { buildJointEnvelope, jointPlan, operatorFundingInput } from "./lockupBuilder.js";
+import type { RuntimeConfig } from "../config";
+import type { FundingSelection } from "./inventory";
+import { LockupShapeError } from "../lockup";
+import { domainGraphId, parseJointEnvelope } from "./psbt";
+import { buildJointEnvelope, jointPlan, operatorFundingInput } from "./lockupBuilder";
 
 /** Joint-send terms without a covenant. `contribution` plays the role of the
  * covenant `topup`: sats the operator fronts toward the receiver's dust

@@ -9,7 +9,7 @@ import {
     validateFareOption,
     type AssetRule,
     type FareOption,
-} from "../src/fares.js";
+} from "../src/fares";
 import type { AssetIdRef } from "@arkade-taxi/covenant";
 
 const asset = (fill: number, groupIndex = 0): AssetIdRef => ({

@@ -3,15 +3,15 @@ import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArkAddress } from "@arkade-os/sdk";
-import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static.js";
+import { APP_JS, INDEX_HTML, STYLES_CSS } from "../../src/admin/static";
 import { assetIdToWire } from "@arkade-taxi/protocol";
 import { taxiAssetId, sdkAssetId } from "@arkade-taxi/client";
-import { PATCHABLE_POLICY_KEYS, POLICY_VOCABULARY } from "../../src/admin/routes.js";
-import { SHOWN_CONFIG } from "../../src/config.js";
-import { openApiDocument } from "../../src/openapi.js";
-import type { OperationalSnapshot } from "../../src/routes.js";
-import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures.js";
-import { boardingView, harness, type Harness } from "./fixtures.js";
+import { PATCHABLE_POLICY_KEYS, POLICY_VOCABULARY } from "../../src/admin/routes";
+import { SHOWN_CONFIG } from "../../src/config";
+import { openApiDocument } from "../../src/openapi";
+import type { OperationalSnapshot } from "../../src/routes";
+import { DUST, config, fundingCoin, operatorKey, policy, serverKey } from "../fixtures";
+import { boardingView, harness, type Harness } from "./fixtures";
 
 afterEach(() => vi.useRealTimers());
 
