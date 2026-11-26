@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.5 (unreleased)
+
+- The packages build with `tsup` instead of `tsc`. Each entry point ships as one ESM bundle with
+  a rolled-up declaration file, so the packed client, covenant and protocol hold `dist/index.js`,
+  the client's `dist/wallet/index.js` and a shared chunk instead of one `.js` and `.d.ts` per
+  source module. The exports, their declarations and the client's `./wallet` subpath are
+  unchanged, the declarations still resolve under NodeNext, and both client entries share one copy
+  of every class, so a `CovenantSpendBusyError` the wallet rethrows is the class `.` exports.
+- Every bundle ships a source map that embeds its TypeScript sources.
+- The covenant declares `@scure/base`, which it imports, so its bundle leaves it external.
+- TypeScript resolves modules as a bundler, so relative imports carry no `.js` extension, and
+  `pnpm lint` (ESLint with typescript-eslint, type-only and unused-import rules) joins the gates.
+
 ## 1.1.4 (unreleased)
 
 - A reclaim that cannot fetch the transaction that created a renewed covenant's coin raises a
